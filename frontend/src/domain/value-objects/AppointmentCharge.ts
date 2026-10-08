@@ -9,17 +9,36 @@
 const ACCREDITED_PAYMENT_STATUSES: readonly string[] = ['approved', 'manual_confirmed']
 const LIVE_CHARGE_PAYMENT_STATUSES: readonly string[] = ['pending', 'rejected']
 
+/**
+ * Medios con que se registra el resto de un turno (D-20261008-01). Replica
+ * `BalancePaymentMethod` de `backend/modules/payments/model.py`.
+ */
+export const REMAINDER_PAYMENT_METHODS = [
+  'efectivo',
+  'transferencia',
+  'mercadopago',
+  'otro'
+] as const
+export type RemainderPaymentMethod = (typeof REMAINDER_PAYMENT_METHODS)[number]
+
 interface AppointmentChargeInput {
   appointmentStatus: string
   /** Precio congelado del turno; la API manda los importes como texto decimal. */
   priceAmount: number | string | null | undefined
   paymentStatus: string | null | undefined
   paymentAmount: number | string | null | undefined
+  /** Saldo que calcula el backend en SQL (D-20261008-01); manda sobre el calculo local. */
+  remainingAmount?: number | string | null
+  /** Resto ya registrado aparte del cobro (a lo sumo uno por turno). */
+  remainderAmount?: number | string | null
 }
 
 export type AppointmentCharge =
-  /** La plata entro; `remaining` es lo que falta para el precio del turno. */
-  | { kind: 'paid'; paid: number; remaining: number }
+  /**
+   * La plata entro: `paid` es el cobro mas el resto registrado y `remaining`
+   * lo que falta para el precio del turno.
+   */
+  | { kind: 'paid'; paid: number; remaining: number; remainderRecorded: boolean }
   | { kind: 'refunded' }
   /**
    * Cobro vivo: lo que el turno tiene pendiente de pago. Es sena si cobra
@@ -37,26 +56,59 @@ const toAmount = (value: number | string | null | undefined): number | null => {
 }
 
 /**
+ * El saldo lo calcula el backend (D-20261008-01: nunca se confia en el
+ * cliente). Si no viene (un backend anterior), el precio menos lo pagado. Un
+ * ausente no debe el resto de un servicio que no recibio: su saldo es cero (lo
+ * que pago es sena retenida, como la cuentan los reportes).
+ */
+const remainingOf = (
+  appointmentStatus: string,
+  price: number | null,
+  paid: number,
+  fromServer: number | null
+): number => {
+  if (appointmentStatus === 'absent' || price === null) return 0
+  return fromServer ?? Math.max(price - paid, 0)
+}
+
+const toCents = (amount: number): number => Math.round(amount * 100)
+
+/** El importe es mayor a cero y entra en el saldo, al centavo. */
+export const fitsRemaining = (amount: number, remaining: number): boolean =>
+  toCents(amount) > 0 && toCents(amount) <= toCents(remaining)
+
+/**
+ * Se ofrece registrar el resto si el cobro esta acreditado, queda saldo y no
+ * hay uno ya registrado: hay a lo sumo un resto por turno (D-20261008-01).
+ */
+export const canRecordRemainder = (charge: AppointmentCharge): boolean =>
+  charge.kind === 'paid' && charge.remaining > 0 && !charge.remainderRecorded
+
+/**
  * 2026-10-08 (decision de Mateo): el importe de "Confirmar pago" se precarga
  * con la sena pendiente si el turno tiene un cobro vivo; si no, con el precio
  * del turno menos lo pagado. Con un solo cobro por turno, "lo pagado" de un
  * turno sin cobro acreditado es cero.
- *
- * Un ausente no debe el resto de un servicio que no recibio: su `remaining`
- * es cero (lo que pago es sena retenida, como la cuentan los reportes).
  */
 export const appointmentChargeOf = ({
   appointmentStatus,
   priceAmount,
   paymentStatus,
-  paymentAmount
+  paymentAmount,
+  remainingAmount,
+  remainderAmount
 }: AppointmentChargeInput): AppointmentCharge => {
   const price = toAmount(priceAmount)
   const amount = toAmount(paymentAmount)
   if (paymentStatus && ACCREDITED_PAYMENT_STATUSES.includes(paymentStatus)) {
-    const paid = amount ?? 0
-    const owes = price !== null && appointmentStatus !== 'absent'
-    return { kind: 'paid', paid, remaining: owes ? Math.max(price - paid, 0) : 0 }
+    const remainder = toAmount(remainderAmount)
+    const paid = (amount ?? 0) + (remainder ?? 0)
+    return {
+      kind: 'paid',
+      paid,
+      remaining: remainingOf(appointmentStatus, price, paid, toAmount(remainingAmount)),
+      remainderRecorded: remainder !== null
+    }
   }
   if (paymentStatus === 'refunded') return { kind: 'refunded' }
   if (paymentStatus && LIVE_CHARGE_PAYMENT_STATUSES.includes(paymentStatus) && amount !== null) {

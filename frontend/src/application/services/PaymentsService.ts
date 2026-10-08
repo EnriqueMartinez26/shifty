@@ -1,3 +1,5 @@
+import type { RemainderPaymentMethod } from '@domain/value-objects/AppointmentCharge'
+
 import apiClient from '@infrastructure/http/client'
 
 export interface GatewayConfig {
@@ -74,6 +76,33 @@ export interface AppointmentSearchItem {
   /** Cobro del turno (a lo sumo uno): estado e importe, o null si no tiene. */
   payment_status?: string | null
   payment_amount?: string | null
+  /** Saldo del turno que calcula el backend (D-20261008-01). */
+  remaining_amount?: string | null
+  /** Resto vivo registrado aparte del cobro, o null. */
+  remainder_payment?: RemainderPaymentSummary | null
+}
+
+export interface RemainderPaymentSummary {
+  amount: string
+  method?: string | null
+  created_at: string
+}
+
+export interface RemainderPaymentRecord {
+  public_id: string
+  appointment_id: string
+  amount: string
+  method?: string | null
+  created_at: string
+  reverted_at?: string | null
+  remaining_amount: string
+}
+
+export interface RemainderPaymentInput {
+  amount: number
+  method: RemainderPaymentMethod | null
+  /** Una por dialogo: un reintento del mismo envio no registra dos restos. */
+  idempotencyKey: string
 }
 
 export interface ProcessOutboxResult {
@@ -188,6 +217,26 @@ class PaymentsService {
         amount,
         notes
       }
+    )
+    return data
+  }
+
+  /** Saldo restante por turno (D-20261008-01): el resto pagado aparte. */
+  async recordRemainingPayment(
+    appointmentId: string,
+    { amount, method, idempotencyKey }: RemainderPaymentInput
+  ): Promise<RemainderPaymentRecord> {
+    const { data } = await apiClient.post<RemainderPaymentRecord>(
+      `/payments/${appointmentId}/remaining-payment`,
+      { amount, method, idempotency_key: idempotencyKey }
+    )
+    return data
+  }
+
+  /** Solo admin: marca revertido el resto (la devolucion se hizo por fuera). */
+  async revertRemainingPayment(appointmentId: string): Promise<RemainderPaymentRecord> {
+    const { data } = await apiClient.post<RemainderPaymentRecord>(
+      `/payments/${appointmentId}/remaining-payment/revert`
     )
     return data
   }

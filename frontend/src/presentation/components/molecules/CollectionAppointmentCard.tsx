@@ -1,8 +1,8 @@
 import React from 'react'
 
-import { CheckCircle2, ExternalLink, Link2 } from 'lucide-react'
+import { CheckCircle2, ExternalLink, Link2, Undo2, Wallet } from 'lucide-react'
 
-import type { AppointmentCharge } from '@domain/value-objects/AppointmentCharge'
+import { canRecordRemainder, type AppointmentCharge } from '@domain/value-objects/AppointmentCharge'
 
 import { formatCurrency } from '@shared/utils/currency'
 
@@ -22,8 +22,13 @@ interface CollectionAppointmentCardProps {
   latestLink: string | null
   linkBlockedReason: string | null
   confirmBlockedReason: string | null
+  /** Motivo por el que no se puede registrar ni revertir el resto, o null. */
+  remainderBlockedReason: string | null
   onCreateLink: () => void
   onConfirmPayment: () => void
+  onRecordRemainder: () => void
+  /** Solo si quien mira puede revertir el resto (admin); null si no. */
+  onRevertRemainder: (() => void) | null
 }
 
 const chipClass = 'px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-widest'
@@ -83,6 +88,10 @@ const ChargeSummary: React.FC<{ charge: AppointmentCharge }> = ({ charge }) => {
  * (CONFIRMADO y el mismo boton). Un turno pagado muestra lo pagado y lo que
  * resta, y no vuelve a ofrecer cobrar (el backend ignora una segunda
  * confirmacion de un cobro acreditado).
+ *
+ * Saldo restante por turno (D-20261008-01): un turno señado que todavia debe
+ * parte del precio ofrece "Registrar resto"; registrado, lo pagado suma la
+ * seña y el resto.
  */
 export const CollectionAppointmentCard: React.FC<CollectionAppointmentCardProps> = ({
   clientName,
@@ -94,10 +103,14 @@ export const CollectionAppointmentCard: React.FC<CollectionAppointmentCardProps>
   latestLink,
   linkBlockedReason,
   confirmBlockedReason,
+  remainderBlockedReason,
   onCreateLink,
-  onConfirmPayment
+  onConfirmPayment,
+  onRecordRemainder,
+  onRevertRemainder
 }) => {
   const canCharge = charge.kind === 'unpaid' || charge.kind === 'pending'
+  const canRevert = onRevertRemainder !== null && charge.kind === 'paid' && charge.remainderRecorded
   return (
     <div
       className="rounded-2xl p-4 bg-white flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4"
@@ -156,6 +169,37 @@ export const CollectionAppointmentCard: React.FC<CollectionAppointmentCardProps>
               Abrir link
               <ExternalLink className="w-3.5 h-3.5" />
             </a>
+          )}
+        </div>
+      )}
+
+      {(canRecordRemainder(charge) || canRevert) && (
+        <div className="flex flex-wrap gap-2">
+          {canRecordRemainder(charge) && (
+            <button
+              type="button"
+              onClick={onRecordRemainder}
+              disabled={remainderBlockedReason !== null}
+              title={remainderBlockedReason ?? undefined}
+              className="px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest inline-flex items-center gap-2 disabled:opacity-50"
+              style={buttonStyles2000s.selected}
+            >
+              <Wallet className="w-3.5 h-3.5" />
+              Registrar resto
+            </button>
+          )}
+          {canRevert && (
+            <button
+              type="button"
+              onClick={() => onRevertRemainder?.()}
+              disabled={remainderBlockedReason !== null}
+              title={remainderBlockedReason ?? undefined}
+              className="px-4 py-2 text-[10px] font-black uppercase tracking-widest inline-flex items-center gap-2 disabled:opacity-50"
+              style={buttonStyles2000s.default}
+            >
+              <Undo2 className="w-3.5 h-3.5" />
+              Revertir resto
+            </button>
           )}
         </div>
       )}
