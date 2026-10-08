@@ -374,7 +374,12 @@ Una instrucción en lenguaje natural no es una garantía.
 11. **Dinero y cohortes se agregan en SQL** (`GROUP BY`, funciones de
     ventana), nunca cargando la lista a memoria. (2026-09-04: ledger y
     reportes sumaban en Python.) (`test_reportes_dinero_en_sql.py`,
-    `test_fiado_resumen_en_sql.py`)
+    `test_fiado_resumen_en_sql.py`) El ingreso de un turno es su cobro
+    acreditado MÁS su resto vivo pagado aparte (`appointment_balance_payments`,
+    a lo sumo uno por turno; D-20261008-01): toda suma de ingreso une los dos
+    (`payments/repository.py::live_balance_payment_join`) y el saldo sale de
+    `remaining_balance_of`, nunca del pedido
+    (`test_reportes_cuentan_el_saldo_restante.py`).
 12. **Un `await db.execute` dentro de un `for` es N+1 hasta demostrar lo
     contrario**; se resuelve con `in_()` o join.
     `availability.get_available_slots` se auditó el 2026-09-16: carga
