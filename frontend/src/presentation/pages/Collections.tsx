@@ -1,17 +1,25 @@
 import React, { useState } from 'react'
 
-import { CheckCircle2, CreditCard, ExternalLink, Link2 } from 'lucide-react'
+import { CreditCard } from 'lucide-react'
 
+import {
+  appointmentChargeOf,
+  type AppointmentCharge
+} from '@domain/value-objects/AppointmentCharge'
 import { isCollectibleStatus } from '@domain/value-objects/BookingStatus'
+
+import type { AppointmentSearchItem } from '@application/services/PaymentsService'
 
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
 import { formatCurrency } from '@shared/utils/currency'
 
-import { buttonStyles2000s, colors2000s } from '../../theme/colors'
+import { colors2000s } from '../../theme/colors'
+import { CollectionAppointmentCard } from '../components/molecules/CollectionAppointmentCard'
 import { FormFeedback, type FormFeedbackMessage } from '../components/molecules/FormFeedback'
 import { PageHeader } from '../components/molecules/PageHeader'
 import { QueryErrorNotice } from '../components/molecules/QueryErrorNotice'
 import { SummaryCards } from '../components/molecules/SummaryCards'
+import { ManualPaymentModal } from '../components/organisms/ManualPaymentModal'
 import { useAuth } from '../context/AuthContext'
 import { ROLES_ADMIN_SUPER, hasAnyRole } from '../context/roles'
 import { useDocumentTitle } from '../hooks/useDocumentTitle'
@@ -23,13 +31,37 @@ import {
 } from '../hooks/usePayments'
 import { useStoreFeatureFlags } from '../hooks/useStores'
 import { useStoreWriteAccess } from '../hooks/useStoreWriteAccess'
-import { bookingStatusLabel } from '../lib/bookingStatusLabel'
-import { formatDateTimeEsAr } from '../lib/formatters'
 import { create2000sListCardStyle, create2000sPanelStyle } from '../lib/surfaceStyles'
 
 const PAYMENTS_OFF_REASON =
   'Los cobros online están apagados para tu negocio. Activalos en Configuración > Funciones.'
 const PAYMENTS_OFF_NOTICE = `${PAYMENTS_OFF_REASON} Las señas que te pagan por WhatsApp las confirmás igual con "Confirmar pago".`
+
+const chargeOf = (appointment: AppointmentSearchItem): AppointmentCharge =>
+  appointmentChargeOf({
+    appointmentStatus: appointment.status,
+    priceAmount: appointment.price_amount,
+    paymentStatus: appointment.payment_status,
+    paymentAmount: appointment.payment_amount
+  })
+
+/** Importe que el dialogo precarga: el cobro pendiente o el precio del turno. */
+const suggestedAmountOf = (charge: AppointmentCharge): number | null => {
+  if (charge.kind === 'pending') return charge.amount
+  if (charge.kind === 'unpaid') return charge.suggested
+  return null
+}
+
+/**
+ * Importe que viaja al confirmar. Sin `amount` el backend registra el importe
+ * del cobro VIVO, venga de donde venga, sin re-tarifarlo (promo y snapshot de
+ * la sena intactos). Sin cobro vivo no hay importe que conservar: se manda
+ * siempre el que se mostro, asi lo registrado es lo que se vio (revision de
+ * la PR #131, C1: el backend solo conservaba los cobros con sena y un link
+ * del panel se registraba por el precio del turno).
+ */
+const amountToSend = (charge: AppointmentCharge, amount: number): number | undefined =>
+  charge.kind === 'pending' && amount === charge.amount ? undefined : amount
 
 const CollectionsPage: React.FC = () => {
   useDocumentTitle('Cobros · Shifty')
@@ -55,9 +87,14 @@ const CollectionsPage: React.FC = () => {
   const linkBlockedReason = paymentsOff ? PAYMENTS_OFF_REASON : suspendedReason
   const confirmBlockedReason = suspendedReason
   const [feedback, setFeedback] = useState<FormFeedbackMessage | null>(null)
+  // Turno cuyo pago se esta confirmando (dialogo abierto) y su error.
+  const [paying, setPaying] = useState<AppointmentSearchItem | null>(null)
+  const [payError, setPayError] = useState<string | null>(null)
 
   const cardStyle = create2000sPanelStyle()
 
+  // Un completado o un ausente se sigue cobrando (regla 3): solo un turno
+  // soltado (cancelado o vencido) sale de la lista.
   const appointments = (appointmentsQuery.data ?? [])
     .filter((appointment) => isCollectibleStatus(appointment.status))
     .slice(0, 20)
@@ -76,12 +113,13 @@ const CollectionsPage: React.FC = () => {
       : [])
   ]
 
-  const handleCreatePreference = async (appointmentId: string) => {
+  // Los avisos nombran al cliente, nunca un id (regla 20).
+  const handleCreatePreference = async (appointment: AppointmentSearchItem) => {
     try {
-      const response = await createPreference.mutateAsync(appointmentId)
+      await createPreference.mutateAsync(appointment.public_id)
       setFeedback({
         tone: 'success',
-        text: `Link de cobro creado: ${response.payment_public_id}`
+        text: `Link de cobro creado para ${appointment.client_name}.`
       })
     } catch (error: unknown) {
       setFeedback({
@@ -91,14 +129,29 @@ const CollectionsPage: React.FC = () => {
     }
   }
 
-  const handleManualConfirm = async (appointmentId: string) => {
+  const openManualConfirm = (appointment: AppointmentSearchItem) => {
+    setPayError(null)
+    setPaying(appointment)
+  }
+
+  const handleManualConfirm = async (amount: number) => {
+    if (!paying) return
     try {
-      const response = await manualConfirm.mutateAsync({ appointmentId })
-      setFeedback({ tone: 'success', text: `Pago confirmado manualmente: ${response.public_id}` })
+      const response = await manualConfirm.mutateAsync({
+        appointmentId: paying.public_id,
+        amount: amountToSend(chargeOf(paying), amount)
+      })
+      setFeedback({
+        tone: 'success',
+        text: `Pago registrado: ${formatCurrency(response.amount)} de ${paying.client_name}.`
+      })
+      setPaying(null)
     } catch (error: unknown) {
-      setFeedback({ tone: 'error', text: getErrorMessage(error, 'No se pudo confirmar el pago') })
+      setPayError(getErrorMessage(error, 'No se pudo registrar el pago'))
     }
   }
+
+  const payingCharge = paying ? chargeOf(paying) : null
 
   return (
     <div className="space-y-8 duration-500">
@@ -145,96 +198,55 @@ const CollectionsPage: React.FC = () => {
         </div>
 
         <div className="space-y-3">
-          {appointments.map((appointment) => {
-            const latestLink =
-              createPreference.data?.appointment_id === appointment.public_id
-                ? createPreference.data.payment_link
-                : null
-
-            return (
-              <div
-                key={appointment.public_id}
-                className="rounded-2xl p-4 bg-white flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4"
-                style={create2000sListCardStyle()}
-              >
-                <div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <p className="text-sm font-black" style={{ color: colors2000s.text.primary }}>
-                      {appointment.client_name}
-                    </p>
-                    <span
-                      className="px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-widest"
-                      style={{
-                        background: '#f3f4f6',
-                        color: colors2000s.text.secondary
-                      }}
-                    >
-                      {bookingStatusLabel(appointment.status)}
-                    </span>
-                  </div>
-                  <p
-                    className="text-[11px] font-bold mt-1"
-                    style={{ color: colors2000s.text.secondary }}
-                  >
-                    {appointment.service_name} · {appointment.staff_name} ·{' '}
-                    {formatDateTimeEsAr(appointment.starts_at)}
-                  </p>
-                </div>
-
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      void handleCreatePreference(appointment.public_id)
-                    }}
-                    disabled={linkBlockedReason !== null}
-                    title={linkBlockedReason ?? undefined}
-                    className="px-4 py-2 text-[10px] font-black uppercase tracking-widest inline-flex items-center gap-2 disabled:opacity-50"
-                    style={buttonStyles2000s.default}
-                  >
-                    <Link2 className="w-3.5 h-3.5" />
-                    Crear link
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      void handleManualConfirm(appointment.public_id)
-                    }}
-                    disabled={confirmBlockedReason !== null}
-                    title={confirmBlockedReason ?? undefined}
-                    className="px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest inline-flex items-center gap-2 disabled:opacity-50"
-                    style={buttonStyles2000s.selected}
-                  >
-                    <CheckCircle2 className="w-3.5 h-3.5" />
-                    Confirmar pago
-                  </button>
-                  {latestLink && (
-                    <a
-                      href={latestLink}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="px-4 py-2 text-[10px] font-black uppercase tracking-widest inline-flex items-center gap-2"
-                      style={buttonStyles2000s.default}
-                    >
-                      Abrir link
-                      <ExternalLink className="w-3.5 h-3.5" />
-                    </a>
-                  )}
-                </div>
-              </div>
-            )
-          })}
+          {appointments.map((appointment) => (
+            <CollectionAppointmentCard
+              key={appointment.public_id}
+              clientName={appointment.client_name}
+              serviceName={appointment.service_name}
+              staffName={appointment.staff_name}
+              startsAt={appointment.starts_at}
+              status={appointment.status}
+              charge={chargeOf(appointment)}
+              latestLink={
+                createPreference.data?.appointment_id === appointment.public_id
+                  ? (createPreference.data.payment_link ?? null)
+                  : null
+              }
+              linkBlockedReason={linkBlockedReason}
+              confirmBlockedReason={confirmBlockedReason}
+              onCreateLink={() => {
+                void handleCreatePreference(appointment)
+              }}
+              onConfirmPayment={() => openManualConfirm(appointment)}
+            />
+          ))}
 
           {!appointments.length && !appointmentsQuery.isLoading && (
             <div
               className="rounded-2xl p-6 bg-white text-sm font-bold"
               style={{ ...create2000sListCardStyle(), color: colors2000s.text.secondary }}
             >
-              No hay turnos pendientes o confirmados para operar cobros ahora.
+              No hay turnos para cobrar ahora.
             </div>
           )}
         </div>
       </div>
+
+      {paying && payingCharge && (
+        <ManualPaymentModal
+          clientName={paying.client_name}
+          serviceName={paying.service_name}
+          startsAt={paying.starts_at}
+          suggestedAmount={suggestedAmountOf(payingCharge)}
+          isDeposit={payingCharge.kind === 'pending' && payingCharge.isDeposit}
+          busy={manualConfirm.isPending}
+          error={payError}
+          onSubmit={(amount) => {
+            void handleManualConfirm(amount)
+          }}
+          onClose={() => setPaying(null)}
+        />
+      )}
     </div>
   )
 }

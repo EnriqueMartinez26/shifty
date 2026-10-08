@@ -3148,6 +3148,9 @@ Responses:
 | `client_name` | string | yes |  |
 | `client_id` | string | yes |  |
 | `client_phone` | string \| null | no |  |
+| `price_amount` | string \| null | no | pattern="^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$" |
+| `payment_status` | string \| null | no |  |
+| `payment_amount` | string \| null | no | pattern="^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$" |
 
 ### AppointmentStatus
 

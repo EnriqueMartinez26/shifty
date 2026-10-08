@@ -69,6 +69,11 @@ export interface AppointmentSearchItem {
   staff_id: string
   client_name: string
   client_id: string
+  /** Precio congelado del turno (texto decimal); null en turnos historicos. */
+  price_amount?: string | null
+  /** Cobro del turno (a lo sumo uno): estado e importe, o null si no tiene. */
+  payment_status?: string | null
+  payment_amount?: string | null
 }
 
 export interface ProcessOutboxResult {

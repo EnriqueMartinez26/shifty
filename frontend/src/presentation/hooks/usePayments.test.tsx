@@ -4,15 +4,21 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 import { renderHook, waitFor } from '@testing-library/react'
 
-import { useManualConfirmPayment, useRefundPayment } from './usePayments'
+import {
+  useCreatePaymentPreference,
+  useManualConfirmPayment,
+  useRefundPayment
+} from './usePayments'
 
 const mockManualConfirm = jest.fn()
 const mockRefund = jest.fn()
+const mockCreatePreference = jest.fn()
 
 jest.mock('@application/services/PaymentsService', () => ({
   paymentsService: {
     manualConfirm: (...args: unknown[]) => mockManualConfirm(...args),
-    refund: (...args: unknown[]) => mockRefund(...args)
+    refund: (...args: unknown[]) => mockRefund(...args),
+    createPreference: (...args: unknown[]) => mockCreatePreference(...args)
   }
 }))
 
@@ -43,6 +49,36 @@ describe('usePayments: mutaciones que cambian el estado del cobro', () => {
   beforeEach(() => {
     mockManualConfirm.mockReset()
     mockRefund.mockReset()
+    mockCreatePreference.mockReset()
+  })
+
+  // Revision de la PR #131 (S3, 2026-10-08): despues de "Crear link" la
+  // tarjeta seguia diciendo que el turno no tenia cobro, porque la lista de
+  // Cobros no se refrescaba. El link crea (o reabre) el cobro del turno y
+  // suma un pago pendiente al resumen.
+  it('crear un link refresca los turnos de Cobros y el resumen', async () => {
+    mockCreatePreference.mockResolvedValue({ appointment_id: 'apt_1' })
+    const { envoltorio, invalidateSpy } = crearEnvoltorio()
+
+    const { result } = renderHook(() => useCreatePaymentPreference(), { wrapper: envoltorio })
+    result.current.mutate('apt_1')
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(clavesInvalidadas(invalidateSpy)).toEqual([
+      ['payments-reconciliation-summary'],
+      ['payments-appointments']
+    ])
+  })
+
+  it('un link que falla no invalida nada', async () => {
+    mockCreatePreference.mockRejectedValue(new Error('Mercado Pago no respondio'))
+    const { envoltorio, invalidateSpy } = crearEnvoltorio()
+
+    const { result } = renderHook(() => useCreatePaymentPreference(), { wrapper: envoltorio })
+    result.current.mutate('apt_1')
+
+    await waitFor(() => expect(result.current.isError).toBe(true))
+    expect(invalidateSpy).not.toHaveBeenCalled()
   })
 
   it('confirmar un pago a mano refresca el resumen, los turnos, el outbox y la agenda', async () => {

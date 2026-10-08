@@ -551,7 +551,11 @@ async def search_appointments(
     )
     # El telefono del cliente solo lo ve un administrador (dato personal).
     show_phone = has_any_role(user, STORE_MANAGERS)
-    results = [_to_search_result(row, show_phone=show_phone) for row in rows]
+    show_charge = _can_operate_charges(user)
+    results = [
+        _to_search_result(row, show_phone=show_phone, show_charge=show_charge)
+        for row in rows
+    ]
 
     return AppointmentSearchResponse(
         total=total,
@@ -580,10 +584,19 @@ def _search_key(after: Optional[str], page: int) -> Optional[tuple[datetime, str
         raise ValidationException("Cursor de paginacion invalido") from None
 
 
+def _can_operate_charges(user: User) -> bool:
+    """Ve el cobro de cada turno quien opera cobros (2026-10-08): mismo
+    criterio que ``payments.router._require_payment_manager``. La recepcion
+    busca turnos pero no opera cobros, asi que no ve importes."""
+    return user.role in (UserRole.ADMIN, UserRole.STAFF) or user.is_global_admin
+
+
 def _to_search_result(
-    row: AppointmentSearchRow, *, show_phone: bool
+    row: AppointmentSearchRow, *, show_phone: bool, show_charge: bool
 ) -> AppointmentSearchResult:
-    appointment, service, staff_id, staff_name, client = row
+    appointment, service, staff_id, staff_name, client, cobro, importe = row
+    if not show_charge:
+        cobro, importe = None, None
     return AppointmentSearchResult(
         public_id=appointment.public_id,
         starts_at=appointment.starts_at,
@@ -601,4 +614,7 @@ def _to_search_result(
         client_name=client.full_name or client.email,
         client_id=client.public_id,
         client_phone=client.phone if show_phone else None,
+        price_amount=appointment.price_amount if show_charge else None,
+        payment_status=cobro,
+        payment_amount=importe,
     )

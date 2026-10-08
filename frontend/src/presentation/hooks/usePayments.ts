@@ -51,10 +51,24 @@ export const usePaymentsAppointments = () =>
     queryFn: () => paymentsService.getAppointments()
   })
 
-export const useCreatePaymentPreference = () =>
-  useMutation<PaymentPreference, Error, string>({
-    mutationFn: (appointmentId) => paymentsService.createPreference(appointmentId)
+// El link crea (o reabre) el cobro del turno: la tarjeta de Cobros y el
+// resumen de pendientes quedan viejos (revision de la PR #131, S3).
+const PAYMENT_LINK_QUERIES = [
+  ['payments-reconciliation-summary'],
+  ['payments-appointments']
+] as const
+
+export const useCreatePaymentPreference = () => {
+  const queryClient = useQueryClient()
+  return useMutation<PaymentPreference, Error, string>({
+    mutationFn: (appointmentId) => paymentsService.createPreference(appointmentId),
+    onSuccess: () => {
+      PAYMENT_LINK_QUERIES.forEach((queryKey) => {
+        void queryClient.invalidateQueries({ queryKey: [...queryKey] })
+      })
+    }
   })
+}
 
 export const usePromotions = (enabled = true, includeInactive = true) =>
   useQuery<PromotionRecord[]>({
