@@ -112,7 +112,10 @@ const ConEstado: React.FC<{ base: Props }> = ({ base }) => {
   )
 }
 
-const RESERVAR = 'Reservar y pagar por WhatsApp'
+// Sin seña la reserva se confirma; con seña y coordinacion manual se paga por
+// WhatsApp (QA movil 2026-10-08: decia "pagar por WhatsApp" sin seña).
+const RESERVAR = 'Confirmar reserva'
+const RESERVAR_CON_SENA = 'Reservar y pagar la seña por WhatsApp'
 const PAGAR_MP = 'Pagar seña con Mercado Pago'
 const aceptarTerminos = () => fireEvent.click(screen.getByRole('checkbox'))
 const botonReservar = () => screen.getByRole('button', { name: RESERVAR })
@@ -243,7 +246,7 @@ describe('BookingStepConfirmation', () => {
 
       expect(screen.getByTestId('deposit-preview')).toHaveTextContent(/1\.500/)
       expect(screen.getByRole('button', { name: PAGAR_MP })).toBeInTheDocument()
-      expect(botonReservar()).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: RESERVAR_CON_SENA })).toBeInTheDocument()
     })
 
     it('con pago online obligatorio no ofrece coordinar por WhatsApp', () => {
@@ -262,6 +265,7 @@ describe('BookingStepConfirmation', () => {
       render(<BookingStepConfirmation {...props({ paymentsEnabled: true })} />)
 
       expect(screen.getByRole('button', { name: PAGAR_MP })).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: RESERVAR_CON_SENA })).not.toBeInTheDocument()
       expect(screen.queryByRole('button', { name: RESERVAR })).not.toBeInTheDocument()
     })
 
@@ -269,6 +273,44 @@ describe('BookingStepConfirmation', () => {
       render(<BookingStepConfirmation {...props({ paymentsEnabled: true })} />)
 
       expect(screen.queryByTestId('deposit-preview')).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: PAGAR_MP })).not.toBeInTheDocument()
+    })
+
+    it('sin seña el boton confirma la reserva, no habla de pagar', () => {
+      mockDepositPreview.mockReturnValue({
+        isLoading: false,
+        data: {
+          amount: 0,
+          base_amount: 0,
+          extra_percent: 0,
+          reasons: [],
+          price: 5000,
+          payments_enabled: false,
+          online_payment_mandatory: false
+        }
+      })
+      render(<BookingStepConfirmation {...props()} />)
+
+      expect(screen.getByRole('button', { name: RESERVAR })).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /pagar/i })).not.toBeInTheDocument()
+    })
+
+    it('con seña del servicio y cobros apagados, se paga por WhatsApp', () => {
+      // Sin vista previa todavia: se infiere del servicio.
+      mockServices.mockReturnValue({
+        data: [
+          {
+            public_id: 'svc-1',
+            deposit_mode: 'required',
+            deposit_type: 'percent',
+            deposit_amount: 30
+          }
+        ],
+        isLoading: false
+      })
+      render(<BookingStepConfirmation {...props({ paymentsEnabled: false })} />)
+
+      expect(screen.getByRole('button', { name: RESERVAR_CON_SENA })).toBeInTheDocument()
       expect(screen.queryByRole('button', { name: PAGAR_MP })).not.toBeInTheDocument()
     })
 

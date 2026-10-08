@@ -1,6 +1,7 @@
 import React, { useReducer, useRef, useState } from 'react'
 
 import {
+  CalendarCheck,
   ChevronLeft,
   FileText,
   Loader2,
@@ -169,9 +170,10 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
     Number(selectedService.deposit_amount ?? (selectedService.deposit_type === 'full' ? 1 : 0)) > 0
   )
   const depositPreview = depositQuery.data ?? null
-  const canPayDeposit = Boolean(
-    paymentsEnabled && (depositPreview ? depositPreview.amount > 0 : inferredDeposit)
-  )
+  // Lleva seña, se cobre online o no: sin seña no hay nada que pagar por
+  // WhatsApp (QA movil 2026-10-08: el boton lo decia igual).
+  const hasDeposit = depositPreview ? depositPreview.amount > 0 : inferredDeposit
+  const canPayDeposit = Boolean(paymentsEnabled && hasDeposit)
   // Con seña obligatoria y coordinación manual deshabilitada por la tienda, la
   // única vía válida es pagar online. El backend lo rechaza igual, pero no tiene
   // sentido ofrecer un botón que va a fallar.
@@ -702,8 +704,17 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
                 : buttonStyles2000s.disabled
             }
           >
-            <Phone className="w-4 h-4 inline mr-2" />
-            Reservar y pagar por WhatsApp
+            {hasDeposit ? (
+              <>
+                <Phone className="w-4 h-4 inline mr-2" />
+                Reservar y pagar la seña por WhatsApp
+              </>
+            ) : (
+              <>
+                <CalendarCheck className="w-4 h-4 inline mr-2" />
+                Confirmar reserva
+              </>
+            )}
           </button>
         )}
         {canPayDeposit && (
