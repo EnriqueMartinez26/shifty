@@ -78,6 +78,14 @@ const ACTION_VIEWS: Record<AppointmentAction, ActionView> = {
   }
 }
 
+/**
+ * Blanco tactil de 40x40 (QA movil 2026-10-08: median 30x22 compactos y 24 de
+ * alto con texto). En pantallas grandes los compactos de la grilla del dia y
+ * del mes vuelven a su tamano: ahi no hay dedo y no entran.
+ */
+export const TAP_TARGET = 'min-h-10 min-w-10'
+export const COMPACT_ON_DESKTOP = 'md:min-h-0 md:min-w-0'
+
 export const AppointmentActions: React.FC<AppointmentActionsProps> = ({
   status,
   hasStarted,
@@ -112,7 +120,7 @@ export const AppointmentActions: React.FC<AppointmentActionsProps> = ({
               onAction(action)
             }}
             disabled={busy || blockedReason !== null}
-            className={`inline-flex items-center gap-1 rounded-lg bg-white px-2 py-1 text-[9px] font-black uppercase tracking-widest border disabled:opacity-50 ${spec.tone}`}
+            className={`inline-flex items-center justify-center gap-1 rounded-lg bg-white px-2 py-1 text-[9px] font-black uppercase tracking-widest border disabled:opacity-50 ${TAP_TARGET} ${compact ? COMPACT_ON_DESKTOP : ''} ${spec.tone}`}
           >
             {spec.icon}
             {compact ? null : spec.label}

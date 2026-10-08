@@ -55,6 +55,7 @@ import { useConfirm } from '../hooks/useConfirm'
 import { useManagedStaff } from '../hooks/useManagedStaff'
 import { useStoreSettings } from '../hooks/useStores'
 import { useStoreWriteAccess } from '../hooks/useStoreWriteAccess'
+import { initialAgendaView, saveAgendaView } from '../lib/agendaViewPreference'
 import {
   NO_EVENTS,
   buildUnifiedEvents,
@@ -100,7 +101,13 @@ export const CalendarContainer: React.FC = () => {
   const writeAccess = useStoreWriteAccess()
   const readOnlyReason = writeAccess.readOnly ? writeAccess.reason : null
   const [selectedDate, setSelectedDate] = useState(new Date())
-  const [view, setView] = useState<CalendarView>('day')
+  // Lista en el telefono, Día en pantallas grandes, o la que eligio la ultima
+  // vez (QA movil 2026-10-08: volvia a "Día" en cada navegacion).
+  const [view, setView] = useState<CalendarView>(() => initialAgendaView(user?.public_id))
+  const changeView = (next: CalendarView) => {
+    setView(next)
+    saveAgendaView(user?.public_id, next)
+  }
   const [message, setMessage] = useState('')
   const [isNewAppointmentOpen, setIsNewAppointmentOpen] = useState(false)
   // El panel de bloqueos se remonta con `key` al elegir otro bloqueo: sin
@@ -443,7 +450,7 @@ export const CalendarContainer: React.FC = () => {
         selectedDate={selectedDate}
         onPrev={goPrev}
         onNext={goNext}
-        onViewChange={setView}
+        onViewChange={changeView}
         onNewAppointment={() => setIsNewAppointmentOpen(true)}
         readOnlyReason={readOnlyReason}
       />

@@ -25,6 +25,7 @@ from modules.stores.model import StoreMedia
 from tests.integration.test_feature_flags_finance_and_public_privacy import (
     auth_headers,
     create_service,
+    create_staff,
     register_and_login,
 )
 from tests.unit.imagenes_sinteticas import EXIF, jpeg, png, webp_vp8l
@@ -36,7 +37,11 @@ async def _tienda_con_servicio(client: AsyncClient, slug: str) -> tuple[str, str
     store_public_id, token = await register_and_login(
         client, slug=slug, email=f"{slug}@example.com"
     )
-    return store_public_id, token, await create_service(client, token)
+    servicio = await create_service(client, token)
+    # Con un profesional asignado: sin ninguno el servicio no sale en el
+    # catalogo publico (QA movil 2026-10-08).
+    await create_staff(client, token, servicio, email=f"pro-{slug}@example.com")
+    return store_public_id, token, servicio
 
 
 async def _subir(

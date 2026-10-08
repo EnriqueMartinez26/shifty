@@ -31,6 +31,23 @@ describe('getErrorMessage', () => {
     )
   })
 
+  // Revision de #133 (2026-10-08): el email de acceso propio no se cambia por
+  // Personal y la cuenta SuperAdmin no se agrega como profesional.
+  it.each([
+    [
+      'SELF_EMAIL_CHANGE_DENIED',
+      new ValidationError('x', { errorCode: 'SELF_EMAIL_CHANGE_DENIED', statusCode: 400 }),
+      'Tu email de acceso no se cambia desde Personal.'
+    ],
+    [
+      'STAFF_SELF_GLOBAL_ADMIN_DENIED',
+      new ForbiddenError('x', { errorCode: 'STAFF_SELF_GLOBAL_ADMIN_DENIED', statusCode: 403 }),
+      'La cuenta SuperAdmin no se agrega como profesional.'
+    ]
+  ])('traduce %s', (_code, error, texto) => {
+    expect(getErrorMessage(error, FALLBACK)).toBe(texto)
+  })
+
   it('un VALIDATION_ERROR devuelve el fallback, nunca el texto de Pydantic', () => {
     const pydantic = 'body -> email: value is not a valid email address'
     const error = new ValidationError(pydantic, { errorCode: 'VALIDATION_ERROR', statusCode: 422 })
@@ -244,5 +261,42 @@ describe('getErrorMessage: errores de validacion por campo', () => {
 
     expect(getInvalidFields(alCrear)).toEqual(['deposit_amount'])
     expect(getInvalidFields(alEditar)).toEqual(['deposit_amount'])
+  })
+})
+
+// QA movil 2026-10-08: el alta de un profesional con un email ya usado
+// responde 422 VALIDATION_ERROR "Ya existe un usuario con ese email"
+// (staff/repository.py) y el modal decia solo "No se pudo guardar".
+describe('getErrorMessage - textos de validacion conocidos', () => {
+  const duplicado = new ValidationError('Ya existe un usuario con ese email', {
+    errorCode: 'VALIDATION_ERROR',
+    statusCode: 422,
+    detail: {}
+  })
+
+  it('el email duplicado sale con un texto propio, no con el fallback', () => {
+    expect(getErrorMessage(duplicado, FALLBACK)).toBe(
+      'Ese email ya lo usa otra cuenta. Usá otro email.'
+    )
+  })
+
+  it('tambien envuelto en originalError', () => {
+    expect(getErrorMessage(wrapped(duplicado), FALLBACK)).toBe(
+      'Ese email ya lo usa otra cuenta. Usá otro email.'
+    )
+  })
+
+  it('el override de la pantalla le sigue ganando', () => {
+    expect(getErrorMessage(duplicado, FALLBACK, { VALIDATION_ERROR: 'otro texto' })).toBe(
+      'otro texto'
+    )
+  })
+
+  it('un VALIDATION_ERROR con otro texto sigue en el fallback', () => {
+    const otro = new ValidationError('Ya existe un usuario con ese email y algo mas', {
+      errorCode: 'VALIDATION_ERROR',
+      statusCode: 422
+    })
+    expect(getErrorMessage(otro, FALLBACK)).toBe(FALLBACK)
   })
 })

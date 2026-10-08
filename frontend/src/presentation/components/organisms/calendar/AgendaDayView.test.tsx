@@ -86,7 +86,7 @@ describe('AgendaDayView', () => {
   it('pinta un encabezado por profesional con sus iniciales y la grilla', () => {
     renderDayView()
     expect(screen.getByText('AG')).toBeInTheDocument()
-    expect(screen.getByText('Bruno Diaz')).toBeInTheDocument()
+    expect(screen.getByText('Bruno Diaz', { selector: 'p' })).toBeInTheDocument()
     expect(screen.getByText('09:00', { selector: 'span' })).toBeInTheDocument()
     expect(screen.getByText('Carla Ruiz')).toBeInTheDocument()
     // QA 2026-10-02: el estado salia crudo ('CONFIRMED' con uppercase).
@@ -112,4 +112,77 @@ describe('AgendaDayView', () => {
     renderDayView(true)
     expect(screen.getByText('Actualizando agenda...')).toBeInTheDocument()
   })
+
+  // QA movil 2026-10-08: en el dia, los iconos tapaban el nombre del servicio
+  // y la grilla de 800 px con varios profesionales no se podia recorrer.
+  it('los controles del turno van debajo del nombre, no encima', () => {
+    renderDayView()
+    const controls = screen.getByRole('button', { name: 'Confirmar' }).parentElement
+    expect(controls).not.toHaveClass('absolute')
+    expect(
+      precedesNode(
+        screen.getByText('Carla Ruiz'),
+        screen.getByRole('button', { name: 'Confirmar' })
+      )
+    ).toBe(true)
+  })
+
+  // Revision de la PR #129: con alto fijo y overflow-y-auto, un turno corto
+  // (piso de 30 min = 128 px) dejaba las acciones de 40x40 adentro de un
+  // scroll anidado diminuto en el telefono.
+  it('la tarjeta crece hasta mostrar sus acciones, sin scroll propio', () => {
+    renderDayView()
+    const tarjeta = screen.getByText('Carla Ruiz').closest('[data-appointment-card]')
+    expect(tarjeta).not.toBeNull()
+    const estilo = (tarjeta as HTMLElement).style
+
+    expect(estilo.minHeight).toBe(card.height)
+    expect(estilo.height).toBe('')
+    expect(tarjeta).not.toHaveClass('overflow-y-auto', 'overflow-auto', 'overflow-hidden')
+    // Si al crecer tapa al turno de abajo, tocarla la trae al frente.
+    expect(tarjeta).toHaveClass('focus-within:z-20', 'hover:z-20')
+  })
+
+  it('en el telefono muestra un profesional por vez y deja elegirlo', () => {
+    renderDayView()
+    const picker = screen.getByRole('group', { name: 'Profesional' })
+    expect(picker).toHaveClass('md:hidden')
+    const ana = screen.getByRole('button', { name: 'Ana Gomez' })
+    const bruno = screen.getByRole('button', { name: 'Bruno Diaz' })
+    expect(ana).toHaveAttribute('aria-pressed', 'true')
+    expect(bruno).toHaveAttribute('aria-pressed', 'false')
+    // El turno es de Bruno: su columna se oculta en el telefono hasta elegirlo.
+    expect(screen.getByText('Carla Ruiz').closest('[data-staff-column]')).toHaveClass(
+      'hidden',
+      'md:block'
+    )
+
+    fireEvent.click(bruno)
+
+    expect(bruno).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByText('Carla Ruiz').closest('[data-staff-column]')).not.toHaveClass('hidden')
+  })
+
+  it('la grilla solo exige 800 px de ancho desde tablet', () => {
+    const { container } = render(
+      <AgendaDayView
+        staffMembers={staffMembers}
+        loading={false}
+        dayGrid={dayGrid}
+        hoursOfDay={{ byStaff: new Map() }}
+        blocks={[]}
+        cards={[]}
+        canManageBlocks={false}
+        onToggleGap={jest.fn()}
+        onEditBlock={jest.fn()}
+        renderControls={() => null}
+      />
+    )
+    expect(container.querySelector('[class~="min-w-[800px]"]')).toBeNull()
+    expect(container.querySelector('[class~="md:min-w-[800px]"]')).not.toBeNull()
+  })
 })
+
+/** `a` aparece antes que `b` en el documento. */
+const precedesNode = (a: HTMLElement, b: HTMLElement) =>
+  Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING)

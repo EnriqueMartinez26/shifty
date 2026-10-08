@@ -6,6 +6,7 @@ declare global {
       toBeInTheDocument(): R
       toHaveAttribute(attribute: string, value?: string): R
       toHaveTextContent(text: string | RegExp): R
+      toHaveClass(...classNames: string[]): R
     }
   }
 }
@@ -65,6 +66,23 @@ expect.extend({
         pass
           ? 'Expected element not to have matching text content.'
           : `Expected element to have text content matching ${String(text)}.`
+    }
+  },
+  // Mismo criterio que @testing-library/jest-dom: pasa si tiene TODAS.
+  // Sin elemento falla siempre, tambien con `.not`.
+  toHaveClass(received: Element | null, ...classNames: string[]) {
+    if (!(received instanceof Element)) {
+      throw new Error('toHaveClass necesita un elemento y recibio null.')
+    }
+    const actual = [...received.classList]
+    const pass = classNames.every((name) => actual.includes(name))
+
+    return {
+      pass,
+      message: () =>
+        pass
+          ? `Expected element not to have classes ${classNames.join(' ')}.`
+          : `Expected element to have classes ${classNames.join(' ')}, got "${actual.join(' ')}".`
     }
   }
 })

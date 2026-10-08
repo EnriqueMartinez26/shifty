@@ -4,6 +4,8 @@ import type { IStaffRepository } from '../../domain/repositories/IStaffRepositor
 import { Email } from '../../domain/value-objects/Email'
 import apiClient from '../../infrastructure/http/client'
 import { HttpStaffRepository } from '../../infrastructure/repositories/HttpStaffRepository'
+import type { StaffResponseDTO } from '../dtos/StaffDTO'
+import { StaffMapper } from '../mappers/StaffMapper'
 import type { CreateStaffSchema } from '../validators/staff.validators'
 import { createStaffSchema } from '../validators/staff.validators'
 
@@ -88,6 +90,22 @@ export class StaffService extends BaseService<Staff> {
 
       return await this.repository.update(id, input)
     }, 'updateStaff')
+  }
+
+  /**
+   * La cuenta que inicia sesion (el dueno que tambien atiende) se agrega como
+   * profesional: `POST /staff/me`. Usa su misma cuenta (sin otro email ni
+   * otra clave) y su nombre si no elige uno. Path literal (regla 23).
+   */
+  async addMyself(input: { displayName?: string; serviceIds: string[] }): Promise<Staff> {
+    return await this.execute(async () => {
+      const displayName = input.displayName?.trim()
+      const { data } = await apiClient.post<StaffResponseDTO>('/staff/me', {
+        ...(displayName ? { display_name: displayName } : {}),
+        service_ids: input.serviceIds
+      })
+      return StaffMapper.toDomain(data)
+    }, 'addMyself')
   }
 
   /**
