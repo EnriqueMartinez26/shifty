@@ -47,7 +47,8 @@ export default {
     // y cookie-es (.mjs).
     '^.+\\.(mjs|[jt]sx?)$': '<rootDir>/jest.ts-transformer.cjs'
   },
-  // Por defecto Jest ignora node_modules. react-router v8 (+cookie-es) son ESM
-  // puros, asi que hay que exceptuarlos para que el transform de arriba los tome.
-  transformIgnorePatterns: ['/node_modules/(?!(react-router|cookie-es)/)']
+  // Por defecto Jest ignora node_modules. react-router v8, su dependencia
+  // @remix-run/route-pattern y cookie-es son ESM puros: el transform de arriba
+  // tiene que convertirlos a CommonJS para Jest.
+  transformIgnorePatterns: ['/node_modules/(?!(react-router|cookie-es|@remix-run/route-pattern)/)']
 }

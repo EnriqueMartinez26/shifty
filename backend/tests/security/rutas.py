@@ -313,6 +313,14 @@ async def _crear_staff(m: Mundo, a: Actor, t: Tienda) -> Llamada:
     )
 
 
+async def _agregarme_como_staff(m: Mundo, a: Actor, t: Tienda) -> Llamada:
+    # La ficha es la de la cuenta que llama: la segunda vez del mismo actor
+    # responde 409 (ya figura), por eso la fila acepta 201 y 409. El
+    # superadmin queda afuera: la cuenta global no atiende (403
+    # STAFF_SELF_GLOBAL_ADMIN_DENIED, revision de #133).
+    return Llamada("POST", "/staff/me", json={"service_ids": [t.servicio]})
+
+
 async def _ver_staff(m: Mundo, a: Actor, t: Tienda) -> Llamada:
     return Llamada("GET", f"/staff/{t.staff}")
 
@@ -322,6 +330,18 @@ async def _crear_horario(m: Mundo, a: Actor, t: Tienda) -> Llamada:
         "POST",
         f"/staff/{await m.staff(t)}/schedules",
         json={"day_of_week": 1, "start_time": "08:00:00", "end_time": "12:00:00"},
+    )
+
+
+async def _reemplazar_semana(m: Mundo, a: Actor, t: Tienda) -> Llamada:
+    return Llamada(
+        "PUT",
+        f"/staff/{await m.staff(t)}/schedules",
+        json={
+            "schedules": [
+                {"day_of_week": 1, "start_time": "08:00:00", "end_time": "12:00:00"}
+            ]
+        },
     )
 
 
@@ -1139,6 +1159,14 @@ TABLA: tuple[Ruta, ...] = (
     # personal
     R("GET", "/staff/", PERSONAL, A.PROPIA, _listar_staff),
     R("POST", "/staff/", ADMINS, A.RECURSO, _crear_staff, idor=IDOR_EN_BODY),
+    R(
+        "POST",
+        "/staff/me",
+        frozenset({ADMIN_TIENDA}),
+        A.PROPIA,
+        _agregarme_como_staff,
+        ok=frozenset({201, 409}),
+    ),
     R("GET", "/staff/{public_id}", PERSONAL, A.RECURSO, _ver_staff, idor=IDOR_POR_ID),
     R(
         "POST",
@@ -1146,6 +1174,14 @@ TABLA: tuple[Ruta, ...] = (
         ADMINS,
         A.RECURSO,
         _crear_horario,
+        idor=IDOR_POR_ID,
+    ),
+    R(
+        "PUT",
+        "/staff/{public_id}/schedules",
+        ADMINS,
+        A.RECURSO,
+        _reemplazar_semana,
         idor=IDOR_POR_ID,
     ),
     R(

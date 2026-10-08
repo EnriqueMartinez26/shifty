@@ -3,7 +3,7 @@
 Generado automaticamente desde `app.openapi()` del backend (FastAPI); no editar a mano. Regenerar con `backend/scripts/gen_api_contract.py` (el comando esta en su docstring).
 
 - OpenAPI: 3.1.0
-- Paths: 118 — Operaciones: 147
+- Paths: 119 — Operaciones: 149
 
 ## /
 
@@ -183,7 +183,7 @@ Parameters:
 
 Responses:
 
-- `200` Successful Response — `application/json`: `ApiSuccess_list_object__`
+- `200` Successful Response — `application/json`: `array<any>`
 - `422` Validation Error — `application/json`: `HTTPValidationError`
 
 ### GET /appointments/search
@@ -344,7 +344,7 @@ Request body (required):
 
 Responses:
 
-- `200` Successful Response — `application/json`: `ApiSuccess_ResetPasswordResponse_`
+- `200` Successful Response — `application/json`: `ResetPasswordResponse`
 - `422` Validation Error — `application/json`: `HTTPValidationError`
 
 ### POST /auth/forgot-password
@@ -428,7 +428,7 @@ Responses:
 
 Responses:
 
-- `200` Successful Response — `application/json`: `ApiSuccess_RevokedSessionsResult_`
+- `200` Successful Response — `application/json`: `RevokedSessionsResult`
 
 ### POST /auth/sessions/revoke-store
 
@@ -437,7 +437,7 @@ Responses:
 
 Responses:
 
-- `200` Successful Response — `application/json`: `ApiSuccess_RevokedSessionsResult_`
+- `200` Successful Response — `application/json`: `RevokedSessionsResult`
 
 ### POST /auth/sessions/revoke-user/{user_public_id}
 
@@ -452,7 +452,7 @@ Parameters:
 
 Responses:
 
-- `200` Successful Response — `application/json`: `ApiSuccess_RevokedSessionsResult_`
+- `200` Successful Response — `application/json`: `RevokedSessionsResult`
 - `422` Validation Error — `application/json`: `HTTPValidationError`
 
 ### DELETE /auth/sessions/{session_id}
@@ -653,7 +653,7 @@ Responses:
 
 Responses:
 
-- `200` Successful Response — `application/json`: `ApiSuccess_dict_str__str__`
+- `200` Successful Response — `application/json`: `object<string, string>`
 
 ### GET /ops/health/ready
 
@@ -671,7 +671,7 @@ Responses:
 
 Responses:
 
-- `200` Successful Response — `application/json`: `ApiSuccess_dict_str__Any__`
+- `200` Successful Response — `application/json`: `object`
 
 ## Payments
 
@@ -807,7 +807,7 @@ Parameters:
 
 Responses:
 
-- `200` Successful Response — `application/json`: `ApiSuccess_dict_str__Any__`
+- `200` Successful Response — `application/json`: `object`
 - `422` Validation Error — `application/json`: `HTTPValidationError`
 
 ### POST /payments/{appointment_id}/manual-confirm
@@ -1003,7 +1003,7 @@ Parameters:
 
 Responses:
 
-- `200` Successful Response — `application/json`: `ApiSuccess_list_object__`
+- `200` Successful Response — `application/json`: `array<any>`
 - `422` Validation Error — `application/json`: `HTTPValidationError`
 
 ### PATCH /public/client/appointments/{public_id}/cancel
@@ -1095,7 +1095,7 @@ Request body (required):
 
 Responses:
 
-- `200` Successful Response — `application/json`: `ApiSuccess_dict_str__object__`
+- `200` Successful Response — `application/json`: `object`
 - `422` Validation Error — `application/json`: `HTTPValidationError`
 
 ### POST /public/otp/verify
@@ -1109,7 +1109,7 @@ Request body (required):
 
 Responses:
 
-- `200` Successful Response — `application/json`: `ApiSuccess_dict_str__object__`
+- `200` Successful Response — `application/json`: `object`
 - `422` Validation Error — `application/json`: `HTTPValidationError`
 
 ### GET /public/payments/{payment_public_id}/status
@@ -1537,6 +1537,20 @@ Responses:
 - `201` Successful Response — `application/json`: `ApiSuccess_StaffResponse_`
 - `422` Validation Error — `application/json`: `HTTPValidationError`
 
+### POST /staff/me
+
+- Summary: Add Myself As Staff
+- operationId: `add_myself_as_staff_staff_me_post`
+
+Request body (required):
+
+- `application/json`: `StaffSelfCreate`
+
+Responses:
+
+- `201` Successful Response — `application/json`: `ApiSuccess_StaffResponse_`
+- `422` Validation Error — `application/json`: `HTTPValidationError`
+
 ### GET /staff/{public_id}
 
 - Summary: Get Staff
@@ -1629,6 +1643,26 @@ Responses:
 - `200` Successful Response — `application/json`: `ApiSuccess_ScheduleResponse_`
 - `422` Validation Error — `application/json`: `HTTPValidationError`
 
+### PUT /staff/{public_id}/schedules
+
+- Summary: Replace Staff Schedules
+- operationId: `replace_staff_schedules_staff__public_id__schedules_put`
+
+Parameters:
+
+| in | name | required | type | constraints |
+|---|---|---|---|---|
+| path | `public_id` | yes | string | minLength=1, maxLength=64, pattern="^[A-Za-z0-9_-]{1,64}$" |
+
+Request body (required):
+
+- `application/json`: `ScheduleWeekReplace`
+
+Responses:
+
+- `200` Successful Response — `application/json`: `ApiSuccess_list_ScheduleResponse__`
+- `422` Validation Error — `application/json`: `HTTPValidationError`
+
 ### PATCH /staff/{public_id}/schedules/{schedule_id}
 
 - Summary: Update Staff Schedule
@@ -1684,7 +1718,7 @@ Request body (required):
 
 Responses:
 
-- `200` Successful Response — `application/json`: `ApiSuccess_dict_str__str__`
+- `200` Successful Response — `application/json`: `object<string, string>`
 - `422` Validation Error — `application/json`: `HTTPValidationError`
 
 ## Store Terms
@@ -2449,30 +2483,6 @@ Responses:
 | `data` | DashboardSummaryResponse | yes |  |
 | `meta` | object \| null | no |  |
 
-### ApiSuccess_dict_str__Any__
-
-| field | type | required | constraints |
-|---|---|---|---|
-| `success` | boolean | no | default=true |
-| `data` | object | yes |  |
-| `meta` | object \| null | no |  |
-
-### ApiSuccess_dict_str__object__
-
-| field | type | required | constraints |
-|---|---|---|---|
-| `success` | boolean | no | default=true |
-| `data` | object | yes |  |
-| `meta` | object \| null | no |  |
-
-### ApiSuccess_dict_str__str__
-
-| field | type | required | constraints |
-|---|---|---|---|
-| `success` | boolean | no | default=true |
-| `data` | object<string, string> | yes |  |
-| `meta` | object \| null | no |  |
-
 ### ApiSuccess_ForgotPasswordResponse_
 
 | field | type | required | constraints |
@@ -2577,14 +2587,6 @@ Responses:
 | `data` | array<LedgerClientItem> | yes |  |
 | `meta` | object \| null | no |  |
 
-### ApiSuccess_list_object__
-
-| field | type | required | constraints |
-|---|---|---|---|
-| `success` | boolean | no | default=true |
-| `data` | array<any> | yes |  |
-| `meta` | object \| null | no |  |
-
 ### ApiSuccess_list_PlanResponse__
 
 | field | type | required | constraints |
@@ -2615,6 +2617,14 @@ Responses:
 |---|---|---|---|
 | `success` | boolean | no | default=true |
 | `data` | array<PublicStaffResponse> | yes |  |
+| `meta` | object \| null | no |  |
+
+### ApiSuccess_list_ScheduleResponse__
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `success` | boolean | no | default=true |
+| `data` | array<ScheduleResponse> | yes |  |
 | `meta` | object \| null | no |  |
 
 ### ApiSuccess_list_ServiceResponse__
@@ -2847,14 +2857,6 @@ Responses:
 |---|---|---|---|
 | `success` | boolean | no | default=true |
 | `data` | ResetPasswordResponse | yes |  |
-| `meta` | object \| null | no |  |
-
-### ApiSuccess_RevokedSessionsResult_
-
-| field | type | required | constraints |
-|---|---|---|---|
-| `success` | boolean | no | default=true |
-| `data` | RevokedSessionsResult | yes |  |
 | `meta` | object \| null | no |  |
 
 ### ApiSuccess_ScheduleResponse_
@@ -4205,6 +4207,12 @@ Type: `enum("efectivo", "transferencia", "mercadopago", "otro")`
 | `start_time` | string \| null | no | format="time" |
 | `end_time` | string \| null | no | format="time" |
 
+### ScheduleWeekReplace
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `schedules` | array<ScheduleCreate> | yes | maxItems=42 |
+
 ### ServiceCreate
 
 | field | type | required | constraints |
@@ -4297,6 +4305,13 @@ Type: `enum("efectivo", "transferencia", "mercadopago", "otro")`
 | `service_ids` | array<string> | no |  |
 | `services` | array<ServiceResponse> | no |  |
 | `schedules` | array<ScheduleResponse> | no |  |
+
+### StaffSelfCreate
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `display_name` | string \| null | no | minLength=2, maxLength=100 |
+| `service_ids` | array<string> | no | maxItems=100 |
 
 ### StaffUpdate
 
@@ -4782,4 +4797,4 @@ Type: `enum("admin", "staff", "receptionist", "client")`
 | `terms_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 | `privacy_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 
-Generado desde app.openapi() el 2026-10-08, commit fa002e1d
+Generado desde app.openapi() el 2026-10-08, commit 8130c648

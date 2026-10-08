@@ -127,6 +127,22 @@ describe('AgendaDayView', () => {
     ).toBe(true)
   })
 
+  // Revision de la PR #129: con alto fijo y overflow-y-auto, un turno corto
+  // (piso de 30 min = 128 px) dejaba las acciones de 40x40 adentro de un
+  // scroll anidado diminuto en el telefono.
+  it('la tarjeta crece hasta mostrar sus acciones, sin scroll propio', () => {
+    renderDayView()
+    const tarjeta = screen.getByText('Carla Ruiz').closest('[data-appointment-card]')
+    expect(tarjeta).not.toBeNull()
+    const estilo = (tarjeta as HTMLElement).style
+
+    expect(estilo.minHeight).toBe(card.height)
+    expect(estilo.height).toBe('')
+    expect(tarjeta).not.toHaveClass('overflow-y-auto', 'overflow-auto', 'overflow-hidden')
+    // Si al crecer tapa al turno de abajo, tocarla la trae al frente.
+    expect(tarjeta).toHaveClass('focus-within:z-20', 'hover:z-20')
+  })
+
   it('en el telefono muestra un profesional por vez y deja elegirlo', () => {
     renderDayView()
     const picker = screen.getByRole('group', { name: 'Profesional' })

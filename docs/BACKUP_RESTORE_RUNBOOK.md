@@ -47,14 +47,14 @@ volumes:
       device: ${BACKUP_DIR:-/var/backups/shifty}
 ```
 
-The host directory must exist before `docker compose up` (`install -d -m 0700 /var/backups/shifty`); a bind volume does not create it. The running `db` container only gets the mount when it is recreated, and `make deploy` never recreates `db`: do it once, in a maintenance window, with `APP_VERSION=$(cat .deploy/current) docker compose up -d --no-deps --no-build db` (`docs/DEPLOY_RUNBOOK.md` §1).
+The host directory must exist before `docker compose up` (`install -d -o root -g deploy -m 0750 /var/backups/shifty`: `scripts/deploy.sh` runs as `deploy` and reads `last-success` there); a bind volume does not create it. The running `db` container only gets the mount when it is recreated, and `make deploy` never recreates `db`: do it once, in a maintenance window, with `APP_VERSION=$(cat .deploy/current) docker compose up -d --no-deps --no-build db` (`docs/DEPLOY_RUNBOOK.md` §1).
 
 ### One-time setup on the VPS (owner)
 
 1. Create the bucket (Cloudflare R2 or Backblaze B2, S3-compatible) and an access key limited to that bucket. The bucket is the only part that needs an account (plan §7, decision 24).
 2. Install rclone from the distribution or rclone.org, then `rclone config` a remote (for example `r2`). Check with `rclone lsd r2:`.
-3. `install -d -m 0700 /var/backups/shifty /var/lib/shifty /var/log/shifty /etc/shifty`.
-4. `cp deploy/ops.env.example /etc/shifty/ops.env && chmod 600 /etc/shifty/ops.env`, then set `BACKUP_REMOTE`, `DOMAIN` and `ALERT_EMAIL` or `ALERT_WEBHOOK_URL`. For mail alerts, install and configure `msmtp` (or any `sendmail`) with the existing SMTP account.
+3. `install -d -m 0700 /var/lib/shifty /var/log/shifty` and `install -d -o root -g deploy -m 0750 /etc/shifty /var/backups/shifty`. `scripts/deploy.sh` runs as the `deploy` user (no sudo) and reads both `/etc/shifty/ops.env` and `/var/backups/shifty/last-success`: with root-only modes it ran without `ops.env` and stopped at "no hay backup exitoso registrado" (first deploy, 2026-10-08).
+4. `install -o root -g deploy -m 0640 deploy/ops.env.example /etc/shifty/ops.env`, then set `BACKUP_REMOTE`, `DOMAIN` and `ALERT_EMAIL` or `ALERT_WEBHOOK_URL`, plus `RCLONE_CONFIG=/root/.config/rclone/rclone.conf` (the backup unit runs without `HOME`, so rclone would not find the remote) and `DEPLOY_GITHUB_TOKEN` while the repository is private (`docs/DEPLOY_RUNBOOK.md` §3). A host script that finds `ops.env` but cannot read it logs `AVISO: ... existe pero no se puede leer`. For mail alerts, install and configure `msmtp` (or any `sendmail`) with the existing SMTP account.
 5. Install the units and enable the timer:
 
    ```bash
