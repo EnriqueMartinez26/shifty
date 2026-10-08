@@ -2,6 +2,7 @@ import React, { useState } from 'react'
 
 import { Loader2, TriangleAlert, X } from 'lucide-react'
 
+import { formatAmountInput, parseAmountInput } from '@shared/utils/amountInput'
 import { formatArgentinaDateDisplay, formatArgentinaTime } from '@shared/utils/argentinaTime'
 import { formatCurrency } from '@shared/utils/currency'
 
@@ -25,11 +26,6 @@ interface ManualPaymentModalProps {
 
 const labelClass = 'text-[10px] font-black uppercase tracking-widest ml-1'
 
-const parseAmount = (value: string): number | null => {
-  const amount = Number(value)
-  return value.trim() !== '' && Number.isFinite(amount) && amount > 0 ? amount : null
-}
-
 /**
  * Confirmar a mano un pago (efectivo, transferencia o seña por WhatsApp).
  *
@@ -51,9 +47,13 @@ export const ManualPaymentModal: React.FC<ManualPaymentModalProps> = ({
   onClose
 }) => {
   const [value, setValue] = useState(() =>
-    suggestedAmount === null ? '' : String(suggestedAmount)
+    suggestedAmount === null ? '' : formatAmountInput(suggestedAmount)
   )
-  const amount = parseAmount(value)
+  // Formato es-AR ("3.200,50"): un `type="number"` leia "3.200" como 3,2
+  // (revision de la PR #131, W4). El campo vacio solo deshabilita el boton.
+  const parsed = parseAmountInput(value)
+  const amount = parsed.ok ? parsed.value : null
+  const amountError = !parsed.ok && value.trim() !== '' ? parsed.error : null
 
   const handleSubmit = (event: React.FormEvent) => {
     event.preventDefault()
@@ -136,16 +136,27 @@ export const ManualPaymentModal: React.FC<ManualPaymentModalProps> = ({
             </label>
             <input
               id="manual-payment-amount"
-              type="number"
+              type="text"
               inputMode="decimal"
-              min="0.01"
-              step="0.01"
+              autoComplete="off"
+              placeholder="3.200,50"
               value={value}
               onChange={(event) => setValue(event.target.value)}
+              aria-invalid={amountError !== null}
+              aria-describedby={amountError ? 'manual-payment-amount-error' : undefined}
               className="w-full rounded-md px-4 py-3 font-bold outline-none text-sm"
               style={create2000sModalInputStyle()}
               required
             />
+            {amountError && (
+              <p
+                id="manual-payment-amount-error"
+                className="text-xs font-bold ml-1"
+                style={{ color: '#be123c' }}
+              >
+                {amountError}
+              </p>
+            )}
           </div>
 
           <div className="flex gap-4 pt-2">

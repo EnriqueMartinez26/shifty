@@ -34,7 +34,7 @@ describe('ManualPaymentModal', () => {
     expect(dialogo).toHaveTextContent('Corte')
     expect(dialogo).toHaveTextContent('08/10/2026')
     expect(dialogo).toHaveTextContent('10:00')
-    expect((importe() as HTMLInputElement).value).toBe('3200')
+    expect((importe() as HTMLInputElement).value).toBe('3.200')
   })
 
   it('con una sena pendiente lo dice', () => {
@@ -52,6 +52,44 @@ describe('ManualPaymentModal', () => {
 
     expect(props.onSubmit).toHaveBeenCalledWith(2500)
   })
+
+  // Revision de la PR #131 (W4, 2026-10-08): con `type="number"` el "3.200"
+  // tipeado en es-AR llegaba como 3.2 y se registraban $3,20.
+  it('el campo es de texto decimal, no un type="number"', () => {
+    render(<ManualPaymentModal {...props} />)
+
+    expect(importe()).toHaveAttribute('type', 'text')
+    expect(importe()).toHaveAttribute('inputMode', 'decimal')
+  })
+
+  it.each([
+    ['3.200', 3200],
+    ['3.200,50', 3200.5],
+    ['3200', 3200]
+  ])('lee "%s" en formato es-AR y registra %d', (valor, esperado) => {
+    render(<ManualPaymentModal {...props} />)
+
+    fireEvent.change(importe(), { target: { value: valor } })
+    fireEvent.click(registrar())
+
+    expect(props.onSubmit).toHaveBeenCalledWith(esperado)
+  })
+
+  it.each(['3.2', '3,200', 'abc'])(
+    'un importe ambiguo (%p) no se registra y dice el formato',
+    (valor) => {
+      render(<ManualPaymentModal {...props} />)
+
+      fireEvent.change(importe(), { target: { value: valor } })
+
+      expect(registrar()).toBeDisabled()
+      expect(importe()).toHaveAttribute('aria-invalid', 'true')
+      const ayuda = document.getElementById(importe().getAttribute('aria-describedby') ?? '')
+      expect(ayuda).toHaveTextContent(/punto de miles y coma decimal/)
+      fireEvent.submit(registrar().closest('form') as HTMLFormElement)
+      expect(props.onSubmit).not.toHaveBeenCalled()
+    }
+  )
 
   it.each(['', '0', '-5'])('no deja registrar un importe invalido (%p)', (valor) => {
     render(<ManualPaymentModal {...props} />)
