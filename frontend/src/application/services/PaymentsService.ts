@@ -39,6 +39,11 @@ export interface PaymentRecord {
   currency: string
   status: string
   paid_at?: string | null
+  /**
+   * Al registrar una devolucion: el resto vivo del turno, que la devolucion
+   * no revierte (D-20261008-01); null si no hay.
+   */
+  live_remainder_amount?: string | null
 }
 
 export interface ReconciliationSummary {
@@ -49,6 +54,9 @@ export interface ReconciliationSummary {
   refunded_payments: number
   total_pending_amount: number
   total_approved_amount: number
+  /** Restos vivos pagados aparte del cobro (D-20261008-01), aparte del total. */
+  remainder_payments?: number
+  total_remainder_amount?: number | string
   pending_webhooks: number
   failed_webhooks: number
   pending_outbox: number

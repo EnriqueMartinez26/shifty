@@ -2,7 +2,11 @@ import React from 'react'
 
 import { CheckCircle2, ExternalLink, Link2, Undo2, Wallet } from 'lucide-react'
 
-import { canRecordRemainder, type AppointmentCharge } from '@domain/value-objects/AppointmentCharge'
+import {
+  canRecordRemainder,
+  hasLiveRemainder,
+  type AppointmentCharge
+} from '@domain/value-objects/AppointmentCharge'
 
 import { formatCurrency } from '@shared/utils/currency'
 
@@ -69,12 +73,25 @@ const ChargeSummary: React.FC<{ charge: AppointmentCharge }> = ({ charge }) => {
   }
   if (charge.kind === 'refunded') {
     return (
-      <span
-        className={`${chipClass} inline-block mt-2`}
-        style={{ background: '#f3f4f6', color: colors2000s.text.secondary }}
-      >
-        Pago reembolsado
-      </span>
+      <div className="flex flex-wrap gap-2 mt-2">
+        <span
+          className={chipClass}
+          style={{ background: '#f3f4f6', color: colors2000s.text.secondary }}
+        >
+          Pago reembolsado
+        </span>
+        {charge.remainder !== null && (
+          <span
+            className={chipClass}
+            style={{
+              background: colors2000s.status.success.bg,
+              color: colors2000s.status.success.text
+            }}
+          >
+            Resto registrado {formatCurrency(charge.remainder)}
+          </span>
+        )}
+      </div>
     )
   }
   return null
@@ -110,7 +127,7 @@ export const CollectionAppointmentCard: React.FC<CollectionAppointmentCardProps>
   onRevertRemainder
 }) => {
   const canCharge = charge.kind === 'unpaid' || charge.kind === 'pending'
-  const canRevert = onRevertRemainder !== null && charge.kind === 'paid' && charge.remainderRecorded
+  const canRevert = onRevertRemainder !== null && hasLiveRemainder(charge)
   return (
     <div
       className="rounded-2xl p-4 bg-white flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4"

@@ -197,6 +197,14 @@ describe('ManualPaymentModal: registrar el resto', () => {
     expect(props.onSubmit).not.toHaveBeenCalled()
   })
 
+  // Revision de la PR #137 (S4): el resto salda el precio impago del turno;
+  // lo que se paso al fiado no se registra tambien como resto.
+  it('aclara que el resto no es fiado', () => {
+    render(<ManualPaymentModal {...props} />)
+
+    expect(screen.getByText(/no es fiado/)).toBeInTheDocument()
+  })
+
   it('el dialogo de un pago comun no pide medio de pago', () => {
     render(<ManualPaymentModal {...props} mode="payment" maxAmount={null} />)
 

@@ -1,4 +1,10 @@
-import { appointmentChargeOf, canRecordRemainder, fitsRemaining } from './AppointmentCharge'
+import {
+  appointmentChargeOf,
+  canRecordRemainder,
+  fitsRemaining,
+  hasLiveRemainder,
+  totalCollected
+} from './AppointmentCharge'
 
 // 2026-10-08, QA en el celular (decision de Mateo): "Confirmar pago" no pedia
 // importe y, despues de pagar, la tarjeta seguia igual. El importe se precarga
@@ -84,7 +90,7 @@ describe('appointmentChargeOf', () => {
   it('un cobro reembolsado no ofrece cobrar de nuevo', () => {
     expect(
       appointmentChargeOf({ ...base, paymentStatus: 'refunded', paymentAmount: '960.00' })
-    ).toEqual({ kind: 'refunded' })
+    ).toEqual({ kind: 'refunded', remainder: null })
   })
 })
 
@@ -151,5 +157,46 @@ describe('appointmentChargeOf: saldo restante', () => {
     expect(fitsRemaining(1, 2240.1)).toBe(true)
     expect(fitsRemaining(2240.11, 2240.1)).toBe(false)
     expect(fitsRemaining(0, 2240.1)).toBe(false)
+  })
+})
+
+// Revision de la PR #137 (W1): devolver la sena no revierte el resto. El resto
+// vivo se sigue viendo (y se puede revertir) aunque el cobro este devuelto.
+describe('appointmentChargeOf: resto con la sena devuelta', () => {
+  it('un cobro devuelto conserva el resto vivo', () => {
+    const charge = appointmentChargeOf({
+      appointmentStatus: 'completed',
+      priceAmount: '3200.00',
+      paymentStatus: 'refunded',
+      paymentAmount: '960.00',
+      remainingAmount: '0.00',
+      remainderAmount: '2240.00'
+    })
+    expect(charge).toEqual({ kind: 'refunded', remainder: 2240 })
+    expect(hasLiveRemainder(charge)).toBe(true)
+    expect(canRecordRemainder(charge)).toBe(false)
+  })
+
+  it('hay resto vivo si el cobro pagado o devuelto lo trae', () => {
+    expect(
+      hasLiveRemainder({ kind: 'paid', paid: 3200, remaining: 0, remainderRecorded: true })
+    ).toBe(true)
+    expect(
+      hasLiveRemainder({ kind: 'paid', paid: 960, remaining: 2240, remainderRecorded: false })
+    ).toBe(false)
+    expect(hasLiveRemainder({ kind: 'refunded', remainder: null })).toBe(false)
+    expect(hasLiveRemainder({ kind: 'unpaid', suggested: 3200 })).toBe(false)
+  })
+})
+
+// Revision de la PR #137 (S2): la conciliacion informa los restos aparte de
+// los cobros; lo cobrado en total es la suma de los dos.
+describe('totalCollected', () => {
+  it('suma los cobros acreditados y los restos', () => {
+    expect(totalCollected('960.00', '2240.00')).toBe(3200)
+  })
+
+  it('un backend sin restos cuenta solo los cobros', () => {
+    expect(totalCollected(700000, undefined)).toBe(700000)
   })
 })

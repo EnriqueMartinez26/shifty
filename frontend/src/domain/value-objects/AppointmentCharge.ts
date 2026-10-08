@@ -39,7 +39,11 @@ export type AppointmentCharge =
    * lo que falta para el precio del turno.
    */
   | { kind: 'paid'; paid: number; remaining: number; remainderRecorded: boolean }
-  | { kind: 'refunded' }
+  /**
+   * El cobro se devolvio. `remainder` es el resto vivo, que la devolucion no
+   * revierte y sigue contando como ingreso (revision de la PR #137, W1).
+   */
+  | { kind: 'refunded'; remainder: number | null }
   /**
    * Cobro vivo: lo que el turno tiene pendiente de pago. Es sena si cobra
    * menos que el precio del turno; un link del panel por el precio completo
@@ -72,6 +76,24 @@ const remainingOf = (
 }
 
 const toCents = (amount: number): number => Math.round(amount * 100)
+
+/**
+ * Lo cobrado en total: los cobros acreditados mas los restos pagados aparte.
+ * La conciliacion los informa por separado (revision de la PR #137, S2); un
+ * backend sin restos no manda el segundo importe.
+ */
+export const totalCollected = (
+  approvedAmount: number | string | null | undefined,
+  remainderAmount: number | string | null | undefined
+): number => (toAmount(approvedAmount) ?? 0) + (toAmount(remainderAmount) ?? 0)
+
+/**
+ * El turno tiene un resto vivo: con el cobro pagado o devuelto (la devolucion
+ * de la sena no lo revierte). Es lo que el admin puede revertir.
+ */
+export const hasLiveRemainder = (charge: AppointmentCharge): boolean =>
+  (charge.kind === 'paid' && charge.remainderRecorded) ||
+  (charge.kind === 'refunded' && charge.remainder !== null)
 
 /** El importe es mayor a cero y entra en el saldo, al centavo. */
 export const fitsRemaining = (amount: number, remaining: number): boolean =>
@@ -110,7 +132,9 @@ export const appointmentChargeOf = ({
       remainderRecorded: remainder !== null
     }
   }
-  if (paymentStatus === 'refunded') return { kind: 'refunded' }
+  if (paymentStatus === 'refunded') {
+    return { kind: 'refunded', remainder: toAmount(remainderAmount) }
+  }
   if (paymentStatus && LIVE_CHARGE_PAYMENT_STATUSES.includes(paymentStatus) && amount !== null) {
     return { kind: 'pending', amount, isDeposit: price !== null && amount < price }
   }

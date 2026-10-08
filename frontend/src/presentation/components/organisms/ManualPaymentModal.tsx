@@ -163,7 +163,9 @@ export const ManualPaymentModal: React.FC<ManualPaymentModalProps> = ({
 
           {isRemainder && maxAmount !== null && (
             <p className="text-xs font-bold" style={{ color: colors2000s.text.secondary }}>
-              Resta {formatCurrency(maxAmount)} para completar el precio del turno.
+              Resta {formatCurrency(maxAmount)} para completar el precio del turno. El resto salda
+              lo que falta del precio; no es fiado: si una parte quedó en el fiado, no la registres
+              también como resto.
             </p>
           )}
 

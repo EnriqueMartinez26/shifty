@@ -111,3 +111,51 @@ describe('CollectionAppointmentCard: saldo restante', () => {
     expect(screen.queryByRole('button', { name: /Revertir resto/ })).not.toBeInTheDocument()
   })
 })
+
+// Revision de la PR #137 (W1): con la sena devuelta el resto vivo quedaba
+// invisible y no se podia revertir, aunque seguia contando como ingreso.
+describe('CollectionAppointmentCard: resto con la sena devuelta', () => {
+  const base = {
+    clientName: 'Lucia',
+    serviceName: 'Corte',
+    staffName: 'Ana',
+    startsAt: '2026-10-08T13:00:00Z',
+    status: 'completed',
+    latestLink: null,
+    linkBlockedReason: null,
+    confirmBlockedReason: null,
+    remainderBlockedReason: null,
+    onCreateLink: jest.fn(),
+    onConfirmPayment: jest.fn(),
+    onRecordRemainder: jest.fn()
+  }
+
+  it('muestra el resto registrado y deja revertirlo al admin', () => {
+    const onRevertRemainder = jest.fn()
+    render(
+      <CollectionAppointmentCard
+        {...base}
+        charge={{ kind: 'refunded', remainder: 2240 }}
+        onRevertRemainder={onRevertRemainder}
+      />
+    )
+
+    expect(screen.getByText('Pago reembolsado')).toBeInTheDocument()
+    expect(screen.getByText(/Resto registrado/)).toHaveTextContent('2.240')
+    fireEvent.click(screen.getByRole('button', { name: /Revertir resto/ }))
+    expect(onRevertRemainder).toHaveBeenCalledTimes(1)
+  })
+
+  it('sin resto no muestra nada de eso', () => {
+    render(
+      <CollectionAppointmentCard
+        {...base}
+        charge={{ kind: 'refunded', remainder: null }}
+        onRevertRemainder={jest.fn()}
+      />
+    )
+
+    expect(screen.queryByText(/Resto registrado/)).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Revertir resto/ })).not.toBeInTheDocument()
+  })
+})
