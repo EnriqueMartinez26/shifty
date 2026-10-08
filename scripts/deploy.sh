@@ -79,10 +79,8 @@ cd "$SHIFTY_DIR"
 : "${DEPLOY_SKIP_QUALITY_CHECK:=0}"
 : "${DEPLOY_GITHUB_REPO:=EnriqueMartinez26/shifty}"
 : "${DEPLOY_QUALITY_WORKFLOW:=quality.yml}"
-# Solo lo usa quality_verde, por stdin de curl. common.sh carga ops.env con
-# `set -a`: sin esto, el token viajaria en el entorno de cada docker/compose.
-: "${DEPLOY_GITHUB_TOKEN:=}"
-export -n DEPLOY_GITHUB_TOKEN
+# DEPLOY_GITHUB_TOKEN (opcional): solo lo usa quality_verde, por stdin de
+# curl. common.sh lo des-exporta: no llega al entorno de docker/compose.
 : "${DOMAIN:=}"
 : "${DEPLOY_HEALTH_URL:=${DOMAIN:+https://$DOMAIN/api/ops/health/ready}}"
 : "${DEPLOY_SMOKE_URLS:=${DOMAIN:+https://$DOMAIN/}}"

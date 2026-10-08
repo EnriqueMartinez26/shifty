@@ -34,6 +34,11 @@ else
   fi
   unset _ops_env_dir _ops_env_aviso
 fi
+# `set -a` exporta todo ops.env. El token de GitHub solo lo usa deploy.sh
+# (quality_verde, por stdin de curl): queda como variable del shell, nunca en
+# el entorno de docker, compose, rclone ni ningun otro hijo. Aca y no en cada
+# script, para que un script nuevo que cargue common.sh nazca sin filtrarlo.
+export -n DEPLOY_GITHUB_TOKEN
 
 # Clon del repo en el servidor: ahi estan el compose, el .env (con
 # COMPOSE_FILE y COMPOSE_PROJECT_NAME) y .deploy/. Por defecto, el clon del
