@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 
 import { addDays, format, parseISO } from 'date-fns'
 import { es } from 'date-fns/locale'
@@ -42,6 +42,7 @@ interface BookingStepDateTimeProps {
   /** En false no se monta la lista de espera (quien reprograma ya tiene turno). */
   showWaitlist?: boolean
   heading?: string
+  onEmptyAvailability?: () => void
 }
 
 export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
@@ -54,7 +55,8 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
   onBack,
   lockedStaffId,
   showWaitlist = true,
-  heading = 'Elegí fecha y hora'
+  heading = 'Elegí fecha y hora',
+  onEmptyAvailability
 }) => {
   const [activeDate, setActiveDate] = useState<Date>(() => {
     if (!selectedDate || selectedDate === 'invalid') return new Date()
@@ -90,7 +92,12 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
     [staffList]
   )
 
-  const { data: availability, isLoading } = usePublicAvailability(
+  const {
+    data: availability,
+    isLoading,
+    isError,
+    isFetching
+  } = usePublicAvailability(
     storePublicId,
     serviceId,
     /^\d{4}-\d{2}-\d{2}$/.test(dateStr) ? dateStr : undefined,
@@ -120,6 +127,30 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
       a.starts_at.localeCompare(b.starts_at)
     )
   }, [availability, selectedStaffId])
+
+  const emptyReported = useRef<string | null>(null)
+  useEffect(() => {
+    if (!onEmptyAvailability || isLoading || isFetching || isError || !availability) return
+    const key = `${storePublicId}:${serviceId}:${dateStr}:${selectedStaffId ?? ''}:${forceAll}`
+    if (visibleSlots.some((slot) => slot.status === 'available')) {
+      emptyReported.current = null
+    } else if (emptyReported.current !== key) {
+      emptyReported.current = key
+      onEmptyAvailability()
+    }
+  }, [
+    availability,
+    isLoading,
+    isFetching,
+    isError,
+    visibleSlots,
+    storePublicId,
+    serviceId,
+    dateStr,
+    selectedStaffId,
+    forceAll,
+    onEmptyAvailability
+  ])
 
   return (
     <div className="space-y-6 duration-500">
