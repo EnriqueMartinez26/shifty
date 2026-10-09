@@ -42,6 +42,8 @@ interface BlockFormProps {
   isEditing: boolean
   occurrences: number
   canSave: boolean
+  /** Por que no se puede guardar con la tienda suspendida (FF-15). */
+  readOnlyReason?: string | null
   onChange: (patch: Partial<BlockFormState>) => void
   onSave: () => void
   onReset: () => void
@@ -56,7 +58,24 @@ const fieldStyle = {
   color: colors2000s.text.primary
 }
 
-const fieldClass = 'rounded-[6px] px-4 py-3 font-bold outline-none disabled:opacity-60'
+const fieldClass = 'w-full rounded-[6px] px-4 py-3 font-bold outline-none disabled:opacity-60'
+
+/**
+ * Rotulo visible arriba del campo. Desde y Hasta eran dos horas sin rotulo
+ * (solo aria-label) y en el telefono no se sabia cual era cual (QA movil
+ * 2026-10-08).
+ */
+const Field: React.FC<{ label: string; children: React.ReactNode }> = ({ label, children }) => (
+  <label className="flex min-w-0 flex-col gap-1">
+    <span
+      className="text-[10px] font-black uppercase tracking-widest"
+      style={{ color: colors2000s.text.secondary }}
+    >
+      {label}
+    </span>
+    {children}
+  </label>
+)
 
 const occurrencesText = (occurrences: number): { text: string; isError: boolean } => {
   if (occurrences === 0) {
@@ -81,26 +100,28 @@ const RecurrenceFields: React.FC<
   return (
     <div className="space-y-2">
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <select
-          aria-label="Recurrencia"
-          value={form.recurrence}
-          onChange={(e) => onChange({ recurrence: e.target.value as BlockRecurrence })}
-          className={fieldClass}
-          style={fieldStyle}
-        >
-          <option value="none">Sin recurrencia</option>
-          <option value="daily">Diaria</option>
-          <option value="weekly">Semanal</option>
-        </select>
-        {form.recurrence !== 'none' && (
-          <input
-            type="date"
-            aria-label="Repetir hasta"
-            value={recurrenceUntil}
-            onChange={(e) => onChange({ recurrence_until: e.target.value })}
+        <Field label="Recurrencia">
+          <select
+            value={form.recurrence}
+            onChange={(e) => onChange({ recurrence: e.target.value as BlockRecurrence })}
             className={fieldClass}
             style={fieldStyle}
-          />
+          >
+            <option value="none">Sin recurrencia</option>
+            <option value="daily">Diaria</option>
+            <option value="weekly">Semanal</option>
+          </select>
+        </Field>
+        {form.recurrence !== 'none' && (
+          <Field label="Repetir hasta">
+            <input
+              type="date"
+              value={recurrenceUntil}
+              onChange={(e) => onChange({ recurrence_until: e.target.value })}
+              className={fieldClass}
+              style={fieldStyle}
+            />
+          </Field>
         )}
       </div>
       {summary && (
@@ -121,30 +142,33 @@ const BlockTimeFields: React.FC<Pick<BlockFormProps, 'form' | 'blockDate' | 'onC
   onChange
 }) => (
   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-    <input
-      type="date"
-      aria-label="Fecha"
-      value={blockDate}
-      onChange={(e) => onChange({ date: e.target.value })}
-      className={fieldClass}
-      style={fieldStyle}
-    />
-    <input
-      type="time"
-      aria-label="Desde"
-      value={form.starts_at}
-      onChange={(e) => onChange({ starts_at: e.target.value })}
-      className={fieldClass}
-      style={fieldStyle}
-    />
-    <input
-      type="time"
-      aria-label="Hasta"
-      value={form.ends_at}
-      onChange={(e) => onChange({ ends_at: e.target.value })}
-      className={fieldClass}
-      style={fieldStyle}
-    />
+    <Field label="Fecha">
+      <input
+        type="date"
+        value={blockDate}
+        onChange={(e) => onChange({ date: e.target.value })}
+        className={fieldClass}
+        style={fieldStyle}
+      />
+    </Field>
+    <Field label="Desde">
+      <input
+        type="time"
+        value={form.starts_at}
+        onChange={(e) => onChange({ starts_at: e.target.value })}
+        className={fieldClass}
+        style={fieldStyle}
+      />
+    </Field>
+    <Field label="Hasta">
+      <input
+        type="time"
+        value={form.ends_at}
+        onChange={(e) => onChange({ ends_at: e.target.value })}
+        className={fieldClass}
+        style={fieldStyle}
+      />
+    </Field>
   </div>
 )
 
@@ -168,28 +192,30 @@ const BlockIdentityFields: React.FC<
 
     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
       {/* Editar no cambia el profesional (D-20260929-11): el PATCH no lo acepta. */}
-      <select
-        aria-label="Profesional"
-        value={staffId}
-        disabled={isEditing}
-        onChange={(e) => onChange({ staff_id: e.target.value })}
-        className={fieldClass}
-        style={fieldStyle}
-      >
-        {staffMembers?.map((staff) => (
-          <option key={staff.id} value={staff.id}>
-            {staff.displayName}
-          </option>
-        ))}
-      </select>
-      <input
-        aria-label="Motivo interno"
-        value={form.reason}
-        onChange={(e) => onChange({ reason: e.target.value })}
-        className={fieldClass}
-        style={fieldStyle}
-        placeholder="Motivo interno"
-      />
+      <Field label="Profesional">
+        <select
+          value={staffId}
+          disabled={isEditing}
+          onChange={(e) => onChange({ staff_id: e.target.value })}
+          className={fieldClass}
+          style={fieldStyle}
+        >
+          {staffMembers?.map((staff) => (
+            <option key={staff.id} value={staff.id}>
+              {staff.displayName}
+            </option>
+          ))}
+        </select>
+      </Field>
+      <Field label="Motivo interno">
+        <input
+          value={form.reason}
+          onChange={(e) => onChange({ reason: e.target.value })}
+          className={fieldClass}
+          style={fieldStyle}
+          placeholder="Ej: almuerzo, turno médico"
+        />
+      </Field>
     </div>
   </>
 )
@@ -230,6 +256,7 @@ export const BlockForm: React.FC<BlockFormProps> = (props) => {
           type="button"
           onClick={props.onSave}
           disabled={!canSave}
+          title={props.readOnlyReason ?? undefined}
           className="px-4 py-3 rounded-2xl text-xs font-black uppercase tracking-widest disabled:opacity-50"
           style={buttonStyles2000s.selected}
         >

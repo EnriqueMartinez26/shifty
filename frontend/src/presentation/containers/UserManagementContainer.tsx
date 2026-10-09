@@ -20,6 +20,7 @@ import {
   useManagedDomainUsers,
   useUpdateManagedDomainUser
 } from '../hooks/useManagedDomainUsers'
+import { useStoreWriteAccess } from '../hooks/useStoreWriteAccess'
 import { canDeactivateUser, userFormRules } from '../lib/userAccessRules'
 import { toCreateUserInput, toUserWriteInput } from '../lib/userFormPayload'
 import { toUserListQuery } from '../lib/userSearch'
@@ -38,13 +39,21 @@ export const UserManagementContainer: React.FC = () => {
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [editingUser, setEditingUser] = useState<User | null>(null)
 
-  const { data: users, isLoading, error } = useManagedDomainUsers(listQuery)
+  const {
+    data: users,
+    isLoading,
+    error,
+    hasNextPage,
+    fetchNextPage,
+    isFetchingNextPage
+  } = useManagedDomainUsers(listQuery)
   const createMutation = useCreateManagedDomainUser()
   const updateMutation = useUpdateManagedDomainUser()
   const deleteMutation = useDeleteManagedDomainUser()
-
-  // El servidor corta en `limit`: si llego justo ese numero puede haber mas.
-  const isTruncated = users?.length === listQuery.limit
+  // Tienda suspendida (FF-15): POST /users/ y PATCH /users/{id} responden 402;
+  // la baja sigue (DELETE /users/{public_id}, D-20260930-10).
+  const writeAccess = useStoreWriteAccess()
+  const readOnlyReason = writeAccess.readOnly ? writeAccess.reason : null
 
   const handleDelete = async (id: string) => {
     if (!(await confirm('¿Estás seguro de eliminar este usuario?'))) return
@@ -106,9 +115,11 @@ export const UserManagementContainer: React.FC = () => {
         </div>
 
         <button
-          className="px-6 py-4 rounded-xl flex items-center gap-2 font-black uppercase tracking-widest text-xs transition-all active:scale-95 group"
+          className="px-6 py-4 rounded-xl flex items-center gap-2 font-black uppercase tracking-widest text-xs transition-all active:scale-95 group disabled:opacity-50"
           style={buttonStyles2000s.selected}
           onClick={handleCreate}
+          disabled={readOnlyReason !== null}
+          title={readOnlyReason ?? undefined}
         >
           <Plus size={18} className="group-hover:rotate-90 transition-transform duration-300" />
           NUEVO USUARIO
@@ -120,12 +131,6 @@ export const UserManagementContainer: React.FC = () => {
       <MessageBanner message={message} />
 
       <QueryErrorNotice error={error} message="No se pudieron cargar los usuarios." />
-
-      {isTruncated && (
-        <p className="text-xs font-bold" style={{ color: colors2000s.text.secondary }}>
-          Mostrando los primeros {listQuery.limit}; refiná la búsqueda.
-        </p>
-      )}
 
       {isLoading ? (
         <div
@@ -185,9 +190,25 @@ export const UserManagementContainer: React.FC = () => {
               onEdit={handleEdit}
               onDelete={(id) => void handleDelete(id)}
               canDelete={canDeactivateUser(viewer, user)}
+              readOnlyReason={readOnlyReason}
             />
           ))}
         </div>
+      )}
+
+      {/* El servidor corta en `limit`: el resto llega por paginas (F4-03). */}
+      {!isLoading && hasNextPage && (
+        <button
+          type="button"
+          onClick={() => {
+            void fetchNextPage()
+          }}
+          disabled={isFetchingNextPage}
+          className="w-full px-4 py-3 rounded-2xl text-xs font-black uppercase tracking-widest disabled:opacity-50"
+          style={buttonStyles2000s.default}
+        >
+          {isFetchingNextPage ? 'Cargando...' : 'Ver más'}
+        </button>
       )}
 
       {isModalOpen && (
@@ -197,6 +218,7 @@ export const UserManagementContainer: React.FC = () => {
           onSubmit={handleFormSubmit}
           editingUser={editingUser}
           rules={userFormRules(viewer, editingUser)}
+          readOnlyReason={readOnlyReason}
         />
       )}
     </div>

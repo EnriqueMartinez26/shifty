@@ -79,6 +79,71 @@ describe('AppointmentActions', () => {
     expect(onAction).toHaveBeenCalledWith('reschedule')
   })
 
+  // 2026-10-01: con la tienda suspendida cada accion fallaba con 402 en vez de
+  // verse deshabilitada (FF-15). Cancelar y liberar siguen (D-20260930-12).
+  describe('con la tienda suspendida', () => {
+    const reason = 'Tienda suspendida'
+    const renderSuspended = (status: string, hasStarted: boolean, canRelease: boolean) => {
+      const onAction = jest.fn()
+      render(
+        <AppointmentActions
+          status={status}
+          hasStarted={hasStarted}
+          canRelease={canRelease}
+          canManage
+          canCancelOrReschedule
+          busy={false}
+          readOnlyReason={reason}
+          onAction={onAction}
+        />
+      )
+      return onAction
+    }
+    const expectBlocked = (name: string) => {
+      const button = screen.getByRole('button', { name })
+      expect(button).toBeDisabled()
+      expect(button).toHaveAttribute('title', reason)
+    }
+
+    it('confirmar y reprogramar quedan deshabilitados; liberar sigue', () => {
+      const onAction = renderSuspended('pending', false, true)
+      expectBlocked('Confirmar turno')
+      expectBlocked('Reprogramar turno')
+      fireEvent.click(screen.getByRole('button', { name: 'Liberar turno pendiente' }))
+      expect(onAction).toHaveBeenCalledWith('release')
+    })
+
+    it('cancelar sigue habilitado', () => {
+      const onAction = renderSuspended('confirmed', false, false)
+      fireEvent.click(screen.getByRole('button', { name: 'Cancelar turno' }))
+      expect(onAction).toHaveBeenCalledWith('cancel')
+    })
+
+    it('completar y ausente quedan deshabilitados', () => {
+      renderSuspended('confirmed', true, false)
+      expectBlocked('Marcar turno como completado')
+      expectBlocked('El cliente no vino')
+    })
+  })
+
+  it('sin suspension nada cambia: confirmar habilitado con su titulo', () => {
+    render(
+      <AppointmentActions
+        status="pending"
+        hasStarted={false}
+        canRelease
+        canManage
+        canCancelOrReschedule
+        busy={false}
+        readOnlyReason={null}
+        onAction={() => undefined}
+      />
+    )
+    const confirmar = screen.getByRole('button', { name: 'Confirmar turno' })
+    expect(confirmar).not.toBeDisabled()
+    expect(confirmar).toHaveAttribute('title', 'Confirmar turno')
+  })
+
   it('no renderiza nada cuando no hay acciones', () => {
     const { container } = render(
       <AppointmentActions
@@ -92,5 +157,24 @@ describe('AppointmentActions', () => {
       />
     )
     expect(container.innerHTML).toBe('')
+  })
+
+  // QA movil 2026-10-08: los botones median 30x22 (compactos) o 24 de alto.
+  it.each([false, true])('cada accion es un blanco tactil de 40x40 (compacto: %s)', (compact) => {
+    render(
+      <AppointmentActions
+        status="pending"
+        hasStarted={false}
+        canRelease
+        canManage
+        canCancelOrReschedule
+        busy={false}
+        compact={compact}
+        onAction={() => undefined}
+      />
+    )
+    for (const button of screen.getAllByRole('button')) {
+      expect(button).toHaveClass('min-h-10', 'min-w-10')
+    }
   })
 })

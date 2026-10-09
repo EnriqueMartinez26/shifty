@@ -2,42 +2,78 @@ import React, { useState } from 'react'
 
 import { WalletCards } from 'lucide-react'
 
-import type { LedgerClient } from '@application/services/LedgerService'
+import type { LedgerClient, LedgerMovement } from '@application/services/LedgerService'
 
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
+import { formatCurrency } from '@shared/utils/currency'
+import { displayableEmail, withoutTechnicalEmail } from '@shared/utils/deliverableEmail'
 
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
-import { MessageBanner } from '../components/molecules/MessageBanner'
+import { FormFeedback, type FormFeedbackMessage } from '../components/molecules/FormFeedback'
+import { LedgerMovementItem, movementTypeLabels } from '../components/molecules/LedgerMovementItem'
 import { PageHeader } from '../components/molecules/PageHeader'
 import { QueryErrorNotice } from '../components/molecules/QueryErrorNotice'
+import { useConfirm } from '../hooks/useConfirm'
+import { useDocumentTitle } from '../hooks/useDocumentTitle'
 import {
   useAddLedgerMovement,
   useCustomerLedger,
   useLedgerClients,
-  useLedgerSummary
+  useLedgerSummary,
+  useReverseLedgerMovement
 } from '../hooks/useLedger'
-import {
-  currencyFmtEsAr as currencyFmt,
-  formatDateEsAr,
-  formatDateTimeEsAr
-} from '../lib/formatters'
+import { useStoreWriteAccess } from '../hooks/useStoreWriteAccess'
+import { formatDateEsAr, formatDateTimeEsAr } from '../lib/formatters'
 import {
   create2000sInputStyle,
   create2000sListCardStyle,
   create2000sPanelStyle
 } from '../lib/surfaceStyles'
 
-const movementTypeLabels: Record<'charge' | 'payment' | 'adjustment' | 'refund', string> = {
-  charge: 'Cargo',
-  payment: 'Pago',
-  adjustment: 'Ajuste',
-  refund: 'Devolucion'
+type MovementType = LedgerMovement['movement_type']
+
+// POST .../reverse: 422 si ya fue revertido o si es una reversion (la vista
+// quedo vieja y la cuenta se vuelve a pedir), 404 si no es de este cliente.
+// El texto del servidor no llega (regla 20).
+const REVERSE_ERROR_MESSAGES: Partial<Record<string, string>> = {
+  VALIDATION_ERROR: 'Ese movimiento ya fue revertido o es una reversión. La cuenta se actualizó.',
+  RESOURCE_NOT_FOUND: 'Ese movimiento ya no está en la cuenta de este cliente.'
 }
+
+// Mismo tope que LedgerMovementCreate.amount en el backend (ge=0,
+// le=10_000_000, decimal_places=2). Un movimiento en 0 no mueve el saldo: se
+// pide mayor a 0.
+const MAX_AMOUNT = 10_000_000
+const AMOUNT_MESSAGE = 'Ingresá un monto mayor a $ 0 y hasta $ 10.000.000, con hasta 2 decimales.'
+
+/** Monto tipeado -> numero valido para el backend, o null. Acepta coma decimal. */
+const parseAmount = (raw: string): number | null => {
+  const normalized = raw.trim().replace(',', '.')
+  if (!/^\d+(\.\d{1,2})?$/.test(normalized)) return null
+  const amount = Number(normalized)
+  return amount > 0 && amount <= MAX_AMOUNT ? amount : null
+}
+
+// Un 422 de Pydantic nombra el campo; el texto crudo nunca llega (regla 20).
+const MOVEMENT_FIELD_MESSAGES: Partial<Record<string, string>> = {
+  amount: AMOUNT_MESSAGE,
+  movement_type: 'Elegí el tipo de movimiento.',
+  appointment_id: 'El turno asociado no es válido. Revisá el código o dejalo vacío.',
+  notes: 'Las notas pueden tener hasta 500 caracteres.'
+}
+
+/**
+ * Sin nombre, el backend nombra al cliente con su email, que puede ser el
+ * tecnico {tel}@store{id}.noreply del alta publica: ahi va el telefono.
+ */
+const clientLabel = (client: LedgerClient): string =>
+  withoutTechnicalEmail(client.name, client.phone ?? 'Cliente sin nombre')
 
 const inputStyle = create2000sInputStyle()
 const cardStyle = create2000sPanelStyle()
 
 const LedgerPage: React.FC = () => {
+  useDocumentTitle('Cuentas pendientes · Shifty')
   // /ledger/clients y no /users/: este sirve tambien al profesional (403 en
   // /users/) y solo trae clientes, filtrados en el backend (FF-20).
   // La busqueda viaja al enviarla (Enter o "Buscar"), no por tecla.
@@ -46,6 +82,10 @@ const LedgerPage: React.FC = () => {
   const clientsQuery = useLedgerClients(submittedSearch)
   const summaryQuery = useLedgerSummary()
   const addMovement = useAddLedgerMovement()
+  const reverseMovement = useReverseLedgerMovement()
+  // Tienda suspendida (FF-15): POST /ledger/customers/{id}/movements no esta en
+  // SUSPENSION_ALLOWED_WRITES y responde 402.
+  const writeAccess = useStoreWriteAccess()
   const clients = clientsQuery.data ?? []
   // Una eleccion explicita se guarda entera y se sostiene aunque la busqueda
   // ya no la traiga: caer al primero de otra busqueda mandaba el movimiento
@@ -58,40 +98,94 @@ const LedgerPage: React.FC = () => {
       : clients
   const effectiveClientId = selectedClient?.public_id ?? null
   const ledgerQuery = useCustomerLedger(effectiveClientId)
+  // El tipo arranca SIN elegir y vuelve a "sin elegir" despues de guardar:
+  // volver solo a "Cargo" hizo que un pago se cargara como deuda (QA
+  // 2026-10-02). Recordar el ultimo tipo tiene el mismo riesgo con el
+  // movimiento siguiente; elegirlo cada vez, mas la confirmacion, no.
   const emptyMovementForm = {
-    movement_type: 'charge' as 'charge' | 'payment' | 'adjustment' | 'refund',
+    movement_type: '' as MovementType | '',
     amount: '',
     appointment_id: '',
     notes: ''
   }
   const [movementForm, setMovementForm] = useState(emptyMovementForm)
-  const [message, setMessage] = useState('')
+  const [feedback, setFeedback] = useState<FormFeedbackMessage | null>(null)
+  const { confirm, confirmDialog } = useConfirm()
+  const showError = (text: string) => setFeedback({ tone: 'error', text })
+  // El resultado de revertir va junto al estado de cuenta, no al formulario.
+  const [reverseFeedback, setReverseFeedback] = useState<FormFeedbackMessage | null>(null)
+  const movementsById = new Map(ledgerQuery.movements.map((m) => [m.public_id, m]))
+
+  // Decision de Mateo (2026-10-03): el fiado revierte un movimiento cargado
+  // por error. No lo borra: el servidor agrega el que lo compensa.
+  const handleReverse = async (movement: LedgerMovement) => {
+    if (!effectiveClientId) return
+    setReverseFeedback(null)
+    const confirmed = await confirm(
+      `¿Revertir el ${movementTypeLabels[movement.movement_type]} de ${formatCurrency(
+        Number(movement.amount)
+      )} del ${formatDateTimeEsAr(movement.created_at)}? Se agrega un movimiento que lo compensa y el original queda en el historial.`,
+      { confirmLabel: 'Sí, revertir', cancelLabel: 'Volver' }
+    )
+    if (!confirmed) return
+    try {
+      await reverseMovement.mutateAsync({
+        clientId: effectiveClientId,
+        movementId: movement.public_id
+      })
+      setReverseFeedback({ tone: 'success', text: 'Movimiento revertido' })
+    } catch (error: unknown) {
+      setReverseFeedback({
+        tone: 'error',
+        text: getErrorMessage(error, 'No se pudo revertir el movimiento', REVERSE_ERROR_MESSAGES)
+      })
+    }
+  }
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault()
     if (!effectiveClientId) return
+    const movementType = movementForm.movement_type
+    if (!movementType) {
+      showError('Elegí el tipo de movimiento.')
+      return
+    }
+    const amount = parseAmount(movementForm.amount)
+    if (amount === null) {
+      showError(AMOUNT_MESSAGE)
+      return
+    }
+    setFeedback(null)
+    const clientName = selectedClient?.name ?? 'el cliente'
+    const confirmed = await confirm(
+      `¿Registrar ${movementTypeLabels[movementType]} de ${formatCurrency(amount)} a ${clientName}?`,
+      { confirmLabel: 'Registrar', cancelLabel: 'Volver' }
+    )
+    if (!confirmed) return
     try {
       await addMovement.mutateAsync({
         clientId: effectiveClientId,
         payload: {
-          movement_type: movementForm.movement_type,
-          amount: Number(movementForm.amount),
+          movement_type: movementType,
+          amount,
           appointment_id: movementForm.appointment_id || undefined,
           notes: movementForm.notes || undefined
         }
       })
       setMovementForm(emptyMovementForm)
-      setMessage('Movimiento registrado')
+      setFeedback({ tone: 'success', text: 'Movimiento registrado' })
     } catch (error: unknown) {
-      setMessage(getErrorMessage(error, 'No se pudo registrar el movimiento'))
+      showError(
+        getErrorMessage(error, 'No se pudo registrar el movimiento', {}, MOVEMENT_FIELD_MESSAGES)
+      )
     }
   }
 
   return (
-    <div className="space-y-8 animate-in fade-in duration-500">
+    <div className="space-y-8 duration-500">
       <PageHeader
         title="Cuentas pendientes"
-        description="Mira cuanto debe cada cliente, que pago y que quedo pendiente."
+        description="Mirá cuánto debe cada cliente, qué pagó y qué quedó pendiente."
         isLoading={clientsQuery.isLoading || ledgerQuery.isLoading || summaryQuery.isLoading}
         loadingText="Cargando cuentas pendientes..."
       />
@@ -100,8 +194,6 @@ const LedgerPage: React.FC = () => {
         error={clientsQuery.error ?? summaryQuery.error ?? ledgerQuery.error}
         message="No se pudieron cargar las cuentas pendientes."
       />
-
-      <MessageBanner message={message} />
 
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6">
         <div className="p-5 rounded-2xl" style={cardStyle}>
@@ -112,7 +204,7 @@ const LedgerPage: React.FC = () => {
             Saldo pendiente total
           </p>
           <p className="text-2xl font-black mt-1" style={{ color: colors2000s.text.primary }}>
-            {currencyFmt.format(Number(summaryQuery.data?.total_balance ?? 0))}
+            {formatCurrency(Number(summaryQuery.data?.total_balance ?? 0))}
           </p>
         </div>
         <div className="p-5 rounded-2xl" style={cardStyle}>
@@ -134,7 +226,7 @@ const LedgerPage: React.FC = () => {
             Saldo promedio
           </p>
           <p className="text-2xl font-black mt-1" style={{ color: colors2000s.orange.accent }}>
-            {currencyFmt.format(Number(summaryQuery.data?.average_balance ?? 0))}
+            {formatCurrency(Number(summaryQuery.data?.average_balance ?? 0))}
           </p>
         </div>
         <div className="p-5 rounded-2xl" style={cardStyle}>
@@ -177,7 +269,7 @@ const LedgerPage: React.FC = () => {
               aria-label="Buscar cliente"
               className="w-full rounded-2xl px-4 py-3 font-bold outline-none"
               style={inputStyle}
-              placeholder="Buscar por nombre o telefono"
+              placeholder="Buscar por nombre o teléfono"
             />
             <button
               type="submit"
@@ -192,24 +284,27 @@ const LedgerPage: React.FC = () => {
             onChange={(e) => {
               setPickedClient(clientOptions.find((c) => c.public_id === e.target.value) ?? null)
               setMovementForm(emptyMovementForm)
+              setFeedback(null)
             }}
             className="w-full rounded-2xl px-4 py-3 font-bold outline-none"
             style={inputStyle}
           >
             {clientOptions.map((client) => (
               <option key={client.public_id} value={client.public_id}>
-                {client.name}
+                {clientLabel(client)}
               </option>
             ))}
           </select>
 
           <form
+            noValidate
             onSubmit={(event) => {
               void handleSubmit(event)
             }}
             className="space-y-3"
           >
             <select
+              aria-label="Tipo de movimiento"
               value={movementForm.movement_type}
               onChange={(e) =>
                 setMovementForm((prev) => ({
@@ -220,18 +315,22 @@ const LedgerPage: React.FC = () => {
               className="w-full rounded-2xl px-4 py-3 font-bold outline-none"
               style={inputStyle}
             >
+              <option value="" disabled>
+                Elegí el tipo de movimiento
+              </option>
               <option value="charge">Cargo</option>
               <option value="payment">Pago</option>
               <option value="adjustment">Ajuste</option>
-              <option value="refund">Devolucion</option>
+              <option value="refund">Devolución</option>
             </select>
             <input
+              aria-label="Monto"
+              inputMode="decimal"
               value={movementForm.amount}
               onChange={(e) => setMovementForm((prev) => ({ ...prev, amount: e.target.value }))}
               className="w-full rounded-2xl px-4 py-3 font-bold outline-none"
               style={inputStyle}
               placeholder="Monto"
-              required
             />
             <input
               value={movementForm.appointment_id}
@@ -251,13 +350,16 @@ const LedgerPage: React.FC = () => {
             />
             <button
               type="submit"
-              disabled={!effectiveClientId || addMovement.isPending}
+              disabled={!effectiveClientId || addMovement.isPending || writeAccess.readOnly}
+              title={writeAccess.readOnly ? writeAccess.reason : undefined}
               className="w-full px-4 py-3 rounded-2xl text-xs font-black uppercase tracking-widest disabled:opacity-50"
               style={buttonStyles2000s.selected}
             >
               Guardar movimiento
             </button>
+            <FormFeedback feedback={feedback} />
           </form>
+          {confirmDialog}
         </div>
 
         <div className="p-6 rounded-3xl space-y-5" style={cardStyle}>
@@ -270,7 +372,10 @@ const LedgerPage: React.FC = () => {
                 Estado de cuenta
               </h3>
               <p className="text-xs font-bold" style={{ color: colors2000s.text.secondary }}>
-                Cliente seleccionado: {selectedClient?.email ?? selectedClient?.name ?? '-'}
+                Cliente seleccionado:{' '}
+                {selectedClient
+                  ? (displayableEmail(selectedClient.email) ?? clientLabel(selectedClient))
+                  : '-'}
               </p>
             </div>
             <div className="text-right">
@@ -281,52 +386,35 @@ const LedgerPage: React.FC = () => {
                 Saldo actual
               </p>
               <p className="text-3xl font-black" style={{ color: colors2000s.orange.accent }}>
-                {currencyFmt.format(Number(ledgerQuery.balance ?? 0))}
+                {formatCurrency(Number(ledgerQuery.balance ?? 0))}
               </p>
             </div>
           </div>
 
           <div className="space-y-3">
+            <FormFeedback feedback={reverseFeedback} />
             {ledgerQuery.movements.map((movement) => (
-              <div
+              <LedgerMovementItem
                 key={movement.public_id}
-                className="rounded-2xl p-4 bg-white flex flex-col md:flex-row md:items-center md:justify-between gap-3"
-                style={create2000sListCardStyle()}
-              >
-                <div>
-                  <p
-                    className="text-sm font-black uppercase"
-                    style={{ color: colors2000s.text.primary }}
-                  >
-                    {movementTypeLabels[movement.movement_type]}
-                  </p>
-                  <p
-                    className="text-[11px] font-bold"
-                    style={{ color: colors2000s.text.secondary }}
-                  >
-                    {formatDateTimeEsAr(movement.created_at)}
-                    {movement.notes ? ` · ${movement.notes}` : ''}
-                  </p>
-                </div>
-                <div className="text-right">
-                  <p className="text-sm font-black" style={{ color: colors2000s.orange.accent }}>
-                    {currencyFmt.format(Number(movement.amount))}
-                  </p>
-                  <p
-                    className="text-[11px] font-bold"
-                    style={{ color: colors2000s.text.secondary }}
-                  >
-                    Saldo: {currencyFmt.format(Number(movement.balance_after))}
-                  </p>
-                </div>
-              </div>
+                movement={movement}
+                original={
+                  movement.reverses_id ? movementsById.get(movement.reverses_id) : undefined
+                }
+                onReverse={(target) => {
+                  void handleReverse(target)
+                }}
+                // Tienda suspendida (FF-15): .../reverse no esta en
+                // SUSPENSION_ALLOWED_WRITES y responde 402.
+                reverseDisabled={writeAccess.readOnly || reverseMovement.isPending}
+                reverseDisabledReason={writeAccess.readOnly ? writeAccess.reason : undefined}
+              />
             ))}
             {!ledgerQuery.movements.length && !ledgerQuery.isLoading && (
               <div
                 className="rounded-2xl p-6 bg-white text-sm font-bold"
                 style={{ ...create2000sListCardStyle(), color: colors2000s.text.secondary }}
               >
-                Este cliente todavia no tiene movimientos registrados.
+                Este cliente todavía no tiene movimientos registrados.
               </div>
             )}
             {ledgerQuery.movements.length > 0 && (
@@ -344,7 +432,7 @@ const LedgerPage: React.FC = () => {
                 className="w-full px-4 py-3 rounded-2xl text-xs font-black uppercase tracking-widest disabled:opacity-50"
                 style={buttonStyles2000s.default}
               >
-                {ledgerQuery.isFetchingNextPage ? 'Cargando...' : 'Ver mas'}
+                {ledgerQuery.isFetchingNextPage ? 'Cargando...' : 'Ver más'}
               </button>
             )}
           </div>
@@ -370,16 +458,16 @@ const LedgerPage: React.FC = () => {
                 style={create2000sListCardStyle()}
               >
                 <p className="text-sm font-black" style={{ color: colors2000s.text.primary }}>
-                  {debtor.client_name}
+                  {withoutTechnicalEmail(debtor.client_name, 'Cliente sin nombre')}
                 </p>
                 <p
                   className="text-[11px] font-bold mt-1"
                   style={{ color: colors2000s.text.secondary }}
                 >
-                  Ultimo movimiento: {formatDateEsAr(debtor.last_movement_at)}
+                  Último movimiento: {formatDateEsAr(debtor.last_movement_at)}
                 </p>
                 <p className="text-sm font-black mt-2" style={{ color: colors2000s.orange.accent }}>
-                  {currencyFmt.format(Number(debtor.balance))}
+                  {formatCurrency(Number(debtor.balance))}
                 </p>
               </div>
             ))}

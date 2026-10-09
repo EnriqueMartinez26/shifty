@@ -91,6 +91,16 @@ jest.mock('../components/organisms/NewAppointmentModal', () => ({
   NewAppointmentModal: () => null
 }))
 
+let mockWriteAccess = { readOnly: false, reason: 'Tienda suspendida' }
+jest.mock('../hooks/useStoreWriteAccess', () => ({
+  useStoreWriteAccess: () => mockWriteAccess
+}))
+
+const confirmarCancelacion = async () =>
+  fireEvent.click(
+    within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Cancelar turno' })
+  )
+
 const cardOf = (clientName: string) => {
   const card = screen.getByText(clientName).closest('.absolute')
   if (!(card instanceof HTMLElement)) throw new Error(`No encontre la tarjeta de ${clientName}`)
@@ -103,6 +113,7 @@ describe('CalendarContainer - cancelar y reprogramar (FF-31)', () => {
     mockCancel.mockReset()
     mockRefetch.mockReset()
     mockUser.role = 'professional'
+    mockWriteAccess = { readOnly: false, reason: 'Tienda suspendida' }
     mockAppointments = [
       appointmentOf('appt-own', 'st-1', 'Luis Propio'),
       appointmentOf('appt-other', 'st-2', 'Marta Ajena')
@@ -111,6 +122,34 @@ describe('CalendarContainer - cancelar y reprogramar (FF-31)', () => {
 
   afterEach(() => {
     jest.useRealTimers()
+  })
+
+  // 2026-10-01: con la tienda suspendida cada accion fallaba con 402 en vez de
+  // verse deshabilitada (FF-15). POST /appointments/ y PATCH .../reschedule
+  // siguen bloqueados; PATCH .../cancel no (D-20260930-12).
+  it('con la tienda suspendida no deja crear ni reprogramar, pero si cancelar', async () => {
+    mockWriteAccess = { readOnly: true, reason: 'Tienda suspendida' }
+    mockCancel.mockResolvedValue(undefined)
+    render(<CalendarContainer />)
+
+    const nuevo = screen.getByRole('button', { name: /Nuevo turno/ })
+    expect(nuevo).toBeDisabled()
+    expect(nuevo).toHaveAttribute('title', 'Tienda suspendida')
+    const own = within(cardOf('Luis Propio'))
+    expect(own.getByRole('button', { name: 'Reprogramar turno' })).toBeDisabled()
+
+    fireEvent.click(own.getByRole('button', { name: 'Cancelar turno' }))
+    await confirmarCancelacion()
+    await waitFor(() => expect(mockCancel).toHaveBeenCalledWith('appt-own'))
+  })
+
+  it('sin suspension Nuevo turno y reprogramar siguen habilitados', () => {
+    render(<CalendarContainer />)
+
+    expect(screen.getByRole('button', { name: /Nuevo turno/ })).not.toBeDisabled()
+    expect(
+      within(cardOf('Luis Propio')).getByRole('button', { name: 'Reprogramar turno' })
+    ).not.toBeDisabled()
   })
 
   it('el profesional solo ve cancelar y reprogramar en los turnos de su agenda (D-20260929-03)', () => {
@@ -142,7 +181,12 @@ describe('CalendarContainer - cancelar y reprogramar (FF-31)', () => {
 
     fireEvent.click(within(cardOf('Luis Propio')).getByRole('button', { name: 'Cancelar turno' }))
     expect(await screen.findByText('¿Cancelar el turno de Luis Propio?')).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Confirmar' }))
+    // QA 2026-10-02: "Cancelar"/"Confirmar" era ambiguo en un dialogo de
+    // cancelacion. Ahora dice "Volver" y "Cancelar turno".
+    expect(
+      within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Volver' })
+    ).toBeInTheDocument()
+    await confirmarCancelacion()
 
     await waitFor(() => expect(mockCancel).toHaveBeenCalledWith('appt-own'))
     expect(await screen.findByText('Turno cancelado')).toBeInTheDocument()
@@ -158,7 +202,7 @@ describe('CalendarContainer - cancelar y reprogramar (FF-31)', () => {
     render(<CalendarContainer />)
 
     fireEvent.click(within(cardOf('Luis Propio')).getByRole('button', { name: 'Cancelar turno' }))
-    fireEvent.click(await screen.findByRole('button', { name: 'Confirmar' }))
+    await confirmarCancelacion()
 
     expect(
       await screen.findByText(
@@ -175,7 +219,7 @@ describe('CalendarContainer - cancelar y reprogramar (FF-31)', () => {
     render(<CalendarContainer />)
 
     fireEvent.click(within(cardOf('Luis Propio')).getByRole('button', { name: 'Cancelar turno' }))
-    fireEvent.click(await screen.findByRole('button', { name: 'Confirmar' }))
+    await confirmarCancelacion()
 
     expect(
       await screen.findByText('Solo podés cancelar los turnos de tu agenda.')

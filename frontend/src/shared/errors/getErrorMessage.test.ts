@@ -4,6 +4,7 @@ import {
   getErrorCode,
   getErrorMessage,
   getHttpStatus,
+  getInvalidFields,
   isStateConflictError
 } from './getErrorMessage'
 import { InternalServerError } from './InternalServerError'
@@ -28,6 +29,23 @@ describe('getErrorMessage', () => {
     expect(getErrorMessage(conflict('DEPOSIT_PENDING_RESCHEDULE_DENIED'), FALLBACK)).toBe(
       'Cobrá la seña o cancelá el turno antes de moverlo.'
     )
+  })
+
+  // Revision de #133 (2026-10-08): el email de acceso propio no se cambia por
+  // Personal y la cuenta SuperAdmin no se agrega como profesional.
+  it.each([
+    [
+      'SELF_EMAIL_CHANGE_DENIED',
+      new ValidationError('x', { errorCode: 'SELF_EMAIL_CHANGE_DENIED', statusCode: 400 }),
+      'Tu email de acceso no se cambia desde Personal.'
+    ],
+    [
+      'STAFF_SELF_GLOBAL_ADMIN_DENIED',
+      new ForbiddenError('x', { errorCode: 'STAFF_SELF_GLOBAL_ADMIN_DENIED', statusCode: 403 }),
+      'La cuenta SuperAdmin no se agrega como profesional.'
+    ]
+  ])('traduce %s', (_code, error, texto) => {
+    expect(getErrorMessage(error, FALLBACK)).toBe(texto)
   })
 
   it('un VALIDATION_ERROR devuelve el fallback, nunca el texto de Pydantic', () => {
@@ -151,5 +169,134 @@ describe('getHttpStatus', () => {
 
   it('devuelve undefined si no hay ApplicationError', () => {
     expect(getHttpStatus(new Error('x'))).toBeUndefined()
+  })
+})
+
+// 2026-10-02, QA en navegador: un 422 de Pydantic terminaba en el fallback
+// generico de cada pantalla ("No se pudo registrar el movimiento") sin decir
+// que campo fallo. El campo sale del `detail` (lista "campo: motivo") y la
+// pantalla trae su propio texto: el motivo crudo de Pydantic nunca se muestra.
+describe('getErrorMessage: errores de validacion por campo', () => {
+  const pydantic422 = (...detail: string[]) =>
+    new ValidationError(detail.join('; '), {
+      errorCode: 'VALIDATION_ERROR',
+      statusCode: 422,
+      detail
+    })
+
+  it('nombra el campo invalido con el texto de la pantalla', () => {
+    const error = pydantic422('amount: Input should be greater than or equal to 0')
+
+    expect(getInvalidFields(error)).toEqual(['amount'])
+    expect(getErrorMessage(error, FALLBACK, {}, { amount: 'Revisá el monto.' })).toBe(
+      'Revisá el monto.'
+    )
+  })
+
+  it('toma el ultimo tramo de la ruta y saltea los indices de lista', () => {
+    const error = pydantic422('query -> limit: too big', 'items -> 0 -> name: required')
+
+    expect(getInvalidFields(error)).toEqual(['limit', 'name'])
+  })
+
+  it('tambien encuentra el campo dentro de un error envuelto por BaseService', () => {
+    const error = wrapped(pydantic422('client_phone: String should have at least 8 characters'))
+
+    expect(
+      getErrorMessage(error, FALLBACK, {}, { client_phone: 'El teléfono es muy corto.' })
+    ).toBe('El teléfono es muy corto.')
+  })
+
+  it('sin un campo conocido cae en el fallback, no en el texto del servidor', () => {
+    const error = pydantic422('otro: value is not valid')
+
+    expect(getErrorMessage(error, FALLBACK, {}, { amount: 'Revisá el monto.' })).toBe(FALLBACK)
+  })
+
+  it('el override por codigo le gana al texto por campo', () => {
+    const error = pydantic422('amount: bad')
+
+    expect(
+      getErrorMessage(
+        error,
+        FALLBACK,
+        { VALIDATION_ERROR: 'Datos inválidos.' },
+        { amount: 'Revisá el monto.' }
+      )
+    ).toBe('Datos inválidos.')
+  })
+
+  it('un detail que no es lista (ValidationException de negocio) sin campo no trae campos', () => {
+    const error = new ValidationError('Ese movimiento ya fue revertido.', {
+      errorCode: 'VALIDATION_ERROR',
+      statusCode: 422,
+      detail: { campo: 'x' }
+    })
+
+    expect(getInvalidFields(error)).toEqual([])
+  })
+
+  // 2026-10-02, QA en navegador (S\43): una sena de mas de 100% decia un
+  // mensaje generico. El campo viene en el mensaje del model_validator (al
+  // crear) o de la ValidationException (al editar).
+  // Revision R3: un mensaje de negocio con dos puntos no inventa un campo.
+  it('un mensaje de negocio con dos puntos no nombra un campo', () => {
+    const error = new ValidationError('Horario no disponible: elegi otro', {
+      errorCode: 'VALIDATION_ERROR',
+      statusCode: 422,
+      detail: {}
+    })
+
+    expect(getInvalidFields(error)).toEqual([])
+  })
+
+  it('lee el campo de un model_validator y de una ValidationException de negocio', () => {
+    const alCrear = pydantic422(
+      'Value error, deposit_amount: un porcentaje de sena no puede superar 100'
+    )
+    const alEditar = new ValidationError(
+      'deposit_amount: un porcentaje de sena no puede superar 100',
+      { errorCode: 'VALIDATION_ERROR', statusCode: 422, detail: {} }
+    )
+
+    expect(getInvalidFields(alCrear)).toEqual(['deposit_amount'])
+    expect(getInvalidFields(alEditar)).toEqual(['deposit_amount'])
+  })
+})
+
+// QA movil 2026-10-08: el alta de un profesional con un email ya usado
+// responde 422 VALIDATION_ERROR "Ya existe un usuario con ese email"
+// (staff/repository.py) y el modal decia solo "No se pudo guardar".
+describe('getErrorMessage - textos de validacion conocidos', () => {
+  const duplicado = new ValidationError('Ya existe un usuario con ese email', {
+    errorCode: 'VALIDATION_ERROR',
+    statusCode: 422,
+    detail: {}
+  })
+
+  it('el email duplicado sale con un texto propio, no con el fallback', () => {
+    expect(getErrorMessage(duplicado, FALLBACK)).toBe(
+      'Ese email ya lo usa otra cuenta. Usá otro email.'
+    )
+  })
+
+  it('tambien envuelto en originalError', () => {
+    expect(getErrorMessage(wrapped(duplicado), FALLBACK)).toBe(
+      'Ese email ya lo usa otra cuenta. Usá otro email.'
+    )
+  })
+
+  it('el override de la pantalla le sigue ganando', () => {
+    expect(getErrorMessage(duplicado, FALLBACK, { VALIDATION_ERROR: 'otro texto' })).toBe(
+      'otro texto'
+    )
+  })
+
+  it('un VALIDATION_ERROR con otro texto sigue en el fallback', () => {
+    const otro = new ValidationError('Ya existe un usuario con ese email y algo mas', {
+      errorCode: 'VALIDATION_ERROR',
+      statusCode: 422
+    })
+    expect(getErrorMessage(otro, FALLBACK)).toBe(FALLBACK)
   })
 })

@@ -86,12 +86,13 @@ const AdminLayout: React.FC = () => {
       />
 
       <main className="flex-1 lg:ml-64 p-4 sm:p-6 lg:p-8 min-w-0">
-        <header className="mb-6 lg:mb-10 flex flex-wrap justify-between items-center gap-4">
+        {/* `relative`: en el telefono el panel de la campana se ancla aca. */}
+        <header className="relative mb-6 lg:mb-10 flex flex-wrap justify-between items-center gap-4">
           <div className="flex items-center gap-3">
             <button
               type="button"
               onClick={() => setIsSidebarOpen(true)}
-              aria-label="Abrir menu de navegacion"
+              aria-label="Abrir menú de navegación"
               className="lg:hidden p-2.5 rounded-xl flex-shrink-0"
               style={{
                 background: 'white',
@@ -133,7 +134,7 @@ const AdminLayout: React.FC = () => {
 
         <SubscriptionBanner subscription={subscription} storeName={store?.name} />
 
-        <div className="relative animate-in fade-in duration-500">
+        <div className="relative duration-500">
           <Outlet />
         </div>
 

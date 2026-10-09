@@ -30,6 +30,16 @@ export interface PublicStore {
   feature_flags: PublicStoreFeatureFlags
 }
 
+/**
+ * Slug -> tienda para "Mis turnos" (FF-16). Responde tambien con la tienda
+ * suspendida, cuando la vitrina da 404: cancelar y reprogramar siguen.
+ */
+export interface PublicStoreRef {
+  store_public_id: string
+  name: string
+  accepts_new_bookings: boolean
+}
+
 export interface PublicService {
   public_id: string
   name: string
@@ -93,6 +103,10 @@ export interface BookingConfirmation {
   notes?: string | null
   custom_fields?: Record<string, string>
   payment_required: boolean
+  /** Por donde se paga la seña obligatoria (null: no hay seña que pagar). */
+  deposit_channel?: 'mercadopago' | 'whatsapp' | null
+  /** Hasta cuándo se puede pagar la seña (ISO UTC); después el turno se libera. */
+  deposit_deadline?: string | null
   payment_status?: string | null
   payment_link?: string | null
   payment_public_id?: string | null
@@ -188,7 +202,11 @@ export interface DepositPreview {
 
 export interface ClientAppointmentItem {
   public_id: string
+  /** `public_id` del servicio: con `staff_id`, pide la grilla para reprogramar. */
+  service_id: string
   service_name: string
+  /** Id publico del profesional, el mismo que usa la reserva publica. */
+  staff_id: string
   staff_name: string
   starts_at: string
   ends_at: string
@@ -235,6 +253,11 @@ class PublicBookingService {
     return data
   }
 
+  async getStoreRef(slug: string): Promise<PublicStoreRef> {
+    const { data } = await apiClient.get<PublicStoreRef>(`/public/stores/${slug}/ref`)
+    return data
+  }
+
   async getServices(storePublicId: string): Promise<PublicService[]> {
     const { data } = await apiClient.get<PublicService[]>('/public/services', {
       params: { store_public_id: storePublicId }
@@ -253,10 +276,12 @@ class PublicBookingService {
     storePublicId: string,
     serviceId: string,
     date: string,
-    forceAll = false
+    forceAll = false,
+    signal?: AbortSignal
   ): Promise<AvailabilitySlot[]> {
     const { data } = await apiClient.get<AvailabilitySlot[]>('/public/availability', {
-      params: { store_public_id: storePublicId, service_id: serviceId, date, force_all: forceAll }
+      params: { store_public_id: storePublicId, service_id: serviceId, date, force_all: forceAll },
+      signal
     })
     return data
   }
@@ -289,8 +314,11 @@ class PublicBookingService {
   }
 
   async getClientAppointments(storePublicId: string, phone: string): Promise<ClientAppointments> {
+    // FF-05: sin limit el backend devuelve los 50 mas recientes (acepta 1..200);
+    // se piden todos los que permite para no esconder turnos viejos.
     const { data } = await apiClient.get<ClientAppointments>(
-      `/public/client/${storePublicId}/${phone}/appointments`
+      `/public/client/${storePublicId}/${phone}/appointments`,
+      { params: { limit: 200 } }
     )
     return data
   }
@@ -315,6 +343,14 @@ class PublicBookingService {
   async requestOtp(payload: OtpRequestPayload): Promise<OtpRequestResponse> {
     const { data } = await apiClient.post<OtpRequestResponse>('/public/otp/request', payload)
     return data
+  }
+
+  /**
+   * Baja del mail promocional con el token firmado del link (pagina `/baja`).
+   * Es POST a proposito: un escaner de correo que abre el link no da de baja.
+   */
+  async unsubscribeFromMarketing(token: string): Promise<void> {
+    await apiClient.post('/public/unsubscribe', { token })
   }
 
   async verifyOtp(payload: OtpVerifyPayload): Promise<OtpVerifyResponse> {

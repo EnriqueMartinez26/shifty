@@ -115,8 +115,8 @@ async def test_el_aviso_al_dueno_sale_con_la_fila_ya_commiteada_y_una_sola_vez(
     async def dueno(
         *, email: str, title: str, body: str | None = None, smtp: Any = None
     ) -> dict[str, str]:
-        # El cuerpo arranca con "Cliente N reservo ...": identifica la fila.
-        nombre = (body or "").split(" reservo", 1)[0]
+        # El cuerpo arranca con "Cliente N reservó ...": identifica la fila.
+        nombre = (body or "").split(" reservó", 1)[0]
         commiteado_al_enviar.append(
             await _commiteado_segun_otra_conexion(owner_engine, nombre)
         )
@@ -143,7 +143,7 @@ async def test_el_aviso_al_dueno_sale_con_la_fila_ya_commiteada_y_una_sola_vez(
     assert all(int(r["failed"]) == 0 for r in resultados), resultados
     # Cada aviso salio una sola vez (SKIP LOCKED) y ninguno se perdio.
     assert sorted(enviados) == sorted(
-        f"Cliente {i} reservo Consulta y va a coordinar el pago. "
+        f"Cliente {i} reservó Consulta y va a coordinar el pago. "
         "Confirmalo cuando recibas la transferencia."
         for i in range(CUANTOS)
     )

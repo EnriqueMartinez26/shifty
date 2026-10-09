@@ -8,6 +8,8 @@ import {
   NotFoundError,
   PaymentRequiredError,
   RateLimitError,
+  RequestCanceledError,
+  RequestTimeoutError,
   ServiceUnavailableError,
   ValidationError
 } from '@shared/errors'
@@ -34,6 +36,32 @@ describe('shouldRetryQuery', () => {
     ['429', new RateLimitError('x', { statusCode: 429 })]
   ])('no reintenta un %s: repetirlo no cambia la respuesta', (_status, error) => {
     expect(shouldRetryQuery(0, error)).toBe(false)
+  })
+
+  it('no reintenta una lectura que vencio su timeout (D-20260930-02)', () => {
+    // F4-04 b (2026-10-01): sin esto un GET colgado esperaba 15 s, se
+    // reintentaba y esperaba otros 15 s antes de mostrar el error.
+    const timeout = new RequestTimeoutError('x', { errorCode: 'REQUEST_TIMEOUT', statusCode: 0 })
+
+    expect(shouldRetryQuery(0, timeout)).toBe(false)
+    // Tambien envuelto por BaseService (el original en `originalError`).
+    expect(shouldRetryQuery(0, Object.assign(new Error('x'), { originalError: timeout }))).toBe(
+      false
+    )
+  })
+
+  it('no reintenta una consulta cancelada a proposito', () => {
+    // 2026-10-02: una consulta cancelada por react-query se reportaba como
+    // error de red a Sentry, y como NetworkError tambien se reintentaba.
+    const canceled = new RequestCanceledError('x', {
+      errorCode: 'REQUEST_CANCELED',
+      statusCode: 0
+    })
+
+    expect(shouldRetryQuery(0, canceled)).toBe(false)
+    expect(shouldRetryQuery(0, Object.assign(new Error('x'), { originalError: canceled }))).toBe(
+      false
+    )
   })
 
   it.each([

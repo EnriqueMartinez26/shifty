@@ -8,6 +8,10 @@ export interface LedgerMovement {
   appointment_id?: string | null
   notes?: string | null
   created_at: string
+  /** El movimiento que esta reversion anula; null si no es una reversion. */
+  reverses_id?: string | null
+  /** Otro movimiento ya lo anulo: no se puede volver a revertir. */
+  reversed?: boolean
 }
 
 /** Una pagina del historial, del movimiento mas nuevo al mas viejo. */
@@ -61,8 +65,11 @@ class LedgerService {
   }
 
   // `/users/` es solo del admin; este buscador sirve tambien al profesional.
-  async searchClients(q?: string): Promise<LedgerClient[]> {
-    const { data } = await apiClient.get<LedgerClient[]>('/ledger/clients', { params: { q } })
+  async searchClients(q?: string, signal?: AbortSignal): Promise<LedgerClient[]> {
+    const { data } = await apiClient.get<LedgerClient[]>('/ledger/clients', {
+      params: { q },
+      signal
+    })
     return data
   }
 
@@ -75,6 +82,17 @@ class LedgerService {
     const { data } = await apiClient.post<LedgerMovement>(
       `/ledger/customers/${clientId}/movements`,
       payload
+    )
+    return data
+  }
+
+  /**
+   * Agrega el movimiento que anula a `movementId` (el original queda en el
+   * historial). Sin cuerpo; 422 si ya fue revertido o si es una reversion.
+   */
+  async reverseMovement(clientId: string, movementId: string): Promise<LedgerMovement> {
+    const { data } = await apiClient.post<LedgerMovement>(
+      `/ledger/customers/${clientId}/movements/${movementId}/reverse`
     )
     return data
   }

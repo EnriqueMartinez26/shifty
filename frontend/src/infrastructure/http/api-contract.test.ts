@@ -1,3 +1,5 @@
+import { CanceledError } from 'axios'
+
 import {
   ConflictError,
   ForbiddenError,
@@ -6,6 +8,8 @@ import {
   NotFoundError,
   PaymentRequiredError,
   RateLimitError,
+  RequestCanceledError,
+  RequestTimeoutError,
   ServiceUnavailableError,
   UnauthorizedError,
   ValidationError
@@ -78,6 +82,51 @@ describe('normalizeApiError', () => {
         errorCode: 'NOT_FOUND'
       }
     })
+  })
+
+  it('maps a read timeout to its own typed error (D-20260930-02)', () => {
+    // F4-04 b (2026-10-01): un timeout decia "No se pudo conectar con el
+    // servidor." y se reintentaba como una conexion caida.
+    const error = normalizeApiError({
+      code: 'ETIMEDOUT',
+      message: 'timeout of 15000ms exceeded'
+    })
+
+    expect(error).toBeInstanceOf(RequestTimeoutError)
+    expect(error).toMatchObject({
+      code: 'REQUEST_TIMEOUT',
+      statusCode: 0,
+      message: 'La consulta tardó demasiado. Probá de nuevo.',
+      context: { errorCode: 'REQUEST_TIMEOUT', statusCode: 0 }
+    })
+  })
+
+  it('keeps an aborted request (ECONNABORTED without timeout) as a network error', () => {
+    // Con clarifyTimeoutError, ECONNABORTED solo significa "Request aborted".
+    const error = normalizeApiError({ code: 'ECONNABORTED', message: 'Request aborted' })
+
+    expect(error).toBeInstanceOf(NetworkError)
+    expect(error).not.toBeInstanceOf(RequestTimeoutError)
+    expect(error).not.toBeInstanceOf(RequestCanceledError)
+  })
+
+  it('maps a request canceled by its caller to its own typed error, not a network error', () => {
+    // 2026-10-02: una consulta cancelada por react-query se reportaba como
+    // error de red a Sentry. axios la rechaza con ERR_CANCELED.
+    const error = normalizeApiError({ code: 'ERR_CANCELED', message: 'canceled' })
+
+    expect(error).toBeInstanceOf(RequestCanceledError)
+    expect(error).not.toBeInstanceOf(NetworkError)
+    expect(error).toMatchObject({
+      code: 'REQUEST_CANCELED',
+      statusCode: 0,
+      isOperational: true,
+      context: { errorCode: 'REQUEST_CANCELED', statusCode: 0 }
+    })
+  })
+
+  it('maps a real axios CanceledError to the canceled error', () => {
+    expect(normalizeApiError(new CanceledError())).toBeInstanceOf(RequestCanceledError)
   })
 
   it('maps missing transport responses to the shared network error', () => {

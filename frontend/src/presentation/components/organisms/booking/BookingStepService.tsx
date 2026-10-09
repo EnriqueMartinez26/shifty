@@ -4,6 +4,8 @@ import { Briefcase, Clock, Loader2, Check } from 'lucide-react'
 
 import { usePublicServices } from '@presentation/hooks/usePublic'
 
+import { formatCurrency } from '@shared/utils/currency'
+
 import { colors2000s } from '../../../../theme/colors'
 import { createBookingChoiceCardStyle } from '../../../lib/surfaceStyles'
 
@@ -32,7 +34,7 @@ export const BookingStepService: React.FC<BookingStepServiceProps> = ({
   }
 
   return (
-    <div className="space-y-4 animate-in fade-in slide-in-from-right-4 duration-500">
+    <div className="space-y-4 duration-500">
       <div className="mb-6">
         <h2
           className="text-2xl font-black uppercase tracking-tight"
@@ -52,7 +54,7 @@ export const BookingStepService: React.FC<BookingStepServiceProps> = ({
             <button
               key={svc.public_id}
               onClick={() => onSelect(svc.public_id)}
-              className="w-full text-left p-5 flex items-center gap-4 transition-all active:scale-98 group border relative overflow-hidden"
+              className="w-full text-left p-4 pl-5 sm:p-5 flex items-center gap-3 sm:gap-4 transition-all active:scale-98 group border relative overflow-hidden"
               style={createBookingChoiceCardStyle(isSelected)}
             >
               {/* Left dynamic accented border */}
@@ -63,7 +65,7 @@ export const BookingStepService: React.FC<BookingStepServiceProps> = ({
 
               {/* Glossy avatar */}
               <div
-                className="w-14 h-14 rounded-md flex items-center justify-center flex-shrink-0 ml-1 overflow-hidden"
+                className="w-12 h-12 sm:w-14 sm:h-14 rounded-md flex items-center justify-center flex-shrink-0 ml-1 overflow-hidden"
                 style={{
                   background: isSelected
                     ? 'linear-gradient(135deg, rgba(255,255,255,0.4) 0%, rgba(255,255,255,0.15) 100%)'
@@ -75,24 +77,34 @@ export const BookingStepService: React.FC<BookingStepServiceProps> = ({
                 }}
               >
                 {svc.image_url ? (
-                  <img src={svc.image_url} alt={svc.name} className="w-full h-full object-cover" />
+                  <img
+                    src={svc.image_url}
+                    alt={svc.name}
+                    loading="lazy"
+                    decoding="async"
+                    width={56}
+                    height={56}
+                    className="w-full h-full object-cover"
+                  />
                 ) : (
                   <Briefcase className="w-6 h-6 group-hover:scale-110 transition-transform duration-300" />
                 )}
               </div>
 
               <div className="flex-1 min-w-0">
+                {/* En 390 px el nombre salia cortado ("BARBA Y PERFILAD"), el precio
+                    recortado y el circulo encima del titulo (QA movil 2026-10-08). */}
                 <p
-                  className="text-lg font-black uppercase tracking-tight leading-none mb-2"
+                  className="text-base sm:text-lg font-black uppercase tracking-tight leading-tight mb-2 break-words"
                   style={{ color: isSelected ? '#ffffff' : colors2000s.text.primary }}
                 >
                   {svc.name}
                 </p>
 
-                <div className="flex items-center gap-3">
+                <div className="flex flex-wrap items-center gap-2">
                   {/* Recessed spec fields */}
                   <span
-                    className="text-xs font-black px-3 py-1 rounded-md flex items-center gap-1"
+                    className="text-xs font-black px-3 py-1 rounded-md flex items-center gap-1 whitespace-nowrap"
                     style={{
                       background: '#ffffff',
                       boxShadow: colors2000s.shadows.insetDark,
@@ -103,20 +115,20 @@ export const BookingStepService: React.FC<BookingStepServiceProps> = ({
                   </span>
 
                   <span
-                    className="text-xs font-black px-3 py-1 rounded-md"
+                    className="text-xs font-black px-3 py-1 rounded-md whitespace-nowrap"
                     style={{
                       background: '#ffffff',
                       boxShadow: colors2000s.shadows.insetDark,
                       color: colors2000s.orange.accent
                     }}
                   >
-                    ${svc.price}
+                    {formatCurrency(svc.price)}
                   </span>
                 </div>
               </div>
 
               <div
-                className="w-7 h-7 rounded-full flex items-center justify-center transition-all"
+                className="w-7 h-7 flex-shrink-0 rounded-full flex items-center justify-center transition-all"
                 style={{
                   background: isSelected
                     ? `linear-gradient(180deg, ${colors2000s.status.success.light} 0%, ${colors2000s.status.success.dark} 100%)`

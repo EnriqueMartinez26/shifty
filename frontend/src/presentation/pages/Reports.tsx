@@ -7,14 +7,15 @@ import type { ReportSummary } from '@application/services/ReportsService'
 
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
 import { formatArgentinaDate } from '@shared/utils/argentinaTime'
+import { formatCurrency } from '@shared/utils/currency'
 
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
 import { ReportAppointmentsTable } from '../components/organisms/ReportAppointmentsTable'
 import { useAuth } from '../context/AuthContext'
 import { hasAnyRole, ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN } from '../context/roles'
+import { useDocumentTitle } from '../hooks/useDocumentTitle'
 import type { ReportExportFormat } from '../hooks/useReports'
 import { useExportReport, useProfessionalReports, useReportSummary } from '../hooks/useReports'
-import { currencyFmtEsAr as currencyFmt } from '../lib/formatters'
 import {
   create2000sInputStyle,
   create2000sListCardStyle,
@@ -105,6 +106,7 @@ const ReportRangeHeader: React.FC<ReportRangeHeaderProps> = ({
 )
 
 const ReportsPage: React.FC = () => {
+  useDocumentTitle('Reportes · Shifty')
   const [fromDate, setFromDate] = useState(toInputDate(subDays(new Date(), 7)))
   const [toDate, setToDate] = useState(toInputDate(new Date()))
   const [offset, setOffset] = useState(0)
@@ -205,7 +207,7 @@ const ReportsPage: React.FC = () => {
 
   if (summaryQuery.isError && !summary) {
     return (
-      <div className="space-y-8 animate-in fade-in duration-500">
+      <div className="space-y-8 duration-500">
         {rangeHeader}
         <div
           role="alert"
@@ -225,7 +227,7 @@ const ReportsPage: React.FC = () => {
   }
 
   return (
-    <div className="space-y-8 animate-in fade-in duration-500">
+    <div className="space-y-8 duration-500">
       {rangeHeader}
 
       <div className="grid grid-cols-2 xl:grid-cols-4 gap-6">
@@ -248,7 +250,7 @@ const ReportsPage: React.FC = () => {
             Ingresos
           </p>
           <p className="text-2xl font-black mt-1" style={{ color: colors2000s.orange.accent }}>
-            {currencyFmt.format(stats?.total_revenue ?? 0)}
+            {formatCurrency(stats?.total_revenue ?? 0)}
           </p>
         </div>
         <div className="p-5 rounded-md" style={cardStyle}>
@@ -259,7 +261,7 @@ const ReportsPage: React.FC = () => {
             Ticket promedio
           </p>
           <p className="text-2xl font-black mt-1" style={{ color: colors2000s.text.primary }}>
-            {currencyFmt.format(stats?.average_ticket ?? 0)}
+            {formatCurrency(stats?.average_ticket ?? 0)}
           </p>
         </div>
         <div className="p-5 rounded-md" style={cardStyle}>
@@ -270,7 +272,7 @@ const ReportsPage: React.FC = () => {
             Saldo en deuda
           </p>
           <p className="text-2xl font-black mt-1" style={{ color: colors2000s.text.primary }}>
-            {currencyFmt.format(debtSummary?.outstanding_balance ?? 0)}
+            {formatCurrency(debtSummary?.outstanding_balance ?? 0)}
           </p>
         </div>
         <div className="p-5 rounded-md" style={cardStyle}>
@@ -389,7 +391,7 @@ const ReportsPage: React.FC = () => {
               color: colors2000s.text.primary
             }}
           >
-            Servicios mas vendidos
+            Servicios más vendidos
           </div>
           <div className="p-4 space-y-3">
             {(summary?.top_services || []).map((item) => (
@@ -411,7 +413,7 @@ const ReportsPage: React.FC = () => {
                   {item.appointments} reservas · {item.completed_appointments} completados
                 </p>
                 <p className="text-xs font-black mt-2" style={{ color: colors2000s.orange.accent }}>
-                  {currencyFmt.format(item.revenue)}
+                  {formatCurrency(item.revenue)}
                 </p>
               </div>
             ))}
@@ -459,7 +461,7 @@ const ReportsPage: React.FC = () => {
                   {item.appointments} reservas · {item.completed_appointments} completados
                 </p>
                 <p className="text-xs font-black mt-2" style={{ color: colors2000s.orange.accent }}>
-                  {currencyFmt.format(item.revenue)}
+                  {formatCurrency(item.revenue)}
                 </p>
               </div>
             ))}
@@ -507,7 +509,7 @@ const ReportsPage: React.FC = () => {
                   Cliente con saldo pendiente
                 </p>
                 <p className="text-xs font-black mt-2" style={{ color: colors2000s.orange.accent }}>
-                  {currencyFmt.format(item.balance)}
+                  {formatCurrency(item.balance)}
                 </p>
               </div>
             ))}
@@ -570,7 +572,7 @@ const ReportsPage: React.FC = () => {
                   Horas bloqueadas
                 </th>
                 <th className="text-right px-6 py-4 font-black uppercase tracking-widest">
-                  Ocupacion
+                  Ocupación
                 </th>
                 <th className="text-right px-6 py-4 font-black uppercase tracking-widest">
                   Ingresos
@@ -611,7 +613,7 @@ const ReportsPage: React.FC = () => {
                     className="px-6 py-4 text-right font-black"
                     style={{ color: colors2000s.text.primary }}
                   >
-                    {currencyFmt.format(item.revenue)}
+                    {formatCurrency(item.revenue)}
                   </td>
                 </tr>
               ))}
@@ -621,7 +623,7 @@ const ReportsPage: React.FC = () => {
                     <td
                       colSpan={6}
                       className="px-6 py-10 text-center font-bold italic"
-                      style={{ color: colors2000s.text.disabled }}
+                      style={{ color: colors2000s.text.secondary }}
                     >
                       Sin datos de profesionales para el rango.
                     </td>

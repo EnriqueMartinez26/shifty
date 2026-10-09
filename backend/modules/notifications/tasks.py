@@ -19,7 +19,7 @@ from core.celery_app import celery_app
 from core.enqueue import enqueue
 from core.worker_loop import run_in_worker_loop
 from core.config import settings
-from core.utils import ARGENTINA_TZ
+from core.utils import ARGENTINA_TZ, format_ars
 from core.database import (
     AsyncSessionFactory,
     _apply_tenant_context,
@@ -317,19 +317,23 @@ send_otp_email: Any = celery_app.task(name="send_otp_email", max_retries=0)(
 )
 
 
-async def enqueue_otp_email(to: str, subject: str, body: str) -> None:
-    """Encola el mail del OTP. Nunca propaga.
+async def enqueue_otp_email(to: str, subject: str, body: str) -> bool:
+    """Encola el mail del OTP; True si la cola lo acepto. Nunca propaga.
 
     La respuesta del pedido de OTP es neutra por contrato (regla 20): no
     puede cambiar de forma ni de tiempo porque el broker este caido. Un
     fallo de encolado se trata como un fallo de envio: se loguea sin datos
-    personales y el cliente vuelve a pedir el codigo.
+    personales y el cliente vuelve a pedir el codigo. El ``bool`` es para el
+    servicio del OTP, que con False no guarda el codigo nuevo y deja vivo el
+    anterior (2026-10-05).
 
     F1-03 (2026-09-24): por ``core.enqueue.enqueue``. El ``.delay`` directo
     bloqueaba el event loop hasta 33 s con el broker inalcanzable.
     """
-    if not await enqueue(send_otp_email, to, subject, body):
+    encolado = await enqueue(send_otp_email, to, subject, body)
+    if not encolado:
         logger.warning("otp_email_enqueue_failed")
+    return encolado
 
 
 def is_deliverable_email(email: str | None) -> bool:
@@ -360,6 +364,31 @@ def format_local_datetime(value: Any) -> tuple[str, str]:
         instant = instant.replace(tzinfo=timezone.utc)
     local = instant.astimezone(ARGENTINA_TZ)
     return (local.strftime("%d/%m/%Y"), local.strftime("%H:%M"))
+
+
+# ``strftime("%A")`` depende del locale del proceso: los dias van a mano.
+_DIAS = ("lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo")
+
+
+def format_local_deadline(value: Any) -> str:
+    """Un plazo en hora argentina para personas: "sábado 12/10 a las 15:00".
+
+    El mismo formato que la pantalla de exito de la reserva
+    (``formatArgentinaDayHeading`` + hora en ``BookingSuccess.tsx``): el
+    cliente y el dueno leen el plazo de la sena igual en la pantalla, en el
+    mail y en el aviso. Cadena vacia si el valor no se puede leer.
+    """
+    if isinstance(value, datetime):
+        instant = value
+    else:
+        try:
+            instant = datetime.fromisoformat(str(value))
+        except ValueError:
+            return ""
+    if instant.tzinfo is None:
+        instant = instant.replace(tzinfo=timezone.utc)
+    local = instant.astimezone(ARGENTINA_TZ)
+    return f"{_DIAS[local.weekday()]} {local:%d/%m} a las {local:%H:%M}"
 
 
 def build_client_details(
@@ -461,12 +490,27 @@ def _registration_subject(details: dict[str, Any]) -> str:
     return f"Reserva registrada - {details.get('service', '')}"
 
 
+def _registration_next_step(details: dict[str, Any]) -> str:
+    """Que sigue despues de reservar. Con una sena por WhatsApp pendiente, el
+    plazo exacto para pagarla (decision de Mateo, 2026-10-03): si no se paga,
+    el turno se libera (``deposit_channels.whatsapp_hold_deadline``)."""
+    plazo = format_local_deadline(details.get("deposit_deadline") or "")
+    if not plazo:
+        return "Te vamos a avisar cuando esté confirmada."
+    importe = details.get("deposit_amount")
+    sena = f"la seña de {format_ars(importe)}" if importe else "la seña"
+    return (
+        f"Tenés hasta el {plazo} para pagar {sena} por WhatsApp. Si no, el "
+        "turno se libera. Te vamos a avisar cuando esté confirmada."
+    )
+
+
 def _registration_body(details: dict[str, Any]) -> str:
     return (
         f"{_saludo(details)}\n\n"
         f'Tu reserva para "{details.get("service")}" {_con_quien(details)} '
-        f"quedo registrada para el {_cuando(details)}.\n\n"
-        "Te vamos a avisar cuando este confirmada.\n\n"
+        f"quedó registrada para el {_cuando(details)}.\n\n"
+        f"{_registration_next_step(details)}\n\n"
         f"{_contacto(details)}\n\n" + _pie(details, "reservaste un turno en {tienda}")
     )
 
@@ -878,9 +922,47 @@ async def _load_booking_mail(
             details = build_client_details(
                 appointment, appointment.service, appointment.staff, store
             )
+            details |= await _whatsapp_deposit_details(db, appointment)
             return appointment.client_email, details, str(appointment.status)
         finally:
             set_tenant_context(None, False)
+
+
+async def _whatsapp_deposit_details(db: Any, appointment: Any) -> dict[str, Any]:
+    """Plazo e importe de la sena por WhatsApp pendiente, para "reserva
+    registrada" (decision de Mateo, 2026-10-03); vacio si no hay una.
+
+    Se relee aca, como el resto del turno: el plazo es la retencion del turno
+    (``expires_at``) y el cobro tiene que seguir vivo y ser ``manual``.
+    """
+    from sqlalchemy import select
+
+    from modules.appointments.model import AppointmentStatus
+    from modules.payments.model import (
+        LIVE_CHARGE_PAYMENT_STATUSES,
+        PAYMENT_PROVIDER_MANUAL,
+        Payment,
+    )
+
+    if (
+        appointment.status != AppointmentStatus.PENDING_PAYMENT.value
+        or appointment.expires_at is None
+    ):
+        return {}
+    importe = await db.scalar(
+        select(Payment.amount).where(
+            Payment.store_id == appointment.store_id,
+            Payment.appointment_id == appointment.id,
+            Payment.provider == PAYMENT_PROVIDER_MANUAL,
+            Payment.status.in_(sorted(LIVE_CHARGE_PAYMENT_STATUSES)),
+        )
+    )
+    if importe is None:
+        return {}
+    return {
+        "deposit_deadline": appointment.expires_at.isoformat(),
+        "deposit_amount": str(importe),
+    }
 
 
 async def deliver_booking_email(

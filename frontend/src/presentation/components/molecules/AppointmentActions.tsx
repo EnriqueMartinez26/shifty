@@ -15,9 +15,18 @@ interface AppointmentActionsProps {
   /** Puede cancelar o reprogramar este turno (D-20260929-03). */
   canCancelOrReschedule: boolean
   busy: boolean
+  /** Tienda suspendida: deshabilita lo que el backend responde con 402 (FF-15). */
+  readOnlyReason?: string | null
   compact?: boolean
   onAction: (action: AppointmentAction) => void
 }
+
+/**
+ * Lo que una tienda suspendida sigue pudiendo hacer: PATCH .../cancel y
+ * .../release estan en SUSPENSION_ALLOWED_WRITES (D-20260930-12). Confirmar,
+ * completar, ausente y reprogramar responden 402.
+ */
+const ALLOWED_WHEN_SUSPENDED: ReadonlySet<AppointmentAction> = new Set(['cancel', 'release'])
 
 interface ActionView {
   label: string
@@ -69,6 +78,14 @@ const ACTION_VIEWS: Record<AppointmentAction, ActionView> = {
   }
 }
 
+/**
+ * Blanco tactil de 40x40 (QA movil 2026-10-08: median 30x22 compactos y 24 de
+ * alto con texto). En pantallas grandes los compactos de la grilla del dia y
+ * del mes vuelven a su tamano: ahi no hay dedo y no entran.
+ */
+export const TAP_TARGET = 'min-h-10 min-w-10'
+export const COMPACT_ON_DESKTOP = 'md:min-h-0 md:min-w-0'
+
 export const AppointmentActions: React.FC<AppointmentActionsProps> = ({
   status,
   hasStarted,
@@ -76,6 +93,7 @@ export const AppointmentActions: React.FC<AppointmentActionsProps> = ({
   canManage,
   canCancelOrReschedule,
   busy,
+  readOnlyReason = null,
   compact = false,
   onAction
 }) => {
@@ -90,18 +108,19 @@ export const AppointmentActions: React.FC<AppointmentActionsProps> = ({
     <div className={`flex flex-wrap gap-1 ${compact ? 'mt-1' : 'mt-2'}`}>
       {actions.map((action) => {
         const spec = ACTION_VIEWS[action]
+        const blockedReason = ALLOWED_WHEN_SUSPENDED.has(action) ? null : readOnlyReason
         return (
           <button
             key={action}
             type="button"
-            title={spec.title}
+            title={blockedReason ?? spec.title}
             aria-label={spec.title}
             onClick={(event) => {
               event.stopPropagation()
               onAction(action)
             }}
-            disabled={busy}
-            className={`inline-flex items-center gap-1 rounded-lg bg-white px-2 py-1 text-[9px] font-black uppercase tracking-widest border disabled:opacity-50 ${spec.tone}`}
+            disabled={busy || blockedReason !== null}
+            className={`inline-flex items-center justify-center gap-1 rounded-lg bg-white px-2 py-1 text-[9px] font-black uppercase tracking-widest border disabled:opacity-50 ${TAP_TARGET} ${compact ? COMPACT_ON_DESKTOP : ''} ${spec.tone}`}
           >
             {spec.icon}
             {compact ? null : spec.label}

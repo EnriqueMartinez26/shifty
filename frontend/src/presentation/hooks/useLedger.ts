@@ -27,7 +27,8 @@ export const useLedgerClients = (search: string) => {
   const q = term.length >= 2 ? term : undefined
   return useQuery<LedgerClient[]>({
     queryKey: ['ledger-clients', q ?? null],
-    queryFn: () => ledgerService.searchClients(q),
+    // Con el signal, la busqueda vieja se cancela al tipear otra (F4-04).
+    queryFn: ({ signal }) => ledgerService.searchClients(q, signal),
     placeholderData: keepPreviousData
   })
 }
@@ -63,6 +64,22 @@ export const useAddLedgerMovement = () => {
   return useMutation<LedgerMovement, Error, { clientId: string; payload: LedgerMovementPayload }>({
     mutationFn: ({ clientId, payload }) => ledgerService.addMovement(clientId, payload),
     onSuccess: (_data, variables) => {
+      void queryClient.invalidateQueries({ queryKey: ['ledger-summary'] })
+      void queryClient.invalidateQueries({ queryKey: ['customer-ledger', variables.clientId] })
+    }
+  })
+}
+
+/**
+ * Revierte un movimiento (decision de Mateo, 2026-10-03). Con exito o con
+ * error se vuelve a pedir la cuenta: el saldo y la marca "Revertido" son del
+ * servidor, y un 422 (ya revertido) quiere decir que la vista quedo vieja.
+ */
+export const useReverseLedgerMovement = () => {
+  const queryClient = useQueryClient()
+  return useMutation<LedgerMovement, Error, { clientId: string; movementId: string }>({
+    mutationFn: ({ clientId, movementId }) => ledgerService.reverseMovement(clientId, movementId),
+    onSettled: (_data, _error, variables) => {
       void queryClient.invalidateQueries({ queryKey: ['ledger-summary'] })
       void queryClient.invalidateQueries({ queryKey: ['customer-ledger', variables.clientId] })
     }

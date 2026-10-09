@@ -210,4 +210,126 @@ describe('BookingStepDateTime', () => {
     expect(screen.getByTestId(`date-${lejanaStr}`)).toBeInTheDocument()
     expect(mockAvailability).toHaveBeenCalledWith('store-1', 'svc-1', lejanaStr, false)
   })
+
+  describe('reprogramar desde "Mis turnos" (FF-06)', () => {
+    // FF-06 (2026-10-01): "Mis turnos" reprogramaba con inputs libres de fecha
+    // y hora y recomponia el instante; un horario fuera de la grilla terminaba
+    // en 409 o 400. Reusa esta grilla con el profesional del turno fijo
+    // (el backend reprograma siempre con el mismo, D-20260930-06).
+    const AVISAME = /Avisame si se libera/
+    const slots = [
+      {
+        staff_id: 'st-1',
+        staff_name: 'Ana',
+        starts_at: '2026-09-15T13:00:00+00:00',
+        ends_at: '2026-09-15T13:30:00+00:00',
+        status: 'booked',
+        reason: null
+      },
+      {
+        staff_id: 'st-2',
+        staff_name: 'Bruno',
+        starts_at: '2026-09-15T13:00:00+00:00',
+        ends_at: '2026-09-15T13:30:00+00:00',
+        status: 'available',
+        reason: null
+      }
+    ]
+
+    it('con lockedStaffId no muestra el selector y solo ofrece los horarios de ese profesional', () => {
+      mockAvailability.mockReturnValue({ isLoading: false, data: slots })
+      mockStaff.mockReturnValue({
+        isLoading: false,
+        data: [
+          { public_id: 'st-1', kind: 'person', display_name: 'Ana', service_ids: ['svc-1'] },
+          { public_id: 'st-2', kind: 'person', display_name: 'Bruno', service_ids: ['svc-1'] }
+        ]
+      })
+
+      render(
+        <BookingStepDateTime
+          storePublicId="store-1"
+          serviceId="svc-1"
+          staffId={null}
+          lockedStaffId="st-1"
+          selectedDate={null}
+          selectedTime={null}
+          heading="Elegí el nuevo horario"
+          onSelect={() => undefined}
+          onBack={() => undefined}
+        />
+      )
+
+      expect(screen.getByRole('heading', { name: 'Elegí el nuevo horario' })).toBeInTheDocument()
+      expect(screen.queryByText('Profesional')).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /Cualquiera/ })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /Bruno/ })).not.toBeInTheDocument()
+      // El horario de Ana esta tomado: el de Bruno, libre, no se ofrece.
+      expect(screen.getByRole('button', { name: /10:00/ })).toBeDisabled()
+      // QA 2026-10-02 (S\08): el estado salia crudo, 'booked'.
+      expect(screen.getByRole('button', { name: /10:00/ })).toHaveTextContent('Ocupado')
+      expect(screen.queryByText('booked')).not.toBeInTheDocument()
+    })
+
+    it('sin showWaitlist la lista de espera sigue apareciendo como antes', () => {
+      mockAvailability.mockReturnValue({ isLoading: false, data: [] })
+
+      render(
+        <BookingStepDateTime
+          storePublicId="store-1"
+          serviceId="svc-1"
+          staffId={null}
+          selectedDate={null}
+          selectedTime={null}
+          onSelect={() => undefined}
+          onBack={() => undefined}
+        />
+      )
+
+      expect(screen.getByRole('button', { name: AVISAME })).toBeInTheDocument()
+      expect(screen.getByRole('heading', { name: 'Elegí fecha y hora' })).toBeInTheDocument()
+    })
+
+    it('con showWaitlist={false} no monta la lista de espera aunque no haya horarios', () => {
+      mockAvailability.mockReturnValue({ isLoading: false, data: [] })
+
+      render(
+        <BookingStepDateTime
+          storePublicId="store-1"
+          serviceId="svc-1"
+          staffId={null}
+          lockedStaffId="st-1"
+          showWaitlist={false}
+          selectedDate={null}
+          selectedTime={null}
+          onSelect={() => undefined}
+          onBack={() => undefined}
+        />
+      )
+
+      expect(screen.getByText('No hay turnos disponibles.')).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: AVISAME })).not.toBeInTheDocument()
+    })
+
+    it('con showWaitlist={false} tampoco la monta con todos los horarios tomados', () => {
+      mockAvailability.mockReturnValue({ isLoading: false, data: [slots[0]] })
+
+      render(
+        <BookingStepDateTime
+          storePublicId="store-1"
+          serviceId="svc-1"
+          staffId={null}
+          lockedStaffId="st-1"
+          showWaitlist={false}
+          selectedDate={null}
+          selectedTime={null}
+          onSelect={() => undefined}
+          onBack={() => undefined}
+        />
+      )
+
+      expect(screen.getByRole('button', { name: /10:00/ })).toBeDisabled()
+      expect(screen.queryByRole('button', { name: AVISAME })).not.toBeInTheDocument()
+    })
+  })
 })

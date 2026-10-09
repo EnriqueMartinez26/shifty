@@ -4,6 +4,7 @@ import { formatArgentinaTime } from '@shared/utils/argentinaTime'
 
 import { colors2000s } from '../../../theme/colors'
 import { statusStyle } from '../../lib/appointmentStatusStyle'
+import { bookingStatusLabel } from '../../lib/bookingStatusLabel'
 import { SLOT_HEIGHT_PX, gridPlacement, type DayGrid } from '../../lib/calendarGrid'
 
 interface StaffColumnBlock {
@@ -34,6 +35,8 @@ interface StaffColumnProps {
   cards: readonly StaffColumnCard[]
   canManageBlocks: boolean
   onEditBlock: (block: StaffColumnBlock) => void
+  /** En el telefono se ve un profesional por vez (QA movil 2026-10-08). */
+  hiddenOnPhone?: boolean
 }
 
 const closedBandStyle = {
@@ -53,9 +56,13 @@ export const StaffColumn: React.FC<StaffColumnProps> = ({
   blocks,
   cards,
   canManageBlocks,
-  onEditBlock
+  onEditBlock,
+  hiddenOnPhone = false
 }) => (
-  <div className="flex-1 min-w-[150px] relative border-r border-gray-50">
+  <div
+    data-staff-column
+    className={`${hiddenOnPhone ? 'hidden md:block' : ''} flex-1 min-w-[150px] relative border-r border-gray-50`}
+  >
     {grid.bands.map((band) =>
       band.kind === 'open' ? (
         band.labels.map((label) => (
@@ -85,7 +92,7 @@ export const StaffColumn: React.FC<StaffColumnProps> = ({
           top: segment.topPx,
           height: segment.heightPx,
           background: colors2000s.bg.disabled,
-          color: colors2000s.text.disabled
+          color: colors2000s.text.secondary
         }}
       >
         Fuera de horario
@@ -122,21 +129,25 @@ export const StaffColumn: React.FC<StaffColumnProps> = ({
 
     {cards.map((card) => {
       const style = statusStyle(card.status)
+      // El alto de la grilla es un piso, no un tope: con las acciones de 40x40
+      // del telefono un turno corto no entra, y un alto fijo con scroll propio
+      // las escondia (revision de la PR #129). Si al crecer tapa al turno de
+      // abajo, tocarla o enfocarla la trae al frente.
       return (
         <div
           key={card.id}
-          className="absolute left-2 right-2 rounded-[6px] p-3 border border-l-[5px] transition-all hover:scale-[1.02] active:scale-95 cursor-pointer flex flex-col justify-between"
+          data-appointment-card
+          className="absolute left-2 right-2 rounded-[6px] p-3 border border-l-[5px] transition-all hover:scale-[1.02] hover:z-20 focus-within:z-20 active:scale-95 cursor-pointer flex flex-col justify-between gap-1"
           style={{
             top: card.top,
-            height: card.height,
+            minHeight: card.height,
             background: style.background,
             borderColor: colors2000s.border.default,
             borderLeftColor: style.accent,
             boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.8), 0 3px 6px rgba(0,0,0,0.05)'
           }}
         >
-          <div className="absolute top-1 right-1 z-10 flex items-center gap-1">{card.controls}</div>
-          <div>
+          <div className="min-w-0">
             <p
               className="text-[8px] font-black uppercase tracking-widest mb-0.5"
               style={{ color: style.text }}
@@ -149,6 +160,8 @@ export const StaffColumn: React.FC<StaffColumnProps> = ({
             >
               {card.title}
             </h4>
+            {/* Debajo del nombre, no encima: tapaban el servicio (QA movil 2026-10-08). */}
+            <div className="flex flex-wrap items-start gap-1">{card.controls}</div>
           </div>
           <span
             className="self-start px-2 py-0.5 rounded-[4px] text-[8px] font-black tracking-widest uppercase"
@@ -158,7 +171,7 @@ export const StaffColumn: React.FC<StaffColumnProps> = ({
               color: style.text
             }}
           >
-            {card.timeLabel} - {card.status}
+            {card.timeLabel} - {bookingStatusLabel(card.status)}
           </span>
         </div>
       )

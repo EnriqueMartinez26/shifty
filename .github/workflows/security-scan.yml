@@ -109,6 +109,11 @@ jobs:
           load: true
           tags: shifty-scan-${{ matrix.service }}:${{ github.sha }}
           provenance: false
+          # Distinto en cada corrida: el upgrade de seguridad no sale de la
+          # cache y Trivy mira los paquetes que tendria hoy la imagen
+          # (D-20260930-23).
+          build-args: |
+            SECURITY_UPGRADE_STAMP=${{ github.run_id }}
           # Solo lee la cache de build-images.yml; no la escribe.
           cache-from: type=gha,scope=${{ matrix.service }}
 

@@ -4,19 +4,42 @@ name: Build images
 # el VPS solo hace `pull` (scripts/deploy.sh). Antes se construian en el mismo
 # servidor, sin version: no habia a que volver en un rollback.
 #
-# Cada push a main publica en GHCR (privado, del repo) tres imagenes con el sha
-# del commit y `latest`:
+# Publica en GHCR (privado, del repo) tres imagenes con el sha del commit y
+# `latest`:
 #   ghcr.io/enriquemartinez26/shifty-backend:<sha>   (API, worker y beat)
 #   ghcr.io/enriquemartinez26/shifty-frontend:<sha>
 #   ghcr.io/enriquemartinez26/shifty-nginx:<sha>
 # El deploy usa SIEMPRE el sha (APP_VERSION); `latest` es solo de referencia.
+#
+# Compuerta (2026-10-03): solo se publica un commit de main cuyo Quality paso.
+# Antes corria en cada push a main sin esperar a quality.yml, y un commit en
+# rojo quedaba como imagen desplegable. Ahora lo dispara el FIN de Quality
+# (`workflow_run`) y construye el sha QUE QUALITY PROBO
+# (`workflow_run.head_sha`): en un `workflow_run`, `github.sha` es el ultimo
+# commit de main, que puede ser otro.
+#
+# Trampas de `workflow_run` (documentacion de GitHub Actions):
+# - Corre el archivo de la rama por defecto, con el GITHUB_TOKEN (y sus
+#   `permissions`) y los `vars` del repo base, aunque el Quality que lo
+#   disparo viniera de un fork. El filtro `branches` mira `head_branch`, y un
+#   PR desde un fork con una rama llamada `main` tambien la trae: por eso el
+#   `if` exige ademas un `push` del mismo repo.
+# - Solo existe una vez mergeado a main: en un PR no corre ni se puede probar.
+# - `workflow_dispatch` sigue para reconstruir a mano y NO pasa por esta
+#   compuerta; por eso scripts/deploy.sh vuelve a preguntarle a GitHub si
+#   Quality paso en main para ese sha antes de desplegarlo.
 #
 # Retencion: el job `retention` borra las versiones sin tag y conserva las 5
 # mas nuevas de cada paquete (rollback = la anterior). Decision 2
 # del plan §7.
 
 on:
-  push:
+  workflow_run:
+    # Tiene que coincidir con `name:` de quality.yml.
+    workflows:
+      - Quality
+    types:
+      - completed
     branches:
       - main
   workflow_dispatch:
@@ -29,9 +52,19 @@ env:
   REGISTRY: ghcr.io
   # GHCR exige minusculas en el nombre del paquete.
   OWNER: enriquemartinez26
+  # El sha que se construye y con el que se etiqueta: el que probo Quality
+  # (workflow_run) o el de la rama elegida a mano (workflow_dispatch).
+  IMAGE_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
 
 jobs:
   build:
+    # A mano, o un Quality verde de un push a main de este mismo repo.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -49,6 +82,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7.0.0
+        with:
+          # Sin esto, en un workflow_run se construiria el ultimo commit de
+          # main, que puede no ser el que Quality probo.
+          ref: ${{ env.IMAGE_SHA }}
+          # El build no hace git push: el token no queda en .git/config.
+          persist-credentials: false
 
       - name: Setup Buildx
         uses: docker/setup-buildx-action@v4.4.1
@@ -66,15 +105,27 @@ jobs:
           context: ${{ matrix.context }}
           push: true
           tags: |
-            ${{ env.REGISTRY }}/${{ env.OWNER }}/shifty-${{ matrix.service }}:${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ env.OWNER }}/shifty-${{ matrix.service }}:${{ env.IMAGE_SHA }}
             ${{ env.REGISTRY }}/${{ env.OWNER }}/shifty-${{ matrix.service }}:latest
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
-          # Solo el Dockerfile del frontend los lee (el DSN publico de Sentry
-          # va en el bundle); los otros dos los ignoran.
+            org.opencontainers.image.revision=${{ env.IMAGE_SHA }}
+          # VITE_SENTRY_DSN: solo lo lee el Dockerfile del frontend (el DSN
+          # publico de Sentry va en el bundle); los otros dos lo ignoran.
+          # SECURITY_UPGRADE_STAMP: distinto en cada corrida, invalida la capa
+          # de apk/apt upgrade de los tres Dockerfiles. Sin el, la cache gha
+          # reusaba esa capa y la imagen no recibia parches (D-20260930-23).
+          # VITE_SUPPORT_WHATSAPP, VITE_CONTACT_EMAIL, VITE_LEGAL_RESPONSABLES:
+          # contacto de Shifty, solo del front. Van en variables del repo y no
+          # en el codigo porque el repo es publico; vacias, el front omite esa
+          # linea (docs/DEPLOY_RUNBOOK.md, seccion 2).
           build-args: |
             VITE_SENTRY_DSN=${{ vars.VITE_SENTRY_DSN }}
+            VITE_GA4_MEASUREMENT_ID=${{ vars.VITE_GA4_MEASUREMENT_ID }}
+            VITE_SUPPORT_WHATSAPP=${{ vars.VITE_SUPPORT_WHATSAPP }}
+            VITE_CONTACT_EMAIL=${{ vars.VITE_CONTACT_EMAIL }}
+            VITE_LEGAL_RESPONSABLES=${{ vars.VITE_LEGAL_RESPONSABLES }}
+            SECURITY_UPGRADE_STAMP=${{ github.run_id }}
           # Sin attestation de provenance: agrega un manifiesto SIN tag que
           # cuelga de la imagen, y la limpieza de versiones sin tag (job
           # retention) lo borraria y romperia la imagen.

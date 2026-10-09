@@ -6,6 +6,8 @@ import {
   NotFoundError,
   PaymentRequiredError,
   RateLimitError,
+  RequestCanceledError,
+  RequestTimeoutError,
   ServiceUnavailableError,
   UnauthorizedError,
   ValidationError
@@ -99,7 +101,7 @@ describe('ForbiddenErrorHandler', () => {
     await new ForbiddenErrorHandler().handle(error)
 
     expect(sink).toHaveBeenCalledWith(
-      'No tienes permisos suficientes para realizar esta acción.',
+      'No tenés permisos suficientes para realizar esta acción.',
       'error'
     )
   })
@@ -123,6 +125,31 @@ describe('TransientErrorHandler (402, 429, 502/503)', () => {
     const avisos = sink.mock.calls.map(([texto]) => String(texto))
     expect(avisos[0]).toContain('Tu suscripción está suspendida')
     expect(avisos.join()).not.toContain(crudo)
+  })
+
+  it('una lectura vencida avisa con su propio texto, no como falta de red (D-20260930-02)', async () => {
+    // F4-04 b (2026-10-01): el refresco de una pantalla que vencia su timeout
+    // no tenia aviso propio.
+    const timeout = new RequestTimeoutError('x', { errorCode: 'REQUEST_TIMEOUT', statusCode: 0 })
+
+    expect(new NetworkErrorHandler().canHandle(timeout)).toBe(false)
+    expect(new TransientErrorHandler().canHandle(timeout)).toBe(true)
+    await new TransientErrorHandler().handle(timeout)
+
+    expect(sink).toHaveBeenCalledWith('La consulta tardó demasiado. Probá de nuevo.', 'warning')
+  })
+
+  it('una consulta cancelada no es ni falta de red ni un aviso transitorio', () => {
+    // 2026-10-02: una consulta cancelada por react-query se reportaba como
+    // error de red a Sentry y se anunciaba "Sin conexion a Internet".
+    const canceled = new RequestCanceledError('x', {
+      errorCode: 'REQUEST_CANCELED',
+      statusCode: 0
+    })
+
+    expect(new NetworkErrorHandler().canHandle(canceled)).toBe(false)
+    expect(new TransientErrorHandler().canHandle(canceled)).toBe(false)
+    expect(new InternalServerErrorHandler().canHandle(canceled)).toBe(false)
   })
 
   it('con Retry-After dice en cuanto probar de nuevo (F4-04)', async () => {

@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 
 import structlog
-from sqlalchemy import Select, select, tuple_
+from sqlalchemy import Select, select, text, tuple_
 from sqlalchemy import true as sa_true
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -30,6 +30,12 @@ logger = structlog.get_logger()
 # corte nunca vuelva a ser invisible.
 SUBSCRIPTION_PAGE_SIZE = 500
 SUBSCRIPTION_MAX_PAGES = 40
+
+# Advisory-lock namespace/key reserved for the global lifecycle job ("SH" /
+# "SUBS" in ASCII). A try-lock skips an overlapping run instead of waiting
+# and inspecting rows again after the active run releases its row locks.
+SUBSCRIPTION_LIFECYCLE_LOCK_NAMESPACE = 0x5348
+SUBSCRIPTION_LIFECYCLE_LOCK_KEY = 0x53554253
 
 
 def today_local(now: datetime | None = None) -> date:
@@ -105,6 +111,13 @@ async def advance_subscriptions(
     Los avisos se devuelven para que la tarea los publique al outbox; aca no
     se manda ningun mail.
 
+    El job es global y una corrida completa comparte transaccion. En Postgres,
+    un advisory try-lock transaccional evita que dos corridas solapadas se
+    repartan paginas con ``SKIP LOCKED`` y luego vuelvan a inspeccionar filas
+    cuando la primera libera sus locks. Si otra corrida ya tiene el lock, esta
+    devuelve contadores vacios; Celery puede ejecutar el siguiente ciclo.
+    SQLite conserva el camino anterior, sin intentar tomar un advisory lock.
+
     Costo declarado (V-diff, 2026-09-20): la corrida entera es UNA
     transaccion, y cada pagina toma sus filas con ``FOR UPDATE SKIP LOCKED``
     que no se sueltan hasta el commit de la tarea. En el peor caso quedan
@@ -119,6 +132,19 @@ async def advance_subscriptions(
     now = now or datetime.now(timezone.utc)
     hoy = today_local(now)
     run = DailyRun()
+    # SQLite has no advisory-lock implementation and keeps the existing path.
+    if db.bind and db.bind.dialect.name == "postgresql":
+        acquired = await db.scalar(
+            text("SELECT pg_try_advisory_xact_lock(:namespace, :lock_key)"),
+            {
+                "namespace": SUBSCRIPTION_LIFECYCLE_LOCK_NAMESPACE,
+                "lock_key": SUBSCRIPTION_LIFECYCLE_LOCK_KEY,
+            },
+        )
+        if not acquired:
+            logger.info("subscription_lifecycle_overlap_skipped")
+            return run
+
     cursor: tuple[datetime, str] | None = None
     for pagina in range(SUBSCRIPTION_MAX_PAGES):
         filas = list((await db.execute(_pagina(cursor, limit))).scalars().all())
@@ -156,7 +182,8 @@ def _pagina(
             StoreSubscription.created_at.asc(), StoreSubscription.id.asc()
         )
         .limit(limit)
-        # Dos corridas solapadas no toman la misma fila.
+        # Defensa adicional a nivel de fila; las corridas globales se
+        # serializan con el advisory lock al entrar a esta funcion.
         .with_for_update(skip_locked=True)
     )
 

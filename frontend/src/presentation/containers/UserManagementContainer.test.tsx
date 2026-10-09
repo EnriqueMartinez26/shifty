@@ -2,6 +2,8 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 
 import { User } from '@domain/entities/User'
 
+import { ValidationError } from '@shared/errors/ValidationError'
+
 import { UserManagementContainer } from './UserManagementContainer'
 
 const mockUpdate = jest.fn()
@@ -9,11 +11,15 @@ const mockCreate = jest.fn()
 const mockDelete = jest.fn()
 const mockListQuery = jest.fn()
 let mockViewer: { public_id: string; is_global_admin?: boolean } = { public_id: 'admin-1' }
-let mockUsersQuery: { data?: User[]; isLoading: boolean; error: unknown } = {
-  data: [],
-  isLoading: false,
-  error: null
+const mockFetchNextPage = jest.fn()
+type UsersQuery = {
+  data?: User[]
+  isLoading: boolean
+  error: unknown
+  hasNextPage?: boolean
+  isFetchingNextPage?: boolean
 }
+let mockUsersQuery: UsersQuery = { data: [], isLoading: false, error: null }
 
 const usuario = User.fromPrimitives({
   id: 'usr-1',
@@ -29,7 +35,7 @@ const usuario = User.fromPrimitives({
 jest.mock('../hooks/useManagedDomainUsers', () => ({
   useManagedDomainUsers: (query: unknown) => {
     mockListQuery(query)
-    return mockUsersQuery
+    return { fetchNextPage: mockFetchNextPage, ...mockUsersQuery }
   },
   useCreateManagedDomainUser: () => ({ mutateAsync: mockCreate }),
   useUpdateManagedDomainUser: () => ({ mutateAsync: mockUpdate }),
@@ -38,6 +44,11 @@ jest.mock('../hooks/useManagedDomainUsers', () => ({
 
 jest.mock('../context/AuthContext', () => ({
   useAuth: () => ({ user: mockViewer })
+}))
+
+let mockWriteAccess = { readOnly: false, reason: 'Tienda suspendida' }
+jest.mock('../hooks/useStoreWriteAccess', () => ({
+  useStoreWriteAccess: () => mockWriteAccess
 }))
 
 const otroAdmin = User.fromPrimitives({
@@ -58,9 +69,35 @@ describe('UserManagementContainer', () => {
   beforeEach(() => {
     mockUsersQuery = { data: [usuario], isLoading: false, error: null }
     mockViewer = { public_id: 'admin-1' }
+    mockWriteAccess = { readOnly: false, reason: 'Tienda suspendida' }
     mockDelete.mockReset()
     mockUpdate.mockReset()
     mockUpdate.mockResolvedValue(usuario)
+  })
+
+  // 2026-10-02, QA en navegador: el rol salia crudo (CLIENT, RECEPTIONIST) y
+  // se veia el email tecnico {tel}@store{id}.noreply del alta publica.
+  it('muestra el rol en castellano y oculta el email tecnico', () => {
+    const cliente = User.fromPrimitives({
+      id: 'usr-3',
+      email: '5491155550707@store01m3xx3hzqhynqygq38hwdawjp.noreply',
+      firstName: 'Carla',
+      lastName: 'Ruiz',
+      phone: '5491155550707',
+      role: 'client',
+      isActive: true,
+      createdAt: '2026-09-01T12:00:00+00:00'
+    })
+    mockUsersQuery = { data: [usuario, cliente], isLoading: false, error: null }
+
+    render(<UserManagementContainer />)
+
+    expect(screen.queryByText('client')).not.toBeInTheDocument()
+    expect(screen.queryByText('receptionist')).not.toBeInTheDocument()
+    expect(screen.getAllByText('Recepción').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('Cliente').length).toBeGreaterThan(0)
+    expect(screen.queryByText(/\.noreply/)).not.toBeInTheDocument()
+    expect(screen.getAllByText('Sin email').length).toBeGreaterThan(0)
   })
 
   it('edita un usuario mandando solo lo que cambio, en UserWriteInput', async () => {
@@ -213,6 +250,91 @@ describe('UserManagementContainer', () => {
     )
   })
 
+  // 2026-10-01, D-20261001-01. Antes la edición mandaba cualquier clave tipeada
+  // sin validar (el 422 volvía genérico) y el alta solo tenía el piso de 12.
+  describe('contraseña (D-20261001-01)', () => {
+    const campoClave = (container: HTMLElement) =>
+      container.querySelector<HTMLInputElement>('form input[type="password"]')!
+
+    it('el campo es new-password, con piso 6 y tope 64, al crear y al editar', () => {
+      const { container } = render(<UserManagementContainer />)
+
+      fireEvent.click(screen.getByRole('button', { name: /nuevo usuario/i }))
+      expect(campoClave(container)).toHaveAttribute('autocomplete', 'new-password')
+      expect(campoClave(container)).toHaveAttribute('minlength', '6')
+      expect(campoClave(container)).toHaveAttribute('maxlength', '128')
+      fireEvent.click(screen.getByRole('button', { name: 'Cancelar' }))
+
+      fireEvent.click(screen.getByRole('button', { name: /editar/i }))
+      expect(campoClave(container)).toHaveAttribute('autocomplete', 'new-password')
+      expect(campoClave(container)).toHaveAttribute('minlength', '6')
+      expect(campoClave(container)).toHaveAttribute('maxlength', '128')
+    })
+
+    it('al crear, una clave de más de 72 bytes se rechaza antes de enviar', async () => {
+      mockCreate.mockReset()
+      const { container } = render(<UserManagementContainer />)
+
+      fireEvent.click(screen.getByRole('button', { name: /nuevo usuario/i }))
+      fireEvent.change(campoClave(container), { target: { value: `${'é'.repeat(36)}12` } })
+      fireEvent.submit(screen.getByRole('button', { name: 'Crear Usuario' }).closest('form')!)
+
+      expect(await screen.findByRole('alert')).toHaveTextContent(
+        'La contraseña ocupa más de 72 bytes (los acentos, la ñ, los símbolos y los emojis ocupan más de uno)'
+      )
+      expect(mockCreate).not.toHaveBeenCalled()
+    })
+
+    it('al editar, una clave tipeada y corta se rechaza; vacía no se valida ni viaja', async () => {
+      const { container } = render(<UserManagementContainer />)
+
+      fireEvent.click(screen.getByRole('button', { name: /editar/i }))
+      fireEvent.change(campoClave(container), { target: { value: 'ab1' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Guardar Cambios' }))
+
+      expect(await screen.findByRole('alert')).toHaveTextContent(
+        'La contraseña debe tener al menos 6 caracteres'
+      )
+      expect(mockUpdate).not.toHaveBeenCalled()
+
+      fireEvent.change(campoClave(container), { target: { value: '' } })
+      fireEvent.change(screen.getByDisplayValue('Ana'), { target: { value: 'Ana Maria' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Guardar Cambios' }))
+
+      await waitFor(() => expect(mockUpdate).toHaveBeenCalledTimes(1))
+      expect(mockUpdate).toHaveBeenCalledWith({ id: 'usr-1', data: { firstName: 'Ana Maria' } })
+    })
+
+    it('al editar, una clave válida viaja tal cual, con espacios incluidos', async () => {
+      const { container } = render(<UserManagementContainer />)
+
+      fireEvent.click(screen.getByRole('button', { name: /editar/i }))
+      fireEvent.change(campoClave(container), { target: { value: ' abc123 ' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Guardar Cambios' }))
+
+      await waitFor(() => expect(mockUpdate).toHaveBeenCalledTimes(1))
+      expect(mockUpdate).toHaveBeenCalledWith({ id: 'usr-1', data: { password: ' abc123 ' } })
+    })
+
+    it('un 422 con una clave tipeada sugiere que puede ser demasiado común', async () => {
+      mockUpdate.mockRejectedValue(
+        new ValidationError('body -> password: value error', {
+          errorCode: 'VALIDATION_ERROR',
+          detail: ['password: value error']
+        })
+      )
+      const { container } = render(<UserManagementContainer />)
+
+      fireEvent.click(screen.getByRole('button', { name: /editar/i }))
+      fireEvent.change(campoClave(container), { target: { value: 'password123' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Guardar Cambios' }))
+
+      expect(await screen.findByRole('alert')).toHaveTextContent(
+        'La contraseña no es aceptable: es demasiado común o no cumple las reglas. Elegí otra'
+      )
+    })
+  })
+
   it('si la baja falla lo avisa en vez de callarse', async () => {
     mockDelete.mockRejectedValue(
       Object.assign(new Error('403'), { context: { errorCode: 'PERMISSION_DENIED' } })
@@ -233,19 +355,52 @@ describe('UserManagementContainer', () => {
     render(<UserManagementContainer />)
     const buscador = screen.getByRole('searchbox', { name: 'Buscar usuario' })
 
-    expect(mockListQuery).toHaveBeenLastCalledWith({ limit: 200, includeInactive: true })
+    expect(mockListQuery).toHaveBeenLastCalledWith({ limit: 100, includeInactive: true })
 
     fireEvent.change(buscador, { target: { value: ' ana ' } })
     fireEvent.click(screen.getByRole('button', { name: 'Buscar' }))
-    expect(mockListQuery).toHaveBeenLastCalledWith({ limit: 200, includeInactive: true, q: 'ana' })
+    expect(mockListQuery).toHaveBeenLastCalledWith({ limit: 100, includeInactive: true, q: 'ana' })
 
     fireEvent.change(buscador, { target: { value: 'Ana@Example.com ' } })
     fireEvent.submit(buscador.closest('form')!)
     expect(mockListQuery).toHaveBeenLastCalledWith({
-      limit: 200,
+      limit: 100,
       includeInactive: true,
       email: 'ana@example.com'
     })
+  })
+
+  // 2026-09-30 (F4-03): la lista de usuarios cortaba en 200 sin forma de ver
+  // el resto; el aviso "Mostrando los primeros 200" era el unico camino.
+  it('con mas paginas muestra "Ver más" y pide la siguiente', () => {
+    mockUsersQuery = { data: [usuario], isLoading: false, error: null, hasNextPage: true }
+    mockFetchNextPage.mockReset()
+    render(<UserManagementContainer />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Ver más' }))
+
+    expect(mockFetchNextPage).toHaveBeenCalledTimes(1)
+    expect(screen.queryByText(/Mostrando los primeros/)).not.toBeInTheDocument()
+  })
+
+  it('"Ver más" queda deshabilitado mientras llega la pagina siguiente', () => {
+    mockUsersQuery = {
+      data: [usuario],
+      isLoading: false,
+      error: null,
+      hasNextPage: true,
+      isFetchingNextPage: true
+    }
+    render(<UserManagementContainer />)
+
+    expect(screen.getByRole('button', { name: /ver más|cargando/i })).toBeDisabled()
+  })
+
+  it('una pagina corta no muestra "Ver más"', () => {
+    mockUsersQuery = { data: [usuario], isLoading: false, error: null, hasNextPage: false }
+    render(<UserManagementContainer />)
+
+    expect(screen.queryByRole('button', { name: /ver más/i })).not.toBeInTheDocument()
   })
 
   it('si falla la lista lo avisa en vez de mostrarla vacia (N2)', () => {
@@ -253,5 +408,44 @@ describe('UserManagementContainer', () => {
     render(<UserManagementContainer />)
 
     expect(screen.getByRole('alert')).toHaveTextContent('No se pudieron cargar los usuarios.')
+  })
+
+  // 2026-10-01: con la tienda suspendida cada accion fallaba con 402 en vez de
+  // verse deshabilitada (FF-15). POST /users/ y PATCH /users/{id} no estan en
+  // SUSPENSION_ALLOWED_WRITES; DELETE /users/{public_id} si (D-20260930-10).
+  it('con la tienda suspendida NUEVO y Editar se deshabilitan; Eliminar sigue', async () => {
+    mockWriteAccess = { readOnly: true, reason: 'Tienda suspendida' }
+    render(<UserManagementContainer />)
+
+    for (const name of [/nuevo usuario/i, /editar/i]) {
+      const button = screen.getByRole('button', { name })
+      expect(button).toBeDisabled()
+      expect(button).toHaveAttribute('title', 'Tienda suspendida')
+    }
+    fireEvent.click(screen.getByRole('button', { name: /eliminar/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Confirmar' }))
+    await waitFor(() => expect(mockDelete).toHaveBeenCalledWith('usr-1'))
+  })
+
+  it('sin suspension NUEVO y Editar siguen habilitados', () => {
+    render(<UserManagementContainer />)
+
+    expect(screen.getByRole('button', { name: /nuevo usuario/i })).not.toBeDisabled()
+    expect(screen.getByRole('button', { name: /editar/i })).not.toBeDisabled()
+  })
+
+  // 2026-10-02: si la tienda se suspendia con el modal abierto, el modal no
+  // recibia el motivo y guardar fallaba con 402 en vez de verse deshabilitado.
+  it('si la tienda se suspende con el modal abierto, guardar se deshabilita con el motivo', () => {
+    const { rerender } = render(<UserManagementContainer />)
+    fireEvent.click(screen.getByRole('button', { name: /nuevo usuario/i }))
+    expect(screen.getByRole('button', { name: 'Crear Usuario' })).not.toBeDisabled()
+
+    mockWriteAccess = { readOnly: true, reason: 'Tienda suspendida' }
+    rerender(<UserManagementContainer />)
+
+    const guardar = screen.getByRole('button', { name: 'Crear Usuario' })
+    expect(guardar).toBeDisabled()
+    expect(guardar).toHaveAttribute('title', 'Tienda suspendida')
   })
 })

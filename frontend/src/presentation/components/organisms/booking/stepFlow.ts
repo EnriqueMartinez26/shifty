@@ -37,3 +37,51 @@ export const resolveBackJump = (from: number, options: StepOptions): number => {
   if (step === STEP_SERVICE && options.services?.length === 1) return from
   return step
 }
+
+const STEP_CONFIRMATION = 2
+const STEP_PARAM = 'step'
+
+/**
+ * `?step=` de la URL (F4-15): un entero no negativo, con tope en el ultimo
+ * paso. Ausente o ilegible es `null`: el wizard usa su paso de arranque.
+ */
+export const parseStepParam = (raw: string | null): number | null => {
+  const value = raw?.trim()
+  if (!value || !/^\d+$/.test(value)) return null
+  return Math.min(Number(value), STEP_CONFIRMATION)
+}
+
+/**
+ * Un paso solo se muestra si lo anterior esta elegido: tras recargar con
+ * ?step=2 el estado del wizard esta vacio y se cae al paso que corresponde
+ * (sin servicio, el servicio; sin horario, el horario). Mandar los datos sin
+ * horario armaria una reserva con `starts_at` vacio.
+ */
+export const clampStep = (
+  step: number,
+  chosen: { serviceId: string | null; startsAt: string | null }
+): number => {
+  if (step >= STEP_CONFIRMATION && chosen.serviceId && chosen.startsAt) return STEP_CONFIRMATION
+  if (step >= STEP_DATETIME && chosen.serviceId) return STEP_DATETIME
+  return STEP_SERVICE
+}
+
+/**
+ * Copia de los parametros con el paso escrito; no toca `payment_id`,
+ * `service`, `staff` ni `date`. El paso de arranque no se escribe (la URL
+ * queda como llego), asi que volver al servicio desde un deep-link, que
+ * arranca en el horario, deja `?step=0` explicito.
+ */
+export const withStepParam = (
+  params: URLSearchParams,
+  step: number,
+  startStep: number
+): URLSearchParams => {
+  const next = new URLSearchParams(params)
+  if (step === startStep) next.delete(STEP_PARAM)
+  else next.set(STEP_PARAM, String(step))
+  return next
+}
+
+export const readStepParam = (params: URLSearchParams): number | null =>
+  parseStepParam(params.get(STEP_PARAM))

@@ -1,6 +1,6 @@
 /** Texto en castellano de los motivos de recargo de la seña (sin la base). */
 const DEPOSIT_REASON_LABEL: Record<string, string> = {
-  far_notice: 'reservar con mucha antelacion',
+  far_notice: 'reservar con mucha antelación',
   new_client: 'ser tu primera visita',
   absences: 'ausencias anteriores'
 }
@@ -25,7 +25,7 @@ export const depositBreakdownText = (
   const motivo = topeada
     ? 'la seña se topea al precio del servicio'
     : `${preview.extra_percent}% del precio`
-  return `Incluye ${fmt(preview.base_amount)} de seña base mas ${fmt(recargo)} por ${depositReasonsText(preview.reasons)} (${motivo}).`
+  return `Incluye ${fmt(preview.base_amount)} de seña base más ${fmt(recargo)} por ${depositReasonsText(preview.reasons)} (${motivo}).`
 }
 
 export const depositReasonsText = (reasons: string[]): string => {

@@ -11,7 +11,8 @@ import { Price } from '../../domain/value-objects/Price'
 import { ServiceColor } from '../../domain/value-objects/ServiceColor'
 import apiClient from '../../infrastructure/http/client'
 import { HttpServiceRepository } from '../../infrastructure/repositories/HttpServiceRepository'
-import { createServiceSchema } from '../validators/service.validators'
+import { ServiceMapper } from '../mappers/ServiceMapper'
+import { createServiceSchema, updateServiceSchema } from '../validators/service.validators'
 
 export class ServiceService extends BaseService<Service> {
   protected repository: IServiceRepository
@@ -25,6 +26,13 @@ export class ServiceService extends BaseService<Service> {
     return await this.execute(async () => {
       return await this.repository.findAll()
     }, 'listServices')
+  }
+
+  /** Catalogo del panel: incluye los inactivos para poder reactivarlos (FF-22). */
+  async listCatalog(): Promise<Service[]> {
+    return await this.execute(async () => {
+      return await this.repository.findAll({ includeInactive: true })
+    }, 'listCatalog')
   }
 
   async createService(data: {
@@ -72,6 +80,10 @@ export class ServiceService extends BaseService<Service> {
 
   async updateService(id: string, data: ServiceWriteInput): Promise<Service> {
     return await this.execute(async () => {
+      // D-20260930-09: la edicion rechaza lo mismo que el alta. Se valida el
+      // payload que de verdad viaja (lo ausente no se manda ni se valida) y el
+      // repositorio recibe `data` tal cual: validar no completa ni cambia nada.
+      this.validate(ServiceMapper.toWritePayload(data), updateServiceSchema)
       return await this.repository.update(id, data)
     }, 'updateService')
   }
@@ -80,6 +92,19 @@ export class ServiceService extends BaseService<Service> {
     await this.execute(async () => {
       await this.repository.delete(id)
     }, 'deleteService')
+  }
+
+  /** Sube la imagen y devuelve el servicio con su `imageUrl` nueva. */
+  async uploadImage(id: string, file: Blob): Promise<Service> {
+    return await this.execute(async () => {
+      return await this.repository.uploadImage(id, file)
+    }, 'uploadImage')
+  }
+
+  async removeImage(id: string): Promise<Service> {
+    return await this.execute(async () => {
+      return await this.repository.removeImage(id)
+    }, 'removeImage')
   }
 }
 

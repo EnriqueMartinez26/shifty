@@ -58,10 +58,11 @@ export class UserService extends BaseService<User> {
    * capped by `limit`).
    *
    * @param query Search filters; see `UserListQuery`.
+   * @param signal Cancels the request (react-query passes its own).
    * @returns A promise that resolves to at most `query.limit` users.
    */
-  async listUsers(query: UserListQuery): Promise<User[]> {
-    return await this.execute(() => this.repository.list(query), 'listUsers')
+  async listUsers(query: UserListQuery, signal?: AbortSignal): Promise<User[]> {
+    return await this.execute(() => this.repository.list(query, signal), 'listUsers')
   }
 
   /**

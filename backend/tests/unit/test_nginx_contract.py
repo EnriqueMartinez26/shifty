@@ -598,6 +598,44 @@ def test_la_subida_de_medios_admite_el_tope_de_la_app_mas_el_multipart(
 
 SUBIDA_DE_SERVICIO = "^/api/services/[A-Za-z0-9_-]+/image$"
 
+# --- F4-13: tunel de Sentry con el tope de cuerpo de la SPA --------------------
+
+TUNEL_SENTRY = ("=", "/sentry-tunnel")
+GENERADOR_DEL_TUNEL = RAIZ / "frontend" / "sentry-tunnel.sh"
+
+
+@EDGES
+def test_el_tunel_de_sentry_admite_el_tope_de_la_spa(ruta: Path) -> None:
+    # 2026-09-30: un envelope de Sentry de mas de 32 KB daba 413 en el borde.
+    # /sentry-tunnel caia en `location /` con el tope de 32k del server y
+    # nunca llegaba al 256k que la SPA le da al tunel (sentry-tunnel.sh).
+    server = server_de_la_app(leer(ruta))
+    tunel = location(server, *TUNEL_SENTRY)
+    assert una(tunel, "client_max_body_size").args == ("256k",)
+    # Solo el tunel sube el tope: el resto del server sigue en 32k.
+    assert efectivo("client_max_body_size", server) == ("32k",)
+    # El borde no puede cortar antes que la SPA: mismo tope que el location
+    # que genera sentry-tunnel.sh.
+    generado = re.findall(
+        r"client_max_body_size (\S+);", GENERADOR_DEL_TUNEL.read_text(encoding="utf-8")
+    )
+    assert generado == ["256k"], generado
+    # Proxy identico al de `location /` (upstream de la SPA, cabeceras, sin
+    # limit_req propio): solo cambia el tope de cuerpo.
+    raiz = location(server, "/")
+    assert una(tunel, "proxy_pass").args == ("http://spa",)
+    for nombre in (
+        "proxy_pass",
+        "proxy_http_version",
+        "proxy_set_header",
+        "limit_req",
+        "add_header",
+        "error_page",
+    ):
+        assert [d.args for d in todas(tunel, nombre)] == [
+            d.args for d in todas(raiz, nombre)
+        ], nombre
+
 
 @pytest.mark.parametrize(
     ("uri", "calza"),
@@ -853,9 +891,9 @@ def test_la_spa_emite_un_solo_cache_control() -> None:
 
 
 def test_solo_los_assets_con_hash_son_inmutables() -> None:
-    # Vite pone hash en el nombre solo bajo /assets/. favicon.svg o icons.svg
-    # (de public/) no cambian de nombre: con immutable, un cambio no llegaba
-    # nunca a quien ya los tenia.
+    # Vite pone hash en el nombre solo bajo /assets/. favicon-32.png o
+    # apple-touch-icon.png (de public/) no cambian de nombre: con immutable, un
+    # cambio no llegaba nunca a quien ya los tenia.
     server = _server_spa()
     assets = location(server, "^~", "/assets/")
     assert _cache_control(assets) == ["public, max-age=31536000, immutable"]
@@ -876,6 +914,25 @@ def test_toda_ruta_desconocida_de_la_spa_cae_en_index_html() -> None:
     # refresh o un link directo devuelve 404.
     raiz = location(_server_spa(), "/")
     assert una(raiz, "try_files").args == ("$uri", "$uri/", "/index.html")
+
+
+def test_el_manifest_de_la_spa_sale_con_su_tipo_y_sus_iconos_existen() -> None:
+    # 2026-10-03: el mime.types de nginx 1.30.5 no mapea .webmanifest; sin el
+    # tipo explicito salia application/octet-stream y, con nosniff, el
+    # navegador descartaba el manifest.
+    manifest = location(_server_spa(), "=", "/manifest.webmanifest")
+    tipos = bloque_con(manifest, "types")
+    assert [(d.nombre, d.args) for d in tipos] == [
+        ("application/manifest+json", ("webmanifest",))
+    ]
+    assert una(manifest, "try_files").args == ("$uri", "=404")
+    publico = RAIZ / "frontend" / "public"
+    datos = json.loads((publico / "manifest.webmanifest").read_text(encoding="utf-8"))
+    for icono in datos["icons"]:
+        assert (publico / icono["src"].lstrip("/")).is_file(), icono["src"]
+    assert 'rel="manifest" href="/manifest.webmanifest"' in (
+        RAIZ / "frontend" / "index.html"
+    ).read_text(encoding="utf-8")
 
 
 def test_toda_location_de_la_spa_con_headers_propios_incluye_los_de_seguridad() -> None:

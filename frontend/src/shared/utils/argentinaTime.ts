@@ -93,6 +93,45 @@ export const formatArgentinaDateDisplay = (iso: string): string => {
   return `${pad(wall.day)}/${pad(wall.month)}/${wall.year}`
 }
 
+/** Dia de calendario argentino de un `yyyy-MM-dd` o de un instante ISO. */
+const argentinaDayOf = (value: string): WallClock | null => {
+  const soloFecha = calendarParts(value)
+  if (soloFecha) return soloFecha
+  const instant = parseInstant(value)
+  return instant ? wallClockInArgentina(instant) : null
+}
+
+// Nombres de dias y meses en castellano. La fecha ya viene resuelta a dia
+// argentino, asi que se formatea como medianoche UTC de ese dia: con la zona
+// del navegador un dia podia correrse. Antes la agenda usaba date-fns sin
+// locale y mostraba "02 DE OCTOBER" y "MON" (QA 2026-10-02).
+const weekdayShortFormatter = new Intl.DateTimeFormat('es-AR', {
+  weekday: 'short',
+  timeZone: 'UTC'
+})
+const weekdayLongFormatter = new Intl.DateTimeFormat('es-AR', { weekday: 'long', timeZone: 'UTC' })
+const monthLongFormatter = new Intl.DateTimeFormat('es-AR', { month: 'long', timeZone: 'UTC' })
+const asUtcDay = (wall: WallClock): Date => new Date(Date.UTC(wall.year, wall.month - 1, wall.day))
+
+/** Dia de la semana abreviado en castellano ("vie"). Cadena vacia si es invalido. */
+export const formatArgentinaWeekdayShort = (value: string): string => {
+  const wall = argentinaDayOf(value)
+  return wall ? weekdayShortFormatter.format(asUtcDay(wall)).replace('.', '') : ''
+}
+
+/** "02 de octubre". Cadena vacia si es invalido. */
+export const formatArgentinaLongDate = (value: string): string => {
+  const wall = argentinaDayOf(value)
+  return wall ? `${pad(wall.day)} de ${monthLongFormatter.format(asUtcDay(wall))}` : ''
+}
+
+/** Encabezado de un dia en una lista: "viernes 02/10". Cadena vacia si es invalido. */
+export const formatArgentinaDayHeading = (value: string): string => {
+  const wall = argentinaDayOf(value)
+  if (!wall) return ''
+  return `${weekdayLongFormatter.format(asUtcDay(wall))} ${pad(wall.day)}/${pad(wall.month)}`
+}
+
 /**
  * `dd/MM` en hora argentina, para listas ya acotadas a un rango conocido.
  * Se compone desde el wall clock en vez de recortar la salida de
@@ -143,7 +182,7 @@ export const argentinaLocalToUtcIso = (date: string, time: string): string => {
     timeParts.length < 2 ||
     [year, month, day, hour, minute].some((n) => !Number.isFinite(n))
   ) {
-    throw new Error(`Fecha u hora invalida: ${date} ${time}`)
+    throw new Error(`Fecha u hora inválida: ${date} ${time}`)
   }
   // Se toma la hora tipeada "como si" fuera UTC y se corrige por el desfase
   // que la zona tiene en ese instante.

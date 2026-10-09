@@ -128,6 +128,14 @@ def reject_payload_control_chars(value: Any) -> Any:
     return value
 
 
+# Limites de la contrasena al FIJARLA (D-20261001-01, 2026-10-01). Los schemas
+# los importan: ningun otro lugar repite estos numeros. El LOGIN no los usa
+# (1 a 128 caracteres y verificacion intacta) para no invalidar hashes viejos.
+PASSWORD_MIN_LENGTH = 6
+PASSWORD_MAX_LENGTH = 64
+# bcrypt solo usa los primeros 72 bytes del texto en UTF-8.
+PASSWORD_MAX_BYTES = 72
+
 # Claves mas usadas del mundo real (rankings de brechas publicas), normalizadas
 # a minusculas. No pretende ser un corpus completo: corta lo que un atacante
 # prueba primero en un password spraying. ASVS 2.1.7.
@@ -158,15 +166,35 @@ _PASSWORDS_PROHIBIDAS = {
 
 
 def validate_password_strength(password: str) -> str:
-    """Politica de contrasena para cuentas nuevas o cambiadas (ASVS 2.1).
+    """Politica de contrasena para cuentas nuevas o cambiadas.
 
-    Piso de 12 caracteres (el largo es la defensa real), al menos una letra y
-    un numero para cortar los casos triviales, y una denylist de claves
-    quemadas en brechas. No se aplica al login para no invalidar contrasenas
-    ya existentes.
+    Entre 6 y 64 caracteres, y ademas no mas de 72 bytes en UTF-8: bcrypt solo
+    mira los primeros 72, asi que una clave mas larga en bytes se RECHAZA en
+    vez de truncarla en silencio (una de 64 letras con acento llega a 128
+    bytes). Al menos una letra y un numero para cortar los casos triviales, y
+    una denylist de claves quemadas en brechas. No se aplica al login para no
+    invalidar contrasenas ya existentes: ``core/security.py`` sigue recortando
+    a 72 bytes al verificar, asi los hashes viejos siguen sirviendo.
+
+    2026-10-01, D-20261001-01: el piso bajo de 12 a 6 y se sumo el techo (64
+    caracteres, 72 bytes) por decision del dueno. El piso queda por debajo de
+    lo que piden ASVS 5.0 (8) y NIST SP 800-63B-4 (15 con un solo factor);
+    el techo de 64 cumple el minimo de 64 que ambos piden aceptar. La mitigan
+    el rate limit de /auth/, el bloqueo tras 5 fallos y bcrypt con costo 12.
     """
-    if len(password) < 12:
-        raise ValueError("La contrasena debe tener al menos 12 caracteres")
+    if len(password) < PASSWORD_MIN_LENGTH:
+        raise ValueError(
+            f"La contrasena debe tener al menos {PASSWORD_MIN_LENGTH} caracteres"
+        )
+    if len(password) > PASSWORD_MAX_LENGTH:
+        raise ValueError(
+            f"La contrasena puede tener como maximo {PASSWORD_MAX_LENGTH} caracteres"
+        )
+    if len(password.encode("utf-8")) > PASSWORD_MAX_BYTES:
+        raise ValueError(
+            f"La contrasena no puede superar los {PASSWORD_MAX_BYTES} bytes: las "
+            "letras con acento y los simbolos ocupan mas de uno. Usa una mas corta"
+        )
     if not any(c.isalpha() for c in password):
         raise ValueError("La contrasena debe incluir al menos una letra")
     if not any(c.isdigit() for c in password):

@@ -1,18 +1,7 @@
 import React, { useRef, useState } from 'react'
 
 import { format } from 'date-fns'
-import {
-  Calendar,
-  Clock,
-  FileText,
-  Loader2,
-  Mail,
-  Phone,
-  Sparkles,
-  TriangleAlert,
-  User,
-  X
-} from 'lucide-react'
+import { Calendar, Clock, FileText, Loader2, Mail, Phone, Sparkles, User, X } from 'lucide-react'
 
 import type { CreateBookingInput } from '@domain/repositories/IBookingRepository'
 
@@ -26,6 +15,7 @@ import { createUuid } from '@shared/utils/uuid'
 
 import { buttonStyles2000s, colors2000s } from '../../../theme/colors'
 import { create2000sModalInputStyle, create2000sModalSurfaceStyle } from '../../lib/surfaceStyles'
+import { FormErrorAlert } from '../molecules/FormErrorAlert'
 
 interface NewAppointmentModalProps {
   onClose: () => void
@@ -145,7 +135,7 @@ export const NewAppointmentModal: React.FC<NewAppointmentModalProps> = ({
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
       <div
-        className="relative w-full max-w-2xl rounded-md shadow-2xl animate-in zoom-in-95 duration-200 flex flex-col overflow-hidden max-h-[90vh]"
+        className="relative w-full max-w-2xl rounded-md shadow-2xl duration-200 flex flex-col overflow-hidden max-h-[90vh]"
         style={create2000sModalSurfaceStyle()}
       >
         <div
@@ -174,16 +164,7 @@ export const NewAppointmentModal: React.FC<NewAppointmentModalProps> = ({
         </div>
 
         <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-4 sm:p-8 space-y-6">
-          {error && (
-            <div
-              role="alert"
-              className="rounded-2xl px-4 py-3 text-xs font-bold flex items-center gap-2"
-              style={{ background: '#fff1f2', color: '#be123c' }}
-            >
-              <TriangleAlert size={14} className="flex-shrink-0" />
-              {error}
-            </div>
-          )}
+          <FormErrorAlert message={error} />
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Field label="Servicio">

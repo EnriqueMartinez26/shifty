@@ -21,6 +21,7 @@ import {
 } from './infrastructure/setup/SpecificHandlers'
 import { ErrorBoundaryFallback } from './presentation/components/error-boundary'
 import { showToast } from './presentation/lib/notify'
+import { prefetchPortal } from './presentation/lib/portalPrefetch'
 import {
   queryRetryDelay,
   refreshSubscriptionOnSuspension,
@@ -29,8 +30,13 @@ import {
 } from './presentation/lib/queryClientPolicies'
 import { setUnreadableInstantReporter } from './presentation/lib/reportUnreadableInstant'
 import { GlobalErrorHandler } from './shared/errors/GlobalErrorHandler'
+import { installStaleChunkReload } from './shared/utils/staleChunkReload'
 
 initSentry()
+
+// Tras un deploy el chunk viejo da 404: se recarga una vez para traer el
+// index.html nuevo en vez de dejar la pestana en blanco (F4-12).
+installStaleChunkReload()
 
 // Una fecha ilegible degrada a texto de respaldo en vez de tumbar la pantalla;
 // esto evita que ademas se pierda la senal de que llego un dato corrupto.
@@ -90,6 +96,17 @@ const queryClient = new QueryClient({
     }
   }
 })
+
+// El portal publico pide su chunk y su tienda antes de montar, en paralelo
+// (F4-14). Es solo un adelanto: si algo falla la pagina lo pide de nuevo.
+try {
+  void prefetchPortal(window.location.pathname, queryClient, {
+    booking: () => import('./presentation/pages/PublicBooking'),
+    clientAppointments: () => import('./presentation/pages/ClientAppointments')
+  }).catch(() => undefined)
+} catch {
+  // Ignorado a proposito: un prefetch no puede impedir que la app monte.
+}
 
 const rootElement = document.getElementById('root')
 if (!rootElement) {

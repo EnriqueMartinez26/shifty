@@ -53,7 +53,8 @@ describe('HttpUserRepository.update (F11c-11)', () => {
 
   it('no manda la clave vacia ni los campos ausentes', async () => {
     // Editar sin tocar la contraseña deja el campo en '': mandarlo seria un
-    // 422 del backend (min 12) o, peor, un intento de pisar la clave.
+    // 422 del backend (min 6; era 12 hasta 2026-10-01, D-20261001-01) o, peor,
+    // un intento de pisar la clave.
     const { patch, repository } = createRepository()
 
     await repository.update('usr-1', { firstName: 'Ana', password: '' })
@@ -238,6 +239,38 @@ describe('HttpUserRepository.list', () => {
       params: { include_inactive: true, q: 'ana', email: undefined, limit: 200 }
     })
     expect(users[0]?.id).toBe('usr-1')
+  })
+
+  it('la segunda pagina manda offset=100 (F4-03)', async () => {
+    // 2026-09-30: la lista de usuarios cortaba en 200 sin forma de ver el
+    // resto; no habia offset y el servidor siempre devolvia la primera pagina.
+    const get = jest.fn().mockResolvedValue({ data: [] })
+    const repository = new HttpUserRepository({ get } as unknown as AxiosInstance)
+
+    await repository.list({ limit: 100, includeInactive: true, offset: 100 })
+
+    expect(get.mock.calls[0][1]).toStrictEqual({
+      params: {
+        include_inactive: true,
+        q: undefined,
+        email: undefined,
+        limit: 100,
+        offset: 100
+      },
+      signal: undefined
+    })
+  })
+
+  it('pasa la senal de cancelacion a axios', async () => {
+    // 2026-10-02: la lista de usuarios no recibia el `signal` de react-query;
+    // una busqueda reemplazada seguia viajando hasta el final.
+    const get = jest.fn().mockResolvedValue({ data: [] })
+    const repository = new HttpUserRepository({ get } as unknown as AxiosInstance)
+    const controller = new AbortController()
+
+    await repository.list({ limit: 100 }, controller.signal)
+
+    expect(get.mock.calls[0][1].signal).toBe(controller.signal)
   })
 })
 

@@ -294,10 +294,10 @@ Fuente: `backend/core/config.py` y los archivos de ejemplo (`.env.example`, `bac
 | Paquete | Versión en `backend/uv.lock` hoy | Cómo entra | Estado |
 |---|---|---|---|
 | anyio | 4.13.0 | transitiva (starlette/httpx) | pendiente de OK |
-| cryptography | 48.0.0 | **solo** por el extra `python-jose[cryptography]` (`uv.lock:1452-1454`) | pendiente de OK (ver Q3) |
-| ecdsa | 0.19.2 | transitiva (python-jose) | pendiente de OK |
+| cryptography | 50.0.0 | directa (`>=50.0.0`, `backend/pyproject.toml:18`; `uv.lock:411-412`) | hecho: declarada directa en el bump de CVE (`191c1b28`); Q3 cerrada |
+| ecdsa | — (era 0.19.2) | ya no entra (era transitiva de python-jose) | fuera del lock desde el 2026-10-02: python-jose se reemplazó por PyJWT (D-20260930-04) |
 | pillow | 12.2.0 | transitiva (reportlab) | pendiente de OK |
-| pyasn1 | 0.6.3 | transitiva (python-jose, rsa) | pendiente de OK |
+| pyasn1 | — (era 0.6.4) | ya no entra (era transitiva de python-jose y rsa) | fuera del lock desde el 2026-10-02: python-jose se reemplazó por PyJWT (D-20260930-04) |
 | pydantic-settings | 2.14.1 | directa (`>=2.2.0`) | pendiente de OK |
 | starlette | 1.0.0 | transitiva (fastapi) | pendiente de OK |
 
@@ -370,6 +370,8 @@ Cambia el contrato, así que va con acuerdo previo. Si no hay un caso real de "b
 3. Si más adelante se quiere retirarlo del todo: fixture de tests primero, después borrar la ruta y su fila en `SUSPENSION_ALLOWED_WRITES`.
 
 ### Q3. ¿Declarar `cryptography` explícito en `pyproject.toml`?
+
+**Cerrada (2026-10-02).** `cryptography` es dependencia directa (`>=50.0.0` en `backend/pyproject.toml:18`, 50.0.0 en `backend/uv.lock:411-412`) desde el bump de CVE (`191c1b28`), y D-20260930-04 (PR #100) reemplazó `python-jose` por `PyJWT`, lo que sacó `ecdsa` y `pyasn1` del árbol. Lo que sigue es el análisis original, que describe el estado previo.
 
 **Confirmado que hace falta.** `backend/core/crypto.py:6` hace `from cryptography.fernet import Fernet` (cifrado de secretos del gateway), pero `cryptography` no está en `[project].dependencies`: entra solo por el extra `python-jose[cryptography]` (`uv.lock:1452-1454`). Si mañana se reemplaza `python-jose` (que sigue trayendo `ecdsa` y `pyasn1`, dos de los CVE pendientes) o se le quita el extra, el import de `core/crypto.py` se rompe sin que el lock lo avise.
 
@@ -457,7 +459,7 @@ Resultado del gate sobre `integration/aud2` @ 6786cef (2026-09-24, un comando po
 | Mails | SMTP dentro del request | La reserva pública y las transiciones del panel responden sin esperar al mail; el mail sale por Celery/outbox con hasta ~20 s de demora. | No (solo expectativa de tiempos). |
 | "Pagué y sigue pendiente" | hasta 5-6 min | conciliación a demanda al consultar el estado pendiente > 20 s; el sondeo del front debería usar backoff (R12-05). | Recomendado: backoff 2 → 5 → 15 s. |
 | Errores de MP al cliente | texto crudo del proveedor | 503 `PAYMENT_PROVIDER_UNAVAILABLE`, 502 `PAYMENT_LINK_CREATION_FAILED`, 409 `PAYMENT_GATEWAY_NOT_CONNECTED`, mensajes fijos. | Mostrar `message`. |
-| `/ops/slo` | — | métricas de atraso (`oldest_pending_*`, `oldest_pending_email_send_seconds`). | No. |
+| `/ops/slo` | — | métricas de atraso (`oldest_pending_*`, `oldest_pending_email_send_seconds`, `oldest_overdue_hold_seconds`, `oldest_due_held_recheck_seconds`) y `integrity_held_holds` (contador sin umbral; atraso de reconsulta con umbral aparte). | No. |
 
 ## Cambios posteriores al inventario (Fase 3 y 5, 2026-09-24, `integration/aud2` @ 9214b37)
 

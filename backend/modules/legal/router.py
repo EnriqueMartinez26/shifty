@@ -79,8 +79,8 @@ async def unsubscribe_from_marketing_post(
     """Misma baja que el GET, con el token en el cuerpo. La usa la pagina de
     confirmacion del front: los escaneres de correo abren los links GET del
     mail y darian de baja sin que la persona lo pidiera (revision de
-    fix/legal-datos, 2026-09-25). El GET sigue mientras el link del mail
-    apunte a la API."""
+    fix/legal-datos, 2026-09-25). Desde 2026-10-02 el link del mail abre
+    esa pagina (``/baja``); el GET sigue para los mails ya enviados."""
     await enforce_rate_limit(
         request, "public:unsubscribe", settings.RATE_LIMIT_PUBLIC_READ_PER_MINUTE
     )

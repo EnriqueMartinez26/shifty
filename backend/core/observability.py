@@ -5,6 +5,7 @@ pasan en silencio: nadie se entera hasta que un cliente reclama.
 """
 
 import re
+import time
 from typing import TYPE_CHECKING, Any
 from urllib.parse import unquote, urlsplit, urlunsplit
 
@@ -284,4 +285,36 @@ def report_exception(exc: BaseException, **context: Any) -> None:
         logger.warning("sentry_capture_failed", exc_info=True)
 
 
-__all__ = ["init_observability", "report_exception"]
+class OncePer:
+    """Deja pasar cada clave a lo sumo una vez cada ``seconds``, en memoria.
+
+    Para el log y Sentry de un problema que se repite en cada request (una
+    tienda sin canal de cobro, un token que no se descifra): un aviso por
+    clave y ventana, no uno por request. Es por proceso: cada replica y cada
+    reinicio vuelven a avisar una vez, y eso es lo buscado (nadie mira un aviso
+    unico de hace una semana). Las claves vencidas se podan al crecer, asi que
+    la memoria queda acotada por las claves activas en la ventana.
+    """
+
+    _PRUNE_ABOVE = 1024
+
+    def __init__(self, seconds: float) -> None:
+        self.seconds = seconds
+        self._seen: dict[str, float] = {}
+
+    def allow(self, key: str, *, now: float | None = None) -> bool:
+        ahora = time.monotonic() if now is None else now
+        if len(self._seen) > self._PRUNE_ABOVE:
+            self._seen = {
+                clave: visto
+                for clave, visto in self._seen.items()
+                if ahora - visto < self.seconds
+            }
+        visto = self._seen.get(key)
+        if visto is not None and ahora - visto < self.seconds:
+            return False
+        self._seen[key] = ahora
+        return True
+
+
+__all__ = ["OncePer", "init_observability", "report_exception"]

@@ -13,6 +13,7 @@ import {
 import { Link } from 'react-router'
 
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
+import { useDocumentTitle } from '../hooks/useDocumentTitle'
 import { create2000sPanelStyle } from '../lib/surfaceStyles'
 
 interface ManualStep {
@@ -40,7 +41,7 @@ const SECTIONS: ManualSection[] = [
       {
         title: '1. Completá los datos de tu negocio',
         body: 'En Configuración cargá el nombre, el logo y tu número de WhatsApp. Ese número es el que van a usar tus clientes para coordinar con vos.',
-        tip: 'El "slug" es la dirección de tu página pública. Si tu slug es mibarberia, tus clientes reservan en /booking/mibarberia.'
+        tip: 'El "slug" es la dirección de tu página pública. Si tu slug es mibarberia, tus clientes reservan en /b/mibarberia.'
       },
       {
         title: '2. Cargá tus servicios',
@@ -50,11 +51,11 @@ const SECTIONS: ManualSection[] = [
       {
         title: '3. Sumá a tu personal',
         body: 'En Personal agregá a cada persona que atiende y marcá qué servicios hace cada una.',
-        tip: 'Si trabajás solo, cargate a vos mismo como personal. El sistema necesita saber quién atiende cada turno.'
+        tip: 'Si vos también atendés, tocá "Agregarme como profesional": figurás con tu nombre y tu misma cuenta, sin inventar otro email. El sistema necesita saber quién atiende cada turno.'
       },
       {
         title: '4. Definí los horarios',
-        body: 'A cada persona cargale sus días y horas de trabajo. Fuera de ese horario, nadie va a poder reservar.',
+        body: 'En Personal tocá "Horarios" en cada persona y cargale sus días y horas de trabajo. Si no le cargás nada, atiende en el horario de tu negocio. Fuera de su horario, nadie va a poder reservar.',
         tip: 'Podés cargar dos franjas el mismo día (por ejemplo 9 a 13 y 16 a 20). Si te equivocaste, editá o borrá la franja: el sistema no te deja pisar una con otra.'
       }
     ]
@@ -112,7 +113,7 @@ const SECTIONS: ManualSection[] = [
       },
       {
         title: '4. Qué pasa cuando alguien reserva',
-        body: 'Si paga la seña, el turno se confirma solo y te llega el aviso. Si elige coordinar por WhatsApp, el turno queda pendiente y lo confirmás vos cuando recibís la transferencia.'
+        body: 'Si paga la seña con Mercado Pago, el turno se confirma solo y te llega el aviso. Si elige pagarla por WhatsApp, el turno queda retenido hasta 2 horas antes de empezar, esperando la seña: cuando te paguen, confirmalo desde Cobros con "Confirmar pago". Si no la confirmás a tiempo, el turno se libera y te avisamos.'
       },
       {
         title: 'Si no pagan a tiempo',
@@ -184,6 +185,7 @@ const SECTIONS: ManualSection[] = [
 ]
 
 const Manual: React.FC = () => {
+  useDocumentTitle('Manual de uso · Shifty')
   const [openSection, setOpenSection] = useState<string>(SECTIONS[0]?.id ?? '')
 
   return (

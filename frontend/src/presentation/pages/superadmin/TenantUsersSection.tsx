@@ -8,6 +8,8 @@ import type {
   SuperAdminUser
 } from '@application/services/SuperAdminService'
 
+import { withoutTechnicalEmail } from '@shared/utils/deliverableEmail'
+
 import { colors2000s } from '../../../theme/colors'
 import { MiniButton } from '../SuperAdminUi'
 import {
@@ -55,7 +57,7 @@ export const TenantUsersSection: React.FC<TenantUsersSectionProps> = ({
           className="mt-2 text-xl font-black uppercase tracking-tight"
           style={{ color: colors2000s.text.primary }}
         >
-          Detalle del tenant
+          Detalle de la tienda
         </h2>
       </div>
       {overviewQuery.isFetching ? (
@@ -81,7 +83,7 @@ export const TenantUsersSection: React.FC<TenantUsersSectionProps> = ({
             style={scopeBadgeStyle('danger')}
           >
             Contexto de tienda inactiva. Crear admins, asignar planes y canjear cupones puede quedar
-            bloqueado por reglas de backend.
+            bloqueado por las reglas del sistema.
           </div>
         ) : null}
 
@@ -216,7 +218,7 @@ export const TenantUsersSection: React.FC<TenantUsersSectionProps> = ({
                     <div>
                       <p className="text-sm font-black" style={{ color: colors2000s.text.primary }}>
                         {[tenantUser.first_name, tenantUser.last_name].filter(Boolean).join(' ') ||
-                          tenantUser.email}
+                          withoutTechnicalEmail(tenantUser.email, tenantUser.phone ?? 'Sin nombre')}
                       </p>
                       <p
                         className="text-[10px] font-bold uppercase tracking-widest"
@@ -254,16 +256,20 @@ export const TenantUsersSection: React.FC<TenantUsersSectionProps> = ({
                       }}
                       tone={tenantUser.is_active ? 'danger' : 'default'}
                     />
-                    <MiniButton
-                      label={
-                        tenantUser.is_global_admin ? 'Revocar SuperAdmin' : 'Promover SuperAdmin'
-                      }
-                      onClick={(event) => {
-                        event.stopPropagation()
-                        void toggleGlobalAdmin(tenantUser)
-                      }}
-                      tone={tenantUser.is_global_admin ? 'danger' : 'default'}
-                    />
+                    {/* Un cliente final no se promueve: el backend lo rechaza
+                        (CLIENT_GLOBAL_ADMIN_DENIED). Revocar sigue a mano. */}
+                    {tenantUser.is_global_admin || tenantUser.role !== 'client' ? (
+                      <MiniButton
+                        label={
+                          tenantUser.is_global_admin ? 'Revocar SuperAdmin' : 'Promover SuperAdmin'
+                        }
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          void toggleGlobalAdmin(tenantUser)
+                        }}
+                        tone={tenantUser.is_global_admin ? 'danger' : 'default'}
+                      />
+                    ) : null}
                   </div>
                 </div>
               ))
@@ -274,7 +280,7 @@ export const TenantUsersSection: React.FC<TenantUsersSectionProps> = ({
                   className="text-sm font-black uppercase tracking-widest"
                   style={{ color: colors2000s.text.primary }}
                 >
-                  No hay usuarios del tenant
+                  No hay usuarios en la tienda
                 </p>
               </div>
             )}
@@ -288,7 +294,7 @@ export const TenantUsersSection: React.FC<TenantUsersSectionProps> = ({
           className="text-sm font-black uppercase tracking-widest"
           style={{ color: colors2000s.text.primary }}
         >
-          Selecciona una tienda
+          Seleccioná una tienda
         </p>
       </div>
     )}

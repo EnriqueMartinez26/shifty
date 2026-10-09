@@ -45,9 +45,18 @@ const completarFormulario = (container: HTMLElement, fecha: string, hora: string
 const crear = () => fireEvent.click(screen.getByRole('button', { name: 'Crear Turno' }))
 
 describe('NewAppointmentModal', () => {
+  // jsdom no implementa scrollIntoView: el test que lo stubea no lo deja
+  // puesto para los siguientes (revisión de la PR #129).
+  const scrollIntoViewOriginal = Element.prototype.scrollIntoView
+
   beforeEach(() => {
     mockCrearTurno.mockReset()
     mockCrearTurno.mockResolvedValue('appt-1')
+  })
+
+  afterEach(() => {
+    if (scrollIntoViewOriginal) Element.prototype.scrollIntoView = scrollIntoViewOriginal
+    else delete (Element.prototype as Partial<Element>).scrollIntoView
   })
 
   it('crea un turno pasado en el instante UTC de la hora argentina tipeada', async () => {
@@ -87,6 +96,25 @@ describe('NewAppointmentModal', () => {
 
     expect(payloadDe(1).idempotency_key).toBe(payloadDe(0).idempotency_key)
     expect(payloadDe(2).idempotency_key).not.toBe(payloadDe(0).idempotency_key)
+  })
+
+  it('el error del alta se lleva a la vista y toma el foco', async () => {
+    // QA movil 2026-10-08: el 409 "no atiende en ese horario" quedaba a
+    // top=-84px del formulario scrolleado y parecia que no pasaba nada.
+    const scrollIntoView = jest.fn()
+    Element.prototype.scrollIntoView = scrollIntoView
+    mockCrearTurno.mockRejectedValue(
+      new ConflictError('texto del servidor', { errorCode: 'OUT_OF_SCHEDULE' })
+    )
+    const { container } = render(<NewAppointmentModal onClose={jest.fn()} />)
+
+    completarFormulario(container, '2026-10-01', '10:00')
+    crear()
+
+    const alerta = await screen.findByRole('alert')
+    expect(alerta).toHaveTextContent('El profesional no atiende en ese horario. Elegí otro.')
+    expect(scrollIntoView).toHaveBeenCalled()
+    expect(alerta).toHaveFocus()
   })
 
   it('el profesional no elige profesional: el backend le asigna su agenda', () => {

@@ -92,6 +92,8 @@ jest.mock('./presentation/pages/ClientAppointments', () => mockPage('ClientAppoi
 jest.mock('./presentation/pages/Settings', () => mockPage('Settings'))
 jest.mock('./presentation/pages/Legal', () => mockPage('Legal'))
 jest.mock('./presentation/pages/Manual', () => mockPage('Manual'))
+jest.mock('./presentation/pages/NotFound', () => mockPage('NotFound'))
+jest.mock('./presentation/pages/Unsubscribe', () => mockPage('Unsubscribe'))
 
 const SESIONES = {
   super_admin: { role: 'super_admin', is_global_admin: true },
@@ -204,7 +206,9 @@ const RUTAS_PUBLICAS = [
   { ruta: '/booking/mi-tienda', marcadores: [BOUNDARY_BOOKING, 'page:PublicBooking'] },
   { ruta: '/b/mi-tienda', marcadores: [BOUNDARY_BOOKING, 'page:PublicBooking'] },
   { ruta: '/booking/mi-tienda/mis-turnos', marcadores: ['page:ClientAppointments'] },
-  { ruta: '/b/mi-tienda/mis-turnos', marcadores: ['page:ClientAppointments'] }
+  { ruta: '/b/mi-tienda/mis-turnos', marcadores: ['page:ClientAppointments'] },
+  // Link de baja del mail promocional: publica, sin sesion (2026-10-02).
+  { ruta: '/baja', marcadores: ['page:Unsubscribe'] }
 ]
 
 const sinSesion = (): EstadoAuth => ({
@@ -276,7 +280,7 @@ describe('rutas del panel sin sesion', () => {
   })
 
   it.each(['/dashboard', '/dashboard/reports', '/control-global', '/'])(
-    'con la sesion no verificable (%s) ofrece reintentar y no manda a /login',
+    'con la sesión no verificable (%s) ofrece reintentar y no manda a /login',
     async (ruta) => {
       mockAuth = { ...sinSesion(), sessionUnavailable: true }
       abrir(ruta)
@@ -303,27 +307,29 @@ describe('rutas dentro del arbol de sesion, abiertas', () => {
   })
 })
 
+const RUTAS_DESCONOCIDAS = [
+  '/register',
+  '/dashboard/no-existe-2',
+  '/cualquier/cosa',
+  '/b/mi-tienda/no-existe'
+]
+
 describe('raiz y comodin', () => {
-  it.each(['/', '/register', '/dashboard/no-existe-2', '/cualquier/cosa'])(
-    'sin sesion %s va al login sin recordar la ruta',
-    async (ruta) => {
-      abrir(ruta)
+  it('sin sesion / va al login sin recordar la ruta', async () => {
+    abrir('/')
 
-      await esperar('/login', ['auth', 'page:Login'])
-      expect(window.history.state?.usr ?? null).toBeNull()
-    }
-  )
+    await esperar('/login', ['auth', 'page:Login'])
+    expect(window.history.state?.usr ?? null).toBeNull()
+  })
 
-  describe.each(['/', '/register', '/cualquier/cosa'])('con sesion %s', (ruta) => {
-    it.each(CASOS_INICIO)('$sesion va a $destino', async ({ sesion, destino }) => {
-      mockAuth = conSesion(sesion)
-      abrir(ruta)
+  it.each(CASOS_INICIO)('con sesion / y $sesion va a $destino', async ({ sesion, destino }) => {
+    mockAuth = conSesion(sesion)
+    abrir('/')
 
-      await esperar(
-        destino,
-        destino === '/control-global' ? PANEL_GLOBAL : [...PANEL_ADMIN, 'page:Dashboard']
-      )
-    })
+    await esperar(
+      destino,
+      destino === '/control-global' ? PANEL_GLOBAL : [...PANEL_ADMIN, 'page:Dashboard']
+    )
   })
 
   it('con token y sin usuario cargado va al panel', async () => {
@@ -333,11 +339,22 @@ describe('raiz y comodin', () => {
     await esperar('/dashboard', [...PANEL_ADMIN, 'page:Dashboard'])
   })
 
-  it('una ruta desconocida bajo /dashboard cae en el comodin, no en el panel', async () => {
-    mockAuth = conSesion('professional')
-    abrir('/dashboard/no-existe')
+  // Antes el comodin redirigia al inicio (login o panel): una direccion mal
+  // escrita no decia nada y, sin backend, quedaba en "Cargando...".
+  it.each(RUTAS_DESCONOCIDAS)(
+    'sin sesión %s muestra el 404, sin redirigir ni montar la sesión',
+    async (ruta) => {
+      abrir(ruta)
 
-    await esperar('/dashboard', [...PANEL_ADMIN, 'page:Dashboard'])
+      await esperar(ruta, ['page:NotFound'])
+    }
+  )
+
+  it.each(RUTAS_DESCONOCIDAS)('con sesion %s muestra el 404 sin redirigir', async (ruta) => {
+    mockAuth = conSesion('professional')
+    abrir(ruta)
+
+    await esperar(ruta, ['page:NotFound'])
   })
 })
 

@@ -139,7 +139,7 @@ describe('ReportsPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Siguiente' }))
 
     expect(screen.getByText('Total turnos')).toBeInTheDocument()
-    expect(screen.getByText(/No se pudo cargar esta pagina del detalle/)).toBeInTheDocument()
+    expect(screen.getByText(/No se pudo cargar esta página del detalle/)).toBeInTheDocument()
     // Filas y rotulo de la misma pagina (la ultima buena), no "101–102".
     expect(screen.getByText(/^1–2 de 2/)).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Reintentar' }))

@@ -235,7 +235,9 @@ async def offer_released_slot(
     now: datetime,
     notify_owner: bool = True,
 ) -> OfferResult:
-    """Le ofrece el cupo al primero de la lista. NO commitea y NO manda mails.
+    """Le ofrece el cupo al primero de la lista con email entregable.
+
+    NO commitea y NO manda mails.
 
     El mail vuelve en ``pending_email`` para que el llamador lo despache
     despues del commit: mandarlo aca lo dejaba dentro de la transaccion que
@@ -270,7 +272,25 @@ async def offer_released_slot(
             candidates=len(encajan), offered_entry_id=None, owner_notified=notify_owner
         )
 
-    entry, service = encajan[0]
+    # El cupo solo se ofrece a quien tiene email entregable (D-20260930-11):
+    # sin email la oferta no le llega a nadie, vence y le gasta una de sus
+    # ofertas. Las demas se saltean sin tocarlas y siguen contadas en el aviso
+    # al duenio (``encajan``), que puede escribirles por WhatsApp. No se
+    # filtra en ``matching_entries`` para no cambiar ese conteo.
+    elegida = next(
+        (
+            (candidata, servicio)
+            for candidata, servicio in encajan
+            if candidata.client_email and is_deliverable_email(candidata.client_email)
+        ),
+        None,
+    )
+    if elegida is None:
+        return OfferResult(
+            candidates=len(encajan), offered_entry_id=None, owner_notified=notify_owner
+        )
+
+    entry, service = elegida
     entry.status = WaitlistStatus.OFFERED.value
     entry.notified_at = now
     entry.offer_expires_at = now + timedelta(minutes=settings.WAITLIST_OFFER_MINUTES)

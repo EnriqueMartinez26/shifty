@@ -12,9 +12,13 @@ import { useConfirm } from '../hooks/useConfirm'
 import {
   useCreateManagedService,
   useDeleteManagedService,
-  useManagedServices,
-  useUpdateManagedService
+  useManagedServiceCatalog,
+  useRemoveServiceImage,
+  useUpdateManagedService,
+  useUploadServiceImage
 } from '../hooks/useManagedServices'
+import { useManagedStaff } from '../hooks/useManagedStaff'
+import { useStoreWriteAccess } from '../hooks/useStoreWriteAccess'
 import { notifyError } from '../lib/notify'
 import type { ServiceFormValues } from '../types/forms'
 
@@ -24,10 +28,25 @@ export const ServiceManagementContainer: React.FC = () => {
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [editingService, setEditingService] = useState<Service | null>(null)
 
-  const { data: services, isLoading, error } = useManagedServices()
+  // El catalogo trae los inactivos: "Eliminar" es un soft delete y sin ellos un
+  // servicio borrado desaparecia sin forma de reactivarlo (FF-22).
+  const { data: services, isLoading, error } = useManagedServiceCatalog()
+  // Servicios que algun profesional activo hace: los demas no salen en el
+  // portal (public_api, QA movil 2026-10-08). Sin el personal cargado no se
+  // avisa nada, para no marcar todo por un instante.
+  const { data: staff } = useManagedStaff()
+  const staffedServiceIds = staff
+    ? new Set(staff.filter((member) => member.isActive).flatMap((member) => member.serviceIds))
+    : null
   const createMutation = useCreateManagedService()
   const updateMutation = useUpdateManagedService()
   const deleteMutation = useDeleteManagedService()
+  const uploadImageMutation = useUploadServiceImage()
+  const removeImageMutation = useRemoveServiceImage()
+  // Tienda suspendida (FF-15): POST, PATCH y DELETE /services/... (imagen
+  // incluida) no estan en SUSPENSION_ALLOWED_WRITES y responden 402.
+  const writeAccess = useStoreWriteAccess()
+  const readOnlyReason = writeAccess.readOnly ? writeAccess.reason : null
 
   const filteredServices = services?.filter((service) =>
     service.name.toLowerCase().includes(searchTerm.toLowerCase())
@@ -46,6 +65,14 @@ export const ServiceManagementContainer: React.FC = () => {
       await deleteMutation.mutateAsync(id)
     } catch (error: unknown) {
       notifyError(error, 'No se pudo eliminar el servicio.')
+    }
+  }
+
+  const handleReactivate = async (id: string) => {
+    try {
+      await updateMutation.mutateAsync({ id, data: { isActive: true } })
+    } catch (error: unknown) {
+      notifyError(error, 'No se pudo reactivar el servicio.')
     }
   }
 
@@ -96,9 +123,11 @@ export const ServiceManagementContainer: React.FC = () => {
         </div>
 
         <button
-          className="px-6 py-4 rounded-xl flex items-center gap-2 font-black uppercase tracking-widest text-xs transition-all active:scale-95 group"
+          className="px-6 py-4 rounded-xl flex items-center gap-2 font-black uppercase tracking-widest text-xs transition-all active:scale-95 group disabled:opacity-50"
           style={buttonStyles2000s.selected}
           onClick={handleCreate}
+          disabled={readOnlyReason !== null}
+          title={readOnlyReason ?? undefined}
         >
           <Plus size={18} className="group-hover:rotate-90 transition-transform duration-300" />
           NUEVO SERVICIO
@@ -144,6 +173,11 @@ export const ServiceManagementContainer: React.FC = () => {
               service={service}
               onEdit={handleEdit}
               onDelete={(id) => void handleDelete(id)}
+              onReactivate={(id) => void handleReactivate(id)}
+              readOnlyReason={readOnlyReason}
+              withoutStaff={
+                staffedServiceIds !== null && service.isActive && !staffedServiceIds.has(service.id)
+              }
             />
           ))}
         </div>
@@ -154,6 +188,9 @@ export const ServiceManagementContainer: React.FC = () => {
         onClose={() => setIsModalOpen(false)}
         onSubmit={handleFormSubmit}
         editingService={editingService}
+        onUploadImage={(id, file) => uploadImageMutation.mutateAsync({ id, file })}
+        onRemoveImage={(id) => removeImageMutation.mutateAsync(id)}
+        readOnlyReason={readOnlyReason}
       />
     </div>
   )

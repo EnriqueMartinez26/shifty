@@ -14,18 +14,21 @@ export const colors2000s = {
     disabledBottom: '#dcdcdc' // Botones deshabilitados - bottom
   },
 
-  // Naranja (seleccionado)
+  // Naranja. light/dark son la marca (logo, barras, decoracion): blanco
+  // encima da 2.31/2.85:1, asi que el texto blanco va sobre cta -> accent
+  // (orangeCtaGradient). Los pares se miden en colors.contrast.test.ts.
   orange: {
-    light: '#ff8c42', // Naranja seleccionado - top
-    dark: '#e67e22', // Naranja seleccionado - bottom
-    accent: '#c85a0f' // Naranja oscuro para títulos/labels
+    light: '#ff8c42', // Marca - top
+    dark: '#e67e22', // Marca - bottom (theme-color)
+    accent: '#9a4507', // Titulos, labels y links sobre claro; fondo del CTA - bottom
+    cta: '#b4530a' // Fondo del CTA y de lo seleccionado - top (texto blanco)
   },
 
   // Textos
   text: {
-    primary: '#5a5a5a', // Texto normal
-    secondary: '#7a7a7a', // Labels, headers
-    disabled: '#b0b0b0', // Texto deshabilitado
+    primary: '#404040', // Texto normal
+    secondary: '#5c5c5c', // Labels, headers, ayudas y pies (AA sobre bg.secondary)
+    disabled: '#b0b0b0', // SOLO controles deshabilitados (1.72:1): nunca contenido
     onOrange: '#ffffff' // Texto sobre naranja
   },
 
@@ -90,6 +93,10 @@ export const colors2000s = {
   }
 } as const
 
+// Fondo de todo texto blanco sobre naranja (CTA, chips y avatares
+// seleccionados): 5.02:1 arriba y 6.50:1 abajo.
+export const orangeCtaGradient = `linear-gradient(180deg, ${colors2000s.orange.cta} 0%, ${colors2000s.orange.accent} 100%)`
+
 // Estilos CSS reutilizables
 export const buttonStyles2000s = {
   default: {
@@ -116,7 +123,7 @@ export const buttonStyles2000s = {
     color: colors2000s.orange.accent
   },
   selected: {
-    background: `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`,
+    background: orangeCtaGradient,
     border: `1px solid ${colors2000s.orange.accent}`,
     color: colors2000s.text.onOrange,
     boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerOrange}`

@@ -1,6 +1,16 @@
 import React from 'react'
 
-import { Briefcase, Clock, DollarSign, Edit2, Trash2, Check, X } from 'lucide-react'
+import {
+  Briefcase,
+  Clock,
+  DollarSign,
+  Edit2,
+  Trash2,
+  Check,
+  X,
+  RotateCcw,
+  TriangleAlert
+} from 'lucide-react'
 
 import { Service } from '@domain/entities/Service'
 
@@ -10,22 +20,36 @@ interface ServiceCardProps {
   service: Service
   onEdit: (service: Service) => void
   onDelete: (id: string) => void
+  onReactivate: (id: string) => void
   isSelected?: boolean
+  /** Tienda suspendida: editar, eliminar y reactivar responden 402 (FF-15). */
+  readOnlyReason?: string | null
+  /**
+   * Activo pero ningun profesional activo lo hace: el portal no lo publica
+   * (QA movil 2026-10-08) y el dueno tiene que saber por que.
+   */
+  withoutStaff?: boolean
 }
 
 export const ServiceCard: React.FC<ServiceCardProps> = ({
   service,
   onEdit,
   onDelete,
-  isSelected = false
+  onReactivate,
+  isSelected = false,
+  readOnlyReason = null,
+  withoutStaff = false
 }) => {
   const accentColor = service.color || colors2000s.orange.light
+  const blocked = readOnlyReason !== null
+  const title = readOnlyReason ?? undefined
 
   return (
     <div
+      data-testid="service-card"
       className={`relative p-6 rounded-md transition-all duration-200 hover:scale-[1.01] active:scale-[0.99] border-l-[6px] flex flex-col justify-between h-full ${
         isSelected ? 'ring-2 ring-offset-2 ring-orange-400' : ''
-      }`}
+      } ${service.isActive ? '' : 'opacity-60'}`}
       style={{
         background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
         borderTop: `1px solid ${colors2000s.border.default}`,
@@ -42,7 +66,7 @@ export const ServiceCard: React.FC<ServiceCardProps> = ({
           style={{
             background: 'white',
             boxShadow: colors2000s.shadows.insetDark,
-            color: service.isActive ? colors2000s.status.success.text : colors2000s.text.disabled
+            color: service.isActive ? colors2000s.status.success.text : colors2000s.text.secondary
           }}
         >
           {service.isActive ? (
@@ -68,6 +92,10 @@ export const ServiceCard: React.FC<ServiceCardProps> = ({
               <img
                 src={service.imageUrl}
                 alt={service.name}
+                loading="lazy"
+                decoding="async"
+                width={48}
+                height={48}
                 className="w-full h-full object-cover"
               />
             ) : (
@@ -83,12 +111,27 @@ export const ServiceCard: React.FC<ServiceCardProps> = ({
             </h3>
             <p
               className="text-[10px] font-bold mt-1 truncate max-w-[200px] leading-tight"
-              style={{ color: colors2000s.text.disabled }}
+              style={{ color: colors2000s.text.secondary }}
             >
               {service.description || 'Sin descripción'}
             </p>
           </div>
         </div>
+
+        {withoutStaff && (
+          <p
+            role="status"
+            className="flex items-start gap-2 rounded-md px-3 py-2 text-[11px] font-bold"
+            style={{
+              background: colors2000s.status.warning.bg,
+              border: `1px solid ${colors2000s.status.warning.border}`,
+              color: colors2000s.status.warning.text
+            }}
+          >
+            <TriangleAlert size={14} className="flex-shrink-0 mt-px" aria-hidden="true" />
+            Sin profesionales asignados: no aparece en tu página.
+          </p>
+        )}
 
         {/* Specs metadata rows */}
         <div className="grid grid-cols-2 gap-4 pt-4">
@@ -104,7 +147,7 @@ export const ServiceCard: React.FC<ServiceCardProps> = ({
             <div>
               <p
                 className="text-[8px] font-black uppercase tracking-widest leading-none mb-1"
-                style={{ color: colors2000s.text.disabled }}
+                style={{ color: colors2000s.text.secondary }}
               >
                 Duración
               </p>
@@ -129,12 +172,12 @@ export const ServiceCard: React.FC<ServiceCardProps> = ({
             <div>
               <p
                 className="text-[8px] font-black uppercase tracking-widest leading-none mb-1"
-                style={{ color: colors2000s.text.disabled }}
+                style={{ color: colors2000s.text.secondary }}
               >
                 Precio
               </p>
               <p className="text-xs font-black leading-none" style={{ color: accentColor }}>
-                ${service.price.getValue().toLocaleString()}
+                {service.price.format()}
               </p>
             </div>
           </div>
@@ -145,18 +188,36 @@ export const ServiceCard: React.FC<ServiceCardProps> = ({
       <div className="grid grid-cols-2 gap-3 pt-4 mt-5">
         <button
           onClick={() => onEdit(service)}
-          className="flex items-center justify-center gap-2 py-2.5 px-3 font-black text-[10px] uppercase tracking-widest transition-all active:scale-95"
+          disabled={blocked}
+          title={title}
+          className="flex items-center justify-center gap-2 py-2.5 px-3 font-black text-[10px] uppercase tracking-widest transition-all active:scale-95 disabled:opacity-50"
           style={buttonStyles2000s.default}
         >
           <Edit2 size={14} /> Editar
         </button>
-        <button
-          onClick={() => onDelete(service.id)}
-          className="flex items-center justify-center gap-2 py-2.5 px-3 font-black text-[10px] uppercase tracking-widest transition-all active:scale-95"
-          style={{ ...buttonStyles2000s.default, color: colors2000s.status.danger.light }}
-        >
-          <Trash2 size={14} /> Eliminar
-        </button>
+        {/* "Eliminar" es un soft delete: un inactivo ya esta borrado, lo que
+            le queda es volver (FF-22). */}
+        {service.isActive ? (
+          <button
+            onClick={() => onDelete(service.id)}
+            disabled={blocked}
+            title={title}
+            className="flex items-center justify-center gap-2 py-2.5 px-3 font-black text-[10px] uppercase tracking-widest transition-all active:scale-95 disabled:opacity-50"
+            style={{ ...buttonStyles2000s.default, color: colors2000s.status.danger.light }}
+          >
+            <Trash2 size={14} /> Eliminar
+          </button>
+        ) : (
+          <button
+            onClick={() => onReactivate(service.id)}
+            disabled={blocked}
+            title={title}
+            className="flex items-center justify-center gap-2 py-2.5 px-3 font-black text-[10px] uppercase tracking-widest transition-all active:scale-95 disabled:opacity-50"
+            style={{ ...buttonStyles2000s.default, color: colors2000s.status.success.text }}
+          >
+            <RotateCcw size={14} /> Reactivar
+          </button>
+        )}
       </div>
     </div>
   )

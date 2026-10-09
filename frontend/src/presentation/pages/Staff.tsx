@@ -2,9 +2,12 @@ import React from 'react'
 
 import { StaffManagementContainer } from '@presentation/containers/StaffManagementContainer'
 
+import { useDocumentTitle } from '../hooks/useDocumentTitle'
+
 const StaffPage: React.FC = () => {
+  useDocumentTitle('Personal · Shifty')
   return (
-    <div className="animate-in fade-in slide-in-from-bottom-4 duration-700">
+    <div className="duration-700">
       <StaffManagementContainer />
     </div>
   )

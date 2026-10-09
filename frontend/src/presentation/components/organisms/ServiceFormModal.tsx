@@ -10,22 +10,47 @@ import {
   DollarSign,
   Check,
   Wallet,
-  Image as ImageIcon
+  Image as ImageIcon,
+  Trash2,
+  Upload
 } from 'lucide-react'
 
 import { Service, type ServiceDepositMode, type ServiceDepositType } from '@domain/entities/Service'
 
+import { getClientValidationMessages } from '@application/validators/service.validators'
+
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
+import { formatCurrency } from '@shared/utils/currency'
+import { validateServiceImage } from '@shared/utils/imageFile'
 
 import { colors2000s, buttonStyles2000s } from '../../../theme/colors'
 import { create2000sModalInputStyle, create2000sModalSurfaceStyle } from '../../lib/surfaceStyles'
 import type { ServiceFormValues } from '../../types/forms'
+import { FormErrorAlert } from '../molecules/FormErrorAlert'
 
 interface ServiceFormModalProps {
   isOpen: boolean
   onClose: () => void
   onSubmit: (data: ServiceFormValues) => Promise<void>
   editingService?: Service | null
+  // Subir y quitar la imagen persisten al instante, sin pasar por Guardar.
+  onUploadImage: (id: string, file: File) => Promise<Service>
+  onRemoveImage: (id: string) => Promise<Service>
+  /**
+   * Tienda suspendida (FF-15): guardar y la imagen responden 402. Cubre el
+   * modal que quedo abierto antes de que cargara el plan.
+   */
+  readOnlyReason?: string | null
+}
+
+// Un 422 del servidor nombra el campo; nunca el texto crudo (regla 20).
+const SERVICE_FIELD_ERRORS: Partial<Record<string, string>> = {
+  deposit_amount:
+    'Revisá la seña: un porcentaje va de 1 a 100 y un monto fijo tiene que ser mayor a 0.',
+  name: 'El nombre tiene que tener entre 2 y 255 caracteres.',
+  description: 'La descripción es demasiado larga o tiene caracteres no permitidos.',
+  duration_minutes: 'La duración tiene que ser de 1 a 480 minutos.',
+  price: 'El precio tiene que ser de 0 a 10.000.000.'
 }
 
 const PRESET_COLORS = [
@@ -69,13 +94,20 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
   isOpen,
   onClose,
   onSubmit,
-  editingService
+  editingService,
+  onUploadImage,
+  onRemoveImage,
+  readOnlyReason = null
 }) => {
+  const blockedTitle = readOnlyReason ?? undefined
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [formData, setFormData] = useState<ServiceFormValues>(EMPTY_FORM)
+  const [imageBusy, setImageBusy] = useState(false)
+  const [imageError, setImageError] = useState<string | null>(null)
 
   useEffect(() => {
+    setImageError(null)
     if (editingService) {
       const p = editingService.toPrimitives()
       setFormData({
@@ -103,6 +135,10 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
   // Se calcula en el render, no en un efecto: `full` significa 100% del precio
   // y no lleva monto aparte, y sin seña el monto no significa nada.
   const needsDepositAmount = formData.depositMode !== 'none' && formData.depositType !== 'full'
+  // Aviso junto al campo: el motivo del submit sale arriba del formulario y
+  // con el modal scrolleado no se veia (QA 2026-10-02).
+  const percentTooHigh =
+    needsDepositAmount && formData.depositType === 'percent' && (formData.depositAmount ?? 0) > 100
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -112,17 +148,72 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
       await onSubmit(formData)
       onClose()
     } catch (err) {
-      setError(getErrorMessage(err, 'No se pudo guardar'))
+      // D-20260930-09: si lo rechazo la validacion del cliente se dice que
+      // corregir; "No se pudo guardar" no lo decia. Lo demas sigue por la
+      // tabla de codigos (regla 20).
+      const motivos = getClientValidationMessages(err)
+      setError(
+        motivos.length > 0
+          ? motivos.join(' · ')
+          : getErrorMessage(err, 'No se pudo guardar', {}, SERVICE_FIELD_ERRORS)
+      )
     } finally {
       setLoading(false)
     }
   }
 
+  // Con una subida en curso no se cierra: su resultado caeria en el formulario
+  // del proximo servicio que se abra.
+  const closeIfIdle = () => {
+    if (!imageBusy) onClose()
+  }
+
+  // Tras subir o quitar, el formulario toma la URL que devolvio el backend. Con
+  // la vieja, un Guardar posterior daria 422 (URL de medios de otro id) o
+  // desvincularia y borraria la imagen recien subida
+  // (modules/stores/media.py::resolve_image_link).
+  const runImageChange = async (change: () => Promise<string>, fallback: string) => {
+    setImageError(null)
+    setImageBusy(true)
+    try {
+      const imageUrl = await change()
+      setFormData((f) => ({ ...f, imageUrl }))
+    } catch (err) {
+      setImageError(getErrorMessage(err, fallback))
+    } finally {
+      setImageBusy(false)
+    }
+  }
+
+  const handleImageUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    event.target.value = '' // permite volver a elegir el mismo archivo
+    if (!file || !editingService) return
+    // Feedback rapido sin tocar la API; el backend valida igual y manda.
+    const invalid = await validateServiceImage(file).catch(() => 'No se pudo leer el archivo.')
+    if (invalid) {
+      setImageError(invalid)
+      return
+    }
+    await runImageChange(async () => {
+      const updated = await onUploadImage(editingService.id, file)
+      return updated.imageUrl ?? ''
+    }, 'No se pudo subir la imagen')
+  }
+
+  const handleImageRemove = async () => {
+    if (!editingService) return
+    await runImageChange(async () => {
+      await onRemoveImage(editingService.id)
+      return ''
+    }, 'No se pudo quitar la imagen')
+  }
+
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/45 backdrop-blur-sm" onClick={onClose} />
+      <div className="absolute inset-0 bg-black/45 backdrop-blur-sm" onClick={closeIfIdle} />
       <div
-        className="relative w-full max-w-5xl rounded-md animate-in zoom-in-95 duration-200 flex flex-col lg:flex-row overflow-hidden max-h-[95vh]"
+        className="relative w-full max-w-5xl rounded-md duration-200 flex flex-col lg:flex-row overflow-hidden max-h-[95vh]"
         style={create2000sModalSurfaceStyle()}
       >
         {/* Formulario (Izquierda) */}
@@ -143,7 +234,7 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
               </p>
             </div>
             <button
-              onClick={onClose}
+              onClick={closeIfIdle}
               className="w-10 h-10 flex items-center justify-center transition-all active:scale-90"
               style={buttonStyles2000s.default}
             >
@@ -157,18 +248,7 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
             }}
             className="space-y-6"
           >
-            {error && (
-              <div
-                role="alert"
-                className="rounded-2xl px-4 py-3 text-xs font-bold mb-4"
-                style={{
-                  background: colors2000s.status.danger.bg,
-                  color: colors2000s.status.danger.text
-                }}
-              >
-                {error}
-              </div>
-            )}
+            <FormErrorAlert message={error} className="mb-4" />
             <div className="space-y-1.5">
               <label className="text-[10px] font-black uppercase tracking-widest text-gray-400 ml-1">
                 Nombre del Servicio
@@ -261,6 +341,11 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
                       </option>
                     ))}
                   </select>
+                  {formData.depositMode === 'required' && (
+                    <p className="text-[10px] font-bold text-gray-400 ml-1">
+                      Se paga por Mercado Pago o por WhatsApp: necesitás uno de los dos configurado.
+                    </p>
+                  )}
                 </div>
 
                 {formData.depositMode !== 'none' && (
@@ -317,17 +402,21 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
                     className="w-full rounded-xl px-4 py-3 font-bold border text-sm transition-all"
                     style={create2000sModalInputStyle()}
                     min={0}
-                    // Sin `max`: el backend acepta hasta 10.000.000 para
-                    // cualquier tipo, y un formulario mas estricto que el
-                    // contrato traba datos legitimos. Con `max=100` un servicio
-                    // ya cargado con 500% quedaba IMPOSIBLE de editar: la
-                    // validacion nativa bloqueaba el submit en un campo que el
-                    // dueno ni tocaba, y no se podia ni cambiarle el nombre.
-                    // Si se quiere el tope del 100%, va en el backend, que es
-                    // donde protege tambien a la API (2026-09-21).
+                    // Sin `max` nativo a proposito: el tope del porcentaje (100)
+                    // y el monto mayor a 0 los valida el schema del servicio
+                    // al crear y al editar (D-20260930-09), con un mensaje que
+                    // dice que corregir; la validacion nativa solo frenaba el
+                    // submit sin explicar nada. El backend y la base rechazan
+                    // lo mismo (`deposit_policy_error`,
+                    // `ck_services_deposit_percent_max`).
                     placeholder={formData.depositType === 'percent' ? 'Ej: 30' : 'Ej: 5000'}
                     required
                   />
+                  {percentTooHigh && (
+                    <p className="text-[11px] font-bold text-red-600 ml-1">
+                      El porcentaje no puede superar 100.
+                    </p>
+                  )}
                   <p className="text-[10px] font-bold text-gray-400 ml-1">
                     {formData.depositType === 'percent'
                       ? 'Porcentaje del precio que el cliente paga para reservar.'
@@ -341,6 +430,53 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
               <label className="text-[10px] font-black uppercase tracking-widest text-gray-400 ml-1 flex items-center gap-2">
                 <ImageIcon size={14} /> Imagen del servicio
               </label>
+              {editingService ? (
+                <div className="flex flex-wrap items-center gap-3">
+                  <label
+                    className={`inline-flex items-center gap-2 px-4 py-2.5 font-black uppercase tracking-widest text-[11px] transition-all active:scale-95 ${
+                      blockedTitle ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'
+                    }`}
+                    style={buttonStyles2000s.default}
+                    title={blockedTitle}
+                  >
+                    {imageBusy ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <Upload className="w-4 h-4" />
+                    )}
+                    {imageBusy ? 'Guardando...' : 'Subir imagen'}
+                    <input
+                      type="file"
+                      accept="image/png,image/jpeg,image/webp"
+                      className="hidden"
+                      disabled={imageBusy || readOnlyReason !== null}
+                      onChange={(e) => void handleImageUpload(e)}
+                    />
+                  </label>
+                  {formData.imageUrl ? (
+                    <button
+                      type="button"
+                      onClick={() => void handleImageRemove()}
+                      disabled={imageBusy || readOnlyReason !== null}
+                      title={blockedTitle}
+                      className="inline-flex items-center gap-2 px-4 py-2.5 font-black uppercase tracking-widest text-[11px] transition-all active:scale-95 disabled:opacity-50"
+                      style={buttonStyles2000s.default}
+                    >
+                      <Trash2 className="w-4 h-4" /> Quitar imagen
+                    </button>
+                  ) : null}
+                  <p className="w-full text-[10px] font-bold text-gray-400 ml-1">
+                    PNG, JPEG o WebP · máx 1 MB. Subir o quitar la imagen se guarda al instante:
+                    cerrar sin guardar no la deshace.
+                  </p>
+                </div>
+              ) : (
+                <p className="text-[10px] font-bold text-gray-400 ml-1">
+                  Guardá el servicio para poder subir una imagen. Mientras tanto podés pegar una
+                  URL.
+                </p>
+              )}
+              <FormErrorAlert message={imageError} />
               <input
                 value={formData.imageUrl}
                 onChange={(e) => setFormData({ ...formData, imageUrl: e.target.value })}
@@ -390,7 +526,7 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
             <div className="flex gap-4 pt-6">
               <button
                 type="button"
-                onClick={onClose}
+                onClick={closeIfIdle}
                 className="px-6 py-4 font-black uppercase tracking-widest text-xs transition-all active:scale-95"
                 style={buttonStyles2000s.default}
               >
@@ -398,7 +534,8 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
               </button>
               <button
                 type="submit"
-                disabled={loading}
+                disabled={loading || imageBusy || readOnlyReason !== null}
+                title={blockedTitle}
                 className="flex-1 font-black py-4 rounded-xl transition-all uppercase tracking-widest text-xs active:scale-95 disabled:opacity-50"
                 style={buttonStyles2000s.selected}
               >
@@ -476,6 +613,10 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
                     <img
                       src={formData.imageUrl}
                       alt={formData.name || 'Servicio'}
+                      loading="lazy"
+                      decoding="async"
+                      width={48}
+                      height={48}
                       className="w-full h-full object-cover"
                     />
                   ) : (
@@ -530,7 +671,7 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
                       className="text-[10px] font-black leading-none"
                       style={{ color: formData.color }}
                     >
-                      ${formData.price}
+                      {formatCurrency(formData.price)}
                     </p>
                   </div>
                 </div>

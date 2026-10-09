@@ -26,7 +26,7 @@ from core.roles import (
 )
 from core.utils import ensure_utc_aware
 from modules.auth.dependencies import get_current_user
-from modules.payments.jobs import EVENT_EMAIL_SEND
+from modules.payments.jobs import EVENT_EMAIL_SEND, overdue_holds
 from modules.payments.model import (
     WEBHOOK_INBOX_MAX_ATTEMPTS,
     OutboxMessage,
@@ -124,7 +124,8 @@ def _segundos_desde(ahora: datetime, desde: datetime | None) -> int:
 
 
 async def _slo_metrics(db: AsyncSession, store_id: str | None) -> dict[str, int]:
-    """Colas y atraso del inbox y del outbox; ``None`` = global.
+    """Colas y atraso del inbox y del outbox, y la retencion vencida mas vieja
+    sin liberar; ``None`` = global.
 
     UNA sentencia agregada por tabla (regla 11; F1-25, R9-16): los contadores
     solos no distinguian un outbox al dia de uno que despacha con minutos de
@@ -174,6 +175,7 @@ async def _slo_metrics(db: AsyncSession, store_id: str | None) -> dict[str, int]
             *store_filter,
         )
     )
+    retenciones = await overdue_holds(db, ahora, store_id=store_id)
     return {
         "dead_letter_webhooks_24h": int(dead_letters or 0),
         "pending_webhooks": int(inbox[0] or 0),
@@ -182,6 +184,14 @@ async def _slo_metrics(db: AsyncSession, store_id: str | None) -> dict[str, int]
         "oldest_pending_outbox_seconds": _segundos_desde(ahora, outbox[1]),
         "oldest_pending_inbox_seconds": _segundos_desde(ahora, inbox[2]),
         "oldest_pending_email_send_seconds": _segundos_desde(ahora, outbox[2]),
+        "oldest_overdue_hold_seconds": _segundos_desde(ahora, retenciones.oldest_at),
+        "oldest_due_held_recheck_seconds": _segundos_desde(
+            ahora, retenciones.recheck_due_at
+        ),
+        # Sin umbral ni alerta (revision S3 del seguimiento W2 de la PR #104):
+        # cada uno ya aviso a Sentry una vez por pago; esto los deja visibles
+        # despues de resolver ese issue.
+        "integrity_held_holds": retenciones.parked,
     }
 
 
@@ -195,6 +205,10 @@ def _slo_thresholds() -> dict[str, int]:
         "oldest_pending_inbox_seconds": settings.SLO_MAX_OLDEST_PENDING_INBOX_SECONDS,
         "oldest_pending_email_send_seconds": (
             settings.SLO_MAX_OLDEST_PENDING_EMAIL_SEND_SECONDS
+        ),
+        "oldest_overdue_hold_seconds": settings.SLO_MAX_OLDEST_OVERDUE_HOLD_SECONDS,
+        "oldest_due_held_recheck_seconds": (
+            settings.SLO_MAX_OLDEST_DUE_HELD_RECHECK_SECONDS
         ),
     }
 
@@ -210,6 +224,10 @@ _SLO_ALERTS = (
     ("oldest_pending_inbox_seconds", "inbox_lag_high", "critical"),
     ("oldest_pending_outbox_seconds", "outbox_lag_high", "warning"),
     ("oldest_pending_email_send_seconds", "email_send_lag_high", "warning"),
+    # Seguimiento W2 de la PR #104: una retencion vencida que no se libera es
+    # un cupo que nadie puede reservar; el job no da abasto o no corre.
+    ("oldest_overdue_hold_seconds", "overdue_hold_lag_high", "warning"),
+    ("oldest_due_held_recheck_seconds", "held_recheck_lag_high", "warning"),
 )
 
 

@@ -1,9 +1,10 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 
 import type { StoreSettings } from '@application/services/StoreSettingsService'
 
 import { ConflictError } from '@shared/errors/ConflictError'
+import { ValidationError } from '@shared/errors/ValidationError'
 
 import SettingsPage from './Settings'
 
@@ -43,6 +44,7 @@ const store: StoreSettings = {
 }
 
 const updateStore = jest.fn()
+const updateFeatureFlags = jest.fn()
 let storeQuery: { data?: StoreSettings; isLoading: boolean; error: unknown } = {
   data: store,
   isLoading: false,
@@ -54,7 +56,7 @@ jest.mock('../hooks/useStores', () => ({
   useStoreSettings: () => storeQuery,
   useStoreFeatureFlags: () => ({ data: undefined }),
   useUpdateStoreSettings: () => ({ mutateAsync: updateStore, isPending: false }),
-  useUpdateStoreFeatureFlags: () => idleMutation,
+  useUpdateStoreFeatureFlags: () => ({ mutateAsync: updateFeatureFlags, isPending: false }),
   useUploadStoreLogo: () => idleMutation
 }))
 
@@ -71,6 +73,11 @@ jest.mock('../hooks/useChangePassword', () => ({
 
 jest.mock('../hooks/useManagedServices', () => ({
   useManagedServices: () => ({ data: [] })
+}))
+
+let mockWriteAccess = { readOnly: false, reason: 'Tienda suspendida' }
+jest.mock('../hooks/useStoreWriteAccess', () => ({
+  useStoreWriteAccess: () => mockWriteAccess
 }))
 
 const renderSettings = () =>
@@ -229,6 +236,142 @@ describe('SettingsPage - slug repetido (409)', () => {
   })
 })
 
+// 2026-09-30 (FF-28): el panel mostraba interruptores que no hacen nada y decia
+// SMS/WhatsApp para un codigo que va por email. `advanced_reports` y
+// `new_calendar` no los lee ningun camino del backend; siguen en el contrato
+// (`StoreFeatureFlags`), solo dejan de mostrarse.
+describe('SettingsPage - funciones (FF-28)', () => {
+  // Los dos flags ocultos prendidos en la base: guardar otra cosa no los
+  // tiene que reenviar ni apagar.
+  const conFlagsOcultos: StoreSettings = {
+    ...store,
+    feature_flags: {
+      payments: false,
+      ledger: false,
+      advanced_reports: true,
+      new_calendar: true,
+      otp_booking: false
+    }
+  }
+
+  beforeEach(() => {
+    storeQuery = { data: conFlagsOcultos, isLoading: false, error: null }
+    updateStore.mockReset()
+    updateFeatureFlags.mockReset()
+  })
+
+  it('no muestra los interruptores que ningun camino del backend lee', () => {
+    renderSettings()
+    fireEvent.click(screen.getByRole('button', { name: 'Funciones' }))
+
+    expect(screen.queryByText('Reportes avanzados')).not.toBeInTheDocument()
+    expect(screen.queryByText('Agenda nueva')).not.toBeInTheDocument()
+    expect(screen.queryByRole('switch', { name: 'Reportes avanzados' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('switch', { name: 'Agenda nueva' })).not.toBeInTheDocument()
+  })
+
+  it('dice que el codigo de la reserva publica va por email', () => {
+    renderSettings()
+    fireEvent.click(screen.getByRole('button', { name: 'Funciones' }))
+
+    expect(screen.getByText('Código por email en la reserva pública')).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        'Pide un código de verificación, enviado por email, antes de confirmar la reserva.'
+      )
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/SMS o WhatsApp/)).not.toBeInTheDocument()
+  })
+
+  it('guardar sin tocar ningun flag no llama a updateFeatureFlags', async () => {
+    updateStore.mockResolvedValue(conFlagsOcultos)
+    renderSettings()
+
+    fireEvent.change(screen.getByDisplayValue('Peluqueria Tucuman'), {
+      target: { value: 'Otro nombre' }
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Funciones' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Guardar Cambios' }))
+
+    expect(await screen.findByRole('button', { name: 'Guardado' })).toBeInTheDocument()
+    expect(updateStore).toHaveBeenCalledWith({ name: 'Otro nombre' })
+    expect(updateFeatureFlags).not.toHaveBeenCalled()
+  })
+})
+
+// 2026-10-01: con la tienda suspendida cada accion fallaba con 402 en vez de
+// verse deshabilitada (FF-15). PATCH /stores/me, PUT /stores/me/feature-flags y
+// POST /stores/me/media no estan en SUSPENSION_ALLOWED_WRITES; cambiar la
+// clave (PUT /auth/change-password) va por un router sin la guarda.
+describe('SettingsPage - tienda suspendida (FF-15)', () => {
+  const expectBlocked = (element: HTMLElement | null) => {
+    expect(element).toHaveAttribute('title', 'Tienda suspendida')
+  }
+
+  beforeEach(() => {
+    storeQuery = { data: store, isLoading: false, error: null }
+    mockWriteAccess = { readOnly: true, reason: 'Tienda suspendida' }
+  })
+
+  afterEach(() => {
+    mockWriteAccess = { readOnly: false, reason: 'Tienda suspendida' }
+  })
+
+  it('Guardar, Subir imagen y los interruptores de Funciones quedan deshabilitados', () => {
+    const { container } = renderSettings()
+    fireEvent.change(screen.getByDisplayValue('Peluqueria Tucuman'), {
+      target: { value: 'Otro nombre' }
+    })
+
+    const guardar = screen.getByRole('button', { name: 'Guardar Cambios' })
+    expect(guardar).toBeDisabled()
+    expectBlocked(guardar)
+    const logo = container.querySelector<HTMLInputElement>('input[type="file"]')
+    expect(logo).toBeDisabled()
+    expectBlocked(logo?.closest('label') ?? null)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Funciones' }))
+    const switches = screen.getAllByRole('switch')
+    expect(switches.length).toBeGreaterThan(0)
+    for (const toggle of switches) {
+      expect(toggle).toBeDisabled()
+      expectBlocked(toggle)
+    }
+  })
+
+  it('Mercado Pago: "Guardar condiciones" es el PATCH /stores/me y tambien se apaga', () => {
+    renderSettings()
+    fireEvent.click(screen.getByRole('button', { name: 'Mercado Pago' }))
+
+    const guardar = screen.getByRole('button', { name: /Guardar condiciones/ })
+    expect(guardar).toBeDisabled()
+    expectBlocked(guardar)
+  })
+
+  it('Seguridad: cambiar la clave sigue habilitado', () => {
+    renderSettings()
+    fireEvent.click(screen.getByRole('button', { name: 'Seguridad' }))
+
+    const actualizar = screen.getByRole('button', { name: 'Actualizar Acceso' })
+    expect(actualizar).not.toBeDisabled()
+    expect(actualizar).not.toHaveAttribute('title')
+  })
+
+  it('sin suspension Guardar se habilita con un cambio y los interruptores tambien', () => {
+    mockWriteAccess = { readOnly: false, reason: 'Tienda suspendida' }
+    renderSettings()
+    fireEvent.change(screen.getByDisplayValue('Peluqueria Tucuman'), {
+      target: { value: 'Otro nombre' }
+    })
+
+    expect(screen.getByRole('button', { name: 'Guardar Cambios' })).not.toBeDisabled()
+    fireEvent.click(screen.getByRole('button', { name: 'Funciones' }))
+    for (const toggle of screen.getAllByRole('switch')) {
+      expect(toggle).not.toBeDisabled()
+    }
+  })
+})
+
 describe('SettingsPage - dia legado con varios periodos', () => {
   const partido = {
     ...store,
@@ -255,5 +398,104 @@ describe('SettingsPage - dia legado con varios periodos', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Conservar 16:00 a 20:00 el Lunes' }))
     expect(screen.getByLabelText<HTMLInputElement>('Apertura Lunes').value).toBe('16:00')
     expect(screen.getByRole('button', { name: 'Guardar Cambios' })).not.toBeDisabled()
+  })
+})
+
+/**
+ * Cambio de clave: valida la nueva antes de enviar; la actual conserva su contrato.
+ * La NUEVA se valida con las reglas del backend antes de
+ * enviar; la ACTUAL no se valida (1 a 128, la verifica el servidor).
+ */
+describe('SettingsPage - cambio de contraseña', () => {
+  const abrirSeguridad = () => {
+    storeQuery = { data: store, isLoading: false, error: null }
+    idleMutation.mutateAsync.mockReset()
+    renderSettings()
+    fireEvent.click(screen.getByRole('button', { name: 'Seguridad' }))
+  }
+
+  const completar = (actual: string, nueva: string, confirmar: string) => {
+    fireEvent.change(screen.getByLabelText('Contraseña Actual'), { target: { value: actual } })
+    fireEvent.change(screen.getByLabelText('Nueva Contraseña'), { target: { value: nueva } })
+    fireEvent.change(screen.getByLabelText('Confirmar Nueva'), { target: { value: confirmar } })
+    fireEvent.submit(screen.getByRole('button', { name: 'Actualizar Acceso' }).closest('form')!)
+  }
+
+  it('asocia cada label con su input y fija autocomplete y topes', () => {
+    abrirSeguridad()
+
+    const actual = screen.getByLabelText('Contraseña Actual')
+    expect(actual).toHaveAttribute('type', 'password')
+    expect(actual).toHaveAttribute('autocomplete', 'current-password')
+    expect(actual).toHaveAttribute('maxlength', '256')
+    expect(actual).not.toHaveAttribute('minlength')
+
+    const nueva = screen.getByLabelText('Nueva Contraseña')
+    expect(nueva).toHaveAttribute('type', 'password')
+    expect(nueva).toHaveAttribute('autocomplete', 'new-password')
+    expect(nueva).toHaveAttribute('minlength', '6')
+    expect(nueva).toHaveAttribute('maxlength', '128')
+
+    const confirmar = screen.getByLabelText('Confirmar Nueva')
+    expect(confirmar).toHaveAttribute('type', 'password')
+    expect(confirmar).toHaveAttribute('autocomplete', 'new-password')
+    expect(confirmar).toHaveAttribute('maxlength', '128')
+  })
+
+  it('una clave nueva corta se rechaza en el cliente, sin llamar al servidor', async () => {
+    abrirSeguridad()
+
+    completar('vieja', 'ab12', 'ab12')
+
+    expect(
+      await screen.findByText('La contraseña debe tener al menos 6 caracteres')
+    ).toBeInTheDocument()
+    expect(idleMutation.mutateAsync).not.toHaveBeenCalled()
+  })
+
+  it('una clave nueva de más de 72 bytes se rechaza antes de enviar', async () => {
+    abrirSeguridad()
+    const nueva = `${'é'.repeat(36)}12`
+
+    completar('vieja', nueva, nueva)
+
+    expect(
+      await screen.findByText(
+        'La contraseña ocupa más de 72 bytes (los acentos, la ñ, los símbolos y los emojis ocupan más de uno)'
+      )
+    ).toBeInTheDocument()
+    expect(idleMutation.mutateAsync).not.toHaveBeenCalled()
+  })
+
+  it('la clave actual no se valida: una vieja de 3 caracteres llega al servidor, sin recortar', async () => {
+    abrirSeguridad()
+    idleMutation.mutateAsync.mockResolvedValue(undefined)
+
+    completar(' ab ', 'nueva123', 'nueva123')
+
+    await waitFor(() => {
+      expect(idleMutation.mutateAsync).toHaveBeenCalledWith({
+        current_password: ' ab ',
+        new_password: 'nueva123'
+      })
+    })
+  })
+
+  it('un 422 del servidor muestra un texto útil sobre la clave, no el genérico', async () => {
+    abrirSeguridad()
+    idleMutation.mutateAsync.mockRejectedValue(
+      new ValidationError('body -> new_password: value error', {
+        errorCode: 'VALIDATION_ERROR',
+        statusCode: 422
+      })
+    )
+
+    completar('vieja', 'password123', 'password123')
+
+    expect(
+      await screen.findByText(
+        'La contraseña no es aceptable: es demasiado común o no cumple las reglas. Elegí otra'
+      )
+    ).toBeInTheDocument()
   })
 })

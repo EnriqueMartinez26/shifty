@@ -1,6 +1,6 @@
 import React from 'react'
 
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 
 import type { BookingConfirmation } from '@application/services/PublicBookingService'
 
@@ -37,7 +37,6 @@ const estado = (patch: Partial<BookingWizardState> = {}): BookingWizardState => 
   startsAt: '2026-09-25T12:00:00+00:00',
   client: cliente(),
   promotionCode: '',
-  idempotencyKey: 'idem-1',
   ...patch
 })
 
@@ -47,9 +46,10 @@ const otpInicial = (patch: Partial<BookingOtpState> = {}): BookingOtpState => ({
   email: '',
   verified: false,
   verifiedPhone: '',
-  debugCode: '',
   expiresAt: '',
   error: '',
+  rateLimited: false,
+  debugCode: '',
   ...patch
 })
 
@@ -84,6 +84,7 @@ const props = (patch: Partial<Props> = {}): Props => ({
   requiresOtp: false,
   otpState: otpInicial(),
   isRequestingOtp: false,
+  otpResendSeconds: 0,
   isVerifyingOtp: false,
   onRequestOtp: jest.fn(),
   onVerifyOtp: jest.fn(),
@@ -111,7 +112,10 @@ const ConEstado: React.FC<{ base: Props }> = ({ base }) => {
   )
 }
 
-const RESERVAR = 'Reservar y pagar por WhatsApp'
+// Sin seña la reserva se confirma; con seña y coordinacion manual se paga por
+// WhatsApp (QA movil 2026-10-08: decia "pagar por WhatsApp" sin seña).
+const RESERVAR = 'Confirmar reserva'
+const RESERVAR_CON_SENA = 'Reservar y pagar la seña por WhatsApp'
 const PAGAR_MP = 'Pagar seña con Mercado Pago'
 const aceptarTerminos = () => fireEvent.click(screen.getByRole('checkbox'))
 const botonReservar = () => screen.getByRole('button', { name: RESERVAR })
@@ -129,8 +133,10 @@ describe('BookingStepConfirmation', () => {
     it('muestra fecha y hora del turno elegido y los campos del cliente', () => {
       render(<BookingStepConfirmation {...props()} />)
 
-      expect(screen.getByText('Tus datos y confirmacion')).toBeInTheDocument()
-      expect(screen.getByText('2026-09-25')).toBeInTheDocument()
+      expect(screen.getByText('Tus datos y confirmación')).toBeInTheDocument()
+      // 2026-10-02, QA en navegador: el resumen mostraba la fecha ISO.
+      expect(screen.getByText('25/09/2026')).toBeInTheDocument()
+      expect(screen.queryByText('2026-09-25')).not.toBeInTheDocument()
       expect(screen.getByText('09:00 hs')).toBeInTheDocument()
       expect(screen.getByPlaceholderText('Ej: Juan Perez')).toBeInTheDocument()
       expect(screen.getByPlaceholderText('PREFIJO + NUM')).toBeInTheDocument()
@@ -149,6 +155,50 @@ describe('BookingStepConfirmation', () => {
         />
       )
       expect(botonReservar()).not.toBeDisabled()
+    })
+
+    // 2026-10-02, QA en navegador (S\05): con el telefono "123" el boton
+    // quedaba habilitado, el backend respondia 422 en client_phone y la
+    // pantalla decia "El horario podria estar ocupado".
+    it('un telefono con menos de 6 digitos bloquea la reserva y lo dice junto al campo', () => {
+      render(
+        <BookingStepConfirmation
+          {...props({
+            bookingState: estado({ client: cliente({ name: 'Lucia', phone: '123' }) })
+          })}
+        />
+      )
+      aceptarTerminos()
+
+      expect(botonReservar()).toBeDisabled()
+      expect(screen.getByText(/al menos 6 dígitos/)).toBeInTheDocument()
+    })
+
+    it('un 422 en client_phone dice que revise el telefono, no que el horario esta ocupado', async () => {
+      const onConfirm = jest.fn().mockRejectedValue(
+        new ValidationError(
+          'client_phone: Value error, El teléfono debe tener al menos 6 digitos',
+          {
+            errorCode: 'VALIDATION_ERROR',
+            statusCode: 422,
+            detail: ['client_phone: Value error, El teléfono debe tener al menos 6 digitos']
+          }
+        )
+      )
+      render(
+        <BookingStepConfirmation
+          {...props({
+            onConfirm,
+            bookingState: estado({ client: cliente({ name: 'Lucia', phone: '1155550101' }) })
+          })}
+        />
+      )
+      aceptarTerminos()
+      fireEvent.click(botonReservar())
+
+      const aviso = (await screen.findByText(/Revisá el teléfono/)).closest('[role="alert"]')
+      expect(aviso).toHaveTextContent(/al menos 6 dígitos/)
+      expect(aviso).not.toHaveTextContent(/ocupado/)
     })
 
     it('un campo personalizado obligatorio vacio bloquea la reserva', () => {
@@ -179,7 +229,48 @@ describe('BookingStepConfirmation', () => {
   })
 
   describe('vista previa de la seña', () => {
+    const servicioConSena = (deposit_mode: 'optional' | 'required') =>
+      mockServices.mockReturnValue({
+        data: [{ public_id: 'svc-1', deposit_mode, deposit_type: 'percent', deposit_amount: 30 }],
+        isLoading: false
+      })
+    const previewConSena = () =>
+      mockDepositPreview.mockReturnValue({
+        isLoading: false,
+        data: {
+          amount: 1500,
+          base_amount: 1500,
+          extra_percent: 0,
+          reasons: [],
+          price: 5000,
+          payments_enabled: true,
+          online_payment_mandatory: false
+        }
+      })
+
+    // Revision de la PR #129: una seña OPCIONAL reservada sin Mercado Pago no
+    // genera cobro (deposit_channels.resolve_deposit_channel devuelve None),
+    // y el boton igual decia "pagar la seña por WhatsApp".
+    it('con seña opcional el boton manual confirma la reserva, no pide pagar por WhatsApp', () => {
+      servicioConSena('optional')
+      previewConSena()
+      render(<BookingStepConfirmation {...props({ paymentsEnabled: true })} />)
+
+      expect(screen.getByRole('button', { name: RESERVAR })).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: RESERVAR_CON_SENA })).not.toBeInTheDocument()
+      expect(screen.getByRole('button', { name: PAGAR_MP })).toBeInTheDocument()
+    })
+
+    it('con seña opcional inferida del servicio tampoco pide pagar por WhatsApp', () => {
+      servicioConSena('optional')
+      render(<BookingStepConfirmation {...props({ paymentsEnabled: false })} />)
+
+      expect(screen.getByRole('button', { name: RESERVAR })).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: RESERVAR_CON_SENA })).not.toBeInTheDocument()
+    })
+
     it('muestra la seña que calcula el backend y ofrece pagarla online', () => {
+      servicioConSena('required')
       mockDepositPreview.mockReturnValue({
         isLoading: false,
         data: {
@@ -196,7 +287,7 @@ describe('BookingStepConfirmation', () => {
 
       expect(screen.getByTestId('deposit-preview')).toHaveTextContent(/1\.500/)
       expect(screen.getByRole('button', { name: PAGAR_MP })).toBeInTheDocument()
-      expect(botonReservar()).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: RESERVAR_CON_SENA })).toBeInTheDocument()
     })
 
     it('con pago online obligatorio no ofrece coordinar por WhatsApp', () => {
@@ -215,6 +306,7 @@ describe('BookingStepConfirmation', () => {
       render(<BookingStepConfirmation {...props({ paymentsEnabled: true })} />)
 
       expect(screen.getByRole('button', { name: PAGAR_MP })).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: RESERVAR_CON_SENA })).not.toBeInTheDocument()
       expect(screen.queryByRole('button', { name: RESERVAR })).not.toBeInTheDocument()
     })
 
@@ -222,6 +314,44 @@ describe('BookingStepConfirmation', () => {
       render(<BookingStepConfirmation {...props({ paymentsEnabled: true })} />)
 
       expect(screen.queryByTestId('deposit-preview')).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: PAGAR_MP })).not.toBeInTheDocument()
+    })
+
+    it('sin seña el boton confirma la reserva, no habla de pagar', () => {
+      mockDepositPreview.mockReturnValue({
+        isLoading: false,
+        data: {
+          amount: 0,
+          base_amount: 0,
+          extra_percent: 0,
+          reasons: [],
+          price: 5000,
+          payments_enabled: false,
+          online_payment_mandatory: false
+        }
+      })
+      render(<BookingStepConfirmation {...props()} />)
+
+      expect(screen.getByRole('button', { name: RESERVAR })).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /pagar/i })).not.toBeInTheDocument()
+    })
+
+    it('con seña del servicio y cobros apagados, se paga por WhatsApp', () => {
+      // Sin vista previa todavia: se infiere del servicio.
+      mockServices.mockReturnValue({
+        data: [
+          {
+            public_id: 'svc-1',
+            deposit_mode: 'required',
+            deposit_type: 'percent',
+            deposit_amount: 30
+          }
+        ],
+        isLoading: false
+      })
+      render(<BookingStepConfirmation {...props({ paymentsEnabled: false })} />)
+
+      expect(screen.getByRole('button', { name: RESERVAR_CON_SENA })).toBeInTheDocument()
       expect(screen.queryByRole('button', { name: PAGAR_MP })).not.toBeInTheDocument()
     })
 
@@ -246,36 +376,69 @@ describe('BookingStepConfirmation', () => {
       })
     })
 
-    it('con un telefono a medio tipear consulta la seña sin telefono', () => {
+    describe('con un telefono a medio tipear', () => {
       // F11a-05 (2026-09-24): cada tecla cambiaba la queryKey y con menos de 6
       // caracteres el backend responde 422 (client_phone min_length=6), con
       // reintento y paso por el manejador global de errores.
-      const { rerender } = render(
-        <BookingStepConfirmation
-          {...props({ bookingState: estado({ client: cliente({ phone: '11555' }) }) })}
-        />
-      )
-      expect(mockDepositPreview).toHaveBeenLastCalledWith(
-        expect.objectContaining({ clientPhone: undefined })
-      )
+      // F4-06 (2026-09-30): aun dentro del rango habia una request por tecla
+      // desde el sexto caracter; el telefono viaja con 8 digitos o mas y
+      // despues de 400 ms sin tipear.
+      beforeEach(() => jest.useFakeTimers())
+      afterEach(() => jest.useRealTimers())
 
-      rerender(
+      const conTelefono = (phone: string) => (
         <BookingStepConfirmation
-          {...props({ bookingState: estado({ client: cliente({ phone: '1'.repeat(31) }) }) })}
+          {...props({ bookingState: estado({ client: cliente({ phone }) }) })}
         />
       )
-      expect(mockDepositPreview).toHaveBeenLastCalledWith(
-        expect.objectContaining({ clientPhone: undefined })
-      )
+      const ultimoTelefono = () => mockDepositPreview.mock.lastCall?.[0]?.clientPhone
 
-      rerender(
-        <BookingStepConfirmation
-          {...props({ bookingState: estado({ client: cliente({ phone: ' 115555 ' }) }) })}
-        />
-      )
-      expect(mockDepositPreview).toHaveBeenLastCalledWith(
-        expect.objectContaining({ clientPhone: '115555' })
-      )
+      it('con menos de 8 digitos o mas de 30 caracteres consulta la seña sin telefono', () => {
+        const { rerender } = render(conTelefono('11555'))
+        expect(ultimoTelefono()).toBeUndefined()
+
+        // 6 digitos: antes viajaba, ahora no.
+        rerender(conTelefono(' 115555 '))
+        act(() => {
+          jest.advanceTimersByTime(400)
+        })
+        expect(ultimoTelefono()).toBeUndefined()
+
+        rerender(conTelefono('1155555'))
+        act(() => {
+          jest.advanceTimersByTime(400)
+        })
+        expect(ultimoTelefono()).toBeUndefined()
+
+        rerender(conTelefono('1'.repeat(31)))
+        act(() => {
+          jest.advanceTimersByTime(400)
+        })
+        expect(ultimoTelefono()).toBeUndefined()
+      })
+
+      it('con 8 digitos o mas manda el telefono despues de 400 ms sin tipear', () => {
+        const { rerender } = render(conTelefono('115'))
+
+        rerender(conTelefono(' 11555501 '))
+        expect(ultimoTelefono()).toBeUndefined()
+        act(() => {
+          jest.advanceTimersByTime(399)
+        })
+        expect(ultimoTelefono()).toBeUndefined()
+        act(() => {
+          jest.advanceTimersByTime(1)
+        })
+        expect(ultimoTelefono()).toBe('11555501')
+
+        // Una tecla mas reinicia la espera: sigue el telefono anterior.
+        rerender(conTelefono('115555010'))
+        expect(ultimoTelefono()).toBe('11555501')
+        act(() => {
+          jest.advanceTimersByTime(400)
+        })
+        expect(ultimoTelefono()).toBe('115555010')
+      })
     })
   })
 
@@ -308,7 +471,7 @@ describe('BookingStepConfirmation', () => {
 
     it('un codigo rechazado muestra el motivo y no queda aplicado', async () => {
       mockPreviewPromotion.mockRejectedValue(
-        new ValidationError('El codigo vencio', { statusCode: 400 })
+        new ValidationError('El código vencio', { statusCode: 400 })
       )
       const onPromotionCodeChange = jest.fn()
       render(<BookingStepConfirmation {...props({ onPromotionCodeChange })} />)
@@ -318,7 +481,7 @@ describe('BookingStepConfirmation', () => {
       })
       fireEvent.click(screen.getByRole('button', { name: 'Aplicar' }))
 
-      await waitFor(() => expect(screen.getByText('El codigo vencio')).toBeInTheDocument())
+      await waitFor(() => expect(screen.getByText('El código vencio')).toBeInTheDocument())
       expect(onPromotionCodeChange).toHaveBeenLastCalledWith('')
     })
 
@@ -371,9 +534,9 @@ describe('BookingStepConfirmation', () => {
       )
 
       expect(
-        screen.getByText('Completa tu telefono para verificarlo antes de confirmar.')
+        screen.getByText('Completá tu teléfono para verificarlo antes de confirmar.')
       ).toBeInTheDocument()
-      expect(screen.queryByText('Verificamos tu telefono')).not.toBeInTheDocument()
+      expect(screen.queryByText('Verificamos tu teléfono')).not.toBeInTheDocument()
     })
 
     it('con telefono completo muestra el pedido del codigo por email', () => {
@@ -389,9 +552,9 @@ describe('BookingStepConfirmation', () => {
         />
       )
 
-      expect(screen.getByText('Verificamos tu telefono')).toBeInTheDocument()
-      expect(screen.getByRole('button', { name: 'Verificar codigo' })).toBeDisabled()
-      fireEvent.click(screen.getByRole('button', { name: 'Enviar codigo' }))
+      expect(screen.getByText('Verificamos tu teléfono')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Verificar código' })).toBeDisabled()
+      fireEvent.click(screen.getByRole('button', { name: 'Enviar código' }))
       expect(onRequestOtp).toHaveBeenCalledTimes(1)
     })
 
@@ -421,8 +584,98 @@ describe('BookingStepConfirmation', () => {
       )
       aceptarTerminos()
 
-      expect(screen.getByText('Telefono validado correctamente')).toBeInTheDocument()
+      expect(screen.getByText('Teléfono validado correctamente')).toBeInTheDocument()
       expect(botonReservar()).not.toBeDisabled()
+    })
+  })
+
+  describe('en el celular (F4-11)', () => {
+    // 2026-09-30, F4-11: en el celular el codigo abria el teclado de letras,
+    // no se ofrecia desde el mail y aceptaba cualquier largo; nombre, email y
+    // telefono no se autocompletaban.
+    it('nombre, email y telefono se autocompletan', () => {
+      render(<BookingStepConfirmation {...props()} />)
+
+      expect(screen.getByPlaceholderText('Ej: Juan Perez')).toHaveAttribute('autocomplete', 'name')
+      expect(screen.getByPlaceholderText('juan@email.com')).toHaveAttribute('autocomplete', 'email')
+      expect(screen.getByPlaceholderText('PREFIJO + NUM')).toHaveAttribute('autocomplete', 'tel')
+    })
+
+    it('el codigo usa teclado numerico, autocompletado de codigo y 6 digitos', () => {
+      render(
+        <BookingStepConfirmation
+          {...props({
+            requiresOtp: true,
+            bookingState: estado({ client: cliente({ phone: '1155550101' }) })
+          })}
+        />
+      )
+
+      const codigo = screen.getByPlaceholderText('Código que te llegó por email')
+      expect(codigo).toHaveAttribute('inputmode', 'numeric')
+      expect(codigo).toHaveAttribute('autocomplete', 'one-time-code')
+      expect(codigo).toHaveAttribute('maxlength', '6')
+      expect(screen.getByLabelText('Email para el código')).toHaveAttribute('autocomplete', 'email')
+    })
+
+    it('el codigo descarta lo que no es un digito', () => {
+      // 2026-09-30, F4-11: inputMode numeric no impide tipear letras o guiones
+      // en un teclado fisico y el backend rechazaba el codigo como invalido.
+      const onOtpCodeChange = jest.fn()
+      render(
+        <BookingStepConfirmation
+          {...props({
+            requiresOtp: true,
+            onOtpCodeChange,
+            bookingState: estado({ client: cliente({ phone: '1155550101' }) })
+          })}
+        />
+      )
+
+      fireEvent.change(screen.getByPlaceholderText('Código que te llegó por email'), {
+        target: { value: '12a-3 4' }
+      })
+
+      expect(onOtpCodeChange).toHaveBeenLastCalledWith('1234')
+    })
+
+    it('durante la espera el boton muestra los segundos y no pide', () => {
+      const onRequestOtp = jest.fn()
+      render(
+        <BookingStepConfirmation
+          {...props({
+            requiresOtp: true,
+            onRequestOtp,
+            otpResendSeconds: 42,
+            otpState: otpInicial({ email: 'lucia@example.com' }),
+            bookingState: estado({ client: cliente({ phone: '1155550101' }) })
+          })}
+        />
+      )
+
+      const boton = screen.getByRole('button', { name: 'Reenviar en 42 s' })
+      expect(boton).toBeDisabled()
+      fireEvent.click(boton)
+      expect(onRequestOtp).not.toHaveBeenCalled()
+    })
+
+    it('con OTP_RATE_LIMITED no deja pedir otro codigo y muestra el aviso', () => {
+      // 2026-09-30, F4-11: agotados los codigos del telefono, el boton seguia
+      // habilitado y cada toque volvia a chocar contra el limite.
+      const aviso =
+        'Pediste demasiados códigos para este teléfono. Esperá un rato antes de pedir otro.'
+      render(
+        <BookingStepConfirmation
+          {...props({
+            requiresOtp: true,
+            otpState: otpInicial({ email: 'lucia@example.com', rateLimited: true, error: aviso }),
+            bookingState: estado({ client: cliente({ phone: '1155550101' }) })
+          })}
+        />
+      )
+
+      expect(screen.getByRole('button', { name: 'Enviar código' })).toBeDisabled()
+      expect(screen.getByRole('alert')).toHaveTextContent(aviso)
     })
   })
 
@@ -455,18 +708,26 @@ describe('BookingStepConfirmation', () => {
       await waitFor(() => expect(screen.getByText('Reserva Registrada')).toBeInTheDocument())
     })
 
+    // Reservar por WhatsApp una seña obligatoria deja el pago pendiente y sin
+    // link de Mercado Pago: se paga por WhatsApp (decision de Mateo, 2026-10-03).
     it('una reserva con pago pendiente se anuncia como pendiente de pago', async () => {
       const base = completo()
-      base.onConfirm = jest
-        .fn()
-        .mockResolvedValue(confirmacion({ status: 'pending_payment', payment_required: true }))
+      base.onConfirm = jest.fn().mockResolvedValue(
+        confirmacion({
+          status: 'pending_payment',
+          payment_required: true,
+          deposit_channel: 'whatsapp'
+        })
+      )
       render(<BookingStepConfirmation {...base} />)
       aceptarTerminos()
       fireEvent.click(botonReservar())
 
       await waitFor(() => expect(screen.getByText('Reserva Pendiente de Pago')).toBeInTheDocument())
       expect(
-        screen.getByText('Tu turno se confirma cuando el cobro quede aprobado.')
+        screen.getByText(
+          'Pagá la seña por WhatsApp: tu turno se confirma cuando Tienda reciba el pago.'
+        )
       ).toBeInTheDocument()
     })
 
@@ -483,6 +744,45 @@ describe('BookingStepConfirmation', () => {
       expect(
         screen.getByText(/El horario podria haberse ocupado mientras completabas el formulario/)
       ).toBeInTheDocument()
+    })
+
+    it('un 409 DEPOSIT_CHANNEL_UNAVAILABLE muestra el aviso neutro y no culpa al horario', async () => {
+      // Revision 4R de la PR #108: la seña es obligatoria y el negocio no
+      // tiene con que cobrarla. Sugerir "elegí otro horario" mandaba al
+      // cliente a probar horarios que iban a rebotar igual.
+      const aviso =
+        'Este negocio no puede cobrar la seña de este servicio en este momento. Comunicate con el negocio para reservar.'
+      const base = completo()
+      base.onConfirm = jest.fn().mockRejectedValue(
+        new ConflictError(aviso, {
+          errorCode: 'DEPOSIT_CHANNEL_UNAVAILABLE',
+          statusCode: 409
+        })
+      )
+      render(<BookingStepConfirmation {...base} />)
+      aceptarTerminos()
+      fireEvent.click(botonReservar())
+
+      await waitFor(() => expect(screen.getByText(aviso)).toBeInTheDocument())
+      expect(screen.queryByText(/El horario podria haberse ocupado/)).not.toBeInTheDocument()
+    })
+
+    it('un 400 BOOKING_NOTICE_REQUIRED muestra el texto del servidor con las horas de anticipacion', async () => {
+      // FF-06 (2026-10-01): un texto neutro global para BOOKING_NOTICE_REQUIRED
+      // pisaba el del servidor y el cliente dejaba de ver cuantas horas de
+      // anticipacion pide la tienda.
+      const aviso = 'Este local requiere 24h de anticipación para agendar/reprogramar.'
+      const base = completo()
+      base.onConfirm = jest
+        .fn()
+        .mockRejectedValue(
+          new ValidationError(aviso, { errorCode: 'BOOKING_NOTICE_REQUIRED', statusCode: 400 })
+        )
+      render(<BookingStepConfirmation {...base} />)
+      aceptarTerminos()
+      fireEvent.click(botonReservar())
+
+      await waitFor(() => expect(screen.getByText(aviso)).toBeInTheDocument())
     })
 
     it('un doble click envia la reserva una sola vez', async () => {

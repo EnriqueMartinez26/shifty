@@ -8,6 +8,7 @@ import {
   NetworkError,
   PaymentRequiredError,
   RateLimitError,
+  RequestTimeoutError,
   ServiceUnavailableError,
   type ApplicationError
 } from '@shared/errors'
@@ -103,7 +104,7 @@ export class ForbiddenErrorHandler extends ErrorHandler {
       showToast('Esta función no está habilitada para tu negocio.', 'info')
       return
     }
-    showToast('No tienes permisos suficientes para realizar esta acción.', 'error')
+    showToast('No tenés permisos suficientes para realizar esta acción.', 'error')
   }
 }
 
@@ -127,7 +128,7 @@ export class InternalServerErrorHandler extends ErrorHandler {
 
   public async handle(error: InternalServerError): Promise<void> {
     console.error('[SERVER CRITICAL ERROR]', error.toJSON())
-    showToast('Error interno del servidor. Por favor, intenta de nuevo más tarde.', 'error')
+    showToast('Error interno del servidor. Probá de nuevo más tarde.', 'error')
   }
 }
 
@@ -137,17 +138,21 @@ export class NetworkErrorHandler extends ErrorHandler {
   }
 
   public async handle(_error: NetworkError): Promise<void> {
-    showToast('Sin conexión a Internet. Verifica tu conectividad.', 'warning')
+    showToast('Sin conexión a Internet. Revisá tu conexión.', 'warning')
   }
 }
 
-/** 402, 429 y 502/503: texto de la tabla de codigos o uno neutro, nunca el del servidor. */
+/**
+ * 402, 429, 502/503 y la lectura vencida (D-20260930-02): texto de la tabla de
+ * codigos o uno neutro, nunca el del servidor.
+ */
 export class TransientErrorHandler extends ErrorHandler {
   public canHandle(error: unknown): boolean {
     return (
       error instanceof PaymentRequiredError ||
       error instanceof RateLimitError ||
-      error instanceof ServiceUnavailableError
+      error instanceof ServiceUnavailableError ||
+      error instanceof RequestTimeoutError
     )
   }
 

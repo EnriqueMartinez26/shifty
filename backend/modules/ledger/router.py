@@ -5,8 +5,9 @@ from typing import Annotated, Any
 
 from fastapi import Depends, Path, Query
 from core.router import CanonicalAPIRouter
-from sqlalchemy import Row, and_, func, select
+from sqlalchemy import Exists, Row, and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from core.database import get_db
 from core.exceptions import (
@@ -123,6 +124,38 @@ def _client_display_name(
         if user.phone:
             return _client_phone(user, full_contact=full_contact) or fallback_id
     return fallback_id
+
+
+def _ya_revertido(store_id: str) -> Exists:
+    """``reversed`` de cada fila de la pagina, en la misma consulta.
+
+    Un EXISTS correlacionado sobre ``uq_customer_ledger_reverses_id``: sin un
+    SELECT por movimiento (regla 12). Lleva su propio ``store_id``, como el
+    resto del fiado: la RLS es la garantia y el filtro la defensa en
+    profundidad (§2), asi que una fila de otra tienda nunca lo marca.
+    """
+    reversa = aliased(CustomerLedger)
+    return (
+        select(reversa.id)
+        .where(reversa.reverses_id == CustomerLedger.id, reversa.store_id == store_id)
+        .exists()
+    )
+
+
+def _movement_response(
+    movement: CustomerLedger, *, reversed: bool
+) -> LedgerMovementResponse:
+    return LedgerMovementResponse(
+        public_id=movement.id,
+        movement_type=movement.movement_type,
+        amount=movement.amount,
+        balance_after=movement.balance_after,
+        appointment_id=movement.appointment_id,
+        notes=movement.notes,
+        created_at=movement.created_at,
+        reverses_id=movement.reverses_id,
+        reversed=reversed,
+    )
 
 
 @router.get("/summary", response_model=LedgerSummaryResponse)
@@ -308,7 +341,7 @@ async def get_customer_ledger(
         CustomerLedger.client_id == client_id,
     )
     pagina = (
-        select(CustomerLedger)
+        select(CustomerLedger, _ya_revertido(user.store_id))
         .where(*del_cliente)
         # Mas nuevo primero: con un tope, la pagina util es la reciente.
         # El id desempata para que dos filas del mismo instante no se
@@ -321,7 +354,7 @@ async def get_customer_ledger(
         )
     # Una fila de mas dice si hay pagina siguiente sin otra consulta.
     result = await db.execute(pagina.limit(limit + 1).offset(offset))
-    movements = list(result.scalars().all())
+    movements = [(item, bool(revertido)) for item, revertido in result.all()]
     has_more = len(movements) > limit
     movements = movements[:limit]
     # El saldo y el total salen de SQL (regla 11): antes el saldo era
@@ -338,21 +371,13 @@ async def get_customer_ledger(
         balance=balance,
         total=int(total or 0),
         next_cursor=(
-            encode_cursor(movements[-1].created_at, movements[-1].id)
+            encode_cursor(movements[-1][0].created_at, movements[-1][0].id)
             if has_more
             else None
         ),
         movements=[
-            LedgerMovementResponse(
-                public_id=item.id,
-                movement_type=item.movement_type,
-                amount=item.amount,
-                balance_after=item.balance_after,
-                appointment_id=item.appointment_id,
-                notes=item.notes,
-                created_at=item.created_at,
-            )
-            for item in movements
+            _movement_response(item, reversed=revertido)
+            for item, revertido in movements
         ],
     )
 
@@ -375,15 +400,8 @@ async def add_customer_ledger_movement(
         appointment_id=data.appointment_id,
         notes=data.notes,
     )
-    return LedgerMovementResponse(
-        public_id=movement.id,
-        movement_type=movement.movement_type,
-        amount=movement.amount,
-        balance_after=movement.balance_after,
-        appointment_id=movement.appointment_id,
-        notes=movement.notes,
-        created_at=movement.created_at,
-    )
+    # Recien cargado: nadie lo revirtio todavia.
+    return _movement_response(movement, reversed=False)
 
 
 @router.post(
@@ -411,12 +429,5 @@ async def reverse_customer_ledger_movement(
         client_id=client_id,
         movement_id=movement_id,
     )
-    return LedgerMovementResponse(
-        public_id=reversal.id,
-        movement_type=reversal.movement_type,
-        amount=reversal.amount,
-        balance_after=reversal.balance_after,
-        appointment_id=reversal.appointment_id,
-        notes=reversal.notes,
-        created_at=reversal.created_at,
-    )
+    # Una reversa no se revierte (422): nunca figura como revertida.
+    return _movement_response(reversal, reversed=False)

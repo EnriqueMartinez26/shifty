@@ -1,15 +1,22 @@
 import React from 'react'
 
 import { CalendarCheck, Check, Clock3, MapPin, Phone, Store, X } from 'lucide-react'
-import { useParams, useSearchParams } from 'react-router'
+import { useNavigate, useParams, useSearchParams } from 'react-router'
 
 import { BookingWizardContainer } from '@presentation/components/organisms/booking/BookingWizardContainer'
-import { resolveBookingPreselect } from '@presentation/components/organisms/booking/deepLink'
+import {
+  initialStepFor,
+  resolveBookingPreselect
+} from '@presentation/components/organisms/booking/deepLink'
+import { useBookingStepParam } from '@presentation/hooks/useBookingStepParam'
 
-import { buildWaMeUrl } from '@shared/utils/clientWhatsApp'
+import { buildWaMeUrl } from '@shared/utils/whatsAppPhone'
 
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
 import LegalFooterLinks from '../components/navigation/LegalFooterLinks'
+import { NotFoundScreen } from '../components/organisms/NotFoundScreen'
+import { isStoreMissing, StoreLoadError } from '../components/organisms/StoreLoadError'
+import { useDocumentTitle } from '../hooks/useDocumentTitle'
 import {
   usePublicPaymentStatus,
   usePublicServices,
@@ -17,11 +24,32 @@ import {
   usePublicStore
 } from '../hooks/usePublic'
 
+/**
+ * WhatsApp de la tienda: texto libre que carga el dueno. Si no se puede leer
+ * como un numero confiable se muestra tal cual, sin link: un wa.me roto
+ * mandaba la consulta a otro pais.
+ */
+const StoreWhatsAppContact: React.FC<{ phone: string; storeName: string }> = ({
+  phone,
+  storeName
+}) => {
+  const href = buildWaMeUrl(phone, `Hola ${storeName}! Quiero consultar por un turno.`)
+  if (!href) return <span>{phone}</span>
+  return (
+    <a href={href} target="_blank" rel="noreferrer">
+      {phone}
+    </a>
+  )
+}
+
 const PublicBooking: React.FC = () => {
   const { slug = '' } = useParams()
   const [searchParams] = useSearchParams()
+  const navigate = useNavigate()
   const paymentId = searchParams.get('payment_id') || undefined
-  const { data: store, isLoading, isError } = usePublicStore(slug)
+  const storeQuery = usePublicStore(slug)
+  const { data: store, isLoading, isError } = storeQuery
+  useDocumentTitle(store ? `${store.name} · Reservá tu turno` : null)
   const paymentStatus = usePublicPaymentStatus(store?.public_id, paymentId)
   // Deep-link "reserva de nuevo" (?service=&staff=): se validan los ids contra
   // las listas publicas antes de montar el wizard. Sin parametros no se
@@ -40,6 +68,10 @@ const PublicBooking: React.FC = () => {
     Boolean(wanted.service) &&
     (servicesQuery.isLoading || (Boolean(wanted.staff) && staffQuery.isLoading))
   const preselect = resolveBookingPreselect(wanted, servicesQuery.data, staffQuery.data)
+  // El paso del wizard vive en ?step= (F4-15); sin el, se arranca en el
+  // horario si el deep-link trae un servicio valido. payment_id, service,
+  // staff y date no se tocan al escribirlo.
+  const bookingStep = useBookingStepParam(initialStepFor(preselect))
 
   if (isLoading || resolvingDeepLink) {
     return (
@@ -52,14 +84,21 @@ const PublicBooking: React.FC = () => {
     )
   }
 
-  if (isError || !store) {
+  // 2026-10-02: cualquier falla decia "Negocio no encontrado", tambien sin red
+  // o con un 5xx. Solo el 404 es una tienda que no existe. Con la tienda ya
+  // cargada, un refetch fallido no tapa la pagina.
+  if (!store && isError && !isStoreMissing(storeQuery.error)) {
     return (
-      <div
-        className="min-h-screen grid place-items-center text-sm font-black uppercase tracking-widest"
-        style={{ background: colors2000s.bg.primary, color: colors2000s.status.danger.light }}
-      >
-        Negocio no encontrado
-      </div>
+      <StoreLoadError onRetry={() => void storeQuery.refetch()} retrying={storeQuery.isFetching} />
+    )
+  }
+
+  if (!store) {
+    return (
+      <NotFoundScreen
+        title="Negocio no encontrado"
+        subtitle="No encontramos una tienda en esta dirección. Revisá el link que te compartieron."
+      />
     )
   }
 
@@ -99,8 +138,26 @@ const PublicBooking: React.FC = () => {
               ? 'Mercado Pago acreditó la seña y tu turno quedó reservado.'
               : failed
                 ? 'El turno no fue confirmado. Podés volver a intentarlo desde la tienda.'
-                : 'No cierres esta pantalla. La confirmación depende del webhook verificado del backend.'}
+                : paymentStatus.pollingStopped
+                  ? 'Todavía no recibimos la confirmación del pago. Si ya pagaste, tu turno se confirma cuando Mercado Pago avise; podés volver a consultar o hablar con la tienda.'
+                  : 'No cierres esta pantalla. El turno se confirma cuando Mercado Pago nos avisa del pago.'}
           </p>
+          {paymentStatus.pollingStopped && (
+            // Pasados 30 min el sondeo corta (F4-05); consultar de nuevo es a
+            // pedido. Solo relee el estado: confirmar es del webhook (regla 7).
+            <button
+              type="button"
+              onClick={() => void paymentStatus.refetch()}
+              disabled={paymentStatus.isFetching}
+              className="w-full py-4 rounded-xl font-black uppercase tracking-widest text-xs border disabled:opacity-60"
+              style={{
+                borderColor: colors2000s.border.default,
+                color: colors2000s.text.primary
+              }}
+            >
+              Volver a consultar
+            </button>
+          )}
           {paymentStatus.isError && (
             <p
               role="alert"
@@ -112,7 +169,9 @@ const PublicBooking: React.FC = () => {
           )}
           <button
             type="button"
-            onClick={() => window.location.assign(`/booking/${slug}`)}
+            // Sin payment_id en la URL se monta un wizard nuevo (estado y clave de
+            // idempotencia nuevos) sin recargar la SPA (F11b-20).
+            onClick={() => void navigate(`/booking/${slug}`)}
             className="w-full py-4 rounded-xl text-white font-black uppercase tracking-widest text-xs"
             style={buttonStyles2000s.selected}
           >
@@ -130,7 +189,7 @@ const PublicBooking: React.FC = () => {
       style={{ background: colors2000s.bg.primary }}
     >
       {/* Header Info */}
-      <div className="max-w-2xl mx-auto mb-8 text-center animate-in fade-in slide-in-from-top-4 duration-700">
+      <div className="max-w-2xl mx-auto mb-8 text-center duration-700">
         <div
           className="inline-flex items-center justify-center w-16 h-16 rounded-md text-white mb-4 transform -rotate-6 border"
           style={{
@@ -174,16 +233,7 @@ const PublicBooking: React.FC = () => {
           >
             <Phone size={14} className="text-orange-500 stroke-[2.5px]" />
             {store.whatsapp_number ? (
-              <a
-                href={buildWaMeUrl(
-                  store.whatsapp_number,
-                  `Hola ${store.name}! Quiero consultar por un turno.`
-                )}
-                target="_blank"
-                rel="noreferrer"
-              >
-                {store.whatsapp_number}
-              </a>
+              <StoreWhatsAppContact phone={store.whatsapp_number} storeName={store.name} />
             ) : (
               <span>Reserva por web disponible</span>
             )}
@@ -224,7 +274,12 @@ const PublicBooking: React.FC = () => {
       )}
 
       {/* The Wizard Component */}
-      <BookingWizardContainer store={store} preselect={preselect} />
+      <BookingWizardContainer
+        store={store}
+        preselect={preselect}
+        step={bookingStep.step}
+        onStepChange={bookingStep.changeStep}
+      />
 
       {/* Footer minimalista */}
       <div className="max-w-2xl mx-auto mt-12 text-center space-y-3">

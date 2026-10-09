@@ -155,10 +155,20 @@ Una instrucción en lenguaje natural no es una garantía.
   `PublicBookingService.ts`) e importan directo donde se consumen, p. ej.
   `presentation/hooks/useManagedDomainUsers.ts`.
 - `presentation/` separa contenedores (estado + hooks de react-query) de
-  componentes de render. Los errores suben como `ApplicationError` tipado
-  (`code`, `statusCode`, `isOperational`).
+  componentes de render. Es el destino, no el estado de todos: al
+  2026-09-30, 10 de los 39 `.tsx` (sin tests) de `components/` llaman
+  hooks de react-query (`ClientOtpGate`, `NewAppointmentModal`,
+  `StaffFormModal`, `ShareLinksPanel`, `NotificationsBell`,
+  `BookingWizardContainer`, `BookingStepService`, `BookingStepDateTime`,
+  `BookingStepConfirmation`, `WaitlistJoinForm`), incluido
+  `BookingWizardContainer`, que es un contenedor por función pero vive en
+  `organisms/booking/`. Un componente nuevo recibe datos y callbacks por
+  props; no suma llamadas a hooks de react-query. Los errores suben como
+  `ApplicationError` tipado (`code`, `statusCode`, `isOperational`).
 - Existen `molecules/` y `organisms/` pero no `atoms/`: la jerarquía
-  atómica está incompleta; no asumirla.
+  atómica está incompleta; no asumirla. Los primitivos del panel de
+  SuperAdmin viven en `presentation/pages/SuperAdminUi.tsx` (7 exports, 11
+  consumidores en `pages/superadmin/`), fuera de la jerarquía atómica.
 - Toda llamada a la API vive en `application/services` para que el test de
   contrato de rutas la vea.
 
@@ -180,25 +190,40 @@ Una instrucción en lenguaje natural no es una garantía.
    es `pending_payment` o un `Payment` en `pending` o `rejected` (MP deja
    reintentar sobre el mismo link), p. ej. el link que el panel genera sobre
    un confirmado (`LIVE_CHARGE_PAYMENT_STATUSES` en
-   `modules/payments/model.py`; en SQL, `live_charge_of` en
+   `modules/payments/model.py`; en SQL, `live_charge_provider_of` en
    `modules/payments/repository.py`). El camino compartido que lo vence es
    `payments/service.py::expire_live_charge` (todos menos el job de
-   retenciones, que vence por el grafo sin publicar; ver abajo): pago a `expired` por la
-   entidad y `payment.preference.expire` al outbox en la misma transacción
-   (salvo un link placeholder, que no existe en MP), con el turno lockeado
-   antes que el pago; el link de MP lo anula después el outbox. Todos los
-   caminos que sueltan un turno (propuesta por Mateo, adoptada por el dueño el
+   retenciones, que vence por el grafo sin publicar; ver abajo): pago a
+   `expired` por la entidad y `payment.preference.expire` al outbox en la
+   misma transacción (salvo un link placeholder, que no existe en MP), con el
+   turno lockeado antes que el pago; el link de MP lo anula después el
+   outbox. Un cobro de `provider = "manual"` (la seña por WhatsApp, ver
+   "Una seña obligatoria se cobra por Mercado Pago o por WhatsApp" más abajo)
+   no tiene link ni se le consulta nada a MP: en todos estos caminos vence
+   directo por el grafo, sin `payment.preference.expire`. Todos los caminos
+   que sueltan un turno (propuesta por Mateo, adoptada por el dueño el
    2026-09-25, D-20260925-02, y revisión de perf/f4-pay):
    - cancelar desde el panel (`AppointmentService.cancel`, cualquier
      personal; un turno ya cancelado es 409 `APPOINTMENT_ALREADY_CANCELLED`;
      cancelar no toca un pago acreditado);
    - reprogramar desde el panel (`reschedule`) un turno con link del panel:
      vence el link y el turno nuevo nace sin cobro. Un `pending_payment`
-     (seña REQUERIDA pendiente) no se reprograma: 409
+     (seña REQUERIDA pendiente, por MP o por WhatsApp) no se reprograma: 409
      `DEPOSIT_PENDING_RESCHEDULE_DENIED` bajo el lock del turno y antes de
      tocar nada, la seña nunca se pierde; se cobra y después se mueve, o se
      cancela (opción A, propuesta por Mateo, adoptada por el dueño el 2026-09-25,
-     D-20260925-03; `guards.reject_reschedule_with_pending_deposit`);
+     D-20260925-03; `guards.reject_reschedule_with_pending_deposit`). Por
+     WhatsApp vale igual (elección técnica del coordinador, 2026-10-03): el
+     personal registra el pago en Cobros y después lo mueve; sin pagar la
+     mueve el cliente (abajo). Tampoco se confirma con "Confirmar": `PATCH
+     /appointments/{id}/confirm` sobre un `pending_payment` con cobro vivo es
+     409 `DEPOSIT_PENDING_CONFIRM_DENIED` (ningún turno confirmado queda con
+     un cobro vivo; la seña se registra con `manual-confirm`). Un turno con
+     un resto vivo (D-20261008-01) tampoco se reprograma: 409
+     `REMAINDER_RESCHEDULE_DENIED` bajo el lock del turno y antes de tocar
+     nada (`guards.reject_reschedule_with_remainder`); se revierte el resto o
+     se cancela, y para el cliente cuenta como pagado
+     (`payments/repository.py::paid_appointment_of`);
    - liberar (`release_pending`, solo admin);
    - cancelar por bloqueo (`AppointmentBlockService`: alta, cierre de la
      tienda y edición);
@@ -207,13 +232,31 @@ Una instrucción en lenguaje natural no es una garantía.
    - el job de retenciones vencidas (`payments/jobs.py`, toma los cobros de
      `LIVE_CHARGE_PAYMENT_STATUSES` y los vence por el grafo; sin publicar:
      el link se creó con `expiration_date_to` = la retención y ya venció).
+     Antes le pregunta a MP: un pago aprobado lo rescata; uno NO aprobado
+     vence aunque no pase la integridad (MP no cobró nada). Uno aprobado que
+     no pasa la integridad (regla 7) queda RETENIDO (`held`): ni se rescata
+     ni se vence, porque MP lo cobró y liberar el cupo perdería la reserva.
+     Espera a una persona, que lo suelta con `release_pending` (o lo
+     cancela) después de resolver el pago en MP; mientras tanto el job lo
+     vuelve a consultar en cada corrida. Un error inesperado al aplicar el
+     pago también lo retiene, hasta la corrida siguiente
+     (`_rescatar_o_retener`, `test_vencimiento_con_cobro_rechazado.py`).
    El cliente no lo cancela ni lo reprograma
    (`client_cancel_denial`/`client_reschedule_denial`, 409
-   `PAYMENT_APPOINTMENT_REQUIRES_RELEASE`), y un turno terminal no se
-   reprograma desde ningún lado (409 `APPOINTMENT_NOT_ACTIVE`). El link del
-   panel y la confirmación manual lockean el turno y rechazan uno soltado
-   (`cancelled`/`expired`, `RELEASED_APPOINTMENT_STATUSES`: 409
-   `APPOINTMENT_NOT_PAYABLE`); un `completed` o `absent` se sigue cobrando.
+   `PAYMENT_APPOINTMENT_REQUIRES_RELEASE`), salvo una seña por WhatsApp
+   pendiente (propuesta del coordinador, aceptada por Mateo, 2026-10-03): la
+   regla existe por la carrera con MP, y por WhatsApp no pasa plata por la
+   plataforma. Cancelar vence ese cobro por el grafo; reprogramar lo vence y
+   el turno nuevo nace `pending_payment` con un cobro `manual` del mismo
+   importe y snapshot, y el plazo recalculado contra el horario nuevo
+   (`payments/service.py::carry_manual_deposit`; el dueño recibe el aviso
+   con el plazo nuevo). Un turno terminal no se reprograma desde ningún lado
+   (409 `APPOINTMENT_NOT_ACTIVE`). El link del panel y la confirmación manual
+   lockean el turno y rechazan uno soltado (`RELEASED_APPOINTMENT_STATUSES`:
+   `cancelled` es 409 `APPOINTMENT_NOT_PAYABLE`; en la confirmación manual
+   un `expired` es 409 `APPOINTMENT_HOLD_EXPIRED`, que le dice al personal
+   que agende un turno nuevo y registre el pago ahí); un `completed` o
+   `absent` se sigue cobrando.
    Regenerar el link de un cobro `expired` sella un `preference_id` nuevo y
    lo reabre con `Payment.reopen_for_panel_link` (único llamador el link del
    panel, bajo el lock del turno; `ALLOWED_PAYMENT_TRANSITIONS` no tiene
@@ -227,7 +270,8 @@ Una instrucción en lenguaje natural no es una garantía.
    `test_turnos_terminales_no_reviven.py`,
    `test_link_del_panel_solo_turnos_vivos.py`,
    `test_confirmacion_manual_solo_turnos_vivos.py`,
-   `test_pg_cancelar_con_cobro_vivo.py`)
+   `test_pg_cancelar_con_cobro_vivo.py`, `test_sena_por_whatsapp_regla_3.py`,
+   `test_pg_cancelar_sena_por_whatsapp.py`)
 4. **Lock pesimista antes de cualquier transición o reserva.**
    `lock_staff_row` / `lock_by_public_id` (`SELECT ... FOR UPDATE`) antes
    de leer disponibilidad. Prohibido "verificar y luego actuar" sin lock.
@@ -249,7 +293,26 @@ Una instrucción en lenguaje natural no es una garantía.
    de idempotencia en otro lado.
 7. **Webhooks de MP**: HMAC + ventana de antigüedad + idempotencia por
    `event_id` + verificar collector y monto (`payments/router.py`,
-   `processing.py`); la integridad exige la `external_reference` del link
+   `processing.py`). Del cuerpo, la firma cubre solo `data.id`: a MP se le
+   consulta SOLO ese id, y el estado y todo lo que valida la integridad
+   salen SOLO de `GET /v1/payments/{id}`; sin respuesta de MP el evento
+   queda en el inbox sin aplicar. Un `approved` sin importe falla cerrado;
+   sin `collector_id` falla si la tienda tiene `oauth_user_id`, y en
+   producción una tienda sin `oauth_user_id` no acredita ningún aprobado
+   (por eso, en producción, el callback de OAuth no guarda un token sin
+   `user_id`). En producción un pago con `live_mode` distinto de `true` no
+   se aplica. Todo rechazo de integridad es un `PaymentRejectedForIntegrity`
+   con su código, y uno de un aprobado avisa a Sentry una vez por pago de MP
+   y motivo (`processing.alert_integrity_rejection`). El job de retenciones
+   vencidas aplica cada pago remoto en su savepoint (regla 3): un aprobado
+   que falla queda retenido y avisa; uno no aprobado vence; cualquier otro
+   error retiene el turno y avisa una vez por pago de MP y clase de error
+   (`alert_unexpected_payment_failure`). La corrida sigue con la página
+   siguiente (`EXPIRE_MAX_PAGES`) e invalida el caché después de cada
+   página (`test_webhook_sin_confiar_en_el_cuerpo.py`,
+   `test_vencimiento_con_cobro_rechazado.py`,
+   `test_oauth_sin_cuenta_en_produccion.py`, 2026-10-02). La integridad
+   exige la `external_reference` del link
    VIGENTE (`<turno>:<link_ref>` con `MERCADOPAGO_LINK_REF_ENABLED`, prendido
    por defecto; apagado, regenerar el link de un cobro vencido es 409; el pago
    de MP no trae `preference_id`). Los links que un cobro deja de usar quedan en
@@ -257,8 +320,22 @@ Una instrucción en lenguaje natural no es una garantía.
    avisarse tarde (webhook demorado, reentregado o perdido; con `binary_mode`
    no hay cupones pendientes) y la conciliacion lo busca 7 días: un `approved`
    de uno de ellos, por su importe, lo adopta un cobro no acreditado (el
-   vigente se vence) y cualquier otro pago en un link reemplazado avisa una
-   vez por pago de MP; los no aprobados se cierran como no-op. `processed_at` solo si se aplicó de verdad; el inbox
+   vigente se vence) y cualquier otro pago aprobado en un link reemplazado
+   avisa una vez por pago de MP. Sobre un cobro asentado (acreditado o
+   devuelto), un evento de OTRO pago de MP (un id distinto de
+   `external_payment_id`, cualquier pago de MP sobre un `manual_confirmed`,
+   un `approved` sobre un cobro devuelto sin id, o un pago que ya recibió el
+   aviso de duplicado) no se aplica, por el link vigente o por uno retirado:
+   un `approved` avisa "pago duplicado" una vez por pago de MP (`pago:<id>`),
+   y un `charged_back`, `in_mediation` o `refunded` avisa una vez por (pago
+   de MP, estado) (`reverso:<id>:<estado>`; el `refunded` de un duplicado ya
+   avisado no avisa); en los dos casos el webhook queda procesado
+   (`processing._evento_de_otro_pago`, `_es_evento_de_otro_pago`,
+   `_avisar_reverso_de_otro_pago`, `test_reversa_de_otro_pago_avisa.py`).
+   Los demás no aprobados se cierran como no-op. `processed_at` solo si se
+   aplicó de verdad o si quedó resuelto con su aviso (duplicado o reversa de
+   otro pago); un aprobado sobre un cobro abierto por un link desconocido o
+   con otro importe queda sin aplicar; el inbox
    reintenta hasta `WEBHOOK_INBOX_MAX_ATTEMPTS = 10`
    (`modules/payments/model.py`). Orden único de locks turno → pago: el
    webhook busca el cobro sin lock y lockea turno y después pago, como
@@ -302,7 +379,14 @@ Una instrucción en lenguaje natural no es una garantía.
 11. **Dinero y cohortes se agregan en SQL** (`GROUP BY`, funciones de
     ventana), nunca cargando la lista a memoria. (2026-09-04: ledger y
     reportes sumaban en Python.) (`test_reportes_dinero_en_sql.py`,
-    `test_fiado_resumen_en_sql.py`)
+    `test_fiado_resumen_en_sql.py`) El ingreso de un turno es su cobro
+    acreditado MÁS su resto vivo pagado aparte (`appointment_balance_payments`,
+    a lo sumo uno por turno; D-20261008-01): toda suma de ingreso une los dos
+    (`payments/repository.py::live_balance_payment_join`) y el saldo sale de
+    `remaining_balance_of`, nunca del pedido
+    (`test_reportes_cuentan_el_saldo_restante.py`). Un resto vivo sobrevive a
+    la devolución de la seña y sigue contando como ingreso hasta que se
+    revierte.
 12. **Un `await db.execute` dentro de un `for` es N+1 hasta demostrar lo
     contrario**; se resuelve con `in_()` o join.
     `availability.get_available_slots` se auditó el 2026-09-16: carga
@@ -475,11 +559,36 @@ Una instrucción en lenguaje natural no es una garantía.
   mandan SMTP en línea se llaman `send_*`; una función `enqueue_*` tiene que
   encolar de verdad (`test_enqueue_encola_de_verdad.py`).
 - **OTP solo por email** (SMTP existente); `whatsapp`/`sms` existen solo con
-  `OTP_PROVIDER=console`. El envío se despacha después de la respuesta
-  (`BackgroundTasks`) y, si el teléfono ya es de un cliente de la tienda con
-  email entregable, el código va SOLO a ese email. Respuesta neutra ante
-  fallo de envío. El front respeta la ventana de 30 minutos.
-  (`test_otp_por_email.py`, `test_otp_email_del_cliente.py`)
+  `OTP_PROVIDER=console`. Si el teléfono ya es de un cliente de la tienda
+  con email entregable, el código va SOLO a ese email y al tipeado le llega
+  un aviso sin código con el mismo asunto (AUD2-B4-05). Sin
+  `BackgroundTasks`: decidido el destino, el request encola el mail en
+  Celery (`notifications/tasks.py::enqueue_otp_email`, por
+  `core/enqueue.py`, cola `interactive`; AUD2-B4-06) y lo manda el worker.
+  Cada mail consume la cuota de su buzón de destino real: 5 por hora y 10
+  por día (`OTP_MAX_MAILS_PER_DESTINATION_PER_HOUR`/`_PER_DAY`, #121), con
+  el buzón normalizado y hasheado en la clave y la política `otp`, que
+  falla cerrada en producción. Pasado el tope el mail no sale y no hay 429:
+  un 429 diría si el teléfono es cliente o si esa casilla ya recibió
+  códigos. El código nuevo se guarda, y con eso invalida el anterior, SOLO
+  si la cola aceptó su mail; con el tope o el broker caído el vivo sigue
+  valiendo (#126). Guardarlo invalida solo los vivos enviados al MISMO
+  buzón (#127, 2026-10-05): sin ficha el código va al email tipeado, y
+  pedir uno con la casilla propia mataba el de la víctima. La verificación
+  compara contra todos los vivos del teléfono (a lo sumo
+  `OTP_MAX_REQUESTS_PER_HOUR`, los más nuevos), consume solo el que
+  coincide y cada intento cuenta contra todos: ningún código ve más de
+  `OTP_MAX_ATTEMPTS` intentos. Sigue abierto, desde antes, el bloqueo por
+  verificaciones: cinco intentos anónimos errados agotan el código de la
+  víctima y diez, el presupuesto de verificación del teléfono
+  (`OTP_MAX_VERIFY_ATTEMPTS_PER_HOUR`), sin necesitar ninguna casilla. La
+  respuesta tiene la misma forma en todos los caminos. El front respeta la
+  ventana de 30 minutos.
+  (`test_otp_por_email.py`, `test_otp_email_del_cliente.py`,
+  `test_otp_por_la_cola.py`, `test_otp_tope_por_mail_destino.py`,
+  `test_otp_no_pisa_codigo_sin_mail.py`,
+  `test_otp_invalida_solo_mismo_destino.py`,
+  `test_pg_otp_mismo_destino.py`)
 - La reserva pública aplica `buffer_minutes` y congela `price_amount` como el
   panel.
 - **Un turno en el pasado lo agenda solo la tienda** (propuesta por Mateo,
@@ -529,6 +638,46 @@ Una instrucción en lenguaje natural no es una garantía.
 - **Un cobro con `deposit_rule` conserva su importe.** Regenerar el link
   desde el panel no re-tarifa: hacerlo dejaba el snapshot mintiendo y rompía
   para siempre la validación de importe del webhook.
+- **Una seña obligatoria se cobra por Mercado Pago o por WhatsApp**
+  (decisión de Mateo, 2026-10-03; `payments/deposit_channels.py`).
+  Configurarla exige un canal: MP conectado con el flag `payments`, o un
+  WhatsApp de la tienda que `core/whatsapp_phone.py` lea igual que el front
+  (`whatsAppPhone.ts`; los casos de los dos viven en
+  `whatsAppPhone.cases.json`, con NBSP, espacio fino y BOM); sin canal es 422
+  `DEPOSIT_CHANNEL_REQUIRED`, y reservar
+  sin canal es 409 `DEPOSIT_CHANNEL_UNAVAILABLE` antes de escribir nada (con
+  un warning `deposit_channel_unavailable` y un evento a Sentry, a lo sumo
+  uno por tienda y hora, `core.observability.OncePer`). "MP conectado" es un
+  solo predicado, `payments/service.py::gateway_has_usable_token` (token que
+  se descifra; no el `"pending"` de un OAuth a medias), el mismo de la
+  preferencia; un token guardado que no se descifra (una
+  `FIELD_ENCRYPTION_KEY` rota o rotada) avisa con ids y a Sentry en vez de
+  pasar en silencio a WhatsApp. Perder el
+  último canal con servicios de seña obligatoria (borrar o romper el
+  WhatsApp, apagar los cobros, desconectar MP) no se bloquea: avisa al dueño
+  por el panel y por mail (`warn_if_deposit_channel_lost`, evento
+  `store.deposit_channel_lost`). Por WhatsApp el turno nace `pending_payment`
+  retenido hasta 2 h antes del turno, con un piso de 30 minutos y nunca
+  después del inicio (`whatsapp_hold_deadline`, decisión de Mateo,
+  2026-10-03; MP sigue en `PAYMENT_HOLD_MINUTES`), y un `Payment` `pending`
+  de `provider = "manual"` con link placeholder. La respuesta del alta lleva
+  `deposit_channel` y `deposit_deadline` (aditivos), y el plazo sale igual en
+  la pantalla de éxito, en "reserva registrada" y en el aviso al dueño. El job
+  de retenciones lo vence por el grafo sin consultar a MP y avisa al dueño
+  (`appointment.deposit_lapsed`); la conciliación no lo toca y un link del
+  panel lo pasa a `mercadopago`. `manual-confirm` y el `refund` de un cobro
+  manual no piden el flag `payments` (no son de MP); `manual-confirm` publica
+  `appointment.confirmed` en su transacción si confirma un turno que no
+  empezó. Un cobro asentado (acreditado o devuelto) solo acepta eventos del
+  pago de MP que lo asentó, el `external_payment_id` que dejó una transición
+  APLICADA; un `manual_confirmed` no lo asentó MP
+  (`processing._evento_de_otro_pago`). El `approved` de otro pago es un pago
+  duplicado (aviso una vez por pago de MP, antes de validar el importe) y su
+  `refunded` o contracargo no se aplica: sin esto, devolver el duplicado en
+  MP dejaba devuelta la seña que la tienda se quedó. Cancelar y reprogramar:
+  regla 3. (`test_sena_por_mp_o_whatsapp.py`,
+  `test_sena_por_whatsapp_regla_3.py`, `test_pg_sena_por_whatsapp.py`,
+  `test_pg_reprogramar_sena_por_whatsapp.py`)
 - **Los recordatorios tienen etapas separadas de verdad**: el piso del de 24
   horas está por encima del lead del de 2 horas, y ningún aviso al cliente
   sale sin pasar por `is_deliverable_email`. El lote reutiliza una sesión
@@ -612,7 +761,7 @@ Una instrucción en lenguaje natural no es una garantía.
   del sha (todo `up` y `run` lleva `--no-build`). `make deploy
   APP_VERSION=<sha>` corre `scripts/deploy.sh`: preflight (`COMPOSE_FILE` con
   `docker-compose.prod.yml`, Compose >= 2.24, disco, backup de menos de
-  24 h), imágenes verificadas con `docker image inspect`, migración con el
+  24 h, Quality verde en `main` para el sha), imágenes verificadas con `docker image inspect`, migración con el
   código viejo sirviendo, backend nuevo al lado del viejo, `up -d --no-deps
   --remove-orphans` con lista explícita (nunca recrea db, redis, rabbitmq ni el borde),
   compuerta de 60 s y rollback automático sin migrar. En un deploy normal el
@@ -633,8 +782,12 @@ Una instrucción en lenguaje natural no es una garantía.
   `unhealthy` con tope de 3 por contenedor y 6 en total por hora, sin tocar
   db ni rabbitmq ni reiniciar nada con db o redis_state caídos (sin
   `autoheal` ni `docker.sock`),
-  chequeos horarios de NTP, certificado, disco y memoria, y latencia por
-  ruta cada 5 minutos. Se prueban con binarios falsos
+  chequeos horarios de NTP, certificado, disco, memoria, `redis_state` (aviso
+  sobre el 80 % de su `maxmemory`: con `noeviction`, lleno es 503) y el
+  endurecimiento del host (`scripts/host-hardening-check.sh`: SSH solo con
+  clave y sin root, ufw con 22/80/443, actualizaciones de seguridad sin
+  reinicio automático, fail2ban; pasos en `docs/DEPLOY_RUNBOOK.md` §1), y
+  latencia por ruta cada 5 minutos. Se prueban con binarios falsos
   (`tests/unit/host_falso.py`).
 
 ### Tiempo
@@ -668,15 +821,16 @@ Una instrucción en lenguaje natural no es una garantía.
 ### Tamaño y forma
 
 29. **Función de más de 80 líneas necesita justificación en el PR.** En el
-    backend quedan 11 al 2026-09-25 (AST, `end_lineno - lineno + 1 > 80`,
+    backend quedan 10 al 2026-10-03 (AST, `end_lineno - lineno + 1 > 80`,
     sin `tests/` ni `alembic/`): `_build_store_notification` y
-    `_claim_and_expire_preferences` (`payments/jobs.py`), `book_for_client` y `_find_suggestion`
-    (`appointments/service.py`), `availability.get_available_slots`,
+    `_claim_and_expire_preferences` (`payments/jobs.py`), `book_for_client`
+    y `_find_suggestion` (`appointments/service.py`),
     `ledger/router.py::get_ledger_summary`,
-    `stores/router.py::update_my_store`,
+    `waitlist/offers.py::offer_released_slot`,
     `core/security_middleware.py::__call__` y tres en `scripts/`.
-    `process_outbox_batch`, `OtpService.request_code` y
-    `_expire_unpaid_appointments` ya bajaron del tope.
+    `process_outbox_batch`, `OtpService.request_code`,
+    `_expire_unpaid_appointments`, `availability.get_available_slots` y
+    `stores/router.py::update_my_store` ya bajaron del tope.
     Son deuda, no permiso. `create_public_booking` y `client_reschedule_appointment`
     se descompusieron (B1-12). El front no está medido acá. Ante una
     validación nueva se extrae, no se apila.
@@ -760,7 +914,7 @@ Una instrucción en lenguaje natural no es una garantía.
   RPO de 24 h sigue sin cumplirse.
 - Falta todavía: activar el pre-commit hook en cada clon que falte (`git
   config core.hooksPath .githooks`, con el toolchain alineado); descomponer
-  las 11 funciones de más de 80 líneas que quedan en el backend (regla 29);
+  las 10 funciones de más de 80 líneas que quedan en el backend (regla 29);
   zona horaria por tienda; migrar los commits de routers/repos que quedan en
   `COMMITS_DECLARADOS_FUERA_DE_SERVICE` al patrón de `appointments`; medir
   la cobertura del backend en CI (`fail_under = 80` en `pyproject.toml`,
@@ -788,8 +942,13 @@ Una instrucción en lenguaje natural no es una garantía.
   integración, `backend-postgres` y los dos jobs de front; `dead-code`
   espera solo a `standards` y `secret-scan` (gitleaks) corre suelto. El
   front corre con cobertura; el backend no la mide (ver §5).
-  `build-images.yml` publica las imágenes en cada push a `main`; no gatea
-  PRs.
+  `build-images.yml` publica las imágenes cuando Quality termina verde en un
+  push a `main` (`workflow_run`, con el sha que Quality probó; 2026-10-03:
+  antes publicaba en cada push y un commit en rojo quedaba desplegable); no
+  gatea PRs. La corrida a mano (`workflow_dispatch`) no pasa por esa
+  compuerta: el preflight de `scripts/deploy.sh` vuelve a pedirle a GitHub un
+  Quality verde en `main` para el sha (`test_build_images_espera_a_que_quality_pase_en_main`,
+  `test_deploy_frena_sin_un_quality_verde_antes_de_tocar_nada`).
 - **Todo cambio de endpoint regenera `docs/API_CONTRACT.md` en el mismo
   commit.** El contrato sale de `app.openapi()` con
   `backend/scripts/gen_api_contract.py`, nunca a mano;

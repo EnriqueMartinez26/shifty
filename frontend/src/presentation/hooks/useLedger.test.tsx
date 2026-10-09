@@ -4,15 +4,19 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 import { act, renderHook, waitFor } from '@testing-library/react'
 
-import { useCustomerLedger } from './useLedger'
+import { useCustomerLedger, useLedgerClients, useReverseLedgerMovement } from './useLedger'
 import { useReportSummary } from './useReports'
 
 const mockGetCustomerLedger = jest.fn()
 const mockGetSummary = jest.fn()
+const mockSearchClients = jest.fn()
+const mockReverseMovement = jest.fn()
 
 jest.mock('@application/services/LedgerService', () => ({
   ledgerService: {
-    getCustomerLedger: (...args: unknown[]) => mockGetCustomerLedger(...args)
+    getCustomerLedger: (...args: unknown[]) => mockGetCustomerLedger(...args),
+    searchClients: (...args: unknown[]) => mockSearchClients(...args),
+    reverseMovement: (...args: unknown[]) => mockReverseMovement(...args)
   }
 }))
 
@@ -52,6 +56,70 @@ describe('useCustomerLedger', () => {
     // Mas nuevo primero, sin invertir: la segunda pagina va detras.
     expect(result.current.movements.map((m) => m.public_id)).toEqual(['mov-2', 'mov-1'])
     expect(result.current.total).toBe(2)
+  })
+})
+
+// Decision de Mateo (2026-10-03): despues de revertir, el saldo y la marca
+// "Revertido" salen de pedir la cuenta de nuevo, no de calcularlos en el front.
+describe('useReverseLedgerMovement', () => {
+  const conCliente = () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const invalidar = jest.spyOn(queryClient, 'invalidateQueries')
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    )
+    return { invalidar, wrapper }
+  }
+
+  it('revierte el movimiento del cliente y vuelve a pedir su cuenta y el resumen', async () => {
+    mockReverseMovement.mockResolvedValue({ public_id: 'mov-r', reverses_id: 'mov-1' })
+    const { invalidar, wrapper } = conCliente()
+    const { result } = renderHook(() => useReverseLedgerMovement(), { wrapper })
+
+    await act(async () => {
+      await result.current.mutateAsync({ clientId: 'cli-a', movementId: 'mov-1' })
+    })
+
+    expect(mockReverseMovement).toHaveBeenCalledWith('cli-a', 'mov-1')
+    expect(invalidar).toHaveBeenCalledWith({ queryKey: ['customer-ledger', 'cli-a'] })
+    expect(invalidar).toHaveBeenCalledWith({ queryKey: ['ledger-summary'] })
+  })
+
+  it('si el servidor la rechaza (ya revertido) igual vuelve a pedir la cuenta', async () => {
+    mockReverseMovement.mockRejectedValue(new Error('422'))
+    const { invalidar, wrapper } = conCliente()
+    const { result } = renderHook(() => useReverseLedgerMovement(), { wrapper })
+
+    await act(async () => {
+      await expect(
+        result.current.mutateAsync({ clientId: 'cli-a', movementId: 'mov-1' })
+      ).rejects.toThrow('422')
+    })
+
+    expect(invalidar).toHaveBeenCalledWith({ queryKey: ['customer-ledger', 'cli-a'] })
+  })
+})
+
+describe('useLedgerClients', () => {
+  it('cancela la busqueda vieja cuando se escribe otra (F4-04)', async () => {
+    // F4-04 a (2026-10-01): sin el signal de react-query, cada tecla dejaba
+    // viva su consulta al servidor aunque la pantalla ya pidiera otra.
+    mockSearchClients.mockReset().mockReturnValue(new Promise(() => {}))
+    const { rerender } = renderHook(({ term }) => useLedgerClients(term), {
+      wrapper: envoltorio,
+      initialProps: { term: 'an' }
+    })
+    await waitFor(() => expect(mockSearchClients).toHaveBeenCalledTimes(1))
+    const [termino, primera] = mockSearchClients.mock.calls[0] as [string, AbortSignal]
+    expect(termino).toBe('an')
+    expect(primera).toBeInstanceOf(AbortSignal)
+    expect(primera.aborted).toBe(false)
+
+    rerender({ term: 'ana' })
+
+    await waitFor(() => expect(mockSearchClients).toHaveBeenCalledTimes(2))
+    expect(mockSearchClients).toHaveBeenLastCalledWith('ana', expect.any(AbortSignal))
+    await waitFor(() => expect(primera.aborted).toBe(true))
   })
 })
 

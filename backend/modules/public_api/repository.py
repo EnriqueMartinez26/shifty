@@ -29,8 +29,7 @@ from modules.appointments.repository import (
 from modules.appointments.working_hours import staff_ids_working_range
 from modules.legal.versions import AcceptedVersions
 from modules.payments.deposit_rules import ClientHistory
-from modules.payments.model import ACCREDITED_PAYMENT_STATUSES, Payment
-from modules.payments.repository import live_charge_of
+from modules.payments.repository import live_charge_provider_of, paid_appointment_of
 from modules.services.model import Service
 from modules.staff.model import Staff, StaffBlock, StaffServiceModel
 from modules.stores.model import Store
@@ -130,9 +129,24 @@ class PublicRepository:
         return result.scalar_one_or_none()
 
     async def get_services(self, store_id: str) -> list[Service]:
+        """Servicios activos que algun profesional activo de la tienda toma.
+
+        Uno sin profesional salia en el portal y todas sus fechas decian "No
+        hay turnos disponibles" (QA movil 2026-10-08). El panel los sigue
+        listando con su aviso. EXISTS en la misma sentencia: sin consulta
+        extra, y con ``store_id`` en el profesional (defensa en profundidad).
+        """
+        someone_does_it = exists().where(
+            StaffServiceModel.service_id == Service.id,
+            StaffServiceModel.staff_id == Staff.id,
+            Staff.store_id == store_id,
+            Staff.is_active == True,
+        )
         result = await self.db.execute(
             select(Service).where(
-                Service.store_id == store_id, Service.is_active == True
+                Service.store_id == store_id,
+                Service.is_active == True,
+                someone_does_it,
             )
         )
         return list(result.scalars().all())
@@ -649,23 +663,20 @@ class PublicRepository:
             cancelled=conteo.get(AppointmentStatus.CANCELLED.value, 0),
         )
 
-    async def accredited_appointment_ids(self, appointment_ids: list[str]) -> set[str]:
-        """De estos turnos, los que tienen un pago acreditado. Una consulta.
+    async def paid_appointment_ids(self, appointment_ids: list[str]) -> set[str]:
+        """De estos turnos, los pagados (``paid_appointment_of``). Una consulta.
 
-        Acreditado es ``Payment.is_accredited`` (aprobado o confirmado a mano):
-        un turno asi no se reprograma desde el cliente
+        Un turno pagado no se reprograma desde el cliente
         (``client_reschedule_denial``). La usa la accion; el historial lo
         resuelve en su propio SELECT (``get_client_appointments``).
         """
         if not appointment_ids:
             return set()
         res = await self.db.execute(
-            select(Payment.appointment_id)
-            .where(
-                Payment.appointment_id.in_(appointment_ids),
-                Payment.status.in_(sorted(ACCREDITED_PAYMENT_STATUSES)),
+            select(Appointment.id).where(
+                Appointment.id.in_(appointment_ids),
+                paid_appointment_of(Appointment.id, Appointment.store_id),
             )
-            .distinct()
         )
         return {str(appointment_id) for appointment_id in res.scalars().all()}
 
@@ -684,16 +695,17 @@ class PublicRepository:
 
     async def get_client_appointments(
         self, client_id: str, store_id: str, *, limit: int
-    ) -> list[tuple[Appointment, bool, bool]]:
+    ) -> list[tuple[Appointment, bool, str | None]]:
         """Los ``limit`` turnos mas recientes del cliente, con servicio y profesional,
-        si cada uno tiene un pago acreditado (para ``can_reschedule``) y si
-        tiene un cobro vivo (para ``can_cancel`` y ``can_reschedule``, D1).
+        si cada uno tiene un pago acreditado (para ``can_reschedule``) y el
+        proveedor de su cobro vivo (para ``can_cancel`` y ``can_reschedule``,
+        D1; una sena por WhatsApp no frena al cliente).
 
-        El pago acreditado y el cobro vivo van en el MISMO SELECT como
-        ``EXISTS`` correlacionados por ``uq_payments_store_appointment``
-        (store_id, appointment_id): una consulta aparte sumaba una sentencia al
-        historial (techo de ``test_historial_del_cliente_con_limite``). El del
-        cobro vivo es ``live_charge_of``, la misma condicion que la accion.
+        El pago acreditado y el cobro vivo van en el MISMO SELECT, correlacionados
+        por ``uq_payments_store_appointment`` (store_id, appointment_id): una
+        consulta aparte sumaba una sentencia al historial (techo de
+        ``test_historial_del_cliente_con_limite``). El del cobro vivo es
+        ``live_charge_provider_of``, la misma condicion que la accion.
 
         Un solo SELECT con JOIN (F3-09, R1-09): antes eran ``selectinload`` de
         servicio y profesional, y el profesional arrastraba en cascada sus
@@ -702,18 +714,10 @@ class PublicRepository:
         pueda tomar por una coleccion modificada (AUD2-B6-02), y un acceso
         accidental levanta en vez de volver a consultar.
         """
-        pagado = (
-            exists()
-            .where(
-                Payment.store_id == Appointment.store_id,
-                Payment.appointment_id == Appointment.id,
-                Payment.status.in_(sorted(ACCREDITED_PAYMENT_STATUSES)),
-            )
-            .label("paid")
-        )
-        cobro_vivo = live_charge_of(Appointment.id, Appointment.store_id).label(
-            "live_charge"
-        )
+        pagado = paid_appointment_of(Appointment.id, Appointment.store_id).label("paid")
+        cobro_vivo = live_charge_provider_of(
+            Appointment.id, Appointment.store_id
+        ).label("live_charge_provider")
         result = await self.db.execute(
             select(Appointment, pagado, cobro_vivo)
             .where(Appointment.client_id == client_id, Appointment.store_id == store_id)
@@ -727,6 +731,6 @@ class PublicRepository:
             .limit(limit)
         )
         return [
-            (appointment, bool(paid), bool(vivo))
+            (appointment, bool(paid), None if vivo is None else str(vivo))
             for appointment, paid, vivo in result.all()
         ]

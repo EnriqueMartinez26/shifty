@@ -1,13 +1,21 @@
 import React, { useState } from 'react'
 
-import { mdiShieldAlert, mdiStore } from '@mdi/js'
-import { ArrowLeft, KeyRound } from 'lucide-react'
-import { Link, useNavigate, useSearchParams } from 'react-router'
+import { mdiShieldAlert } from '@mdi/js'
+import { KeyRound } from 'lucide-react'
+import { useNavigate, useSearchParams } from 'react-router'
+
+import {
+  PASSWORD_MAX_LENGTH,
+  PASSWORD_MIN_LENGTH,
+  PASSWORD_REJECTED_MESSAGE,
+  validateNewPassword
+} from '@domain/value-objects/PasswordRules'
 
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
 
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
 import { Icon2000s } from '../components/legacy/Icon2000s'
+import { AuthShell } from '../components/organisms/AuthShell'
 import { useResetPassword } from '../hooks/useResetPassword'
 import { create2000sInputStyle } from '../lib/surfaceStyles'
 
@@ -30,18 +38,19 @@ const ResetPasswordPage: React.FC = () => {
     setMessage(null)
 
     if (!token) {
-      setError('El enlace no contiene un token valido.')
+      setError('El enlace no contiene un token válido.')
       return
     }
 
-    // Mismo piso que `ResetPasswordRequest` en el backend (min_length=12).
-    if (newPassword.length < 12) {
-      setError('La contrasena debe tener al menos 12 caracteres.')
+    // Mismas reglas que `ResetPasswordRequest` en el backend (D-20261001-01).
+    const passwordError = validateNewPassword(newPassword)
+    if (passwordError) {
+      setError(passwordError)
       return
     }
 
     if (newPassword !== confirmPassword) {
-      setError('Las contrasenas no coinciden.')
+      setError('Las contraseñas no coinciden.')
       return
     }
 
@@ -50,181 +59,144 @@ const ResetPasswordPage: React.FC = () => {
         token,
         new_password: newPassword
       })
-      setMessage(response.message || 'Contrasena actualizada correctamente.')
+      setMessage(response.message || 'Contraseña actualizada correctamente.')
       setTimeout(() => navigate('/login'), 1200)
     } catch (error: unknown) {
-      setError(getErrorMessage(error, 'No se pudo restablecer la contrasena'))
+      // Si el 422 señala la clave, se avisa con texto propio; el token
+      // rechazado conserva su mensaje específico.
+      setError(
+        getErrorMessage(
+          error,
+          'No se pudo restablecer la contraseña',
+          {},
+          {
+            new_password: PASSWORD_REJECTED_MESSAGE
+          }
+        )
+      )
     }
   }
 
   return (
-    <div
-      className="min-h-screen w-full flex items-center justify-center relative overflow-hidden px-4"
-      style={{
-        background: `linear-gradient(180deg, ${colors2000s.bg.primary} 0%, ${colors2000s.bg.secondary} 100%)`
-      }}
+    <AuthShell
+      title="Restablecer contraseña"
+      subtitle="Definí una nueva contraseña para tu cuenta."
+      showBackToLogin
     >
-      <div className="w-full max-w-md p-8 relative z-10">
-        <div className="flex flex-col items-center mb-8 text-center">
+      <form
+        onSubmit={(event) => {
+          void handleSubmit(event)
+        }}
+        className="space-y-6"
+      >
+        <div>
+          <label
+            htmlFor="reset-new-password"
+            className="block text-xs font-bold uppercase tracking-widest mb-2"
+            style={{ color: colors2000s.text.secondary }}
+          >
+            Nueva contraseña
+          </label>
+          <div className="relative">
+            <KeyRound
+              className="absolute left-3 top-3.5 w-4 h-4"
+              style={{ color: colors2000s.text.disabled }}
+            />
+            <input
+              id="reset-new-password"
+              type="password"
+              autoComplete="new-password"
+              minLength={PASSWORD_MIN_LENGTH}
+              maxLength={PASSWORD_MAX_LENGTH * 2}
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              className="w-full rounded-xl pl-10 pr-4 py-3 outline-none transition-all"
+              style={inputStyle}
+              placeholder={`Mínimo ${PASSWORD_MIN_LENGTH} caracteres, con letra y número`}
+              required
+            />
+          </div>
+        </div>
+
+        <div>
+          <label
+            htmlFor="reset-confirm-password"
+            className="block text-xs font-bold uppercase tracking-widest mb-2"
+            style={{ color: colors2000s.text.secondary }}
+          >
+            Confirmar contraseña
+          </label>
+          <div className="relative">
+            <KeyRound
+              className="absolute left-3 top-3.5 w-4 h-4"
+              style={{ color: colors2000s.text.disabled }}
+            />
+            <input
+              id="reset-confirm-password"
+              type="password"
+              autoComplete="new-password"
+              maxLength={PASSWORD_MAX_LENGTH * 2}
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              className="w-full rounded-xl pl-10 pr-4 py-3 outline-none transition-all"
+              style={inputStyle}
+              required
+            />
+          </div>
+        </div>
+
+        {message && (
           <div
-            className="w-16 h-16 rounded-2xl flex items-center justify-center mb-4 rotate-3 relative overflow-hidden"
+            role="status"
+            aria-live="polite"
+            className="text-sm p-3 rounded-xl font-medium"
             style={{
-              background: `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`,
-              boxShadow: `${colors2000s.shadows.outerOrange}, 0 8px 24px rgba(200,90,15,0.3)`,
-              border: `1px solid ${colors2000s.orange.accent}`
+              background: colors2000s.status.success.bg,
+              border: `1px solid ${colors2000s.status.success.border}`,
+              color: colors2000s.status.success.text,
+              boxShadow: colors2000s.shadows.insetDark
             }}
           >
-            <div className="absolute top-0 left-0 right-0 h-1/2 bg-white/20 pointer-events-none" />
-            <Icon2000s path={mdiStore} size={30} variant="active" />
+            {message}
           </div>
-          <h1
-            className="text-3xl font-bold tracking-tight mb-1"
-            style={{ color: colors2000s.orange.accent }}
-          >
-            Restablecer contraseña
-          </h1>
-          <p className="text-sm font-medium" style={{ color: colors2000s.text.secondary }}>
-            Definí una nueva contraseña para tu cuenta.
-          </p>
-        </div>
-
-        <div
-          className="p-8 rounded-3xl"
-          style={{
-            background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
-            border: `1px solid ${colors2000s.border.default}`,
-            boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerMedium}`
-          }}
-        >
-          <form
-            onSubmit={(event) => {
-              void handleSubmit(event)
-            }}
-            className="space-y-6"
-          >
-            <div>
-              <label
-                htmlFor="reset-new-password"
-                className="block text-xs font-bold uppercase tracking-widest mb-2"
-                style={{ color: colors2000s.text.secondary }}
-              >
-                Nueva contraseña
-              </label>
-              <div className="relative">
-                <KeyRound
-                  className="absolute left-3 top-3.5 w-4 h-4"
-                  style={{ color: colors2000s.text.disabled }}
-                />
-                <input
-                  id="reset-new-password"
-                  type="password"
-                  value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)}
-                  className="w-full rounded-xl pl-10 pr-4 py-3 outline-none transition-all"
-                  style={inputStyle}
-                  placeholder="Minimo 12 caracteres"
-                  required
-                />
-              </div>
-            </div>
-
-            <div>
-              <label
-                htmlFor="reset-confirm-password"
-                className="block text-xs font-bold uppercase tracking-widest mb-2"
-                style={{ color: colors2000s.text.secondary }}
-              >
-                Confirmar contraseña
-              </label>
-              <div className="relative">
-                <KeyRound
-                  className="absolute left-3 top-3.5 w-4 h-4"
-                  style={{ color: colors2000s.text.disabled }}
-                />
-                <input
-                  id="reset-confirm-password"
-                  type="password"
-                  value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
-                  className="w-full rounded-xl pl-10 pr-4 py-3 outline-none transition-all"
-                  style={inputStyle}
-                  required
-                />
-              </div>
-            </div>
-
-            {message && (
-              <div
-                role="status"
-                aria-live="polite"
-                className="text-sm p-3 rounded-xl font-medium"
-                style={{
-                  background: colors2000s.status.success.bg,
-                  border: `1px solid ${colors2000s.status.success.border}`,
-                  color: colors2000s.status.success.text,
-                  boxShadow: colors2000s.shadows.insetDark
-                }}
-              >
-                {message}
-              </div>
-            )}
-            {error && (
-              <div
-                role="alert"
-                aria-live="polite"
-                className="text-sm p-3 rounded-xl flex items-center gap-2"
-                style={{
-                  background: colors2000s.status.danger.bg,
-                  border: `1px solid ${colors2000s.status.danger.border}`,
-                  color: colors2000s.status.danger.text,
-                  boxShadow: colors2000s.shadows.insetDark
-                }}
-              >
-                <Icon2000s
-                  path={mdiShieldAlert}
-                  size={16}
-                  variant="idle"
-                  color={colors2000s.status.danger.text}
-                />
-                {error}
-              </div>
-            )}
-
-            <button
-              type="submit"
-              disabled={resetPasswordMutation.isPending}
-              aria-busy={resetPasswordMutation.isPending}
-              className="w-full font-bold py-4 rounded-2xl flex items-center justify-center gap-2 transition-all active:scale-[0.98] disabled:opacity-50 group"
-              style={
-                resetPasswordMutation.isPending
-                  ? buttonStyles2000s.disabled
-                  : buttonStyles2000s.selected
-              }
-            >
-              {resetPasswordMutation.isPending ? 'Actualizando...' : 'Actualizar contraseña'}
-            </button>
-          </form>
-
+        )}
+        {error && (
           <div
-            className="mt-8 pt-8 text-center"
-            style={{ borderTop: `1px solid ${colors2000s.border.light}` }}
+            role="alert"
+            aria-live="polite"
+            className="text-sm p-3 rounded-xl flex items-center gap-2"
+            style={{
+              background: colors2000s.status.danger.bg,
+              border: `1px solid ${colors2000s.status.danger.border}`,
+              color: colors2000s.status.danger.text,
+              boxShadow: colors2000s.shadows.insetDark
+            }}
           >
-            <Link
-              to="/login"
-              className="inline-flex items-center gap-2 text-sm font-bold transition-colors"
-              style={{ color: colors2000s.orange.accent }}
-            >
-              <ArrowLeft className="w-4 h-4" />
-              Volver a iniciar sesión
-            </Link>
+            <Icon2000s
+              path={mdiShieldAlert}
+              size={16}
+              variant="idle"
+              color={colors2000s.status.danger.text}
+            />
+            {error}
           </div>
-        </div>
+        )}
 
-        <p className="mt-8 text-center text-xs" style={{ color: colors2000s.text.disabled }}>
-          Copyright 2026 Shifty SaaS. Todos los derechos reservados.
-        </p>
-      </div>
-    </div>
+        <button
+          type="submit"
+          disabled={resetPasswordMutation.isPending}
+          aria-busy={resetPasswordMutation.isPending}
+          className="w-full font-bold py-4 rounded-2xl flex items-center justify-center gap-2 transition-all active:scale-[0.98] disabled:opacity-50 group"
+          style={
+            resetPasswordMutation.isPending
+              ? buttonStyles2000s.disabled
+              : buttonStyles2000s.selected
+          }
+        >
+          {resetPasswordMutation.isPending ? 'Actualizando...' : 'Actualizar contraseña'}
+        </button>
+      </form>
+    </AuthShell>
   )
 }
 

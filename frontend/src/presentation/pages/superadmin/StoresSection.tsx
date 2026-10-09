@@ -17,6 +17,7 @@ import {
   type SubscriptionFilter
 } from './shared'
 import { buttonStyles2000s, colors2000s } from '../../../theme/colors'
+import { subscriptionStatusLabel } from '../../lib/enumLabels'
 import { formatDateEsAr } from '../../lib/formatters'
 import { create2000sInputStyle } from '../../lib/surfaceStyles'
 import { MiniButton } from '../SuperAdminUi'
@@ -27,23 +28,32 @@ import { MiniButton } from '../SuperAdminUi'
  * llegan por props con los mismos nombres que usaba el JSX original.
  */
 
+/** Listado paginado (FF-24): `total` es null si el backend no mando el header. */
+interface StoresQueryState extends QueryState<SuperAdminStoreRow[]> {
+  total: number | null
+  hasNextPage: boolean
+  isFetchingNextPage: boolean
+  fetchNextPage: () => unknown
+}
+
 interface StoresSectionProps {
+  /** Texto tipeado; la consulta se aplica con espera en SuperAdmin.tsx (F4-10). */
   search: string
-  setSearch: React.Dispatch<React.SetStateAction<string>>
+  onSearchChange: (value: string) => void
   activityFilter: ActivityFilter
   setActivityFilter: React.Dispatch<React.SetStateAction<ActivityFilter>>
   subscriptionFilter: SubscriptionFilter
   setSubscriptionFilter: React.Dispatch<React.SetStateAction<SubscriptionFilter>>
   selectedStoreId: string | null
   setSelectedStoreId: React.Dispatch<React.SetStateAction<string | null>>
-  storesQuery: QueryState<SuperAdminStoreRow[]>
+  storesQuery: StoresQueryState
   openEditStoreFor: (store: SuperAdminStoreRow) => void
   toggleStoreActive: (store: SuperAdminStoreRow) => Promise<void>
 }
 
 export const StoresSection: React.FC<StoresSectionProps> = ({
   search,
-  setSearch,
+  onSearchChange,
   activityFilter,
   setActivityFilter,
   subscriptionFilter,
@@ -55,7 +65,9 @@ export const StoresSection: React.FC<StoresSectionProps> = ({
   toggleStoreActive
 }) => (
   <section className="rounded-[2rem] p-6" style={panelStyle}>
-    <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+    {/* Titulo arriba y filtros abajo, que pasan de linea: en una fila, los
+        de suscripcion quedaban tapados por la columna derecha (QA 2026-10-02). */}
+    <div className="flex flex-col gap-4">
       <div>
         <div className="mb-2 flex items-center gap-2">
           <span
@@ -69,14 +81,14 @@ export const StoresSection: React.FC<StoresSectionProps> = ({
           className="text-2xl font-black uppercase tracking-tight"
           style={{ color: colors2000s.text.primary }}
         >
-          Operacion por tenant
+          Operación por tienda
         </h2>
         <p className="text-xs font-bold" style={{ color: colors2000s.text.secondary }}>
-          Filtros directos por estado y suscripcion para triage operativo rapido.
+          Filtros por estado y suscripción para revisar rápido.
         </p>
       </div>
 
-      <div className="flex flex-col gap-3 md:flex-row md:items-center">
+      <div className="flex flex-wrap items-center gap-3">
         <div className="relative">
           <Search
             className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2"
@@ -84,14 +96,16 @@ export const StoresSection: React.FC<StoresSectionProps> = ({
           />
           <input
             value={search}
-            onChange={(event) => setSearch(event.target.value)}
+            onChange={(event) => onSearchChange(event.target.value)}
             placeholder="Buscar por nombre o slug"
+            aria-label="Buscar tienda"
+            maxLength={100}
             className="w-full rounded-2xl py-3 pl-11 pr-4 text-sm font-bold outline-none md:w-72"
             style={create2000sInputStyle()}
           />
         </div>
 
-        <div className="flex items-center gap-2 rounded-2xl p-2" style={innerCardStyle}>
+        <div className="flex flex-wrap items-center gap-2 rounded-2xl p-2" style={innerCardStyle}>
           <Filter className="h-4 w-4" style={{ color: colors2000s.text.secondary }} />
           {[
             { value: 'active', label: 'Activas' },
@@ -114,11 +128,11 @@ export const StoresSection: React.FC<StoresSectionProps> = ({
           ))}
         </div>
 
-        <div className="flex items-center gap-2 rounded-2xl p-2" style={innerCardStyle}>
+        <div className="flex flex-wrap items-center gap-2 rounded-2xl p-2" style={innerCardStyle}>
           {[
             { value: 'all', label: 'Todas' },
-            { value: 'with', label: 'Con suscripcion' },
-            { value: 'without', label: 'Sin suscripcion' }
+            { value: 'with', label: 'Con suscripción' },
+            { value: 'without', label: 'Sin suscripción' }
           ].map((item) => (
             <button
               key={item.value}
@@ -157,7 +171,7 @@ export const StoresSection: React.FC<StoresSectionProps> = ({
                   'Estado',
                   'Recordatorios',
                   'Usuarios',
-                  'Suscripcion',
+                  'Suscripción',
                   'Renueva',
                   'Acciones'
                 ].map((label) => (
@@ -220,7 +234,7 @@ export const StoresSection: React.FC<StoresSectionProps> = ({
                       style={{ color: colors2000s.text.secondary }}
                     >
                       <div>
-                        Confirmacion:{' '}
+                        Confirmación:{' '}
                         <span style={{ color: colors2000s.text.primary }}>
                           {store.send_email_confirmation ? 'On' : 'Off'}
                         </span>
@@ -251,7 +265,9 @@ export const StoresSection: React.FC<StoresSectionProps> = ({
                         className="text-[10px] font-bold uppercase tracking-widest"
                         style={{ color: colors2000s.text.secondary }}
                       >
-                        {store.subscription_status || 'Sin suscripcion'}
+                        {store.subscription_status
+                          ? subscriptionStatusLabel(store.subscription_status)
+                          : 'Sin suscripción'}
                       </p>
                     </td>
                     <td
@@ -317,10 +333,29 @@ export const StoresSection: React.FC<StoresSectionProps> = ({
             No hay tiendas para este filtro
           </p>
           <p className="mt-2 text-xs font-bold" style={{ color: colors2000s.text.secondary }}>
-            Ajusta busqueda, estado o suscripcion para recuperar resultados.
+            Ajustá la búsqueda, el estado o la suscripción para ver resultados.
           </p>
         </div>
       )}
     </div>
+
+    {storesQuery.data?.length ? (
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+        <p
+          className="text-[10px] font-black uppercase tracking-widest"
+          style={{ color: colors2000s.text.secondary }}
+        >
+          Mostrando {storesQuery.data.length}
+          {storesQuery.total === null ? '' : ` de ${storesQuery.total}`}
+        </p>
+        {storesQuery.hasNextPage ? (
+          <MiniButton
+            label={storesQuery.isFetchingNextPage ? 'Cargando...' : 'Cargar más'}
+            onClick={() => void storesQuery.fetchNextPage()}
+            disabled={storesQuery.isFetchingNextPage}
+          />
+        ) : null}
+      </div>
+    ) : null}
   </section>
 )

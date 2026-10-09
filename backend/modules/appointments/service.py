@@ -36,8 +36,10 @@ from modules.appointments.domain_service import SchedulingDomainService
 from modules.appointments.guards import (
     reject_already_cancelled,
     reject_already_started,
+    reject_confirm_with_pending_deposit,
     reject_inactive,
     reject_reschedule_with_pending_deposit,
+    reject_reschedule_with_remainder,
     require_can_manage_appointment,
 )
 from modules.appointments.working_hours import staff_ids_working_range
@@ -314,6 +316,19 @@ class AppointmentService:
         """
         await AsyncSession.commit(self.uow.session)
 
+    async def _commit_and_invalidate(self, store_id: str, *instants: datetime) -> None:
+        """Commit plano, invalidacion de la disponibilidad y contexto de tienda.
+
+        Sale de ``reschedule`` (B1-12, regla 29): la invalidacion es la llamada
+        de red, va despues del commit y el contexto se reaplica siempre, aun si
+        la invalidacion levanta (``_commit_before_network``).
+        """
+        await self._commit_before_network()
+        try:
+            await invalidate_availability(self.cache, store_id, *instants)
+        finally:
+            await _apply_tenant_context(self.uow.session)
+
     def _publish_client_mail(self, appointment: Appointment, event_type: str) -> None:
         """Aviso al cliente por el outbox, en la transaccion del cambio (F2-02).
 
@@ -438,7 +453,13 @@ class AppointmentService:
         return appointment
 
     async def confirm(self, *, public_id: str, actor: User) -> Appointment:
-        """Confirma un turno (solo ADMIN o STAFF)."""
+        """Confirma un turno (solo ADMIN o STAFF).
+
+        Un turno que espera su sena con el cobro vivo no se confirma aca: 409
+        ``DEPOSIT_PENDING_CONFIRM_DENIED`` (``reject_confirm_with_pending_deposit``,
+        revision 4R de la PR #108). Se confirma registrando el pago en Cobros,
+        para que ningun turno confirmado quede con un cobro vivo.
+        """
         # Lock pesimista antes de leer: sin esto, dos transiciones validas
         # y distintas pueden partir del mismo estado origen (TOCTOU).
         await self.uow.appointments.lock_by_public_id(public_id, actor.store_id)
@@ -447,6 +468,14 @@ class AppointmentService:
         )
         if not appointment:
             raise AppointmentNotFoundException(public_id)
+        if appointment.status == AppointmentStatus.PENDING_PAYMENT.value:
+            # Orden turno -> pago (regla 7): el turno ya esta lockeado.
+            payment = await self.uow.payments.get_by_appointment_locked(
+                appointment.id, actor.store_id
+            )
+            reject_confirm_with_pending_deposit(
+                appointment, live_payment=payment is not None and payment.is_live_charge
+            )
 
         payload_before = {"status": appointment.status}
         appointment.apply_status_transition(AppointmentStatus.CONFIRMED)
@@ -740,13 +769,9 @@ class AppointmentService:
         # dueno 2026-09-25) no lleva "tu turno cambio": el cliente ya estuvo.
         if ensure_utc_aware(new_starts_at) >= now_utc():
             self._publish_client_mail(new_appointment, EVENT_APPOINTMENT_RESCHEDULED)
-        await self._commit_before_network()
-        try:
-            await invalidate_availability(
-                self.cache, original.store_id, original.starts_at, new_starts_at
-            )
-        finally:
-            await _apply_tenant_context(self.uow.session)
+        await self._commit_and_invalidate(
+            original.store_id, original.starts_at, new_starts_at
+        )
         return new_appointment, service, staff
 
     async def _lock_reschedulable(
@@ -771,6 +796,11 @@ class AppointmentService:
         # Antes de lockear el cobro y de cualquier mutacion, evento o
         # invalidacion (decision de Mateo 2026-09-25: opcion A).
         reject_reschedule_with_pending_deposit(original)
+        # Un resto vivo (D-20261008-01) quedaria colgado del cancelado y el
+        # turno nuevo pediria el precio entero (revision de la PR #137, W2).
+        reject_reschedule_with_remainder(
+            await self.uow.balance_payments.get_live(original.id, actor.store_id)
+        )
         payment = await self.uow.payments.get_by_appointment_locked(
             original.id, actor.store_id
         )

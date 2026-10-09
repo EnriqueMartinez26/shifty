@@ -11,18 +11,36 @@ import {
   formatArgentinaDateDisplay,
   formatArgentinaTime
 } from '@shared/utils/argentinaTime'
-import { buildRebookUrl, buildWaMeUrl } from '@shared/utils/clientWhatsApp'
+import { buildRebookUrl } from '@shared/utils/clientWhatsApp'
+import { isDeliverableEmail } from '@shared/utils/deliverableEmail'
 import { buildWaitlistMessage } from '@shared/utils/waitlistWhatsApp'
+import { buildWaMeUrl } from '@shared/utils/whatsAppPhone'
 
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
 import { useAuth } from '../context/AuthContext'
 import { ROLE_STORE_ADMIN } from '../context/roles'
 import { useStoreSettings } from '../hooks/useStores'
+import { useStoreWriteAccess } from '../hooks/useStoreWriteAccess'
 import { useBookFromWaitlist, useRemoveWaitlistEntry, useWaitlist } from '../hooks/useWaitlist'
 
 const STATUS_LABEL: Record<string, string> = {
   waiting: 'En espera',
   offered: 'Cupo ofrecido'
+}
+
+/**
+ * Lo que se le dice al dueno tras reservar. El backend manda la confirmacion
+ * solo a un email entregable y nunca para un turno pasado (outbox,
+ * D-20260925-01): "Le mandamos la confirmación" sin email era falso (QA movil
+ * 2026-10-08).
+ */
+const bookedMessage = (entry: WaitlistEntry, startsAt: string): string => {
+  if (new Date(startsAt).getTime() <= Date.now()) {
+    return `Turno registrado para ${entry.client_name}.`
+  }
+  return isDeliverableEmail(entry.client_email)
+    ? `Turno reservado para ${entry.client_name}. Le va a llegar la confirmación por mail.`
+    : `Turno reservado para ${entry.client_name}. No dejó email: avisale por WhatsApp.`
 }
 
 /**
@@ -33,6 +51,10 @@ const STATUS_LABEL: Record<string, string> = {
 export const WaitlistContainer: React.FC = () => {
   const { user } = useAuth()
   const canManage = user?.role === ROLE_STORE_ADMIN || Boolean(user?.is_global_admin)
+  // Tienda suspendida (FF-15): DELETE /waitlist/{id} y POST
+  // /waitlist/{id}/book no estan en SUSPENSION_ALLOWED_WRITES y responden 402.
+  const writeAccess = useStoreWriteAccess()
+  const readOnlyReason = writeAccess.readOnly ? writeAccess.reason : undefined
   const waitlist = useWaitlist()
   const { data: storeSettings } = useStoreSettings()
   const removeEntry = useRemoveWaitlistEntry()
@@ -56,16 +78,17 @@ export const WaitlistContainer: React.FC = () => {
 
   const confirmBooking = async (entry: WaitlistEntry) => {
     if (!booking) return
+    const startsAt = argentinaLocalToUtcIso(booking.date, booking.time)
     try {
       await bookEntry.mutateAsync({
         entryId: entry.public_id,
         payload: {
-          starts_at: argentinaLocalToUtcIso(booking.date, booking.time),
+          starts_at: startsAt,
           staff_id: entry.staff_id ?? entry.offered_staff_id ?? null
         }
       })
       setBooking(null)
-      setMessage(`Turno reservado para ${entry.client_name}. Le mandamos la confirmacion.`)
+      setMessage(bookedMessage(entry, startsAt))
     } catch (error: unknown) {
       setMessage(getErrorMessage(error, 'No se pudo reservar ese horario'))
     }
@@ -105,7 +128,7 @@ export const WaitlistContainer: React.FC = () => {
   }
 
   return (
-    <div className="space-y-6 animate-in fade-in duration-700">
+    <div className="space-y-6 duration-700">
       <div
         className="flex flex-wrap gap-4 items-center justify-between p-6 rounded-3xl"
         style={{
@@ -122,7 +145,7 @@ export const WaitlistContainer: React.FC = () => {
             Lista de espera
           </h2>
           <p className="text-xs font-bold" style={{ color: colors2000s.text.secondary }}>
-            Cuando se libera un cupo, se le ofrece a una persona por vez. Desde aca podes avisar por
+            Cuando se libera un cupo, se le ofrece a una persona por vez. Desde acá podés avisar por
             WhatsApp o reservarle el turno directamente.
           </p>
         </div>
@@ -173,7 +196,7 @@ export const WaitlistContainer: React.FC = () => {
             Nadie en lista de espera
           </p>
           <p className="text-xs font-bold text-gray-400 mt-2">
-            Los clientes se anotan desde tu pagina publica cuando un dia no tiene cupo.
+            Los clientes se anotan desde tu página pública cuando un día no tiene cupo.
           </p>
         </div>
       ) : (
@@ -248,13 +271,16 @@ export const WaitlistContainer: React.FC = () => {
                       <button
                         type="button"
                         onClick={() => (isBookingThis ? setBooking(null) : startBooking(entry))}
-                        className="inline-flex items-center gap-1 rounded-lg bg-white px-3 py-2 text-[9px] font-black uppercase tracking-widest border text-blue-700 border-blue-200"
+                        disabled={readOnlyReason !== undefined}
+                        title={readOnlyReason}
+                        className="inline-flex items-center gap-1 rounded-lg bg-white px-3 py-2 text-[9px] font-black uppercase tracking-widest border text-blue-700 border-blue-200 disabled:opacity-50"
                       >
                         <CalendarPlus className="w-3 h-3" /> Reservar
                       </button>
                       <button
                         type="button"
-                        disabled={removeEntry.isPending}
+                        disabled={removeEntry.isPending || readOnlyReason !== undefined}
+                        title={readOnlyReason}
                         onClick={() => {
                           void removeFromWaitlist(entry)
                         }}
@@ -267,34 +293,37 @@ export const WaitlistContainer: React.FC = () => {
                 </div>
 
                 {isBookingThis && booking && (
-                  <div className="grid grid-cols-[1fr_auto_auto] gap-2 items-end">
-                    <label className="text-[9px] font-black uppercase tracking-widest text-gray-500">
+                  // Dos columnas y el boton abajo en el telefono: en una fila
+                  // medía 396 px en 390 (QA movil 2026-10-08).
+                  <div className="grid grid-cols-2 sm:grid-cols-[1fr_auto_auto] gap-2 items-end">
+                    <label className="min-w-0 text-[9px] font-black uppercase tracking-widest text-gray-500">
                       Fecha
                       <input
                         type="date"
                         value={booking.date}
                         onChange={(e) => setBooking({ ...booking, date: e.target.value })}
-                        className="mt-1 w-full rounded-lg px-2 py-2 text-xs font-bold border"
+                        className="mt-1 w-full min-w-0 rounded-lg px-2 py-2 text-xs font-bold border"
                         style={{ borderColor: colors2000s.border.default }}
                       />
                     </label>
-                    <label className="text-[9px] font-black uppercase tracking-widest text-gray-500">
+                    <label className="min-w-0 text-[9px] font-black uppercase tracking-widest text-gray-500">
                       Hora
                       <input
                         type="time"
                         value={booking.time}
                         onChange={(e) => setBooking({ ...booking, time: e.target.value })}
-                        className="mt-1 rounded-lg px-2 py-2 text-xs font-bold border"
+                        className="mt-1 w-full min-w-0 rounded-lg px-2 py-2 text-xs font-bold border"
                         style={{ borderColor: colors2000s.border.default }}
                       />
                     </label>
                     <button
                       type="button"
-                      disabled={bookEntry.isPending}
+                      disabled={bookEntry.isPending || readOnlyReason !== undefined}
+                      title={readOnlyReason}
                       onClick={() => {
                         void confirmBooking(entry)
                       }}
-                      className="px-4 py-2 rounded-lg text-white text-[9px] font-black uppercase tracking-widest disabled:opacity-60"
+                      className="col-span-2 sm:col-span-1 min-h-10 px-4 py-2 rounded-lg text-white text-[9px] font-black uppercase tracking-widest disabled:opacity-60"
                       style={buttonStyles2000s.selected}
                     >
                       {bookEntry.isPending ? '...' : 'Confirmar'}

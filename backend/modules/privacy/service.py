@@ -36,6 +36,7 @@ from modules.privacy.schemas import (
     ExportedAppointment,
     ExportedClient,
     ExportedLedgerMovement,
+    ExportedBalancePayment,
     ExportedPayment,
     ExportedWaitlistEntry,
 )
@@ -114,6 +115,10 @@ class DataSubjectService:
             ],
             payments=[
                 _payment(p) for p in await self.repo.payments(store_id, client.id)
+            ],
+            balance_payments=[
+                _balance_payment(b)
+                for b in await self.repo.balance_payments(store_id, client.id)
             ],
             ledger=[_ledger(m) for m in await self.repo.ledger(store_id, client.id)],
             waitlist=[
@@ -235,6 +240,17 @@ def _payment(p: Any) -> ExportedPayment:
         status=p.status,
         paid_at=p.paid_at,
         created_at=p.created_at,
+    )
+
+
+def _balance_payment(b: Any) -> ExportedBalancePayment:
+    return ExportedBalancePayment(
+        public_id=b.id,
+        appointment_id=b.appointment_id,
+        amount=b.amount,
+        method=b.method,
+        created_at=b.created_at,
+        reverted_at=b.reverted_at,
     )
 
 

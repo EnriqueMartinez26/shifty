@@ -1,5 +1,5 @@
 import { ApplicationError } from './ApplicationError'
-import { ERROR_CODE_MESSAGES } from './errorCodes'
+import { ERROR_CODE_MESSAGES, VALIDATION_MESSAGES } from './errorCodes'
 import { NetworkError } from './NetworkError'
 
 type CodeCarrier = { context?: { errorCode?: unknown } }
@@ -91,23 +91,87 @@ const serverMessageFor = (error: unknown, code: string | undefined): string | un
   return appError.message
 }
 
+/** El campo de una entrada "ruta -> del -> campo: motivo" del 422 de Pydantic. */
+const FIELD_NAME = /^[a-z_][a-z0-9_]*$/
+
+const fieldOf = (entry: unknown): string | undefined => {
+  if (typeof entry !== 'string') return undefined
+  const separator = entry.indexOf(': ')
+  if (separator <= 0) return undefined
+  // Un model_validator de Pydantic no tiene ruta: el campo viene adentro del
+  // mensaje ("Value error, deposit_amount: ...").
+  const segments = entry
+    .slice(0, separator)
+    .replace(/^Value error, /, '')
+    .split(' -> ')
+    .map((segment) => segment.trim())
+    .filter((segment) => segment && !/^\d+$/.test(segment))
+  const field = segments[segments.length - 1]
+  // Solo un nombre de campo de la API (snake_case): un mensaje de negocio con
+  // dos puntos ("Horario no disponible: elegi otro") no nombra un campo.
+  return field !== undefined && FIELD_NAME.test(field) ? field : undefined
+}
+
+/**
+ * Campos que el backend rechazo en un 422 de Pydantic. El handler de main.py
+ * deja en `detail` una lista "ruta -> campo: motivo" (sin "body"); se toma el
+ * ultimo tramo de la ruta, salteando indices de lista. Un `detail` que no es
+ * lista (ValidationException de negocio) no nombra campos. El motivo no se
+ * usa: es texto crudo de Pydantic, en ingles (regla 20).
+ */
+export const getInvalidFields = (error: unknown): string[] => {
+  if (getErrorCode(error) !== 'VALIDATION_ERROR') return []
+  const appError = asApplicationError(error)
+  const detail = appError?.context?.detail
+  // Una ValidationException de negocio no trae lista, pero algunas nombran el
+  // campo igual en su mensaje ("deposit_amount: ...", services/schemas.py).
+  const entries: unknown[] = Array.isArray(detail) ? detail : [appError?.message]
+  return entries.map(fieldOf).filter((field): field is string => field !== undefined)
+}
+
+const fieldMessageFor = (
+  error: unknown,
+  fieldMessages: Partial<Record<string, string>>
+): string | undefined => {
+  for (const field of getInvalidFields(error)) {
+    const message = Object.hasOwn(fieldMessages, field) ? fieldMessages[field] : undefined
+    if (message) return message
+  }
+  return undefined
+}
+
+/** Un 422 de negocio cuyo texto exacto tiene traduccion (VALIDATION_MESSAGES). */
+const validationMessageFor = (error: unknown, code: string | undefined): string | undefined => {
+  if (code !== 'VALIDATION_ERROR') return undefined
+  const serverText = asApplicationError(error)?.message.trim()
+  return serverText ? VALIDATION_MESSAGES.get(serverText) : undefined
+}
+
 /**
  * Texto para mostrarle al usuario, en este orden:
  * 1. `overrides[code]`: la pantalla sabe decirlo mejor.
- * 2. La tabla de codigos (errorCodes.ts).
- * 3. El mensaje del servidor, solo si es un 4xx operacional y su codigo no
+ * 2. `fieldMessages[campo]`: en un 422, el texto de la pantalla para el
+ *    primer campo rechazado que conoce.
+ * 3. La tabla de codigos (errorCodes.ts) y, para un VALIDATION_ERROR, la
+ *    de textos conocidos (VALIDATION_MESSAGES).
+ * 4. El mensaje del servidor, solo si es un 4xx operacional y su codigo no
  *    esta en la lista negra (regla 20: nada crudo ni tecnico).
- * 4. `fallback`.
+ * 5. `fallback`.
  */
 export const getErrorMessage = (
   error: unknown,
   fallback: string,
-  overrides: Partial<Record<string, string>> = {}
+  overrides: Partial<Record<string, string>> = {},
+  fieldMessages: Partial<Record<string, string>> = {}
 ): string => {
   const code = getErrorCode(error)
   if (code !== undefined) {
     const override = Object.hasOwn(overrides, code) ? overrides[code] : undefined
-    const known = override ?? ERROR_CODE_MESSAGES.get(code)
+    const known =
+      override ??
+      fieldMessageFor(error, fieldMessages) ??
+      ERROR_CODE_MESSAGES.get(code) ??
+      validationMessageFor(error, code)
     if (known) return known
   }
   return serverMessageFor(error, code) ?? fallback

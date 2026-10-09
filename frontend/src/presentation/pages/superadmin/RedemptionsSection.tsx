@@ -8,9 +8,11 @@ import type {
   SuperAdminStoreRow
 } from '@application/services/SuperAdminService'
 
+import { formatCurrency } from '@shared/utils/currency'
+
 import { emptyStateStyle, innerCardStyle, panelStyle, scopeBadgeStyle } from './shared'
 import { colors2000s } from '../../../theme/colors'
-import { formatCurrencyEsAr, formatDateTimeEsAr } from '../../lib/formatters'
+import { formatDateTimeEsAr } from '../../lib/formatters'
 import { ActionButton } from '../SuperAdminUi'
 
 /**
@@ -46,7 +48,7 @@ export const RedemptionsSection: React.FC<RedemptionsSectionProps> = ({
         </span>
       </div>
       <ActionButton
-        label="Canjear cupon"
+        label="Canjear cupón"
         onClick={openRedeemCouponModal}
         disabled={!selectedStore || !hasSelectedStoreSubscription || !activeCoupons.length}
       />
@@ -71,7 +73,7 @@ export const RedemptionsSection: React.FC<RedemptionsSectionProps> = ({
                 className="rounded-full px-3 py-1 text-[10px] font-black uppercase tracking-widest"
                 style={scopeBadgeStyle('tenant')}
               >
-                -{formatCurrencyEsAr(redemption.discount_amount, redemption.currency)}
+                -{formatCurrency(redemption.discount_amount, redemption.currency)}
               </span>
             </div>
             <p
@@ -80,7 +82,7 @@ export const RedemptionsSection: React.FC<RedemptionsSectionProps> = ({
             >
               Final:{' '}
               <span style={{ color: colors2000s.text.primary }}>
-                {formatCurrencyEsAr(redemption.final_amount, redemption.currency)}
+                {formatCurrency(redemption.final_amount, redemption.currency)}
               </span>
             </p>
           </div>

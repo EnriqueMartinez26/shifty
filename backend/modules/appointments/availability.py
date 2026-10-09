@@ -324,20 +324,14 @@ class AvailabilityService:
         agenda.min_bookable_time = now + timedelta(hours=agenda.notice_hours)
 
         # 4. Grilla por profesional y por franja horaria.
-        all_slots: list[AvailabilitySlot] = []
-        for staff in staff_members:
-            for franja in agenda.schedules.get(staff.id, []):
-                all_slots.extend(
-                    _schedule_slots(
-                        staff,
-                        franja,
-                        search_date,
-                        duration,
-                        agenda,
-                        force_all=force_all,
-                        hide_private_reasons=hide_private_reasons,
-                    )
-                )
+        all_slots = _grid_slots(
+            staff_members,
+            search_date,
+            duration,
+            agenda,
+            force_all=force_all,
+            hide_private_reasons=hide_private_reasons,
+        )
 
         # 5. Cache: los slots viven lo que le queda a la agenda (5 minutos si
         # se acaba de leer de la base, y entonces se escribe tambien).
@@ -580,6 +574,37 @@ class AvailabilityService:
             )
 
         return booked, blocks
+
+
+def _grid_slots(
+    staff_members: list[_StaffRef],
+    search_date: date,
+    duration: timedelta,
+    agenda: _DayAgenda,
+    *,
+    force_all: bool,
+    hide_private_reasons: bool,
+) -> list[AvailabilitySlot]:
+    """Slots del dia de todos los profesionales, franja por franja (B1-12).
+
+    Sale de ``get_available_slots`` (regla 29, funcion de mas de 80 lineas):
+    es solo la grilla en memoria, sin base ni cache.
+    """
+    all_slots: list[AvailabilitySlot] = []
+    for staff in staff_members:
+        for franja in agenda.schedules.get(staff.id, []):
+            all_slots.extend(
+                _schedule_slots(
+                    staff,
+                    franja,
+                    search_date,
+                    duration,
+                    agenda,
+                    force_all=force_all,
+                    hide_private_reasons=hide_private_reasons,
+                )
+            )
+    return all_slots
 
 
 def _schedule_slots(

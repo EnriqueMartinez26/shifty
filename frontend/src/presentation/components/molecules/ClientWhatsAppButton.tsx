@@ -4,10 +4,12 @@ import { MessageCircle } from 'lucide-react'
 
 import {
   buildClientMessage,
-  buildWaMeUrl,
   clientMessageKindFor,
   type ClientMessageInput
 } from '@shared/utils/clientWhatsApp'
+import { buildWaMeUrl } from '@shared/utils/whatsAppPhone'
+
+import { COMPACT_ON_DESKTOP, TAP_TARGET } from './AppointmentActions'
 
 interface ClientWhatsAppButtonProps {
   phone: string
@@ -28,17 +30,20 @@ export const ClientWhatsAppButton: React.FC<ClientWhatsAppButtonProps> = ({
   compact = false
 }) => {
   const kind = clientMessageKindFor(status)
-  if (!kind || !phone.trim()) return null
+  // Un telefono que no se puede leer como argentino no arma link: wa.me lo
+  // mandaria a otro numero.
+  const href = kind ? buildWaMeUrl(phone, buildClientMessage(kind, message)) : null
+  if (!kind || !href) return null
   const label = kind === 'rebook' ? 'Invitar a volver' : 'Recordar por WhatsApp'
   return (
     <a
-      href={buildWaMeUrl(phone, buildClientMessage(kind, message))}
+      href={href}
       target="_blank"
       rel="noreferrer"
       title={label}
       aria-label={label}
       onClick={(event) => event.stopPropagation()}
-      className={`inline-flex items-center gap-1 rounded-lg bg-white px-2 py-1 text-[9px] font-black uppercase tracking-widest border text-green-700 border-green-200 ${compact ? 'mt-1' : 'mt-2'}`}
+      className={`inline-flex items-center justify-center gap-1 rounded-lg bg-white px-2 py-1 text-[9px] font-black uppercase tracking-widest border text-green-700 border-green-200 ${TAP_TARGET} ${compact ? `mt-1 ${COMPACT_ON_DESKTOP}` : 'mt-2'}`}
     >
       <MessageCircle className="w-3 h-3" />
       {compact ? null : label}

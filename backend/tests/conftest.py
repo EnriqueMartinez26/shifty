@@ -7,7 +7,9 @@ _TEST_ENV = {
     "PROJECT_NAME": "Shifty test suite",
     "VERSION": "0.1.0-test",
     "ENV": "development",
-    "SECRET_KEY": "test-only-not-a-secret",
+    # 64 bytes: con una clave HS256 de menos de 32, PyJWT emite
+    # InsecureKeyLengthWarning en cada token de la suite.
+    "SECRET_KEY": "test-only-not-a-secret-0123456789abcdefghijklmnopqrstuvwxyzABCDE",
     "ALGORITHM": "HS256",
     "ACCESS_TOKEN_EXPIRE_MINUTES": "30",
     "REFRESH_TOKEN_EXPIRE_DAYS": "30",

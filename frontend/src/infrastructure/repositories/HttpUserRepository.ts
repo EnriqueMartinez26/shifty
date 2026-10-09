@@ -76,7 +76,7 @@ export class HttpUserRepository
     }
   }
 
-  public async list(query: UserListQuery): Promise<User[]> {
+  public async list(query: UserListQuery, signal?: AbortSignal): Promise<User[]> {
     try {
       // axios omite los params undefined: sin termino no viaja `q` ni `email`.
       const { data } = await this.client.get<UserResponseDTO[]>('/users/', {
@@ -84,8 +84,10 @@ export class HttpUserRepository
           include_inactive: query.includeInactive ?? false,
           q: query.q,
           email: query.email,
-          limit: query.limit
-        }
+          limit: query.limit,
+          offset: query.offset
+        },
+        signal
       })
       return data.map(UserMapper.toDomain)
     } catch (error) {
