@@ -333,6 +333,18 @@ async def _crear_horario(m: Mundo, a: Actor, t: Tienda) -> Llamada:
     )
 
 
+async def _reemplazar_semana(m: Mundo, a: Actor, t: Tienda) -> Llamada:
+    return Llamada(
+        "PUT",
+        f"/staff/{await m.staff(t)}/schedules",
+        json={
+            "schedules": [
+                {"day_of_week": 1, "start_time": "08:00:00", "end_time": "12:00:00"}
+            ]
+        },
+    )
+
+
 async def _editar_horario(m: Mundo, a: Actor, t: Tienda) -> Llamada:
     staff = await m.staff(t)
     horario = await m.horario(t, staff, 2)
@@ -606,6 +618,40 @@ async def _confirmar_pago(m: Mundo, a: Actor, t: Tienda) -> Llamada:
         f"/payments/{await m.turno(t)}/manual-confirm",
         json={"amount": "100.00"},
     )
+
+
+async def _turno_con_sena(m: Mundo, t: Tienda) -> str:
+    """Turno con un cobro acreditado menor que su precio: tiene saldo
+    (D-20261008-01)."""
+    turno = await m.turno(t)
+    await m.ok(
+        "POST",
+        f"/payments/{turno}/manual-confirm",
+        t,
+        200,
+        json={"amount": "100.00"},
+    )
+    return turno
+
+
+async def _registrar_resto(m: Mundo, a: Actor, t: Tienda) -> Llamada:
+    return Llamada(
+        "POST",
+        f"/payments/{await _turno_con_sena(m, t)}/remaining-payment",
+        json={"amount": "1.00", "idempotency_key": m.unico("clave-resto")},
+    )
+
+
+async def _revertir_resto(m: Mundo, a: Actor, t: Tienda) -> Llamada:
+    turno = await _turno_con_sena(m, t)
+    await m.ok(
+        "POST",
+        f"/payments/{turno}/remaining-payment",
+        t,
+        201,
+        json={"amount": "1.00", "idempotency_key": m.unico("clave-resto")},
+    )
+    return Llamada("POST", f"/payments/{turno}/remaining-payment/revert")
 
 
 async def _reembolsar(m: Mundo, a: Actor, t: Tienda) -> Llamada:
@@ -1131,6 +1177,14 @@ TABLA: tuple[Ruta, ...] = (
         idor=IDOR_POR_ID,
     ),
     R(
+        "PUT",
+        "/staff/{public_id}/schedules",
+        ADMINS,
+        A.RECURSO,
+        _reemplazar_semana,
+        idor=IDOR_POR_ID,
+    ),
+    R(
         "PATCH",
         "/staff/{public_id}/schedules/{schedule_id}",
         ADMINS,
@@ -1465,6 +1519,25 @@ TABLA: tuple[Ruta, ...] = (
         ADMINS,
         A.RECURSO,
         _confirmar_pago,
+        idor=IDOR_POR_ID,
+    ),
+    # Saldo restante por turno (D-20261008-01): registrar, con los permisos de
+    # ``manual-confirm`` (el profesional de la matriz no es duenio del turno:
+    # 403); revertir, ``_require_payment_admin``.
+    R(
+        "POST",
+        "/payments/{appointment_id}/remaining-payment",
+        ADMINS,
+        A.RECURSO,
+        _registrar_resto,
+        idor=IDOR_POR_ID,
+    ),
+    R(
+        "POST",
+        "/payments/{appointment_id}/remaining-payment/revert",
+        ADMINS,
+        A.RECURSO,
+        _revertir_resto,
         idor=IDOR_POR_ID,
     ),
     R(

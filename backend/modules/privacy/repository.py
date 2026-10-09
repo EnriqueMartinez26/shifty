@@ -18,7 +18,11 @@ from modules.ledger.model import CustomerLedger
 from modules.ledger.service import current_balance
 from modules.legal.model import MarketingOptOut
 from modules.notifications.model import Notification
-from modules.payments.model import LIVE_CHARGE_PAYMENT_STATUSES, Payment
+from modules.payments.model import (
+    LIVE_CHARGE_PAYMENT_STATUSES,
+    AppointmentBalancePayment,
+    Payment,
+)
 from modules.payments.service import ACTIVE_APPOINTMENT_STATUSES
 from modules.users.model import User, UserRole
 from modules.waitlist.model import (
@@ -86,6 +90,31 @@ class DataSubjectRepository:
                         Appointment.client_id == client_id,
                     )
                     .order_by(Payment.created_at, Payment.id)
+                )
+            ).scalars()
+        )
+
+    async def balance_payments(
+        self, store_id: str, client_id: str
+    ) -> list[AppointmentBalancePayment]:
+        """Los restos de sus turnos (D-20261008-01), vivos o revertidos."""
+        return list(
+            (
+                await self.db.execute(
+                    select(AppointmentBalancePayment)
+                    .join(
+                        Appointment,
+                        Appointment.id == AppointmentBalancePayment.appointment_id,
+                    )
+                    .where(
+                        AppointmentBalancePayment.store_id == store_id,
+                        Appointment.store_id == store_id,
+                        Appointment.client_id == client_id,
+                    )
+                    .order_by(
+                        AppointmentBalancePayment.created_at,
+                        AppointmentBalancePayment.id,
+                    )
                 )
             ).scalars()
         )

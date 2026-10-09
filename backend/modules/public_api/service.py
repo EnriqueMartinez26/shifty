@@ -314,7 +314,8 @@ def client_reschedule_denial(
     (AUD2-B1-02). Despues, un pago acreditado: el ``Payment`` quedaria
     huerfano apuntando al turno cancelado y el nuevo apareceria impago; eso lo
     maneja la tienda. ``paid`` sale de
-    ``PublicRepository.accredited_appointment_ids``. Una sena por WhatsApp
+    ``PublicRepository.paid_appointment_ids`` (cobro acreditado o resto vivo,
+    D-20261008-01). Una sena por WhatsApp
     pendiente se reprograma con el turno (``reschedule_by_client``).
     """
     denial = client_cancel_denial(
@@ -1069,7 +1070,7 @@ class PublicBookingService:
         denial = client_reschedule_denial(
             original,
             cancellation_hours=await self._cancellation_hours(original.store_id),
-            paid=bool(await self.repo.accredited_appointment_ids([original.id])),
+            paid=bool(await self.repo.paid_appointment_ids([original.id])),
             live_charge_provider=live_charge_provider,
         )
         if denial is not None:

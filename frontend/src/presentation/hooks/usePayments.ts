@@ -11,7 +11,9 @@ import {
   type PromotionPayload,
   type PromotionRecord,
   type ProcessOutboxResult,
-  type ReconciliationSummary
+  type ReconciliationSummary,
+  type RemainderPaymentInput,
+  type RemainderPaymentRecord
 } from '@application/services/PaymentsService'
 
 export const useGatewayConfig = () =>
@@ -51,10 +53,24 @@ export const usePaymentsAppointments = () =>
     queryFn: () => paymentsService.getAppointments()
   })
 
-export const useCreatePaymentPreference = () =>
-  useMutation<PaymentPreference, Error, string>({
-    mutationFn: (appointmentId) => paymentsService.createPreference(appointmentId)
+// El link crea (o reabre) el cobro del turno: la tarjeta de Cobros y el
+// resumen de pendientes quedan viejos (revision de la PR #131, S3).
+const PAYMENT_LINK_QUERIES = [
+  ['payments-reconciliation-summary'],
+  ['payments-appointments']
+] as const
+
+export const useCreatePaymentPreference = () => {
+  const queryClient = useQueryClient()
+  return useMutation<PaymentPreference, Error, string>({
+    mutationFn: (appointmentId) => paymentsService.createPreference(appointmentId),
+    onSuccess: () => {
+      PAYMENT_LINK_QUERIES.forEach((queryKey) => {
+        void queryClient.invalidateQueries({ queryKey: [...queryKey] })
+      })
+    }
   })
+}
 
 export const usePromotions = (enabled = true, includeInactive = true) =>
   useQuery<PromotionRecord[]>({
@@ -111,6 +127,43 @@ export const useManualConfirmPayment = () => {
         void queryClient.invalidateQueries({ queryKey: [...queryKey] })
       })
     }
+  })
+}
+
+// El resto de un turno (D-20261008-01) cambia lo pagado en Cobros y el
+// ingreso que suman la conciliacion, los reportes y el panel.
+const REMAINDER_QUERIES = [
+  ['payments-reconciliation-summary'],
+  ['payments-appointments'],
+  ['reports-summary'],
+  ['reports-professionals'],
+  ['dashboard-summary']
+] as const
+
+const invalidateRemainderQueries = (queryClient: ReturnType<typeof useQueryClient>) => {
+  REMAINDER_QUERIES.forEach((queryKey) => {
+    void queryClient.invalidateQueries({ queryKey: [...queryKey] })
+  })
+}
+
+export const useRecordRemainingPayment = () => {
+  const queryClient = useQueryClient()
+  return useMutation<
+    RemainderPaymentRecord,
+    Error,
+    RemainderPaymentInput & { appointmentId: string }
+  >({
+    mutationFn: ({ appointmentId, ...input }) =>
+      paymentsService.recordRemainingPayment(appointmentId, input),
+    onSuccess: () => invalidateRemainderQueries(queryClient)
+  })
+}
+
+export const useRevertRemainingPayment = () => {
+  const queryClient = useQueryClient()
+  return useMutation<RemainderPaymentRecord, Error, string>({
+    mutationFn: (appointmentId) => paymentsService.revertRemainingPayment(appointmentId),
+    onSuccess: () => invalidateRemainderQueries(queryClient)
   })
 }
 

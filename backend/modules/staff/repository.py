@@ -300,19 +300,22 @@ class StaffRepository:
         filtros = [Schedule.staff_id == staff.id, Schedule.day_of_week == day_of_week]
         if exclude_id:
             filtros.append(Schedule.id != exclude_id)
-        existentes = (await self.db.execute(select(Schedule).where(*filtros))).scalars()
+        existentes = await self.db.execute(
+            select(Schedule.start_time, Schedule.end_time).where(*filtros)
+        )
 
-        for otro in existentes:
-            if start < otro.end_time and end > otro.start_time:
+        for inicio_existente, fin_existente in existentes:
+            if start < fin_existente and end > inicio_existente:
                 raise ValueError(
                     "El horario se superpone con otra franja de ese dia "
-                    f"({otro.start_time.strftime('%H:%M')}-"
-                    f"{otro.end_time.strftime('%H:%M')})"
+                    f"({inicio_existente.strftime('%H:%M')}-"
+                    f"{fin_existente.strftime('%H:%M')})"
                 )
 
     async def add_schedule(
         self, staff: Staff, schedule_data: dict[str, Any], store_id: str
     ) -> Schedule:
+        """Inserta una franja; el llamador toma ``lock_staff`` antes."""
         await self._assert_no_overlap(
             staff,
             day_of_week=schedule_data["day_of_week"],
@@ -325,16 +328,23 @@ class StaffRepository:
         return new_schedule
 
     async def get_schedule(self, staff: Staff, schedule_id: str) -> Schedule | None:
+        """Relee una franja del profesional, incluso si ya esta en el identity map.
+
+        Las mutaciones llaman este metodo despues de ``lock_staff``. Refrescar
+        el objeto evita combinar un PATCH parcial con valores que la sesion
+        cargo antes de esperar el lock.
+        """
         result = await self.db.execute(
-            select(Schedule).where(
-                Schedule.id == schedule_id, Schedule.staff_id == staff.id
-            )
+            select(Schedule)
+            .where(Schedule.id == schedule_id, Schedule.staff_id == staff.id)
+            .execution_options(populate_existing=True)
         )
         return result.scalar_one_or_none()
 
     async def update_schedule(
         self, staff: Staff, schedule: Schedule, cambios: dict[str, Any]
     ) -> Schedule:
+        """Actualiza una franja; el llamador toma ``lock_staff`` antes."""
         day = cambios.get("day_of_week", schedule.day_of_week)
         start = cambios.get("start_time", schedule.start_time)
         end = cambios.get("end_time", schedule.end_time)
@@ -352,8 +362,45 @@ class StaffRepository:
         return schedule
 
     async def delete_schedule(self, schedule: Schedule) -> None:
+        """Borra una franja ya releida bajo ``lock_staff`` por el llamador."""
         await self.db.delete(schedule)
         await self.db.flush()
+
+    async def lock_staff(self, staff: Staff) -> None:
+        """``SELECT ... FOR UPDATE`` de la fila del profesional.
+
+        Serializa todos los cambios de horarios del profesional, tanto el
+        reemplazo semanal como las franjas individuales. Lectura y validacion
+        de superposiciones deben ocurrir despues de adquirirlo. SQLite lo
+        ignora; Postgres lo aplica.
+        """
+        await self.db.execute(
+            select(Staff.id)
+            .where(Staff.id == staff.id, Staff.store_id == staff.store_id)
+            .with_for_update()
+        )
+
+    async def replace_schedules(
+        self, staff: Staff, franjas: list[dict[str, Any]]
+    ) -> list[Schedule]:
+        """Borra TODAS las franjas del profesional y guarda ``franjas``.
+
+        Sin commit (lo hace StaffService). Las superposiciones ya se
+        validaron en el service sobre la lista completa: aca solo se escribe.
+        ``store_id`` sale del profesional, nunca del cuerpo.
+        """
+        await self.db.execute(
+            delete(Schedule).where(
+                Schedule.staff_id == staff.id, Schedule.store_id == staff.store_id
+            )
+        )
+        nuevas = [
+            Schedule(**franja, staff_id=staff.id, store_id=staff.store_id)
+            for franja in franjas
+        ]
+        self.db.add_all(nuevas)
+        await self.db.flush()
+        return nuevas
 
     async def _set_services(self, staff: Staff, services_list: list[Service]) -> None:
         """Deja al profesional con EXACTAMENTE los servicios de la lista.
