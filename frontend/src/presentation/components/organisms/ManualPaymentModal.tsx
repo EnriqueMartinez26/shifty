@@ -2,6 +2,12 @@ import React, { useState } from 'react'
 
 import { Loader2, TriangleAlert, X } from 'lucide-react'
 
+import {
+  REMAINDER_PAYMENT_METHODS,
+  fitsRemaining,
+  type RemainderPaymentMethod
+} from '@domain/value-objects/AppointmentCharge'
+
 import { formatAmountInput, parseAmountInput } from '@shared/utils/amountInput'
 import { formatArgentinaDateDisplay, formatArgentinaTime } from '@shared/utils/argentinaTime'
 import { formatCurrency } from '@shared/utils/currency'
@@ -18,13 +24,30 @@ interface ManualPaymentModalProps {
   suggestedAmount: number | null
   /** El importe sugerido es la seña que el turno tiene pendiente. */
   isDeposit: boolean
+  /**
+   * `remainder`: registra el resto de un turno ya señado (D-20261008-01). Pide
+   * el medio de pago y no deja pasarse de `maxAmount` (lo que resta).
+   */
+  mode?: 'payment' | 'remainder'
+  maxAmount?: number | null
   busy: boolean
   error: string | null
-  onSubmit: (amount: number) => void
+  /** En modo `remainder` llega tambien el medio elegido (o null). */
+  onSubmit: (amount: number, method?: RemainderPaymentMethod | null) => void
   onClose: () => void
 }
 
 const labelClass = 'text-[10px] font-black uppercase tracking-widest ml-1'
+
+const METHOD_LABELS: Record<RemainderPaymentMethod, string> = {
+  efectivo: 'Efectivo',
+  transferencia: 'Transferencia',
+  mercadopago: 'Mercado Pago',
+  otro: 'Otro'
+}
+
+const isRemainderMethod = (value: string): value is RemainderPaymentMethod =>
+  (REMAINDER_PAYMENT_METHODS as readonly string[]).includes(value)
 
 /**
  * Confirmar a mano un pago (efectivo, transferencia o seña por WhatsApp).
@@ -34,6 +57,9 @@ const labelClass = 'text-[10px] font-black uppercase tracking-widest ml-1'
  * y pide el importe; solo pinta y junta el dato: el envio y los errores los
  * resuelve el contenedor. Se monta al abrirse, asi que el estado inicial ya es
  * el del turno a cobrar.
+ *
+ * Saldo restante por turno (D-20261008-01): en modo `remainder` registra el
+ * resto que el cliente paga en el local despues de la seña.
  */
 export const ManualPaymentModal: React.FC<ManualPaymentModalProps> = ({
   clientName,
@@ -41,6 +67,8 @@ export const ManualPaymentModal: React.FC<ManualPaymentModalProps> = ({
   startsAt,
   suggestedAmount,
   isDeposit,
+  mode = 'payment',
+  maxAmount = null,
   busy,
   error,
   onSubmit,
@@ -51,13 +79,26 @@ export const ManualPaymentModal: React.FC<ManualPaymentModalProps> = ({
   )
   // Formato es-AR ("3.200,50"): un `type="number"` leia "3.200" como 3,2
   // (revision de la PR #131, W4). El campo vacio solo deshabilita el boton.
+  const [method, setMethod] = useState('')
+  const isRemainder = mode === 'remainder'
   const parsed = parseAmountInput(value)
-  const amount = parsed.ok ? parsed.value : null
-  const amountError = !parsed.ok && value.trim() !== '' ? parsed.error : null
+  const exceeds =
+    isRemainder && parsed.ok && maxAmount !== null && !fitsRemaining(parsed.value, maxAmount)
+  const amount = parsed.ok && !exceeds ? parsed.value : null
+  const amountError = exceeds
+    ? `El importe supera lo que resta (${formatCurrency(maxAmount ?? 0)}).`
+    : !parsed.ok && value.trim() !== ''
+      ? parsed.error
+      : null
+  const title = isRemainder ? 'Registrar resto' : 'Confirmar pago'
 
   const handleSubmit = (event: React.FormEvent) => {
     event.preventDefault()
     if (amount === null || busy) return
+    if (isRemainder) {
+      onSubmit(amount, isRemainderMethod(method) ? method : null)
+      return
+    }
     onSubmit(amount)
   }
 
@@ -88,7 +129,7 @@ export const ManualPaymentModal: React.FC<ManualPaymentModalProps> = ({
               className="text-xl font-black uppercase tracking-tight"
               style={{ color: colors2000s.text.primary }}
             >
-              Confirmar pago
+              {title}
             </h3>
             <p className="text-xs font-bold" style={{ color: colors2000s.text.secondary }}>
               {clientName} · {serviceName}
@@ -120,6 +161,14 @@ export const ManualPaymentModal: React.FC<ManualPaymentModalProps> = ({
             </div>
           )}
 
+          {isRemainder && maxAmount !== null && (
+            <p className="text-xs font-bold" style={{ color: colors2000s.text.secondary }}>
+              Resta {formatCurrency(maxAmount)} para completar el precio del turno. El resto salda
+              lo que falta del precio; no es fiado: si una parte quedó en el fiado, no la registres
+              también como resto.
+            </p>
+          )}
+
           {isDeposit && suggestedAmount !== null && (
             <p className="text-xs font-bold" style={{ color: colors2000s.text.secondary }}>
               Tiene una seña pendiente de {formatCurrency(suggestedAmount)}.
@@ -132,7 +181,7 @@ export const ManualPaymentModal: React.FC<ManualPaymentModalProps> = ({
               className={labelClass}
               style={{ color: colors2000s.text.secondary }}
             >
-              Importe que te pagaron
+              {isRemainder ? 'Importe del resto' : 'Importe que te pagaron'}
             </label>
             <input
               id="manual-payment-amount"
@@ -159,6 +208,32 @@ export const ManualPaymentModal: React.FC<ManualPaymentModalProps> = ({
             )}
           </div>
 
+          {isRemainder && (
+            <div className="space-y-1.5">
+              <label
+                htmlFor="manual-payment-method"
+                className={labelClass}
+                style={{ color: colors2000s.text.secondary }}
+              >
+                Medio de pago (opcional)
+              </label>
+              <select
+                id="manual-payment-method"
+                value={method}
+                onChange={(event) => setMethod(event.target.value)}
+                className="w-full rounded-md px-4 py-3 font-bold outline-none text-sm"
+                style={create2000sModalInputStyle()}
+              >
+                <option value="">Sin especificar</option>
+                {REMAINDER_PAYMENT_METHODS.map((option) => (
+                  <option key={option} value={option}>
+                    {METHOD_LABELS[option]}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
           <div className="flex gap-4 pt-2">
             <button
               type="button"
@@ -175,7 +250,7 @@ export const ManualPaymentModal: React.FC<ManualPaymentModalProps> = ({
               style={buttonStyles2000s.selected}
             >
               {busy && <Loader2 className="w-4 h-4 animate-spin" />}
-              Registrar pago
+              {isRemainder ? 'Registrar resto' : 'Registrar pago'}
             </button>
           </div>
         </form>

@@ -221,6 +221,14 @@ class AppointmentFilterParams(BaseModel):
     page_size: int = Field(default=20, ge=1, le=100)
 
 
+class AppointmentRemainderPayment(BaseModel):
+    """El resto vivo de un turno, pagado aparte de su cobro (D-20261008-01)."""
+
+    amount: Decimal
+    method: Optional[str] = None
+    created_at: datetime
+
+
 class AppointmentSearchResult(BaseModel):
     """Respuesta enriquecida con nombres resueltos para la UI."""
 
@@ -246,6 +254,10 @@ class AppointmentSearchResult(BaseModel):
     price_amount: Optional[Decimal] = None
     payment_status: Optional[str] = None
     payment_amount: Optional[Decimal] = None
+    # Aditivo (D-20261008-01, saldo restante por turno): el saldo que falta
+    # cobrar (calculado en SQL) y el resto ya registrado aparte del cobro.
+    remaining_amount: Optional[Decimal] = None
+    remainder_payment: Optional[AppointmentRemainderPayment] = None
 
 
 class AppointmentSearchResponse(BaseModel):

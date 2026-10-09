@@ -3,6 +3,8 @@ from decimal import Decimal
 
 from pydantic import BaseModel, Field
 
+from modules.payments.model import BalancePaymentMethod
+
 
 class GatewayConfigUpsert(BaseModel):
     provider: str = Field(default="mercadopago", pattern=r"^(mercadopago|stripe)$")
@@ -47,6 +49,33 @@ class ManualPaymentRequest(BaseModel):
     notes: str | None = Field(None, max_length=500)
 
 
+class RemainingPaymentRequest(BaseModel):
+    """El resto de un turno pagado aparte de su cobro (D-20261008-01).
+
+    Sin ``amount`` se registra el saldo entero; con ``amount``, mayor a cero y
+    hasta el saldo (el saldo lo calcula el backend bajo el lock del turno,
+    nunca se toma del pedido). Mismo techo que ``ManualPaymentRequest``
+    (regla 9). La clave de idempotencia es del panel, como reservar.
+    """
+
+    amount: Decimal | None = Field(
+        None, gt=0, le=10_000_000, max_digits=12, decimal_places=2
+    )
+    method: BalancePaymentMethod | None = None
+    idempotency_key: str = Field(..., min_length=10, max_length=128)
+
+
+class RemainingPaymentResponse(BaseModel):
+    public_id: str
+    appointment_id: str
+    amount: Decimal
+    method: BalancePaymentMethod | None = None
+    created_at: datetime
+    reverted_at: datetime | None = None
+    # Saldo del turno despues de esta operacion.
+    remaining_amount: Decimal
+
+
 class RefundRequest(BaseModel):
     amount: Decimal | None = Field(
         None, ge=0, le=10_000_000, max_digits=12, decimal_places=2
@@ -68,6 +97,10 @@ class PaymentResponse(BaseModel):
     currency: str
     status: str
     paid_at: datetime | None = None
+    # Aditivo (revision de la PR #137, W1): al registrar un reembolso, el resto
+    # vivo del turno (D-20261008-01), que el reembolso NO revierte. ``None``
+    # si no hay o si la respuesta no es de un reembolso.
+    live_remainder_amount: Decimal | None = None
 
     class Config:
         from_attributes = True
@@ -104,6 +137,12 @@ class ReconciliationSummaryResponse(BaseModel):
     refunded_payments: int
     total_pending_amount: Decimal
     total_approved_amount: Decimal
+    # Aditivo (revision de la PR #137, S2): los restos vivos pagados aparte
+    # del cobro (D-20261008-01). ``total_approved_amount`` sigue siendo la
+    # suma de los cobros que cuentan ``approved_payments`` y
+    # ``manual_confirmed_payments``; lo cobrado en total es la suma de los dos.
+    remainder_payments: int = 0
+    total_remainder_amount: Decimal = Decimal("0")
     pending_webhooks: int
     failed_webhooks: int
     pending_outbox: int

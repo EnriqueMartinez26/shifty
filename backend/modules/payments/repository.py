@@ -5,12 +5,28 @@ commit (eso lo maneja el service via el Unit of Work). Existe para que los
 casos de uso de pago dejen de hablar con AsyncSession directo desde el router.
 """
 
-from sqlalchemy import ColumnElement, ScalarSelect, select
+from decimal import Decimal
+
+from sqlalchemy import (
+    ColumnElement,
+    Numeric,
+    ScalarSelect,
+    and_,
+    case,
+    exists,
+    func,
+    or_,
+    literal,
+    select,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import InstrumentedAttribute
 
+from modules.appointments.model import Appointment, AppointmentStatus
 from modules.payments.model import (
+    ACCREDITED_PAYMENT_STATUSES,
     LIVE_CHARGE_PAYMENT_STATUSES,
+    AppointmentBalancePayment,
     JsonValue,
     OutboxMessage,
     Payment,
@@ -46,6 +62,81 @@ def live_charge_provider_of(
         )
         .limit(1)
         .scalar_subquery()
+    )
+
+
+# Turnos que no deben saldo aunque tengan un cobro acreditado: el ausente no
+# recibio el servicio (lo pagado es sena retenida, como lo cuentan los
+# reportes) y uno soltado (cancelado o vencido) ya no se cobra (regla 3).
+_SIN_SALDO_STATUSES = (
+    AppointmentStatus.ABSENT.value,
+    AppointmentStatus.CANCELLED.value,
+    AppointmentStatus.EXPIRED.value,
+)
+
+
+def live_balance_payment_join(
+    appointment_id: _StrColumn | str, store_id: _StrColumn | str
+) -> ColumnElement[bool]:
+    """Condicion de join al resto VIVO del turno (D-20261008-01).
+
+    A lo sumo una fila por turno (``uq_appointment_balance_payments_live``),
+    asi que un LEFT JOIN no multiplica turnos, igual que el cobro
+    (``uq_payments_store_appointment``). Lleva ``store_id`` por defensa en
+    profundidad junto a la RLS (CLAUDE.md §2). Unica definicion para la
+    busqueda de Cobros, reportes, panel y el service.
+    """
+    return and_(
+        AppointmentBalancePayment.appointment_id == appointment_id,
+        AppointmentBalancePayment.reverted_at.is_(None),
+        AppointmentBalancePayment.store_id == store_id,
+    )
+
+
+def paid_appointment_of(
+    appointment_id: _StrColumn | str, store_id: _StrColumn | str
+) -> ColumnElement[bool]:
+    """El turno esta pagado: cobro acreditado o resto vivo (D-20261008-01).
+
+    Lo usa la autogestion del cliente: un turno pagado no se reprograma desde
+    "Mis turnos". Con la sena devuelta y el resto vivo, la plata del resto
+    sigue en el turno (revision de la PR #137, W2). Correlacionable por
+    columnas del turno, como ``live_charge_provider_of``.
+    """
+    return or_(
+        exists().where(
+            Payment.store_id == store_id,
+            Payment.appointment_id == appointment_id,
+            Payment.status.in_(sorted(ACCREDITED_PAYMENT_STATUSES)),
+        ),
+        exists().where(live_balance_payment_join(appointment_id, store_id)),
+    )
+
+
+def remaining_balance_of() -> ColumnElement[Decimal]:
+    """Saldo restante del turno, en SQL (regla 11; D-20261008-01).
+
+    Precio congelado - cobro acreditado - resto vivo, sobre un SELECT que ya
+    une ``appointments`` con su cobro (``payments``, cualquier estado) y su
+    resto vivo (``live_balance_payment_join``). Es cero sin cobro acreditado
+    (ahi sigue "Confirmar pago"), sin precio congelado, en un ausente o un
+    turno soltado (``_SIN_SALDO_STATUSES``) y si lo pagado ya cubre el precio.
+    """
+    debe = (
+        Appointment.price_amount
+        - Payment.amount
+        - func.coalesce(AppointmentBalancePayment.amount, 0)
+    )
+    return case(
+        (
+            and_(
+                Payment.status.in_(sorted(ACCREDITED_PAYMENT_STATUSES)),
+                Appointment.status.not_in(_SIN_SALDO_STATUSES),
+                debe > 0,
+            ),
+            debe,
+        ),
+        else_=literal(Decimal("0.00"), Numeric(12, 2)),
     )
 
 
@@ -105,3 +196,49 @@ class OutboxRepository:
                 payload=payload,
             )
         )
+
+
+class BalancePaymentRepository:
+    """Acceso a ``appointment_balance_payments`` (D-20261008-01).
+
+    Consultas puras: la regla (cuando se registra y por cuanto) y el commit
+    son del service (``payments.application.PaymentService``).
+    """
+
+    def __init__(self, db: AsyncSession) -> None:
+        self.db = db
+
+    def add(self, balance_payment: AppointmentBalancePayment) -> None:
+        self.db.add(balance_payment)
+
+    async def get_live(
+        self, appointment_id: str, store_id: str, *, lock: bool = False
+    ) -> AppointmentBalancePayment | None:
+        """El resto vivo del turno, o None. Con ``lock`` lo toma ``FOR
+        UPDATE``: quien lo llama ya tiene el turno lockeado (regla 7)."""
+        query = select(AppointmentBalancePayment).where(
+            live_balance_payment_join(appointment_id, store_id)
+        )
+        if lock:
+            query = query.with_for_update()
+        return (await self.db.execute(query)).scalar_one_or_none()
+
+    async def remaining_balance(self, appointment_id: str, store_id: str) -> Decimal:
+        """Saldo restante del turno (``remaining_balance_of``), una sentencia."""
+        saldo = await self.db.scalar(
+            select(remaining_balance_of())
+            .select_from(Appointment)
+            .outerjoin(
+                Payment,
+                and_(
+                    Payment.appointment_id == Appointment.id,
+                    Payment.store_id == store_id,
+                ),
+            )
+            .outerjoin(
+                AppointmentBalancePayment,
+                live_balance_payment_join(Appointment.id, store_id),
+            )
+            .where(Appointment.id == appointment_id, Appointment.store_id == store_id)
+        )
+        return Decimal(str(saldo or 0))

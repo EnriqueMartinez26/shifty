@@ -7,18 +7,24 @@ import { renderHook, waitFor } from '@testing-library/react'
 import {
   useCreatePaymentPreference,
   useManualConfirmPayment,
-  useRefundPayment
+  useRecordRemainingPayment,
+  useRefundPayment,
+  useRevertRemainingPayment
 } from './usePayments'
 
 const mockManualConfirm = jest.fn()
 const mockRefund = jest.fn()
 const mockCreatePreference = jest.fn()
+const mockRecordRemaining = jest.fn()
+const mockRevertRemaining = jest.fn()
 
 jest.mock('@application/services/PaymentsService', () => ({
   paymentsService: {
     manualConfirm: (...args: unknown[]) => mockManualConfirm(...args),
     refund: (...args: unknown[]) => mockRefund(...args),
-    createPreference: (...args: unknown[]) => mockCreatePreference(...args)
+    createPreference: (...args: unknown[]) => mockCreatePreference(...args),
+    recordRemainingPayment: (...args: unknown[]) => mockRecordRemaining(...args),
+    revertRemainingPayment: (...args: unknown[]) => mockRevertRemaining(...args)
   }
 }))
 
@@ -109,6 +115,72 @@ describe('usePayments: mutaciones que cambian el estado del cobro', () => {
 
     const { result } = renderHook(() => useRefundPayment(), { wrapper: envoltorio })
     result.current.mutate({ paymentId: 'pay_1' })
+
+    await waitFor(() => expect(result.current.isError).toBe(true))
+    expect(invalidateSpy).not.toHaveBeenCalled()
+  })
+})
+
+// Saldo restante por turno (D-20261008-01): el resto cambia lo pagado del
+// turno en Cobros y el ingreso de reportes, panel y conciliacion.
+describe('usePayments: el resto del turno', () => {
+  const CLAVES_DEL_RESTO = [
+    ['payments-reconciliation-summary'],
+    ['payments-appointments'],
+    ['reports-summary'],
+    ['reports-professionals'],
+    ['dashboard-summary']
+  ]
+
+  beforeEach(() => {
+    mockRecordRemaining.mockReset()
+    mockRevertRemaining.mockReset()
+  })
+
+  it('registrar el resto llama al servicio y refresca Cobros, reportes y panel', async () => {
+    mockRecordRemaining.mockResolvedValue({ public_id: 'rest-1' })
+    const { envoltorio, invalidateSpy } = crearEnvoltorio()
+
+    const { result } = renderHook(() => useRecordRemainingPayment(), { wrapper: envoltorio })
+    result.current.mutate({
+      appointmentId: 'apt_1',
+      amount: 2240,
+      method: 'efectivo',
+      idempotencyKey: 'clave-resto-0001'
+    })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(mockRecordRemaining).toHaveBeenCalledWith('apt_1', {
+      amount: 2240,
+      method: 'efectivo',
+      idempotencyKey: 'clave-resto-0001'
+    })
+    expect(clavesInvalidadas(invalidateSpy)).toEqual(CLAVES_DEL_RESTO)
+  })
+
+  it('revertir el resto refresca lo mismo', async () => {
+    mockRevertRemaining.mockResolvedValue({ public_id: 'rest-1' })
+    const { envoltorio, invalidateSpy } = crearEnvoltorio()
+
+    const { result } = renderHook(() => useRevertRemainingPayment(), { wrapper: envoltorio })
+    result.current.mutate('apt_1')
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(mockRevertRemaining).toHaveBeenCalledWith('apt_1')
+    expect(clavesInvalidadas(invalidateSpy)).toEqual(CLAVES_DEL_RESTO)
+  })
+
+  it('un registro que falla no invalida nada', async () => {
+    mockRecordRemaining.mockRejectedValue(new Error('409'))
+    const { envoltorio, invalidateSpy } = crearEnvoltorio()
+
+    const { result } = renderHook(() => useRecordRemainingPayment(), { wrapper: envoltorio })
+    result.current.mutate({
+      appointmentId: 'apt_1',
+      amount: 1,
+      method: null,
+      idempotencyKey: 'clave-resto-0002'
+    })
 
     await waitFor(() => expect(result.current.isError).toBe(true))
     expect(invalidateSpy).not.toHaveBeenCalled()

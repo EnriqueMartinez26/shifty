@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, within } from '@testing-library/react'
 
 import CollectionsPage from './Collections'
 
@@ -14,6 +14,8 @@ let mockFlags: { payments: boolean } | undefined = { payments: true }
 let mockWriteAccess = { readOnly: false, reason: 'Tienda suspendida' }
 const mockManualConfirm = jest.fn()
 const mockCreatePreference = jest.fn()
+const mockRecordRemaining = jest.fn()
+const mockRevertRemaining = jest.fn()
 
 jest.mock('../hooks/useStores', () => ({
   useStoreFeatureFlags: () => ({ data: mockFlags ? { flags: mockFlags } : undefined })
@@ -31,7 +33,9 @@ jest.mock('../hooks/usePayments', () => ({
   usePaymentsAppointments: () => ({ data: mockAppointments, isLoading: false, error: null }),
   useReconciliationSummary: (enabled?: boolean) => mockUseReconciliationSummary(enabled),
   useCreatePaymentPreference: () => ({ mutateAsync: mockCreatePreference, data: undefined }),
-  useManualConfirmPayment: () => ({ mutateAsync: mockManualConfirm, isPending: false })
+  useManualConfirmPayment: () => ({ mutateAsync: mockManualConfirm, isPending: false }),
+  useRecordRemainingPayment: () => ({ mutateAsync: mockRecordRemaining, isPending: false }),
+  useRevertRemainingPayment: () => ({ mutateAsync: mockRevertRemaining, isPending: false })
 }))
 
 const valorDe = (label: string) => screen.getByText(label).nextElementSibling?.textContent
@@ -353,5 +357,136 @@ describe('CollectionsPage: confirmar un pago', () => {
     expect(screen.getByText(/Resta/)).toHaveTextContent('2.240')
     expect(screen.queryByRole('button', { name: /Confirmar pago/ })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Crear link/ })).not.toBeInTheDocument()
+  })
+})
+
+// Saldo restante por turno (D-20261008-01): una sena de $960 acreditada sobre
+// un turno de $3.200 deja $2.240 que el cliente paga en el local. Cobros
+// ofrece registrar ese resto, con el importe precargado y el medio de pago.
+describe('CollectionsPage: registrar el resto', () => {
+  const turno = {
+    public_id: '01JA8ZK3Q4R5S6T7V8W9X0Y1Z2',
+    status: 'completed',
+    client_name: 'Lucia',
+    service_name: 'Corte',
+    staff_name: 'Ana',
+    starts_at: '2026-10-08T13:00:00Z',
+    price_amount: '3200.00',
+    payment_status: 'approved',
+    payment_amount: '960.00',
+    remaining_amount: '2240.00',
+    remainder_payment: null
+  }
+  const saldado = {
+    ...turno,
+    remaining_amount: '0.00',
+    remainder_payment: {
+      amount: '2240.00',
+      method: 'efectivo',
+      created_at: '2026-10-08T15:00:00Z'
+    }
+  }
+
+  beforeEach(() => {
+    mockAuthUser = { role: 'store_admin', is_global_admin: false }
+    mockFlags = { payments: true }
+    mockWriteAccess = { readOnly: false, reason: 'Tienda suspendida' }
+    mockAppointments = [turno]
+    mockRecordRemaining.mockReset()
+    mockRecordRemaining.mockResolvedValue({
+      public_id: '01JA8ZREST000000000000000',
+      appointment_id: turno.public_id,
+      amount: '2240.00',
+      method: 'efectivo',
+      created_at: '2026-10-08T15:00:00Z',
+      reverted_at: null,
+      remaining_amount: '0.00'
+    })
+    mockRevertRemaining.mockReset()
+    mockRevertRemaining.mockResolvedValue({ public_id: '01JA8ZREST000000000000000' })
+  })
+
+  const registrarResto = () => screen.getByRole('button', { name: /Registrar resto/ })
+
+  it('pide el resto precargado y lo registra con el medio de pago y una clave', async () => {
+    render(<CollectionsPage />)
+
+    expect(screen.getByText(/Resta/)).toHaveTextContent('2.240')
+    fireEvent.click(registrarResto())
+    const dialogo = screen.getByRole('dialog', { name: /Registrar resto/ })
+    expect((screen.getByLabelText(/Importe/) as HTMLInputElement).value).toBe('2.240')
+    fireEvent.change(screen.getByLabelText(/Medio de pago/), { target: { value: 'efectivo' } })
+    await act(async () => {
+      fireEvent.click(within(dialogo).getByRole('button', { name: /Registrar resto/ }))
+    })
+
+    expect(mockRecordRemaining).toHaveBeenCalledWith({
+      appointmentId: turno.public_id,
+      amount: 2240,
+      method: 'efectivo',
+      idempotencyKey: expect.any(String)
+    })
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(screen.getByText(/Resto registrado/)).toHaveTextContent('Lucia')
+    expect(document.body.textContent).not.toContain('01JA8ZREST')
+  })
+
+  it('un reintento desde el mismo dialogo reusa la clave', async () => {
+    mockRecordRemaining.mockRejectedValueOnce(new Error('red'))
+    render(<CollectionsPage />)
+
+    fireEvent.click(registrarResto())
+    const dialogo = screen.getByRole('dialog', { name: /Registrar resto/ })
+    const enviar = () => within(dialogo).getByRole('button', { name: /Registrar resto/ })
+    await act(async () => {
+      fireEvent.click(enviar())
+    })
+    expect(dialogo).toHaveTextContent('No se pudo registrar el resto')
+    await act(async () => {
+      fireEvent.click(enviar())
+    })
+
+    const [primera, segunda] = mockRecordRemaining.mock.calls.map(
+      ([vars]) => (vars as { idempotencyKey: string }).idempotencyKey
+    )
+    expect(primera).toBe(segunda)
+  })
+
+  it('con el resto registrado muestra el total y no lo vuelve a ofrecer', () => {
+    mockAppointments = [saldado]
+    render(<CollectionsPage />)
+
+    expect(screen.getByText(/Pagado/)).toHaveTextContent('3.200')
+    expect(screen.queryByRole('button', { name: /Registrar resto/ })).not.toBeInTheDocument()
+  })
+
+  it('con la tienda suspendida lo deshabilita con el motivo', () => {
+    mockWriteAccess = { readOnly: true, reason: 'Tienda suspendida' }
+    render(<CollectionsPage />)
+
+    expect(registrarResto()).toBeDisabled()
+    expect(registrarResto()).toHaveAttribute('title', 'Tienda suspendida')
+  })
+
+  it('el admin revierte el resto despues de confirmar', async () => {
+    mockAppointments = [saldado]
+    render(<CollectionsPage />)
+
+    fireEvent.click(screen.getByRole('button', { name: /Revertir resto/ }))
+    expect(mockRevertRemaining).not.toHaveBeenCalled()
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Sí, revertir/ }))
+    })
+
+    expect(mockRevertRemaining).toHaveBeenCalledWith(turno.public_id)
+    expect(screen.getByText(/Resto revertido/)).toHaveTextContent('Lucia')
+  })
+
+  it('el profesional no ve revertir (solo admin)', () => {
+    mockAuthUser = { role: 'professional', is_global_admin: false }
+    mockAppointments = [saldado]
+    render(<CollectionsPage />)
+
+    expect(screen.queryByRole('button', { name: /Revertir resto/ })).not.toBeInTheDocument()
   })
 })

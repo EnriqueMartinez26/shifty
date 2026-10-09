@@ -124,3 +124,90 @@ describe('ManualPaymentModal', () => {
     expect(props.onSubmit).not.toHaveBeenCalled()
   })
 })
+
+// Saldo restante por turno (D-20261008-01): el mismo dialogo registra el resto
+// que el cliente paga en el local. Precarga lo que resta, no deja pasarse del
+// saldo y pide (opcional) el medio de pago.
+describe('ManualPaymentModal: registrar el resto', () => {
+  const props = {
+    clientName: 'Lucia Perez',
+    serviceName: 'Corte',
+    startsAt: '2026-10-08T13:00:00Z',
+    suggestedAmount: 2240,
+    isDeposit: false,
+    mode: 'remainder' as const,
+    maxAmount: 2240,
+    busy: false,
+    error: null,
+    onSubmit: jest.fn(),
+    onClose: jest.fn()
+  }
+
+  beforeEach(() => {
+    props.onSubmit.mockClear()
+  })
+
+  const importe = () => screen.getByLabelText(/Importe/)
+  const medio = () => screen.getByLabelText(/Medio de pago/)
+  const registrar = () => screen.getByRole('button', { name: /Registrar resto/ })
+
+  it('se titula "Registrar resto", dice cuanto resta y lo precarga', () => {
+    render(<ManualPaymentModal {...props} />)
+
+    const dialogo = screen.getByRole('dialog', { name: /Registrar resto/ })
+    expect(dialogo).toHaveTextContent(/Resta/)
+    expect(dialogo).toHaveTextContent('2.240')
+    expect((importe() as HTMLInputElement).value).toBe('2.240')
+  })
+
+  it('registra el importe y el medio de pago elegido', () => {
+    render(<ManualPaymentModal {...props} />)
+
+    fireEvent.change(medio(), { target: { value: 'transferencia' } })
+    fireEvent.click(registrar())
+
+    expect(props.onSubmit).toHaveBeenCalledWith(2240, 'transferencia')
+  })
+
+  it('sin medio elegido lo manda vacio', () => {
+    render(<ManualPaymentModal {...props} />)
+
+    fireEvent.change(importe(), { target: { value: '1.000' } })
+    fireEvent.click(registrar())
+
+    expect(props.onSubmit).toHaveBeenCalledWith(1000, null)
+  })
+
+  it('ofrece los cuatro medios del backend', () => {
+    render(<ManualPaymentModal {...props} />)
+
+    const valores = Array.from((medio() as HTMLSelectElement).options).map((o) => o.value)
+    expect(valores).toEqual(['', 'efectivo', 'transferencia', 'mercadopago', 'otro'])
+  })
+
+  it('no deja registrar mas de lo que resta', () => {
+    render(<ManualPaymentModal {...props} />)
+
+    fireEvent.change(importe(), { target: { value: '2.240,01' } })
+
+    expect(registrar()).toBeDisabled()
+    expect(importe()).toHaveAttribute('aria-invalid', 'true')
+    expect(screen.getByText(/supera lo que resta/)).toBeInTheDocument()
+    fireEvent.submit(registrar().closest('form') as HTMLFormElement)
+    expect(props.onSubmit).not.toHaveBeenCalled()
+  })
+
+  // Revision de la PR #137 (S4): el resto salda el precio impago del turno;
+  // lo que se paso al fiado no se registra tambien como resto.
+  it('aclara que el resto no es fiado', () => {
+    render(<ManualPaymentModal {...props} />)
+
+    expect(screen.getByText(/no es fiado/)).toBeInTheDocument()
+  })
+
+  it('el dialogo de un pago comun no pide medio de pago', () => {
+    render(<ManualPaymentModal {...props} mode="payment" maxAmount={null} />)
+
+    expect(screen.queryByLabelText(/Medio de pago/)).not.toBeInTheDocument()
+  })
+})

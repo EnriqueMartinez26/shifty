@@ -4,7 +4,8 @@ import { CreditCard } from 'lucide-react'
 
 import {
   appointmentChargeOf,
-  type AppointmentCharge
+  type AppointmentCharge,
+  type RemainderPaymentMethod
 } from '@domain/value-objects/AppointmentCharge'
 import { isCollectibleStatus } from '@domain/value-objects/BookingStatus'
 
@@ -12,6 +13,7 @@ import type { AppointmentSearchItem } from '@application/services/PaymentsServic
 
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
 import { formatCurrency } from '@shared/utils/currency'
+import { createUuid } from '@shared/utils/uuid'
 
 import { colors2000s } from '../../theme/colors'
 import { CollectionAppointmentCard } from '../components/molecules/CollectionAppointmentCard'
@@ -22,12 +24,15 @@ import { SummaryCards } from '../components/molecules/SummaryCards'
 import { ManualPaymentModal } from '../components/organisms/ManualPaymentModal'
 import { useAuth } from '../context/AuthContext'
 import { ROLES_ADMIN_SUPER, hasAnyRole } from '../context/roles'
+import { useConfirm } from '../hooks/useConfirm'
 import { useDocumentTitle } from '../hooks/useDocumentTitle'
 import {
   useCreatePaymentPreference,
   useManualConfirmPayment,
   usePaymentsAppointments,
-  useReconciliationSummary
+  useReconciliationSummary,
+  useRecordRemainingPayment,
+  useRevertRemainingPayment
 } from '../hooks/usePayments'
 import { useStoreFeatureFlags } from '../hooks/useStores'
 import { useStoreWriteAccess } from '../hooks/useStoreWriteAccess'
@@ -42,8 +47,14 @@ const chargeOf = (appointment: AppointmentSearchItem): AppointmentCharge =>
     appointmentStatus: appointment.status,
     priceAmount: appointment.price_amount,
     paymentStatus: appointment.payment_status,
-    paymentAmount: appointment.payment_amount
+    paymentAmount: appointment.payment_amount,
+    remainingAmount: appointment.remaining_amount,
+    remainderAmount: appointment.remainder_payment?.amount
   })
+
+/** Lo que resta del turno, para precargar y topear el dialogo del resto. */
+const remainingOf = (charge: AppointmentCharge): number =>
+  charge.kind === 'paid' ? charge.remaining : 0
 
 /** Importe que el dialogo precarga: el cobro pendiente o el precio del turno. */
 const suggestedAmountOf = (charge: AppointmentCharge): number | null => {
@@ -90,6 +101,15 @@ const CollectionsPage: React.FC = () => {
   // Turno cuyo pago se esta confirmando (dialogo abierto) y su error.
   const [paying, setPaying] = useState<AppointmentSearchItem | null>(null)
   const [payError, setPayError] = useState<string | null>(null)
+  // Saldo restante por turno (D-20261008-01): turno cuyo resto se registra,
+  // su error y la clave de idempotencia del dialogo (un reintento del mismo
+  // envio no registra dos restos).
+  const recordRemainder = useRecordRemainingPayment()
+  const revertRemainder = useRevertRemainingPayment()
+  const { confirm, confirmDialog } = useConfirm()
+  const [remainderFor, setRemainderFor] = useState<AppointmentSearchItem | null>(null)
+  const [remainderError, setRemainderError] = useState<string | null>(null)
+  const [remainderKey, setRemainderKey] = useState('')
 
   const cardStyle = create2000sPanelStyle()
 
@@ -151,7 +171,52 @@ const CollectionsPage: React.FC = () => {
     }
   }
 
+  const openRemainder = (appointment: AppointmentSearchItem) => {
+    setRemainderError(null)
+    setRemainderKey(createUuid())
+    setRemainderFor(appointment)
+  }
+
+  const handleRecordRemainder = async (
+    amount: number,
+    method: RemainderPaymentMethod | null = null
+  ) => {
+    if (!remainderFor) return
+    try {
+      const response = await recordRemainder.mutateAsync({
+        appointmentId: remainderFor.public_id,
+        amount,
+        method,
+        idempotencyKey: remainderKey
+      })
+      setFeedback({
+        tone: 'success',
+        text: `Resto registrado: ${formatCurrency(Number(response.amount))} de ${remainderFor.client_name}.`
+      })
+      setRemainderFor(null)
+    } catch (error: unknown) {
+      setRemainderError(getErrorMessage(error, 'No se pudo registrar el resto'))
+    }
+  }
+
+  // Solo admin (el backend responde 403 al resto). La devolucion se hace por
+  // fuera: aca solo se marca el resto como revertido.
+  const handleRevertRemainder = async (appointment: AppointmentSearchItem) => {
+    const confirmed = await confirm(
+      `¿Revertir el resto que pagó ${appointment.client_name}? Hacé la devolución por fuera de Shifty; el turno vuelve a quedar con saldo pendiente.`,
+      { confirmLabel: 'Sí, revertir', cancelLabel: 'Volver' }
+    )
+    if (!confirmed) return
+    try {
+      await revertRemainder.mutateAsync(appointment.public_id)
+      setFeedback({ tone: 'success', text: `Resto revertido de ${appointment.client_name}.` })
+    } catch (error: unknown) {
+      setFeedback({ tone: 'error', text: getErrorMessage(error, 'No se pudo revertir el resto') })
+    }
+  }
+
   const payingCharge = paying ? chargeOf(paying) : null
+  const remainderCharge = remainderFor ? chargeOf(remainderFor) : null
 
   return (
     <div className="space-y-8 duration-500">
@@ -214,10 +279,19 @@ const CollectionsPage: React.FC = () => {
               }
               linkBlockedReason={linkBlockedReason}
               confirmBlockedReason={confirmBlockedReason}
+              remainderBlockedReason={suspendedReason}
               onCreateLink={() => {
                 void handleCreatePreference(appointment)
               }}
               onConfirmPayment={() => openManualConfirm(appointment)}
+              onRecordRemainder={() => openRemainder(appointment)}
+              onRevertRemainder={
+                isAdmin
+                  ? () => {
+                      void handleRevertRemainder(appointment)
+                    }
+                  : null
+              }
             />
           ))}
 
@@ -247,6 +321,26 @@ const CollectionsPage: React.FC = () => {
           onClose={() => setPaying(null)}
         />
       )}
+
+      {remainderFor && remainderCharge && (
+        <ManualPaymentModal
+          mode="remainder"
+          clientName={remainderFor.client_name}
+          serviceName={remainderFor.service_name}
+          startsAt={remainderFor.starts_at}
+          suggestedAmount={remainingOf(remainderCharge)}
+          maxAmount={remainingOf(remainderCharge)}
+          isDeposit={false}
+          busy={recordRemainder.isPending}
+          error={remainderError}
+          onSubmit={(amount, method) => {
+            void handleRecordRemainder(amount, method ?? null)
+          }}
+          onClose={() => setRemainderFor(null)}
+        />
+      )}
+
+      {confirmDialog}
     </div>
   )
 }

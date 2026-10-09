@@ -79,6 +79,45 @@ describe('PaymentsService', () => {
     })
   })
 
+  // Saldo restante por turno (D-20261008-01).
+  it('recordRemainingPayment manda importe, medio y clave al turno', async () => {
+    const resto = { public_id: 'rest-1', amount: '2240.00', remaining_amount: '0.00' }
+    mockPost.mockResolvedValue({ data: resto })
+
+    await expect(
+      paymentsService.recordRemainingPayment('apt-1', {
+        amount: 2240,
+        method: 'efectivo',
+        idempotencyKey: 'clave-resto-0001'
+      })
+    ).resolves.toEqual(resto)
+    expect(mockPost).toHaveBeenCalledWith('/payments/apt-1/remaining-payment', {
+      amount: 2240,
+      method: 'efectivo',
+      idempotency_key: 'clave-resto-0001'
+    })
+  })
+
+  it('recordRemainingPayment sin medio lo manda en null', async () => {
+    await paymentsService.recordRemainingPayment('apt-1', {
+      amount: 100,
+      method: null,
+      idempotencyKey: 'clave-resto-0002'
+    })
+
+    expect(mockPost).toHaveBeenCalledWith('/payments/apt-1/remaining-payment', {
+      amount: 100,
+      method: null,
+      idempotency_key: 'clave-resto-0002'
+    })
+  })
+
+  it('revertRemainingPayment revierte el resto del turno por POST sin cuerpo', async () => {
+    await paymentsService.revertRemainingPayment('apt-1')
+
+    expect(mockPost).toHaveBeenCalledWith('/payments/apt-1/remaining-payment/revert')
+  })
+
   it('refund manda importe, motivo y manual al pago', async () => {
     await paymentsService.refund('pay-1', 500, 'cancelado', true)
 
