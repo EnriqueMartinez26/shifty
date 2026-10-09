@@ -154,10 +154,9 @@ async def test_el_resto_de_la_api_sigue_sin_cache_y_con_pragma(
 def test_el_router_de_medios_sin_guarda_solo_tiene_lecturas() -> None:
     # Va sin block_writes_when_suspended (main.py): una escritura agregada
     # aca naceria sin la guarda de tienda suspendida.
-    metodos = {
-        metodo
-        for ruta in media_router.routes
-        if isinstance(ruta, APIRoute)
-        for metodo in ruta.methods
-    }
+    metodos: set[str] = set()
+    for ruta in media_router.routes:
+        if isinstance(ruta, APIRoute):
+            assert ruta.methods is not None
+            metodos.update(ruta.methods)
     assert metodos == {"GET", "HEAD"}

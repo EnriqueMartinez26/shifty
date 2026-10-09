@@ -30,7 +30,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import pytest
-from fastapi.routing import APIRoute
+from fastapi.routing import APIRoute, RouteContext, iter_route_contexts
 from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -66,12 +66,16 @@ PASSWORD = "Clave-Larga-2026!ok"
 TELEFONO = "+5491155550977"
 
 
-def _rutas_con_escritura() -> list[APIRoute]:
-    return [
-        route
-        for route in app.routes
-        if isinstance(route, APIRoute) and set(route.methods) - SAFE_METHODS
-    ]
+def _rutas_con_escritura() -> list[RouteContext]:
+    rutas = []
+    for route in iter_route_contexts(app.routes):
+        if not isinstance(route.original_route, APIRoute):
+            continue
+        assert route.path is not None
+        assert route.methods is not None
+        if route.methods - SAFE_METHODS:
+            rutas.append(route)
+    return rutas
 
 
 def _exenta(path: str) -> bool:
@@ -88,6 +92,8 @@ def test_el_prefijo_exento_respeta_el_limite_de_segmento() -> None:
 def test_toda_escritura_del_panel_pasa_por_la_guarda() -> None:
     sin_guarda = []
     for route in _rutas_con_escritura():
+        assert route.path is not None
+        assert route.methods is not None
         if _exenta(route.path):
             continue
         guardada = any(
@@ -101,11 +107,11 @@ def test_toda_escritura_del_panel_pasa_por_la_guarda() -> None:
 
 def test_las_escrituras_permitidas_existen_de_verdad() -> None:
     """Una excepcion que apunta a una ruta que no existe es una excepcion muerta."""
-    rutas = {
-        (method, route.path)
-        for route in _rutas_con_escritura()
-        for method in route.methods
-    }
+    rutas: set[tuple[str, str]] = set()
+    for route in _rutas_con_escritura():
+        assert route.path is not None
+        assert route.methods is not None
+        rutas.update((method, route.path) for method in route.methods)
     # Por el modulo y no importado por nombre: si la tabla no existe, el test
     # falla por la asercion y no tumba la coleccion del archivo entero.
     permitidas = guarda.SUSPENSION_ALLOWED_WRITES
