@@ -22,7 +22,7 @@ jobs:
         working-directory: frontend
     steps:
       - name: Checkout
-        uses: actions/checkout@v7.0.0
+        uses: actions/checkout@v7.0.1
       - name: Setup Node
         uses: actions/setup-node@v7.0.0
         with:
@@ -58,7 +58,7 @@ jobs:
         working-directory: frontend
     steps:
       - name: Checkout
-        uses: actions/checkout@v7.0.0
+        uses: actions/checkout@v7.0.1
       - name: Setup Node 24 compatibility lane
         uses: actions/setup-node@v7.0.0
         with:
@@ -84,7 +84,7 @@ jobs:
         working-directory: backend
     steps:
       - name: Checkout
-        uses: actions/checkout@v7.0.0
+        uses: actions/checkout@v7.0.1
       - name: Setup Python y uv
         uses: ./.github/actions/setup-python-uv
       - name: Install dependencies
@@ -105,7 +105,7 @@ jobs:
         working-directory: backend
     steps:
       - name: Checkout
-        uses: actions/checkout@v7.0.0
+        uses: actions/checkout@v7.0.1
       - name: Setup Python y uv
         uses: ./.github/actions/setup-python-uv
       - name: Install dependencies
@@ -125,7 +125,7 @@ jobs:
         working-directory: backend
     steps:
       - name: Checkout
-        uses: actions/checkout@v7.0.0
+        uses: actions/checkout@v7.0.1
       - name: Setup Python y uv
         uses: ./.github/actions/setup-python-uv
       - name: Install dependencies
@@ -167,7 +167,7 @@ jobs:
       TEST_POSTGRES_URL: postgresql+asyncpg://shifty_app:ci_solo_prueba_app_password@localhost:5432/shifty_test?ssl=disable
     steps:
       - name: Checkout
-        uses: actions/checkout@v7.0.0
+        uses: actions/checkout@v7.0.1
       - name: Setup Python y uv
         uses: ./.github/actions/setup-python-uv
       - name: Install dependencies
@@ -189,7 +189,7 @@ jobs:
       pull-requests: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v7.0.0
+        uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
       - name: Run gitleaks
@@ -201,7 +201,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v7.0.0
+        uses: actions/checkout@v7.0.1
       - name: Setup Node
         uses: actions/setup-node@v7.0.0
         with:
@@ -231,7 +231,7 @@ jobs:
     needs: [standards]
     steps:
       - name: Checkout
-        uses: actions/checkout@v7.0.0
+        uses: actions/checkout@v7.0.1
       - name: Setup Node
         uses: actions/setup-node@v7.0.0
         with:
