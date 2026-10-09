@@ -81,7 +81,7 @@ jobs:
             context: ./nginx
     steps:
       - name: Checkout
-        uses: actions/checkout@v7.0.0
+        uses: actions/checkout@v7.0.1
         with:
           # Sin esto, en un workflow_run se construiria el ultimo commit de
           # main, que puede no ser el que Quality probo.
@@ -121,6 +121,7 @@ jobs:
           # linea (docs/DEPLOY_RUNBOOK.md, seccion 2).
           build-args: |
             VITE_SENTRY_DSN=${{ vars.VITE_SENTRY_DSN }}
+            VITE_GA4_MEASUREMENT_ID=${{ vars.VITE_GA4_MEASUREMENT_ID }}
             VITE_SUPPORT_WHATSAPP=${{ vars.VITE_SUPPORT_WHATSAPP }}
             VITE_CONTACT_EMAIL=${{ vars.VITE_CONTACT_EMAIL }}
             VITE_LEGAL_RESPONSABLES=${{ vars.VITE_LEGAL_RESPONSABLES }}
