@@ -4,6 +4,8 @@ import { subDays } from 'date-fns'
 import { CalendarX, DollarSign, Gauge, UserRoundPlus } from 'lucide-react'
 import { useNavigate } from 'react-router'
 
+import { totalCollected } from '@domain/value-objects/AppointmentCharge'
+
 import { formatArgentinaDate } from '@shared/utils/argentinaTime'
 import { formatCurrency } from '@shared/utils/currency'
 
@@ -304,9 +306,14 @@ const Dashboard = () => {
       id: 'approved-amount',
       label: 'Cobrado',
       value: formatCurrency(
-        paymentsQuery.data?.total_approved_amount ?? reportStats?.total_revenue
+        paymentsQuery.data
+          ? totalCollected(
+              paymentsQuery.data.total_approved_amount,
+              paymentsQuery.data.total_remainder_amount
+            )
+          : reportStats?.total_revenue
       ),
-      detail: paymentsEnabled ? 'Pagos aprobados y manuales' : 'Ingresos por turnos',
+      detail: paymentsEnabled ? 'Pagos aprobados, manuales y restos' : 'Ingresos por turnos',
       tone: 'success',
       onSelect: () =>
         void navigate(paymentsEnabled ? '/dashboard/collections' : '/dashboard/reports')

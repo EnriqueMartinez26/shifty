@@ -90,6 +90,11 @@ NO_ES_TEXTO_PUBLICADO: dict[tuple[str, str, str], str] = {
     ("PATCH", "/public/client/appointments/{public_id}/reschedule", "phone"): _OPACO,
     ("POST", "/ledger/customers/{client_id}/movements", "notes"): _PANEL,
     ("POST", "/payments/{appointment_id}/manual-confirm", "notes"): _PANEL,
+    (
+        "POST",
+        "/payments/{appointment_id}/remaining-payment",
+        "idempotency_key",
+    ): _OPACO,
     ("POST", "/payments/{payment_id}/refund", "reason"): _PANEL,
     ("POST", "/promotions/", "description"): _PANEL,
     ("PATCH", "/promotions/{promotion_public_id}", "description"): _PANEL,

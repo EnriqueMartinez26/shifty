@@ -32,6 +32,7 @@ from modules.billing.model import (
 )
 from modules.ledger.model import CustomerLedger
 from modules.payments.model import (
+    AppointmentBalancePayment,
     OutboxMessage,
     Payment,
     PaymentGatewayConfig,
@@ -403,6 +404,13 @@ async def cleanup_seed(session: AsyncSession) -> None:
         )
 
     if appointment_ids:
+        # El resto pagado aparte (D-20261008-01) cuelga del turno y del usuario
+        # que lo registro: va antes que turnos y usuarios.
+        await session.execute(
+            delete(AppointmentBalancePayment).where(
+                AppointmentBalancePayment.appointment_id.in_(appointment_ids)
+            )
+        )
         await session.execute(
             delete(Payment).where(Payment.appointment_id.in_(appointment_ids))
         )

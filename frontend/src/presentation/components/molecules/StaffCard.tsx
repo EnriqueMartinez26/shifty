@@ -1,27 +1,34 @@
 import React from 'react'
 
-import { Mail, Edit3, Trash2, Check, X, LayoutGrid } from 'lucide-react'
+import { Mail, Edit3, Trash2, Check, X, LayoutGrid, Clock } from 'lucide-react'
 
 import { Staff } from '@domain/entities/Staff'
 
 import { colors2000s, buttonStyles2000s, orangeCtaGradient } from '../../../theme/colors'
+import { summarizeSchedules } from '../../lib/staffWeekDraft'
 
 interface StaffCardProps {
   staff: Staff
   onEdit: (staff: Staff) => void
   onDelete: (id: string) => void
+  /** Abre el editor de la semana de trabajo (`PUT /staff/{id}/schedules`). */
+  onEditSchedule: (staff: Staff) => void
   /** Tienda suspendida: editar (horarios y servicios incluidos) y eliminar responden 402 (FF-15). */
   readOnlyReason?: string | null
   /** id -> nombre de los servicios de la tienda; sin el, el chip dice "Servicio". */
   serviceNames?: ReadonlyMap<string, string>
+  /** La ficha es de la cuenta que inicia sesion: quitarse no es dar de baja. */
+  isSelf?: boolean
 }
 
 export const StaffCard: React.FC<StaffCardProps> = ({
   staff,
   onEdit,
   onDelete,
+  onEditSchedule,
   readOnlyReason = null,
-  serviceNames
+  serviceNames,
+  isSelf = false
 }) => {
   const blocked = readOnlyReason !== null
   const title = readOnlyReason ?? undefined
@@ -98,7 +105,7 @@ export const StaffCard: React.FC<StaffCardProps> = ({
               className="text-[10px] font-black uppercase tracking-widest mt-1 truncate"
               style={{ color: colors2000s.text.secondary }}
             >
-              {isResource ? 'Recurso' : staff.fullName}
+              {isResource ? 'Recurso' : isSelf ? `${staff.fullName} (vos)` : staff.fullName}
             </p>
           </div>
         </div>
@@ -166,13 +173,31 @@ export const StaffCard: React.FC<StaffCardProps> = ({
           </div>
         </div>
 
+        {/* Semana de trabajo: la propia o el horario de la tienda */}
+        <div
+          className="flex items-center gap-2 text-xs font-bold"
+          style={{ color: colors2000s.text.secondary }}
+        >
+          <Clock size={14} color={colors2000s.text.disabled} />
+          <span className="truncate">{summarizeSchedules(staff.schedules)}</span>
+        </div>
+
         {/* Outlined Action Buttons in Footer */}
         <div className="grid grid-cols-2 gap-3 pt-4">
+          {/* Ver la semana es una lectura: con la tienda suspendida el editor
+              abre en solo lectura en vez de quedar deshabilitado. */}
+          <button
+            onClick={() => onEditSchedule(staff)}
+            className="col-span-2 min-h-[44px] flex items-center justify-center gap-2 py-2.5 px-3 font-black text-[10px] uppercase tracking-widest transition-all active:scale-95 disabled:opacity-50"
+            style={buttonStyles2000s.default}
+          >
+            <Clock size={14} /> Horarios
+          </button>
           <button
             onClick={() => onEdit(staff)}
             disabled={blocked}
             title={title}
-            className="flex items-center justify-center gap-2 py-2.5 px-3 font-black text-[10px] uppercase tracking-widest transition-all active:scale-95 disabled:opacity-50"
+            className="min-h-[44px] flex items-center justify-center gap-2 py-2.5 px-3 font-black text-[10px] uppercase tracking-widest transition-all active:scale-95 disabled:opacity-50"
             style={buttonStyles2000s.default}
           >
             <Edit3 size={14} /> Editar
@@ -181,10 +206,10 @@ export const StaffCard: React.FC<StaffCardProps> = ({
             onClick={() => onDelete(staff.id)}
             disabled={blocked}
             title={title}
-            className="flex items-center justify-center gap-2 py-2.5 px-3 font-black text-[10px] uppercase tracking-widest transition-all active:scale-95 disabled:opacity-50"
+            className="min-h-[44px] flex items-center justify-center gap-2 py-2.5 px-3 font-black text-[10px] uppercase tracking-widest transition-all active:scale-95 disabled:opacity-50"
             style={{ ...buttonStyles2000s.default, color: colors2000s.status.danger.light }}
           >
-            <Trash2 size={14} /> Eliminar
+            <Trash2 size={14} /> {isSelf ? 'Quitarme' : 'Eliminar'}
           </button>
         </div>
       </div>

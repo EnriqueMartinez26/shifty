@@ -416,7 +416,9 @@ describe('Dashboard (red de seguridad de la extraccion F11b-09)', () => {
 
       const money = section('Dinero')
       expect(cardOf(money, 'Cobrado').getByText(peso(700000))).toBeInTheDocument()
-      expect(cardOf(money, 'Cobrado').getByText('Pagos aprobados y manuales')).toBeInTheDocument()
+      expect(
+        cardOf(money, 'Cobrado').getByText('Pagos aprobados, manuales y restos')
+      ).toBeInTheDocument()
       expect(cardOf(money, 'Ticket promedio').getByText(peso(15000))).toBeInTheDocument()
       expect(
         cardOf(money, 'Ticket promedio').getByText('Promedio móvil de 7 días')
@@ -581,6 +583,22 @@ describe('Dashboard (red de seguridad de la extraccion F11b-09)', () => {
 
       const money = section('Dinero')
       expect(cardOf(money, 'Cobrado').getByText(peso(980000))).toBeInTheDocument()
+    })
+  })
+
+  // Revision de la PR #137 (S2): la conciliacion informa los restos aparte
+  // (D-20261008-01); el Cobrado del panel es la suma de los dos.
+  describe('restos pagados aparte', () => {
+    it('el Cobrado suma los restos a los cobros acreditados', async () => {
+      Object.assign(mockScenario, {
+        reconciliation: {
+          ...adminScenario().reconciliation,
+          total_remainder_amount: '2240.00'
+        }
+      })
+      await renderDashboard()
+
+      expect(cardOf(section('Dinero'), 'Cobrado').getByText(peso(702240))).toBeInTheDocument()
     })
   })
 

@@ -4,6 +4,7 @@ import enum
 from typing import Any, TypeAlias
 
 from sqlalchemy import (
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
@@ -38,7 +39,7 @@ class PaymentStatus(str, enum.Enum):
 
 # Estados en los que la plata efectivamente entro. Unica fuente: la leen
 # ``Payment.is_accredited`` y las consultas que filtran en SQL (la guarda de
-# reprogramacion del cliente, ``PublicRepository.accredited_appointment_ids``).
+# reprogramacion del cliente, ``payments.repository.paid_appointment_of``).
 ACCREDITED_PAYMENT_STATUSES: frozenset[str] = frozenset(
     {PaymentStatus.APPROVED.value, PaymentStatus.MANUAL_CONFIRMED.value}
 )
@@ -313,6 +314,85 @@ class Payment(BaseEntity):
         }:
             self.paid_at = self.paid_at or datetime.now(timezone.utc)
         return True
+
+
+class BalancePaymentMethod(str, enum.Enum):
+    """Medio con que el cliente pago el resto (opcional, D-20261008-01)."""
+
+    CASH = "efectivo"
+    TRANSFER = "transferencia"
+    MERCADOPAGO = "mercadopago"
+    OTHER = "otro"
+
+
+BALANCE_PAYMENT_METHODS: tuple[str, ...] = tuple(m.value for m in BalancePaymentMethod)
+
+
+class AppointmentBalancePayment(BaseEntity):
+    """El resto de un turno pagado aparte de su cobro (D-20261008-01).
+
+    Saldo restante por turno, opcion A: un turno tiene a lo sumo un cobro
+    (``uq_payments_store_appointment``) y ese cobro acreditado puede ser menor
+    que el precio congelado (una sena de $960 sobre $3.200). El resto ($2.240)
+    se paga en el local y el personal lo registra aca: UN resto vivo por turno
+    (``uq_appointment_balance_payments_live``), por un importe mayor a cero
+    (CHECK) que no supera el saldo (lo valida el service bajo el lock del
+    turno). Es plata fuera de Mercado Pago: no tiene estados ni link.
+
+    La devolucion de un resto se hace fuera del sistema y el admin lo marca
+    revertido (``reverted_at``/``reverted_by``, los dos o ninguno por CHECK):
+    la fila no se borra, queda como auditoria, y un resto revertido deja de
+    contar como ingreso y como saldo pagado. Sin notas libres a proposito: un
+    texto libre seria un dato personal mas que la anonimizacion no cubre.
+    """
+
+    __tablename__ = "appointment_balance_payments"
+    __table_args__ = (
+        CheckConstraint("amount > 0", name="ck_appointment_balance_payments_amount"),
+        CheckConstraint(
+            "method IS NULL OR method IN ("
+            + ", ".join(f"'{m}'" for m in BALANCE_PAYMENT_METHODS)
+            + ")",
+            name="ck_appointment_balance_payments_method",
+        ),
+        CheckConstraint(
+            "(reverted_at IS NULL) = (reverted_by IS NULL)",
+            name="ck_appointment_balance_payments_reverted",
+        ),
+        # Un resto VIVO por turno: la ultima defensa si dos registros pasan
+        # la validacion a la vez (el lock del turno ya los serializa).
+        Index(
+            "uq_appointment_balance_payments_live",
+            "appointment_id",
+            unique=True,
+            postgresql_where=text("reverted_at IS NULL"),
+            sqlite_where=text("reverted_at IS NULL"),
+        ),
+        Index(
+            "ix_appointment_balance_payments_store_created", "store_id", "created_at"
+        ),
+    )
+
+    store_id: Mapped[str] = mapped_column(ForeignKey("stores.id"))
+    appointment_id: Mapped[str] = mapped_column(ForeignKey("appointments.id"))
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))
+    method: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    recorded_by: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    reverted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    reverted_by: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id"), nullable=True
+    )
+
+    @property
+    def is_live(self) -> bool:
+        return self.reverted_at is None
+
+    def revert(self, *, actor_id: str) -> None:
+        """Lo marca revertido: la devolucion se hizo fuera del sistema."""
+        self.reverted_at = datetime.now(timezone.utc)
+        self.reverted_by = actor_id
 
 
 class PaymentLinkHistory(BaseEntity):

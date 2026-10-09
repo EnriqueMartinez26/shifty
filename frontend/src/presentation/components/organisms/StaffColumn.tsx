@@ -129,13 +129,18 @@ export const StaffColumn: React.FC<StaffColumnProps> = ({
 
     {cards.map((card) => {
       const style = statusStyle(card.status)
+      // El alto de la grilla es un piso, no un tope: con las acciones de 40x40
+      // del telefono un turno corto no entra, y un alto fijo con scroll propio
+      // las escondia (revision de la PR #129). Si al crecer tapa al turno de
+      // abajo, tocarla o enfocarla la trae al frente.
       return (
         <div
           key={card.id}
-          className="absolute left-2 right-2 rounded-[6px] p-3 border border-l-[5px] transition-all hover:scale-[1.02] active:scale-95 cursor-pointer flex flex-col justify-between gap-1 overflow-y-auto"
+          data-appointment-card
+          className="absolute left-2 right-2 rounded-[6px] p-3 border border-l-[5px] transition-all hover:scale-[1.02] hover:z-20 focus-within:z-20 active:scale-95 cursor-pointer flex flex-col justify-between gap-1"
           style={{
             top: card.top,
-            height: card.height,
+            minHeight: card.height,
             background: style.background,
             borderColor: colors2000s.border.default,
             borderLeftColor: style.accent,

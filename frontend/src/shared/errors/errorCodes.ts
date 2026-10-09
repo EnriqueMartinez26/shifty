@@ -40,6 +40,15 @@ export const ERROR_CODE_MESSAGES: ReadonlyMap<string, string> = new Map([
   ['SCHEDULE_BLOCKED', 'Ese horario está bloqueado en la agenda. Elegí otro.'],
   ['OUT_OF_SCHEDULE', 'El profesional no atiende en ese horario. Elegí otro.'],
   ['NO_STAFF_AVAILABLE', 'No hay profesionales disponibles en ese horario. Elegí otro.'],
+  // Semana del profesional (PUT /staff/{id}/schedules). El editor nombra el
+  // dia con `detail.day_of_week`; esto es el respaldo sin el dia.
+  ['SCHEDULE_OVERLAP', 'Hay franjas que se superponen el mismo día. Corregilas y volvé a guardar.'],
+  // POST /staff/me: la cuenta ya figura en la agenda (otra pestana la agrego).
+  ['STAFF_SELF_ALREADY_EXISTS', 'Ya figurás como profesional. Actualizá la lista del personal.'],
+  // PUT /staff/{id} sobre la propia ficha: el email de login no cambia sin la
+  // contrasena (mismo criterio que SELF_PASSWORD_CHANGE_DENIED en /users/).
+  ['SELF_EMAIL_CHANGE_DENIED', 'Tu email de acceso no se cambia desde Personal.'],
+  ['STAFF_SELF_GLOBAL_ADMIN_DENIED', 'La cuenta SuperAdmin no se agrega como profesional.'],
   // Solo lo emite la reprogramacion del cliente (public_api/service.py). Sin
   // BOOKING_NOTICE_REQUIRED ni CANCELLATION_WINDOW_EXPIRED a proposito: el
   // texto del servidor dice cuantas horas pide la tienda (FF-06).
@@ -102,8 +111,10 @@ export const ERROR_CODE_MESSAGES: ReadonlyMap<string, string> = new Map([
  * traducen aca, por igualdad exacta: uno parecido sigue en el fallback.
  */
 export const VALIDATION_MESSAGES: ReadonlyMap<string, string> = new Map([
-  // staff/repository.py y superadmin/repository.py, alta o edicion con un
-  // email de login ya usado (QA movil 2026-10-08: el modal decia "No se pudo
-  // guardar" y el motivo solo llegaba a la consola).
+  // staff/repository.py (por /staff/ sale 422 VALIDATION_ERROR), alta o
+  // edicion con un email de login ya usado (QA movil 2026-10-08: el modal
+  // decia "No se pudo guardar" y el motivo solo llegaba a la consola). El
+  // mismo texto de superadmin/repository.py no pasa por aca: su router lo
+  // devuelve como AppException 400, que ya se muestra con serverMessageFor.
   ['Ya existe un usuario con ese email', 'Ese email ya lo usa otra cuenta. Usá otro email.']
 ])

@@ -1,7 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
-import { Staff } from '@domain/entities/Staff'
+import { Staff, type StaffSchedule } from '@domain/entities/Staff'
 
+import { staffSchedulesService } from '@application/services/StaffSchedulesService'
 import { staffService, StaffService } from '@application/services/StaffService'
 
 type CreateStaffInput = Parameters<StaffService['createStaff']>[0]
@@ -31,6 +32,40 @@ export const useUpdateManagedStaff = () => {
   return useMutation({
     mutationFn: ({ id, data }: { id: string; data: UpdateStaffInput }) =>
       staffService.updateStaff(id, data),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['staff'] })
+    }
+  })
+}
+
+/**
+ * Guarda la semana de un profesional. La agenda del panel dibuja el horario
+ * con las franjas de `['staff']` (`workingRangesFor`), asi que se invalida esa
+ * lista.
+ */
+export const useReplaceStaffSchedules = () => {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: ({
+      staffId,
+      schedules
+    }: {
+      staffId: string
+      schedules: readonly StaffSchedule[]
+    }) => staffSchedulesService.replaceWeek(staffId, schedules),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['staff'] })
+    }
+  })
+}
+
+/** "Agregarme como profesional": la cuenta del dueno pasa a la agenda. */
+export const useAddMyselfAsStaff = () => {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (input: Parameters<StaffService['addMyself']>[0]) => staffService.addMyself(input),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['staff'] })
     }

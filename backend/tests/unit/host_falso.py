@@ -56,6 +56,9 @@ requiere_bash = pytest.mark.skipif(BASH is None, reason="hace falta bash")
 
 _DOCKER = r"""#!/bin/sh
 printf '%s\n' "docker $*" >> "$FAKE_DIR/calls"
+# El token de GitHub no tiene por que llegar a docker/compose: se anota si un
+# `docker` lo hereda en el entorno.
+[ -z "${DEPLOY_GITHUB_TOKEN:-}" ] || printf '%s\n' "docker $1 $2" >> "$FAKE_DIR/docker_ve_el_token"
 ids_backend="$FAKE_DIR/backend_ids"
 if [ "$1" = compose ]; then
   # docker-compose.prod.yml interpola ${APP_VERSION:?...}: sin la variable,
@@ -127,8 +130,11 @@ if [ "$1" = compose ]; then
         exit "${FAKE_REDIS_EXIT:-0}"
       fi
       if [ "$3" = rabbitmq ]; then
+        # Por defecto, lo que imprime RabbitMQ 3.13.7 sin alarmas. Sin `:`:
+        # FAKE_RABBIT_ALARMS='' es una salida vacia de verdad.
+        sin_alarmas='{"alarms":[],"node":"rabbit@rabbitmq","result":"ok"}'
         printf '%s
-' "${FAKE_RABBIT_ALARMS:-[]}"
+' "${FAKE_RABBIT_ALARMS-$sin_alarmas}"
         exit "${FAKE_RABBIT_EXIT:-0}"
       fi
       exit "${FAKE_NGINX_EXIT:-0}" ;;
@@ -179,9 +185,14 @@ exit "${{{variable}:-0}}"
 
 # curl: la API de GitHub (deploy.sh pregunta si Quality paso para el sha)
 # contesta lo que diga gh_runs, con su propio codigo de salida; el resto
-# (compuerta, alertas) sale con FAKE_CURL_EXIT, como siempre.
+# (compuerta, alertas) sale con FAKE_CURL_EXIT, como siempre. Lo que curl lee
+# por stdin con `-K -` (cabeceras con secretos, fuera de argv) queda en
+# curl_config.
 _CURL = r"""#!/bin/sh
 printf '%s\n' "curl $*" >> "$FAKE_DIR/calls"
+case " $* " in
+  *" -K - "* | *" --config - "*) cat >> "$FAKE_DIR/curl_config" ;;
+esac
 case "$*" in
   *api.github.com/*/actions/workflows/*)
     cat "$FAKE_DIR/gh_runs" 2>/dev/null

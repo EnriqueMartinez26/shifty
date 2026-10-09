@@ -52,6 +52,17 @@ class ExportedPayment(BaseModel):
     created_at: datetime | None = None
 
 
+class ExportedBalancePayment(BaseModel):
+    """El resto de un turno pagado aparte de su cobro (D-20261008-01)."""
+
+    public_id: str
+    appointment_id: str
+    amount: Decimal
+    method: str | None = None
+    created_at: datetime | None = None
+    reverted_at: datetime | None = None
+
+
 class ExportedLedgerMovement(BaseModel):
     public_id: str
     movement_type: str
@@ -91,6 +102,8 @@ class ClientDataExport(BaseModel):
     client: ExportedClient
     appointments: list[ExportedAppointment]
     payments: list[ExportedPayment]
+    # Aditivo (revision de la PR #137, W3): el resto pagado aparte del cobro.
+    balance_payments: list[ExportedBalancePayment] = []
     ledger: list[ExportedLedgerMovement]
     waitlist: list[ExportedWaitlistEntry]
     # Baja del mail "volve a reservar" (art. 27); None si no se dio de baja.
