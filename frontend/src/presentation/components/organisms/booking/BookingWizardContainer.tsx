@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useState } from 'react'
 
 import { Check } from 'lucide-react'
 
+import { trackBookingCreated, trackBookingEvent } from '@infrastructure/analytics/bookingAnalytics'
+
 import { getErrorCode, getErrorMessage, getRetryAfterSeconds } from '@shared/errors/getErrorMessage'
 import { bookingIdempotencyKey, forgetBookingIdempotency } from '@shared/utils/bookingIdempotency'
 import { isOtpStillValid, phoneDigits, rememberOtpVerification } from '@shared/utils/otpSession'
@@ -316,6 +318,7 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
             storePublicId={store.public_id}
             selectedId={bookingState.serviceId}
             onSelect={(id) => {
+              trackBookingEvent('service_selected')
               updateState({
                 serviceId: id,
                 requestedStaffId: null,
@@ -336,8 +339,10 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
             staffId={bookingState.requestedStaffId}
             selectedDate={bookingState.date}
             selectedTime={bookingState.startTime}
+            onEmptyAvailability={() => trackBookingEvent('availability_empty')}
             onBack={prevStep}
             onSelect={(date, time, assignedStaffId, requestedStaffId, startsAt) => {
+              trackBookingEvent('slot_selected')
               updateState({ date, startTime: time, assignedStaffId, requestedStaffId, startsAt })
               nextStep()
             }}
@@ -401,10 +406,17 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
               // solo si se manda exactamente lo mismo (F4-04). Se guarda solo
               // su SHA-256, sin datos del cliente.
               const idempotencyKey = await bookingIdempotencyKey(store.slug, JSON.stringify(pedido))
-              const confirmation = await createBooking.mutateAsync({
-                ...pedido,
-                idempotency_key: idempotencyKey
-              })
+              let confirmation
+              try {
+                confirmation = await createBooking.mutateAsync({
+                  ...pedido,
+                  idempotency_key: idempotencyKey
+                })
+              } catch (error) {
+                trackBookingEvent('booking_error')
+                throw error
+              }
+              trackBookingCreated(confirmation.public_id)
               forgetBookingIdempotency(store.slug)
               return confirmation
             }}

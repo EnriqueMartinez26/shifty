@@ -27,7 +27,8 @@
     "format": "prettier --write .",
     "format:fix": "prettier --write .",
     "format:check": "prettier --check .",
-    "check": "npm run format:check && npm run lint:strict && npm run typecheck && npm run dead-code",
+    "check": "npm run format:check && npm run lint:strict && npm run typecheck && npm run dead-code && npm run test:csp",
+    "test:csp": "node --test configure-analytics-csp.test.mjs",
     "e2e": "playwright test"
   },
   "devDependencies": {
