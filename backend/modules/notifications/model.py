@@ -26,9 +26,20 @@ class NotificationType(str, enum.Enum):
     # Disputa abierta en Mercado Pago sobre un cobro ya acreditado (V-diff de
     # AUD2-B2-04): el estado del cobro no cambia, la plata queda retenida.
     PAYMENT_IN_MEDIATION = "payment.in_mediation"
+    # Contracargo, disputa o devolucion de OTRO pago de MP sobre un cobro ya
+    # asentado (registrado a mano o acreditado por otro pago): no se aplica,
+    # pero el dueno se entera (re-revision de la PR #112, hallazgo 1).
+    PAYMENT_REVERSAL_OF_OTHER_PAYMENT = "payment.reversal_of_other_payment"
     WAITLIST_SLOT_RELEASED = "waitlist.slot_released"
     SUBSCRIPTION_EXPIRING = "subscription.expiring"
     APPOINTMENT_CANCELLED_BY_CLIENT = "appointment.cancelled_by_client"
+    # La sena por WhatsApp no se confirmo a tiempo y el job libero el turno
+    # (decision de Mateo, 2026-10-03): el dueno se entera, por si el cliente
+    # pago tarde y hay que reagendarlo.
+    APPOINTMENT_DEPOSIT_LAPSED = "appointment.deposit_lapsed"
+    # La tienda perdio su ultimo canal para cobrar una sena obligatoria
+    # (``payments.deposit_channels.warn_if_deposit_channel_lost``).
+    DEPOSIT_CHANNEL_LOST = "store.deposit_channel_lost"
 
 
 class Notification(BaseEntity):

@@ -1,7 +1,10 @@
 import { ErrorHandler } from './ErrorHandler'
 import { GlobalErrorHandler } from './GlobalErrorHandler'
+import { RequestCanceledError } from './RequestCanceledError'
 import { UnauthorizedError } from './UnauthorizedError'
 import { ValidationError } from './ValidationError'
+
+const canceled = new RequestCanceledError('x', { errorCode: 'REQUEST_CANCELED', statusCode: 0 })
 
 class MockHandler extends ErrorHandler {
   private readonly targetClass: Function
@@ -38,6 +41,24 @@ describe('GlobalErrorHandler (Strategy Router)', () => {
     expect(validationHandler.handle).toHaveBeenCalledTimes(1)
     expect(validationHandler.handle).toHaveBeenCalledWith(err)
     expect(unauthorizedHandler.handle).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['tipada', canceled],
+    ['envuelta por BaseService', Object.assign(new Error('x'), { originalError: canceled })]
+  ])('una consulta cancelada %s no llega a ningun handler ni se registra', async (_caso, error) => {
+    // 2026-10-02: una consulta cancelada por react-query se reportaba como
+    // error de red a Sentry. Sin handler propio caia al fallback, que la
+    // registraba con console.error.
+    const catchAll = new MockHandler(Error)
+    globalHandler.registerHandler(catchAll)
+    const spyConsole = jest.spyOn(console, 'error').mockImplementation(() => {})
+
+    await globalHandler.handle(error)
+
+    expect(catchAll.handle).not.toHaveBeenCalled()
+    expect(spyConsole).not.toHaveBeenCalled()
+    spyConsole.mockRestore()
   })
 
   it('should route using the fallback strategy if no handler can handle the error type', async () => {

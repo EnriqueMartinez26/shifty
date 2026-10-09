@@ -55,3 +55,16 @@ def test_los_archivos_del_host_quedan_en_lf_para_git() -> None:
     atributos = (REPO_ROOT / ".gitattributes").read_text(encoding="utf-8")
     assert re.search(r"^\*\.sh text eol=lf$", atributos, re.MULTILINE)
     assert re.search(r"^deploy/\*\* text eol=lf$", atributos, re.MULTILINE)
+
+
+@pytest.mark.parametrize("ruta", [".deploy/", "nginx/certs/", "nginx/acme/"])
+def test_el_estado_del_servidor_esta_en_gitignore(ruta: str) -> None:
+    """2026-10-08, primer deploy: el clon del servidor guarda ahi el estado
+    del deploy (.deploy/current, previous, lock), la clave privada de TLS y los
+    desafios de ACME. Sin ignorarlos, un `git stash -u` o un `git clean` los
+    borra (y un `git add -A` los sube)."""
+    lineas = {
+        linea.strip()
+        for linea in (REPO_ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
+    }
+    assert ruta in lineas

@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Literal, Optional
 import re
 
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
@@ -165,6 +165,13 @@ class PublicBookingResponse(BaseModel):
     notes: Optional[str] = None
     custom_fields: dict[str, str] = Field(default_factory=dict)
     payment_required: bool = False
+    # Por donde se paga la sena obligatoria (decision de Mateo, 2026-10-03):
+    # ``mercadopago`` (``payment_link`` es el checkout) o ``whatsapp`` (la
+    # tienda la confirma a mano); None si no hay sena que pagar. Aditivo.
+    deposit_channel: Literal["mercadopago", "whatsapp"] | None = None
+    # Hasta cuando se puede pagar la sena (UTC): despues el turno se libera.
+    # Por WhatsApp, hasta 2 h antes del turno. Aditivo.
+    deposit_deadline: datetime | None = None
     payment_status: str | None = None
     payment_link: str | None = None
     payment_public_id: str | None = None
@@ -209,7 +216,12 @@ class PublicPromotionPreviewResponse(BaseModel):
 
 class ClientAppointmentItem(BaseModel):
     public_id: str
+    # Ids publicos para pedir la grilla al reprogramar (D-20260930-06): el
+    # ``public_id`` del servicio y el id publico del profesional, los mismos
+    # que usa la reserva publica.
+    service_id: str
     service_name: str
+    staff_id: str
     staff_name: str
     starts_at: datetime
     ends_at: datetime

@@ -21,6 +21,16 @@ ENV VITE_SENTRY_DSN=${VITE_SENTRY_DSN}
 ENV VITE_SENTRY_ENVIRONMENT=${VITE_SENTRY_ENVIRONMENT}
 ENV VITE_SENTRY_TRACES_SAMPLE_RATE=${VITE_SENTRY_TRACES_SAMPLE_RATE}
 ENV VITE_SENTRY_TUNNEL=${VITE_SENTRY_TUNNEL}
+# Contacto de Shifty (banner de renovacion y paginas legales). El repo es
+# publico: los valores reales llegan de variables del repo en GitHub
+# (build-images.yml), nunca de un archivo versionado. Vacio = esa linea no se
+# muestra (docs/DEPLOY_RUNBOOK.md, seccion 2).
+ARG VITE_SUPPORT_WHATSAPP=
+ARG VITE_CONTACT_EMAIL=
+ARG VITE_LEGAL_RESPONSABLES=
+ENV VITE_SUPPORT_WHATSAPP=${VITE_SUPPORT_WHATSAPP}
+ENV VITE_CONTACT_EMAIL=${VITE_CONTACT_EMAIL}
+ENV VITE_LEGAL_RESPONSABLES=${VITE_LEGAL_RESPONSABLES}
 
 RUN npm run build
 
@@ -28,6 +38,9 @@ RUN npm run build
 FROM nginx:1.30.5-alpine
 
 # Paquetes de Alpine al ultimo parche de la rama, como nginx/Dockerfile.
+# Cambia en cada build para que el upgrade de seguridad no salga de la cache
+# (D-20260930-23). Va en esta etapa: la de build sigue cacheada.
+ARG SECURITY_UPGRADE_STAMP=manual
 RUN apk upgrade --no-cache
 
 # El mismo DSN del build decide el tunel: sin DSN, /sentry-tunnel es un 404.

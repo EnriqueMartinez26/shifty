@@ -8,7 +8,7 @@ import { useManagedServices } from '@presentation/hooks/useManagedServices'
 
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
 
-import { colors2000s, buttonStyles2000s } from '../../../theme/colors'
+import { colors2000s, buttonStyles2000s, orangeCtaGradient } from '../../../theme/colors'
 import { create2000sModalInputStyle, create2000sModalSurfaceStyle } from '../../lib/surfaceStyles'
 import type { StaffFormValues } from '../../types/forms'
 
@@ -17,14 +17,34 @@ interface StaffFormModalProps {
   onClose: () => void
   onSubmit: (data: StaffFormValues) => Promise<void>
   editingStaff?: Staff | null
+  /**
+   * Tienda suspendida (FF-15): guardar responde 402. Cubre el modal que quedo
+   * abierto antes de que cargara el plan.
+   */
+  readOnlyReason?: string | null
+  /**
+   * "Agregarme como profesional" (sin `editingStaff`): nombre y email de la
+   * cuenta que inicia sesion. Nombre, apellido y email salen de esa cuenta
+   * (`POST /staff/me`), asi que solo se eligen el nombre visible y los
+   * servicios. Primitivos a proposito: son dependencias del efecto.
+   */
+  selfName?: string | null
+  selfEmail?: string | null
+  /** Editando la ficha propia: el email es el de login y no se cambia aca. */
+  isOwnAccount?: boolean
 }
 
 export const StaffFormModal: React.FC<StaffFormModalProps> = ({
   isOpen,
   onClose,
   onSubmit,
-  editingStaff
+  editingStaff,
+  readOnlyReason = null,
+  selfName = null,
+  selfEmail = null,
+  isOwnAccount = false
 }) => {
+  const isSelf = !editingStaff && selfName !== null
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [formData, setFormData] = useState<StaffFormValues>({
@@ -55,11 +75,11 @@ export const StaffFormModal: React.FC<StaffFormModalProps> = ({
         first_name: '',
         last_name: '',
         email: '',
-        display_name: '',
+        display_name: selfName ?? '',
         service_ids: []
       })
     }
-  }, [editingStaff, isOpen])
+  }, [editingStaff, isOpen, selfName])
 
   if (!isOpen) return null
 
@@ -90,7 +110,7 @@ export const StaffFormModal: React.FC<StaffFormModalProps> = ({
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
       <div
-        className="relative w-full max-w-4xl rounded-md shadow-2xl animate-in zoom-in-95 duration-200 flex flex-col overflow-hidden max-h-[90vh]"
+        className="relative w-full max-w-4xl rounded-md shadow-2xl duration-200 flex flex-col overflow-hidden max-h-[90vh]"
         style={create2000sModalSurfaceStyle()}
       >
         <div
@@ -104,13 +124,15 @@ export const StaffFormModal: React.FC<StaffFormModalProps> = ({
               className="text-2xl font-black uppercase tracking-tight"
               style={{ color: colors2000s.text.primary }}
             >
-              {editingStaff
-                ? formData.kind === 'resource'
-                  ? 'Editar Recurso'
-                  : 'Editar Profesional'
-                : formData.kind === 'resource'
-                  ? 'Nuevo Recurso'
-                  : 'Nuevo Profesional'}
+              {isSelf
+                ? 'Agregarme como profesional'
+                : editingStaff
+                  ? formData.kind === 'resource'
+                    ? 'Editar Recurso'
+                    : 'Editar Profesional'
+                  : formData.kind === 'resource'
+                    ? 'Nuevo Recurso'
+                    : 'Nuevo Profesional'}
             </h3>
             <p className="text-xs font-bold" style={{ color: colors2000s.text.secondary }}>
               Configurá el perfil y especialidades.
@@ -161,7 +183,18 @@ export const StaffFormModal: React.FC<StaffFormModalProps> = ({
                 </h4>
               </div>
 
-              {!editingStaff && (
+              {isSelf && (
+                <p
+                  className="rounded-xl px-4 py-3 text-xs font-bold"
+                  style={{ background: colors2000s.bg.disabled, color: colors2000s.text.primary }}
+                >
+                  Vas a figurar con tu cuenta ({selfName}
+                  {selfEmail ? `, ${selfEmail}` : ''}): no se crea otro usuario ni otra clave, y
+                  seguís siendo administrador.
+                </p>
+              )}
+
+              {!editingStaff && !isSelf && (
                 <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Tipo">
                   {(
                     [
@@ -182,9 +215,7 @@ export const StaffFormModal: React.FC<StaffFormModalProps> = ({
                             ? colors2000s.orange.accent
                             : colors2000s.border.default,
                         background:
-                          formData.kind === kind
-                            ? `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`
-                            : colors2000s.bg.button,
+                          formData.kind === kind ? orangeCtaGradient : colors2000s.bg.button,
                         color: formData.kind === kind ? '#ffffff' : colors2000s.text.primary
                       }}
                     >
@@ -197,7 +228,7 @@ export const StaffFormModal: React.FC<StaffFormModalProps> = ({
                 </div>
               )}
 
-              {formData.kind === 'person' && (
+              {formData.kind === 'person' && !isSelf && (
                 <>
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-1.5">
@@ -244,12 +275,23 @@ export const StaffFormModal: React.FC<StaffFormModalProps> = ({
                     <input
                       type="email"
                       value={formData.email}
+                      readOnly={isOwnAccount}
+                      aria-describedby={isOwnAccount ? 'staff-own-email-hint' : undefined}
                       onChange={(e) => setFormData({ ...formData, email: e.target.value })}
                       className="w-full rounded-xl px-4 py-3 font-bold outline-none text-xs"
                       style={create2000sModalInputStyle()}
                       placeholder="marcelo@shifty.com"
                       required
                     />
+                    {isOwnAccount && (
+                      <p
+                        id="staff-own-email-hint"
+                        className="text-[10px] font-bold ml-1"
+                        style={{ color: colors2000s.text.secondary }}
+                      >
+                        Es el email con el que entrás: acá no se cambia.
+                      </p>
+                    )}
                   </div>
                 </>
               )}
@@ -333,7 +375,7 @@ export const StaffFormModal: React.FC<StaffFormModalProps> = ({
               </div>
               <p
                 className="text-[10px] font-bold italic"
-                style={{ color: colors2000s.text.disabled }}
+                style={{ color: colors2000s.text.secondary }}
               >
                 Seleccioná los servicios que este profesional puede realizar.
               </p>
@@ -351,12 +393,15 @@ export const StaffFormModal: React.FC<StaffFormModalProps> = ({
             </button>
             <button
               type="submit"
-              disabled={loading}
+              disabled={loading || readOnlyReason !== null}
+              title={readOnlyReason ?? undefined}
               className="flex-1 font-black py-4 rounded-xl transition-all uppercase tracking-widest text-xs active:scale-95 disabled:opacity-50"
               style={buttonStyles2000s.selected}
             >
               {loading ? (
                 <Loader2 className="w-5 h-5 animate-spin mx-auto" />
+              ) : isSelf ? (
+                'Agregarme'
               ) : editingStaff ? (
                 'Guardar Cambios'
               ) : (

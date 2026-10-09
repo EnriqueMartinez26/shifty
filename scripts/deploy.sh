@@ -9,14 +9,18 @@
 #   1. Preflight: COMPOSE_FILE incluye docker-compose.prod.yml, Compose >=
 #      2.24 (`!reset`), `docker compose config` valido, los servicios de
 #      DEPLOY_SERVICES existen, la base corre, disco < 80 %, backup exitoso de
-#      menos de 24 h.
+#      menos de 24 h, y Quality paso en main para APP_VERSION (API de GitHub,
+#      con DEPLOY_GITHUB_TOKEN si el repo es privado; `workflow_dispatch` de
+#      build-images.yml publica sin esa compuerta). El rollback no pregunta:
+#      es el camino de emergencia.
 #   2. Guarda la version que corre hoy en .deploy/previous.
 #   3. `pull` de las imagenes de APP_VERSION y verificacion de que cada
 #      `imagen:tag` quedo local (las construye CI:
 #      .github/workflows/build-images.yml). El VPS NUNCA construye: todo `up`
-#      y `run` lleva --no-build, y todo `up` --remove-orphans (un servicio
-#      renombrado, como `redis` -> `redis_cache`/`redis_state`, dejaba vivo el
-#      contenedor viejo con su puerto).
+#      lleva --no-build y --remove-orphans (un servicio renombrado, como
+#      `redis` -> `redis_cache`/`redis_state`, dejaba vivo el contenedor viejo
+#      con su puerto). `run` no tiene --no-build en ninguna version de
+#      Compose (ver `migrar`).
 #   4. MIGRA ANTES DE RECREAR, con el codigo viejo sirviendo:
 #      `compose run --rm --no-deps backend alembic upgrade head`. Por eso las
 #      migraciones son expand/contract (CLAUDE.md §3): el codigo viejo tiene
@@ -33,7 +37,7 @@
 #      deploy normal; se recrea unicamente con `edge` (make deploy-edge),
 #      cuando cambio su imagen o su config.
 #   8. Compuerta de 60 s: /api/ops/health/ready y la home responden, ningun
-#      contenedor unhealthy, `rabbitmq-diagnostics alarms` vacio, 5xx < 0,5 %
+#      contenedor unhealthy, `rabbitmq-diagnostics alarms` sin alarmas, 5xx < 0,5 %
 #      en el log de nginx de los ultimos 2 minutos. Si falla: rollback
 #      automatico (sin migrar).
 #
@@ -58,7 +62,9 @@ cd "$SHIFTY_DIR"
 # Sin nginx: el borde se recarga, no se recrea (ver `edge`).
 : "${DEPLOY_SERVICES:=backend celery_worker celery_worker_interactive celery_beat frontend}"
 : "${DEPLOY_BACKEND_SERVICE:=backend}"
-: "${DEPLOY_BACKEND_REPLICAS:=3}"
+# Las mismas que `deploy.replicas` de docker-compose.prod.yml (contrato en
+# test_compose_contract): en el pico corren el doble, viejas mas nuevas.
+: "${DEPLOY_BACKEND_REPLICAS:=2}"
 : "${DEPLOY_ROLLING:=1}"
 : "${DEPLOY_WAIT_TIMEOUT:=180}"
 # Lo que tarda nginx en re-resolver `backend` (resolver valid=5s, F0-01).
@@ -68,6 +74,13 @@ cd "$SHIFTY_DIR"
 : "${DEPLOY_DISK_MAX_PERCENT:=80}"
 : "${DEPLOY_BACKUP_MAX_AGE_HOURS:=24}"
 : "${DEPLOY_SKIP_BACKUP_CHECK:=0}"
+# Quality verde en main para el sha (preflight). Saltearlo (staging con una
+# imagen de rama) deja una alerta.
+: "${DEPLOY_SKIP_QUALITY_CHECK:=0}"
+: "${DEPLOY_GITHUB_REPO:=EnriqueMartinez26/shifty}"
+: "${DEPLOY_QUALITY_WORKFLOW:=quality.yml}"
+# DEPLOY_GITHUB_TOKEN (opcional): solo lo usa quality_verde, por stdin de
+# curl. common.sh lo des-exporta: no llega al entorno de docker/compose.
 : "${DOMAIN:=}"
 : "${DEPLOY_HEALTH_URL:=${DOMAIN:+https://$DOMAIN/api/ops/health/ready}}"
 : "${DEPLOY_SMOKE_URLS:=${DOMAIN:+https://$DOMAIN/}}"
@@ -127,17 +140,66 @@ compose_file_efectivo() {
     tail -n 1 | tr -d '"'"'"'\r'
 }
 
+# Quality (quality.yml) tiene que haber pasado en un push a main para ESTE sha.
+# build-images.yml solo publica despues de eso, salvo a mano
+# (`workflow_dispatch`), que construye cualquier rama: sin esta pregunta, una
+# imagen de un commit en rojo o de una rama sin mergear se podia desplegar.
+# Con el repo privado la API contesta 404 sin token: DEPLOY_GITHUB_TOKEN
+# (opcional, en /etc/shifty/ops.env; PAT fine-grained con solo "Actions: read"
+# sobre este repo) va como `Authorization: Bearer` POR STDIN (`curl -K -`),
+# nunca en argv, que cualquier usuario del host ve en `ps`. Sin token, la
+# consulta anonima de siempre (60 por hora por IP, solo con repo publico).
+# Falla cerrada: si GitHub no contesta, el deploy espera o se saltea a
+# conciencia con DEPLOY_SKIP_QUALITY_CHECK=1.
+quality_verde() {
+  local version="${APP_VERSION:-}"
+  # Va a una URL: solo lo que admite un tag de imagen.
+  case "$version" in
+    '' | *[!A-Za-z0-9_.-]*) die "preflight: APP_VERSION invalida (${version:-vacia}): tiene que ser el sha del commit" ;;
+  esac
+  if [ "$DEPLOY_SKIP_QUALITY_CHECK" = 1 ]; then
+    alert "deploy: $version se despliega SIN verificar Quality (DEPLOY_SKIP_QUALITY_CHECK=1)" \
+      "Solo para staging con una imagen de rama. En produccion, desplegar un sha de main con Quality verde."
+    return 0
+  fi
+  local token="${DEPLOY_GITHUB_TOKEN:-}"
+  # Va entre comillas en una linea de configuracion de curl: un caracter
+  # fuera de los de un token de GitHub podria inyectar otra opcion. El
+  # mensaje no lo repite.
+  case "$token" in
+    *[!A-Za-z0-9_]*) die "preflight: DEPLOY_GITHUB_TOKEN tiene caracteres que un token de GitHub no tiene (solo letras, digitos y _)" ;;
+  esac
+  local url respuesta total
+  url="https://api.github.com/repos/$DEPLOY_GITHUB_REPO/actions/workflows/$DEPLOY_QUALITY_WORKFLOW/runs?head_sha=$version&branch=main&event=push&status=success&per_page=1"
+  if [ -n "$token" ]; then
+    # printf es un builtin: el token no pasa por argv de ningun proceso.
+    respuesta="$(printf 'header = "Authorization: Bearer %s"\n' "$token" |
+      curl -fsS -m 15 -H 'Accept: application/vnd.github+json' -K - "$url")" ||
+      die "preflight: no pude preguntarle a GitHub si Quality paso para $version (con DEPLOY_GITHUB_TOKEN: vencido o sin \"Actions: read\" sobre $DEPLOY_GITHUB_REPO?); reintentar, o DEPLOY_SKIP_QUALITY_CHECK=1 si se verifico a mano en Actions"
+  elif ! respuesta="$(curl -fsS -m 15 -H 'Accept: application/vnd.github+json' "$url")"; then
+    die "preflight: no pude preguntarle a GitHub si Quality paso para $version (repo privado sin DEPLOY_GITHUB_TOKEN?); reintentar, o DEPLOY_SKIP_QUALITY_CHECK=1 si se verifico a mano en Actions"
+  fi
+  total="$(printf '%s\n' "$respuesta" |
+    sed -n 's/.*"total_count"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n 1)"
+  [ -n "$total" ] || die "preflight: respuesta inesperada de GitHub al buscar Quality para $version: ${respuesta:0:200}"
+  if [ "$total" -lt 1 ]; then
+    die "preflight: Quality no paso en main para $version (o no es el sha completo de 40 caracteres de un commit de main); ver Actions > Quality"
+  fi
+  log "preflight: Quality verde en main para $version"
+}
+
 preflight() {
   local completo="$1"
 
   # El volumen pg_backups es un bind (docker-compose.prod.yml): si el
   # directorio del host no existe, `db` no puede recrearse.
   # mkdir + chmod aparte: si el chmod no se puede (otro dueno), el directorio
-  # igual sirve y se avisa, en vez de frenar el deploy.
+  # igual sirve y se avisa, en vez de frenar el deploy. 0750: el deploy corre
+  # como `deploy` y lee last-success (docs/DEPLOY_RUNBOOK.md §1).
   if [ ! -d "$BACKUP_DIR" ]; then
     mkdir -p "$BACKUP_DIR" ||
-      die "preflight: no se pudo crear $BACKUP_DIR (crearlo como root: install -d -m 0700 $BACKUP_DIR)"
-    chmod 0700 "$BACKUP_DIR" 2>/dev/null || log "preflight: no pude dejar $BACKUP_DIR en 0700"
+      die "preflight: no se pudo crear $BACKUP_DIR (crearlo como root: install -d -o root -g deploy -m 0750 $BACKUP_DIR)"
+    chmod 0750 "$BACKUP_DIR" 2>/dev/null || log "preflight: no pude dejar $BACKUP_DIR en 0750"
     log "preflight: cree $BACKUP_DIR"
   fi
 
@@ -187,14 +249,21 @@ preflight() {
       die "preflight: el ultimo backup exitoso tiene mas de ${DEPLOY_BACKUP_MAX_AGE_HOURS} h; correr scripts/backup.sh antes de migrar"
     fi
   fi
+  quality_verde
   log "preflight: ok (compose $version, disco ${uso} %)"
 }
 
 # --- pasos ------------------------------------------------------------------
 
+# Sin --no-build: `compose run` no lo tiene (solo `up`/`create`; Compose
+# 5.5.1 frena con "unknown flag", 2026-10-02) y `--pull never` existe recien
+# desde 2.33, por encima de DEPLOY_MIN_COMPOSE. Igual no construye ni baja
+# nada: la vista de produccion no tiene `build` (`build: !reset null`,
+# test_produccion_no_construye_ninguna_imagen) y `imagenes_locales` ya
+# verifico que la imagen de la version esta en el host.
 migrar() {
   log "migrando a head con el codigo viejo sirviendo"
-  docker compose run --rm --no-deps --no-build -T "$DEPLOY_BACKEND_SERVICE" alembic upgrade head
+  docker compose run --rm --no-deps -T "$DEPLOY_BACKEND_SERVICE" alembic upgrade head
 }
 
 # Las funciones de pasos devuelven su error con `|| return 1` explicito: se
@@ -275,6 +344,31 @@ imagenes_locales() {
 
 # --- compuerta --------------------------------------------------------------
 
+# Salida de `rabbitmq-diagnostics -q alarms --formatter json`, sin espacios,
+# de la imagen fijada en compose (3.13.7; test_la_compuerta_conoce_la_version_
+# de_rabbitmq_que_corre). Segun alarms_command.ex del tag v3.13.7:
+#   sin alarmas: {"alarms":[],"node":"rabbit@...","result":"ok"}
+#   con alarmas: {"global":[...],"local":[...],"message":"...","result":"ok"}
+# (exit 0 en los dos; nunca imprime vacio ni `[]`). La compuerta exigia vacio
+# o `[]` y el primer deploy (2026-10-08) fallo con la primera forma.
+# Sin python3 ni jq garantizados en el host, se compara texto estricto: un
+# objeto cuyas claves son solo alarms, node y result, cada una una vez, con
+# `alarms` presente y vacia y `result` (si viene) "ok". Cualquier otra cosa
+# (una alarma, una clave desconocida, texto, vacio) cuenta como alarma: la
+# compuerta falla cerrada.
+rabbitmq_sin_alarmas() {
+  local salida="$1" clave
+  local miembro='("alarms":\[\]|"node":"[^"\\]*"|"result":"ok")'
+  local objeto="^\{${miembro}(,${miembro})*\}$"
+  [[ "$salida" =~ $objeto ]] || return 1
+  case "$salida" in *'"alarms":[]'*) ;; *) return 1 ;; esac
+  # Cada clave a lo sumo una vez (un valor de node no puede tener comillas).
+  for clave in '"alarms":' '"node":' '"result":'; do
+    case "${salida#*"$clave"}" in *"$clave"*) return 1 ;; esac
+  done
+  return 0
+}
+
 compuerta() {
   local fallos=0 i url
   for ((i = 1; i <= DEPLOY_GATE_CHECKS; i++)); do
@@ -311,8 +405,8 @@ compuerta() {
     return 1
   fi
   alarmas="$(printf '%s' "$alarmas" | tr -d '[:space:]')"
-  if [ -n "$alarmas" ] && [ "$alarmas" != "[]" ]; then
-    log "compuerta: rabbitmq tiene alarmas activas: $alarmas"
+  if ! rabbitmq_sin_alarmas "$alarmas"; then
+    log "compuerta: rabbitmq tiene alarmas activas (o una salida que no se entiende): $alarmas"
     return 1
   fi
 

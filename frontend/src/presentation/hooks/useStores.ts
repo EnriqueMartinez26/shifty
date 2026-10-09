@@ -13,12 +13,18 @@ import {
 export const useStoreSettings = () =>
   useQuery<StoreSettings>({
     queryKey: ['store-settings'],
-    queryFn: () => storeSettingsService.getSettings()
+    queryFn: () => storeSettingsService.getSettings(),
+    // Solo cambia cuando el admin guarda, y esas mutaciones (abajo) invalidan
+    // ['store-settings']: no hace falta pedirla en cada navegacion (F4-15).
+    staleTime: 5 * 60 * 1000
   })
+
+/** Exportada para que main.tsx la invalide ante un SUBSCRIPTION_SUSPENDED. */
+export const STORE_SUBSCRIPTION_QUERY_KEY = ['store-subscription'] as const
 
 export const useStoreSubscription = () =>
   useQuery<StoreSubscriptionStatus>({
-    queryKey: ['store-subscription'],
+    queryKey: STORE_SUBSCRIPTION_QUERY_KEY,
     queryFn: () => storeSettingsService.getSubscription(),
     // El estado del plan cambia una vez por dia: no hace falta refrescarlo
     // en cada navegacion del panel.

@@ -138,6 +138,15 @@ async def test_rafaga_de_patch_sobre_la_sena_no_deja_ninguna_fila_invalida(
     _store, token = await register_and_login(
         client, app_sessions, slug="pg-sena-rafaga", email="pg-sena-rafaga@demo.com"
     )
+    # Una sena obligatoria necesita un canal de cobro (decision de Mateo,
+    # 2026-10-03, ``payments.deposit_channels``): sin el, los PATCH que la
+    # activan rebotarian con 422 y la carrera no se ejerceria.
+    canal = await client.patch(
+        "/stores/me",
+        headers=auth_headers(token),
+        json={"whatsapp_number": "11 5555 0303"},
+    )
+    assert canal.status_code == 200, canal.text
     alta = await client.post(
         "/services/",
         headers=auth_headers(token),

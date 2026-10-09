@@ -37,11 +37,27 @@ describe('ToggleSwitch', () => {
 
   it('prendido conserva el relleno de marca y suma un anillo acento contra el blanco', () => {
     // Solo el naranja de marca contra la tarjeta blanca da 2.31:1 (N4); el
-    // anillo #c85a0f lleva el borde a 4.26:1.
+    // anillo orange.accent lleva el borde a 6.50:1.
     render(<ToggleSwitch label="Seña" checked onToggle={jest.fn()} />)
 
     const interruptor = screen.getByRole('switch', { name: 'Seña' })
     expect(interruptor.style.boxShadow).toContain(`inset 0 0 0 1px ${colors2000s.orange.accent}`)
     expect(interruptor.style.background).toBe('rgb(255, 140, 66)')
+  })
+})
+
+// 2026-10-01: con la tienda suspendida cada accion fallaba con 402 en vez de
+// verse deshabilitada (FF-15): el interruptor acepta disabled y su motivo.
+describe('ToggleSwitch: deshabilitado', () => {
+  it('deshabilitado muestra el motivo y no avisa el click', () => {
+    const onToggle = jest.fn()
+    render(<ToggleSwitch label="Pagos" checked onToggle={onToggle} disabled title="Suspendida" />)
+
+    const interruptor = screen.getByRole('switch', { name: 'Pagos' })
+    fireEvent.click(interruptor)
+
+    expect(interruptor).toBeDisabled()
+    expect(interruptor).toHaveAttribute('title', 'Suspendida')
+    expect(onToggle).not.toHaveBeenCalled()
   })
 })

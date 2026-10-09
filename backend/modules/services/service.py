@@ -2,9 +2,10 @@
 
 La imagen se sube a ``store_media`` (``kind='service'``, una por servicio) y
 ``services.image_url`` pasa a ser la URL servida ``/api/stores/media/{id}``,
-la misma que usa el logo. Este service es dueno de su transaccion (CLAUDE.md
-§2): el resto del modulo todavia commitea en el repositorio (deuda declarada
-en ``tests/architecture/test_boundaries.py``).
+la misma que usa el logo. Los dos services de este archivo son duenos de la
+transaccion del modulo (CLAUDE.md §2): ``ServiceCatalogService`` el alta, el
+PATCH y la baja del catalogo, ``ServiceImageService`` la imagen. El
+repositorio solo hace ``flush`` (B6-05, 2026-09-30).
 
 Invariante: una URL de medios en ``image_url`` apunta a la imagen de ESE
 servicio. Se sube, no se enlaza a mano; y cuando deja de estar enlazada
@@ -13,13 +14,123 @@ servicio. Se sube, no se enlaza a mano; y cuando deja de estar enlazada
 
 from typing import Any
 
+import structlog
+from redis.exceptions import RedisError
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.exceptions import ServiceNotFoundException
+from core.availability_cache import (
+    AvailabilityCacheClient,
+    invalidate_store_availability,
+)
+from core.exceptions import ServiceNotFoundException, ValidationException
+from modules.payments.deposit_channels import require_deposit_channel
 from modules.services.model import Service
+from modules.services.repository import ServiceRepository
+from modules.services.schemas import DEPOSIT_FIELDS, deposit_policy_error
 from modules.stores.media import media_url, resolve_image_link
 from modules.stores.model import StoreMedia
+
+logger = structlog.get_logger()
+
+
+def _validate_deposit_patch(service: Service, changes: dict[str, Any]) -> None:
+    """B6-02: el PATCH es parcial, asi que la terna se valida contra la fila.
+
+    Solo si el PATCH toca la sena: un servicio viejo con una terna invalida
+    sigue pudiendo cambiar de nombre o de precio.
+    """
+    if not any(field in changes for field in DEPOSIT_FIELDS):
+        return
+    merged = {
+        field: changes.get(field, getattr(service, field)) for field in DEPOSIT_FIELDS
+    }
+    amount = merged["deposit_amount"]
+    error = deposit_policy_error(
+        str(merged["deposit_mode"]),
+        str(merged["deposit_type"]),
+        None if amount is None else float(amount),
+    )
+    if error:
+        raise ValidationException(error)
+
+
+class ServiceCatalogService:
+    """Alta, edicion y baja del catalogo: dueno de la transaccion (B6-05).
+
+    El PATCH de ``image_url`` borra en la MISMA transaccion la fila de la
+    imagen subida que queda sin enlazar (F1-30): es una fila de ``store_media``,
+    no un archivo, asi que no hay efecto externo que ordenar y un fallo del
+    commit deja servicio e imagen como estaban. El unico efecto de afuera es la
+    invalidacion del cache de disponibilidad (un servicio cambia la grilla de
+    todos los dias, B6-08): va DESPUES del commit y es best-effort, un Redis
+    caido no revierte lo ya guardado; en el peor caso el portal muestra lo
+    viejo hasta que vencen los slots (``SLOTS_TTL_SECONDS``, 300 s).
+    """
+
+    def __init__(
+        self, db: AsyncSession, cache: AvailabilityCacheClient | None = None
+    ) -> None:
+        self.db = db
+        self.repo = ServiceRepository(db)
+        self.images = ServiceImageService(db)
+        self.cache = cache
+
+    async def _invalidar_disponibilidad(self, store_id: str) -> None:
+        if self.cache is None:
+            return
+        try:
+            await invalidate_store_availability(self.cache, store_id)
+        except RedisError as exc:
+            logger.warning(
+                "service_cache_invalidation_failed",
+                store_id=store_id,
+                error_type=type(exc).__name__,
+            )
+
+    async def _require_channel_for(self, store_id: str, deposit_mode: str) -> None:
+        """Una sena obligatoria necesita con que cobrarse: Mercado Pago
+        conectado con los cobros prendidos, o el WhatsApp de la tienda
+        (``payments.deposit_channels``, decision de Mateo 2026-10-03). Sin
+        canal es 422 ``DEPOSIT_CHANNEL_REQUIRED``: el cliente no podria pagarla
+        y la reserva rebotaria (o, antes, quedaba sin cobro)."""
+        if deposit_mode == "required":
+            await require_deposit_channel(self.db, store_id)
+
+    async def create(self, service_data: dict[str, Any], store_id: str) -> Service:
+        await self._require_channel_for(
+            store_id, str(service_data.get("deposit_mode") or "none")
+        )
+        service = await self.repo.create(service_data, store_id)
+        await self.db.commit()
+        return service
+
+    async def update(
+        self, public_id: str, store_id: str, changes: dict[str, Any]
+    ) -> Service:
+        service = await self.repo.get_by_id(public_id, store_id)
+        if not service:
+            raise ServiceNotFoundException(public_id)
+        _validate_deposit_patch(service, changes)
+        # Solo si el PATCH toca la sena: renombrar un servicio no se traba
+        # porque la tienda haya perdido el canal (la reserva lo frena igual).
+        if any(field in changes for field in DEPOSIT_FIELDS):
+            await self._require_channel_for(
+                store_id, str(changes.get("deposit_mode", service.deposit_mode))
+            )
+        await self.images.apply_image_url_change(service, changes)
+        updated = await self.repo.update(service, changes)
+        await self.db.commit()
+        await self._invalidar_disponibilidad(str(updated.store_id))
+        return updated
+
+    async def soft_delete(self, public_id: str, store_id: str) -> None:
+        service = await self.repo.get_by_id(public_id, store_id)
+        if not service:
+            raise ServiceNotFoundException(public_id)
+        await self.repo.soft_delete(service)
+        await self.db.commit()
+        await self._invalidar_disponibilidad(str(service.store_id))
 
 
 class ServiceImageService:

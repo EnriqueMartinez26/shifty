@@ -214,4 +214,13 @@ async def test_busqueda_de_turnos_items_y_paginado(
         "client_name": "Cliente Caracterizado",
         "client_id": item["client_id"],
         "client_phone": "5491155558001",
+        # Aditivo (2026-10-08): precio congelado y cobro del turno para Cobros
+        # (``test_busqueda_trae_el_cobro.py``). La reserva no tiene cobro.
+        "price_amount": "10000.00",
+        "payment_status": None,
+        "payment_amount": None,
+        # Aditivo (D-20261008-01): saldo restante y resto pagado aparte
+        # (``test_saldo_restante_del_turno.py``). Sin cobro no hay saldo.
+        "remaining_amount": "0.00",
+        "remainder_payment": None,
     }

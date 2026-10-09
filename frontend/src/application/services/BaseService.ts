@@ -1,6 +1,7 @@
 import { z, type ZodTypeAny } from 'zod'
 
 import { ApplicationError } from '@shared/errors/ApplicationError'
+import { RequestCanceledError } from '@shared/errors/RequestCanceledError'
 import { isProduction } from '@shared/utils/env'
 
 /**
@@ -90,6 +91,13 @@ export abstract class BaseService<T> {
    */
   protected handleError(error: unknown): never {
     const serviceName = this.constructor.name
+
+    // Una consulta que cancelo quien la pidio (react-query al reemplazarla) no
+    // es una falla: se registra como INFO y viaja tal cual, sin ERROR.
+    if (error instanceof RequestCanceledError) {
+      this.log('INFO', `${serviceName} - request canceled`)
+      throw error
+    }
 
     // Un ApplicationError ya es la traduccion tipada del repositorio
     // (ConflictError, NotFoundError...): re-envolverlo en un Error plano

@@ -18,6 +18,15 @@ export interface AppointmentBlockPayload {
   cancel_affected?: boolean
 }
 
+/**
+ * PATCH de un bloqueo. Sin `staff_id` ni `is_active`: el backend no cambia el
+ * profesional de un bloqueo (lo descartaba en silencio, FF-11) y editar no
+ * reactiva uno desactivado (D-20260929-11).
+ */
+export type AppointmentBlockUpdatePayload = Partial<
+  Pick<AppointmentBlockPayload, 'starts_at' | 'ends_at' | 'reason' | 'cancel_affected'>
+>
+
 export interface BlockPreviewPayload {
   staff_id: string | null
   starts_at: string
@@ -63,9 +72,20 @@ export interface RecurringBlocksResult {
   blocks: AppointmentBlock[]
 }
 
+/**
+ * Filtro del listado (F4-07, FF-12). `from_date` y `to_date` son dias locales
+ * `YYYY-MM-DD` y van juntos (el backend acepta hasta 400 dias);
+ * `include_inactive: false` saca los bloqueos desactivados.
+ */
+export interface AppointmentBlockListParams {
+  from_date: string
+  to_date: string
+  include_inactive?: boolean
+}
+
 class AppointmentBlocksService {
-  async list(): Promise<AppointmentBlock[]> {
-    const { data } = await apiClient.get<AppointmentBlock[]>('/appointment-blocks/')
+  async list(params: AppointmentBlockListParams): Promise<AppointmentBlock[]> {
+    const { data } = await apiClient.get<AppointmentBlock[]>('/appointment-blocks/', { params })
     return data
   }
 
@@ -97,7 +117,7 @@ class AppointmentBlocksService {
 
   async update(
     publicId: string,
-    payload: Partial<AppointmentBlockPayload> & { is_active?: boolean }
+    payload: AppointmentBlockUpdatePayload
   ): Promise<AppointmentBlock> {
     const { data } = await apiClient.patch<AppointmentBlock>(
       `/appointment-blocks/${publicId}`,

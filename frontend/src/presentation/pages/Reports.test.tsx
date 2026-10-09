@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 
 import type { ReportSummary } from '@application/services/ReportsService'
 
@@ -41,11 +41,36 @@ const mockSummary: ReportSummary = {
       client_name: 'Beto Gomez',
       service_price: 2000
     }
-  ]
+  ],
+  has_more: false
 }
 
+let mockSummaryData: ReportSummary = mockSummary
+let mockFailLaterPages = false
+let mockPendingLaterPages = false
+// Rango (fecha "desde") cuyo resumen responde con error, p. ej. el 400 de mas
+// de 370 dias.
+let mockFailingFrom: string | null = null
+const mockUseReportSummary = jest.fn((...args: unknown[]) => {
+  const later = (args[3] as { offset: number }).offset > 0
+  const failed = (mockFailLaterPages && later) || args[0] === mockFailingFrom
+  return {
+    data: failed ? undefined : mockSummaryData,
+    isLoading: false,
+    isError: failed,
+    isPlaceholderData: mockPendingLaterPages && later,
+    refetch: mockRefetch
+  }
+})
+const mockRefetch = jest.fn()
+let mockAuthUser: { role: string; is_global_admin?: boolean } = { role: 'store_admin' }
+
+jest.mock('../context/AuthContext', () => ({
+  useAuth: () => ({ user: mockAuthUser })
+}))
+
 jest.mock('../hooks/useReports', () => ({
-  useReportSummary: () => ({ data: mockSummary, isLoading: false, error: null }),
+  useReportSummary: (...args: unknown[]) => mockUseReportSummary(...args),
   useProfessionalReports: () => ({
     data: { professionals: [] },
     isLoading: false,
@@ -54,7 +79,21 @@ jest.mock('../hooks/useReports', () => ({
   useExportReport: () => ({ mutateAsync: jest.fn(), isPending: false })
 }))
 
+const lastOffset = () => {
+  const page = mockUseReportSummary.mock.calls.at(-1)?.[3] as { offset: number }
+  return page.offset
+}
+
 describe('ReportsPage', () => {
+  beforeEach(() => {
+    mockSummaryData = mockSummary
+    mockFailLaterPages = false
+    mockPendingLaterPages = false
+    mockFailingFrom = null
+    mockAuthUser = { role: 'store_admin' }
+    mockUseReportSummary.mockClear()
+  })
+
   it('muestra el estado del turno en castellano y deja crudo el que no conoce', () => {
     render(<ReportsPage />)
 
@@ -68,5 +107,68 @@ describe('ReportsPage', () => {
     const { container } = render(<ReportsPage />)
 
     expect(container.querySelectorAll('button:not([type])')).toHaveLength(0)
+  })
+
+  it('el profesional no ve los botones de exportar (FF-18)', () => {
+    mockAuthUser = { role: 'professional' }
+    render(<ReportsPage />)
+
+    expect(screen.queryByText(/Exportar/)).not.toBeInTheDocument()
+  })
+
+  it('pagina el detalle: Siguiente solo con has_more y la fecha vuelve a la primera (FF-30)', () => {
+    const { rerender } = render(<ReportsPage />)
+    expect(screen.getByRole('button', { name: 'Siguiente' })).toBeDisabled()
+    expect(lastOffset()).toBe(0)
+
+    mockSummaryData = { ...mockSummary, has_more: true }
+    rerender(<ReportsPage />)
+    fireEvent.click(screen.getByRole('button', { name: 'Siguiente' }))
+    expect(lastOffset()).toBe(100)
+
+    const desde = document.querySelector('input[type="date"]') as HTMLInputElement
+    fireEvent.change(desde, { target: { value: '2026-08-01' } })
+    expect(lastOffset()).toBe(0)
+  })
+
+  it('si falla una pagina posterior queda la pantalla y el error va junto a la paginacion', () => {
+    mockSummaryData = { ...mockSummary, has_more: true }
+    mockFailLaterPages = true
+    render(<ReportsPage />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Siguiente' }))
+
+    expect(screen.getByText('Total turnos')).toBeInTheDocument()
+    expect(screen.getByText(/No se pudo cargar esta página del detalle/)).toBeInTheDocument()
+    // Filas y rotulo de la misma pagina (la ultima buena), no "101–102".
+    expect(screen.getByText(/^1–2 de 2/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Reintentar' }))
+    expect(mockRefetch).toHaveBeenCalled()
+    expect(screen.queryByText(/No se pudo cargar el reporte/)).not.toBeInTheDocument()
+  })
+
+  it('si falla un rango nuevo, las fechas siguen a mano para corregirlo (FF-19)', () => {
+    // 2026-09-28: la pantalla de error reemplazaba la pagina entera y escondia
+    // los selectores; con un rango invalido no habia forma de salir.
+    mockFailingFrom = '2025-01-01'
+    render(<ReportsPage />)
+
+    fireEvent.change(screen.getByLabelText('Desde'), { target: { value: '2025-01-01' } })
+
+    expect(screen.getByRole('alert')).toHaveTextContent('No se pudo cargar el reporte')
+    fireEvent.change(screen.getByLabelText('Desde'), { target: { value: '2026-09-01' } })
+    expect(mockUseReportSummary.mock.calls.at(-1)?.[0]).toBe('2026-09-01')
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(screen.getByText('Total turnos')).toBeInTheDocument()
+  })
+
+  it('mientras llega la pagina 2, rotulo y filas son de la pagina que se ve', () => {
+    mockSummaryData = { ...mockSummary, has_more: true }
+    mockPendingLaterPages = true
+    render(<ReportsPage />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Siguiente' }))
+
+    expect(screen.getByText(/^1–2 de 2 · Actualizando/)).toBeInTheDocument()
   })
 })

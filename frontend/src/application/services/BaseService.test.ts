@@ -1,6 +1,6 @@
 import { z } from 'zod'
 
-import { ConflictError, NotFoundError } from '@shared/errors'
+import { ConflictError, NotFoundError, RequestCanceledError } from '@shared/errors'
 
 import { BaseService } from './BaseService'
 
@@ -153,6 +153,25 @@ describe('BaseService', () => {
       expect(error).toBeInstanceOf(typed.constructor)
       expect(consoleErrorSpy).toHaveBeenCalledWith(
         expect.stringContaining(`[ERROR] TestService - ${typed.name}: ${typed.message}`)
+      )
+    })
+
+    it('una consulta cancelada viaja tal cual y no se registra como ERROR', async () => {
+      // 2026-10-02: una consulta cancelada por react-query se reportaba como
+      // error de red a Sentry; aca salia "[ERROR] ... NetworkError" por tecla.
+      const canceled = new RequestCanceledError('La consulta se canceló.', {
+        errorCode: 'REQUEST_CANCELED',
+        statusCode: 0
+      })
+
+      const error: unknown = await service
+        .runCountedFailingOperation(() => Promise.reject(canceled))
+        .catch((reason: unknown) => reason)
+
+      expect(error).toBe(canceled)
+      expect(consoleErrorSpy).not.toHaveBeenCalled()
+      expect(consoleWarnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('[INFO] TestService - request canceled')
       )
     })
 

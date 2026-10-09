@@ -25,8 +25,8 @@ export const dayWindow = (date: string): { starts: string; ends: string } => ({
 
 /**
  * "Avisame si se libera un turno": se muestra cuando el dia no tiene cupo.
- * No pide OTP (el backend limita por telefono); el aviso llega por mail a
- * quien deje uno, y el dueno lo ve en su lista de espera igual.
+ * No pide OTP (el backend limita por telefono). El email es obligatorio: el
+ * cupo solo se ofrece a quien tiene uno entregable (D-20260930-11).
  */
 export const WaitlistJoinForm: React.FC<WaitlistJoinFormProps> = ({
   storePublicId,
@@ -56,8 +56,7 @@ export const WaitlistJoinForm: React.FC<WaitlistJoinFormProps> = ({
           </p>
           <p className="text-xs font-bold text-gray-500 mt-1">
             Si se libera un turno el {formatArgentinaDateDisplay(dayWindow(anotadoPara).starts)} te
-            avisamos{form.email.trim() ? ' por email' : ''}. El cupo se ofrece a una persona por vez
-            durante unos minutos.
+            avisamos por email. El cupo se ofrece a una persona por vez durante unos minutos.
           </p>
         </div>
       </div>
@@ -72,7 +71,7 @@ export const WaitlistJoinForm: React.FC<WaitlistJoinFormProps> = ({
         className="mt-4 w-full py-3 rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-2"
         style={buttonStyles2000s.default}
       >
-        <BellRing className="w-4 h-4" /> Avisame si se libera un turno este dia
+        <BellRing className="w-4 h-4" /> Avisame si se libera un turno este día
       </button>
     )
   }
@@ -90,11 +89,11 @@ export const WaitlistJoinForm: React.FC<WaitlistJoinFormProps> = ({
         window_ends_at: ends,
         client_name: form.name.trim(),
         client_phone: form.phone.trim(),
-        client_email: form.email.trim() || null
+        client_email: form.email.trim()
       })
       setAnotadoPara(date)
     } catch (err: unknown) {
-      setError(getErrorMessage(err, 'No pudimos anotarte. Proba de nuevo.'))
+      setError(getErrorMessage(err, 'No pudimos anotarte. Probá de nuevo.'))
     }
   }
 
@@ -128,11 +127,12 @@ export const WaitlistJoinForm: React.FC<WaitlistJoinFormProps> = ({
         value={form.phone}
         onChange={(e) => setForm({ ...form, phone: e.target.value })}
         placeholder="Tu WhatsApp (ej: 11 5555 0000)"
-        aria-label="Telefono"
+        aria-label="Teléfono"
         className="w-full rounded-xl px-4 py-3 font-bold outline-none"
         style={createBookingInputStyle()}
       />
       <input
+        required
         type="email"
         inputMode="email"
         value={form.email}

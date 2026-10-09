@@ -20,6 +20,7 @@ from typing import cast
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from tests.integration.test_funcional_pagos_promos_fiado import (
@@ -132,4 +133,45 @@ async def test_rafaga_de_reversas_del_mismo_movimiento_revierte_una_vez(
     # "Ese movimiento ya fue revertido." (ValidationException -> 422).
     assert set(codigos) <= {200, 422}, codigos
 
+    assert await _saldos(owner_engine, cliente) == [Decimal("0.00"), CARGO]
+
+
+@pytest.mark.asyncio
+async def test_la_base_rechaza_una_segunda_reversa_del_mismo_movimiento(
+    client: AsyncClient,
+    app_sessions: async_sessionmaker[AsyncSession],
+    owner_engine: AsyncEngine,
+) -> None:
+    """Decision de Mateo (2026-10-03): el panel ofrece "Revertir". Una reversa
+    escrita sin el lock del service (cualquier camino futuro) choca con
+    ``uq_customer_ledger_reverses_id`` en vez de anular dos veces."""
+    token, cliente = await _tienda_con_fiado(client, app_sessions, "pg-fiado-uq")
+    cargo = await client.post(
+        f"/ledger/customers/{cliente}/movements",
+        headers=auth_headers(token),
+        json={"movement_type": "charge", "amount": str(CARGO)},
+    )
+    assert cargo.status_code == 200, cargo.text
+    reversa = await client.post(
+        f"/ledger/customers/{cliente}/movements/{cargo.json()['public_id']}/reverse",
+        headers=auth_headers(token),
+    )
+    assert reversa.status_code == 200, reversa.text
+
+    with pytest.raises(IntegrityError) as choque:
+        async with owner_engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "insert into customer_ledger (id, store_id, client_id, "
+                    "appointment_id, movement_type, amount, balance_after, notes, "
+                    "reverses_id, created_at, updated_at, is_active) "
+                    "select 'otra-reversa', store_id, client_id, appointment_id, "
+                    "movement_type, amount, balance_after - :cargo, notes, "
+                    "reverses_id, created_at, updated_at, is_active "
+                    "from customer_ledger where id = :reversa"
+                ),
+                {"reversa": reversa.json()["public_id"], "cargo": CARGO},
+            )
+
+    assert "uq_customer_ledger_reverses_id" in str(choque.value)
     assert await _saldos(owner_engine, cliente) == [Decimal("0.00"), CARGO]

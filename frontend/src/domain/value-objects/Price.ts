@@ -1,3 +1,5 @@
+import { formatCurrency } from '@shared/utils/currency'
+
 import { InvalidValueError } from '../errors/DomainError'
 
 export class Price {
@@ -25,9 +27,6 @@ export class Price {
   }
 
   format(): string {
-    return new Intl.NumberFormat('es-AR', {
-      style: 'currency',
-      currency: this.currency
-    }).format(this.value)
+    return formatCurrency(this.value, this.currency)
   }
 }

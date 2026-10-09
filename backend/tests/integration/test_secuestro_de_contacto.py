@@ -223,8 +223,8 @@ async def test_ni_con_el_telefono_verificado_por_otp_se_pisa_el_contacto_ajeno(
         channel="email",
         email="real@example.com",
         store_name="Demo",
-        # El envio (post-respuesta desde B4-01) no importa aca.
-        schedule_dispatch=lambda *args: None,
+        # El envio no importa aca; la cola lo acepta y el codigo se guarda.
+        schedule_dispatch=lambda *args: True,
     )
     verificado = await servicio_otp.verify_code(
         store_id=store_id,
@@ -806,12 +806,17 @@ async def test_sin_contacto_verificado_la_sena_no_filtra_el_historial(
         },
     )
     assert turno.status_code == 201, turno.text
-    for accion in ("confirm", "absent"):
-        res = await client.patch(
-            f"/appointments/{turno.json()['public_id']}/{accion}",
-            headers=auth_headers(token),
-        )
-        assert res.status_code == 200, res.text
+    turno_id = turno.json()["public_id"]
+    # La sena por WhatsApp se cierra registrando el pago (revision 4R de la
+    # PR #108: "Confirmar" sobre un pendiente de pago es 409).
+    pago = await client.post(
+        f"/payments/{turno_id}/manual-confirm", headers=auth_headers(token), json={}
+    )
+    assert pago.status_code == 200, pago.text
+    res = await client.patch(
+        f"/appointments/{turno_id}/absent", headers=auth_headers(token)
+    )
+    assert res.status_code == 200, res.text
 
     pedido = await client.post(
         "/public/otp/request",

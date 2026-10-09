@@ -90,7 +90,9 @@ const menuEntries: MenuEntry[] = [
         iconPath: mdiCreditCardOutline,
         label: 'Cobros online',
         path: '/dashboard/payments',
-        roles: [ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN, ROLE_PROFESSIONAL]
+        // El backend le niega al profesional conciliacion, cola de envios y
+        // devoluciones (403): la pantalla solo le mostraba ceros (FF-21).
+        roles: [ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN]
       }),
       link({
         iconPath: mdiCashClock,

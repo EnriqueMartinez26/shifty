@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.availability_cache import AvailabilityCacheClient, invalidate_availability
 from core.database import _apply_tenant_context
+from core.roles import STORE_MANAGERS, require_roles
 from core.utils import ensure_utc_aware, now_utc
 from core.uow import AbstractUnitOfWork
 from core.exceptions import (
@@ -34,9 +35,14 @@ from http import HTTPStatus
 from modules.appointments.domain_service import SchedulingDomainService
 from modules.appointments.guards import (
     reject_already_cancelled,
+    reject_already_started,
+    reject_confirm_with_pending_deposit,
     reject_inactive,
     reject_reschedule_with_pending_deposit,
+    reject_reschedule_with_remainder,
+    require_can_manage_appointment,
 )
+from modules.appointments.working_hours import staff_ids_working_range
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.audit.model import AuditAction
 from modules.auth.service import normalize_email
@@ -276,6 +282,7 @@ class AppointmentService:
                     staff.id,
                     starts_at,
                     ends_at,
+                    store_id=store_id,
                     buffer_minutes=buffer_minutes,
                     require_schedule=require_schedule,
                 )
@@ -308,6 +315,19 @@ class AppointmentService:
         request: va por el outbox.
         """
         await AsyncSession.commit(self.uow.session)
+
+    async def _commit_and_invalidate(self, store_id: str, *instants: datetime) -> None:
+        """Commit plano, invalidacion de la disponibilidad y contexto de tienda.
+
+        Sale de ``reschedule`` (B1-12, regla 29): la invalidacion es la llamada
+        de red, va despues del commit y el contexto se reaplica siempre, aun si
+        la invalidacion levanta (``_commit_before_network``).
+        """
+        await self._commit_before_network()
+        try:
+            await invalidate_availability(self.cache, store_id, *instants)
+        finally:
+            await _apply_tenant_context(self.uow.session)
 
     def _publish_client_mail(self, appointment: Appointment, event_type: str) -> None:
         """Aviso al cliente por el outbox, en la transaccion del cambio (F2-02).
@@ -373,6 +393,12 @@ class AppointmentService:
         de MP lo vence el outbox despues, sin lock: regla 5). Orden de locks
         turno -> pago (regla 7). Un pago ya acreditado no se toca: el turno se
         cancela como siempre y la devolucion la decide la tienda.
+
+        Quien y cuando (2026-09-29): el admin y la recepcion cancelan
+        cualquier turno de la tienda y el profesional solo los suyos
+        (D-20260929-03, 403 ``PERMISSION_DENIED``); un turno que ya empezo no
+        se cancela, se completa o se marca ausente (D-20260929-05, 409
+        ``APPOINTMENT_ALREADY_STARTED``).
         """
         # Lock pesimista antes de leer: sin esto, dos transiciones validas
         # y distintas pueden partir del mismo estado origen (TOCTOU).
@@ -382,8 +408,12 @@ class AppointmentService:
         )
         if not appointment:
             raise AppointmentNotFoundException(public_id)
+        # Rol y duenio del turno (D-20260929-03), bajo el lock.
+        require_can_manage_appointment(appointment, actor, "cancelar este turno")
         # Ya cancelado: 409, bajo el lock (dos a la vez no pasan las dos).
         reject_already_cancelled(appointment)
+        # Ya empezo: se completa o se marca ausente (D-20260929-05).
+        reject_already_started(appointment)
 
         payload_before = {"status": appointment.status}
 
@@ -423,7 +453,13 @@ class AppointmentService:
         return appointment
 
     async def confirm(self, *, public_id: str, actor: User) -> Appointment:
-        """Confirma un turno (solo ADMIN o STAFF)."""
+        """Confirma un turno (solo ADMIN o STAFF).
+
+        Un turno que espera su sena con el cobro vivo no se confirma aca: 409
+        ``DEPOSIT_PENDING_CONFIRM_DENIED`` (``reject_confirm_with_pending_deposit``,
+        revision 4R de la PR #108). Se confirma registrando el pago en Cobros,
+        para que ningun turno confirmado quede con un cobro vivo.
+        """
         # Lock pesimista antes de leer: sin esto, dos transiciones validas
         # y distintas pueden partir del mismo estado origen (TOCTOU).
         await self.uow.appointments.lock_by_public_id(public_id, actor.store_id)
@@ -432,6 +468,14 @@ class AppointmentService:
         )
         if not appointment:
             raise AppointmentNotFoundException(public_id)
+        if appointment.status == AppointmentStatus.PENDING_PAYMENT.value:
+            # Orden turno -> pago (regla 7): el turno ya esta lockeado.
+            payment = await self.uow.payments.get_by_appointment_locked(
+                appointment.id, actor.store_id
+            )
+            reject_confirm_with_pending_deposit(
+                appointment, live_payment=payment is not None and payment.is_live_charge
+            )
 
         payload_before = {"status": appointment.status}
         appointment.apply_status_transition(AppointmentStatus.CONFIRMED)
@@ -659,9 +703,16 @@ class AppointmentService:
         new_starts_at: datetime,
         idempotency_key: str,
         actor: User,
+        allow_outside_schedule: bool = False,
     ) -> tuple[Appointment, Service, Staff]:
         """
         Reprograma un turno: cancela el original y crea uno nuevo.
+
+        Quien y a donde (2026-09-29): rol y duenio del turno como al cancelar
+        (D-20260929-03) y el horario nuevo dentro de la jornada EFECTIVA del
+        profesional (la suya o, sin franjas, la del local: D-20260929-01/02),
+        salvo ``allow_outside_schedule``, que es solo del admin y explicito
+        (D-20260929-04; 403 para el resto, 409 ``OUT_OF_SCHEDULE`` sin el).
 
         Implementación:
           1. Lock y lectura del turno original y, despues, de su cobro
@@ -684,10 +735,20 @@ class AppointmentService:
         El dueno reprograma sin la antelacion minima; el "no pasado" lo valida
         el schema AppointmentReschedule.
         """
+        if allow_outside_schedule:
+            require_roles(
+                actor,
+                STORE_MANAGERS,
+                "Solo el dueno o administrador puede mover un turno fuera de horario",
+            )
         original, payment = await self._lock_reschedulable(public_id, actor)
         service, staff = await self._service_and_staff_of(original, actor)
 
         ends_at = new_starts_at + timedelta(minutes=service.duration_minutes)
+        if not allow_outside_schedule:
+            await self._require_working_hours(
+                original.store_id, original.staff_id, new_starts_at, ends_at
+            )
         await self._lock_and_validate_slot(
             store_id=original.store_id,
             staff_id=original.staff_id,
@@ -708,13 +769,9 @@ class AppointmentService:
         # dueno 2026-09-25) no lleva "tu turno cambio": el cliente ya estuvo.
         if ensure_utc_aware(new_starts_at) >= now_utc():
             self._publish_client_mail(new_appointment, EVENT_APPOINTMENT_RESCHEDULED)
-        await self._commit_before_network()
-        try:
-            await invalidate_availability(
-                self.cache, original.store_id, original.starts_at, new_starts_at
-            )
-        finally:
-            await _apply_tenant_context(self.uow.session)
+        await self._commit_and_invalidate(
+            original.store_id, original.starts_at, new_starts_at
+        )
         return new_appointment, service, staff
 
     async def _lock_reschedulable(
@@ -733,14 +790,36 @@ class AppointmentService:
         )
         if not original:
             raise AppointmentNotFoundException(public_id)
+        # Rol y duenio antes que el estado: sin permiso no se informa nada.
+        require_can_manage_appointment(original, actor, "reprogramar este turno")
         reject_inactive(original)
         # Antes de lockear el cobro y de cualquier mutacion, evento o
         # invalidacion (decision de Mateo 2026-09-25: opcion A).
         reject_reschedule_with_pending_deposit(original)
+        # Un resto vivo (D-20261008-01) quedaria colgado del cancelado y el
+        # turno nuevo pediria el precio entero (revision de la PR #137, W2).
+        reject_reschedule_with_remainder(
+            await self.uow.balance_payments.get_live(original.id, actor.store_id)
+        )
         payment = await self.uow.payments.get_by_appointment_locked(
             original.id, actor.store_id
         )
         return original, payment
+
+    async def _require_working_hours(
+        self, store_id: str, staff_id: str, starts_at: datetime, ends_at: datetime
+    ) -> None:
+        """409 ``OUT_OF_SCHEDULE`` si el rango sale de la jornada efectiva.
+
+        Misma regla y mismo codigo que el alta (``staff_can_take_range``):
+        las franjas del profesional o, sin ninguna, el horario del local, en
+        hora argentina (``working_hours``). Antes el panel movia un turno a
+        cualquier hora sin mirar la jornada (2026-09-29).
+        """
+        if staff_id not in await staff_ids_working_range(
+            self.uow.session, store_id, [staff_id], starts_at, ends_at
+        ):
+            _raise_for_rejection(RangeRejection.OUT_OF_SCHEDULE)
 
     async def _service_and_staff_of(
         self, original: Appointment, actor: User

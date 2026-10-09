@@ -1,5 +1,7 @@
 import React from 'react'
 
+import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH } from '@domain/value-objects/PasswordRules'
+
 import {
   formGridClass,
   innerCardStyle,
@@ -92,12 +94,12 @@ export const UserModals: React.FC<UserModalsProps> = ({
           >
             <option value="admin">Admin</option>
             <option value="staff">Profesional</option>
-            <option value="receptionist">Recepcion</option>
+            <option value="receptionist">Recepción</option>
             <option value="client">Cliente</option>
           </SelectInput>
         </div>
         <div>
-          <FieldLabel>Telefono</FieldLabel>
+          <FieldLabel>Teléfono</FieldLabel>
           <TextInput
             value={userForm.phone}
             onChange={(event) =>
@@ -115,13 +117,15 @@ export const UserModals: React.FC<UserModalsProps> = ({
           onChange={(event) =>
             setUserForm((current) => ({ ...current, password: event.target.value }))
           }
-          minLength={12}
+          autoComplete="new-password"
+          minLength={PASSWORD_MIN_LENGTH}
+          maxLength={PASSWORD_MAX_LENGTH * 2}
         />
       </div>
 
       <ToggleRow
         label="Usuario activo"
-        description="Mantiene o revoca su acceso dentro del tenant."
+        description="Mantiene o revoca su acceso dentro de la tienda."
         checked={userForm.is_active}
         onToggle={() => setUserForm((current) => ({ ...current, is_active: !current.is_active }))}
       />

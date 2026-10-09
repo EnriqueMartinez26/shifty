@@ -82,6 +82,12 @@ ADMINS = frozenset({ADMIN_TIENDA, SUPERADMIN})
 # global: la recepcionista queda afuera (docs/ROLE_MATRIX.md, "Diferencias").
 OPERATIVOS = frozenset({PROFESIONAL, ADMIN_TIENDA, SUPERADMIN})
 LECTORES_DE_REPORTES = OPERATIVOS  # core/roles.py::REPORT_VIEWERS
+# Cancelar y reprogramar desde el panel (D-20260929-03): admin, superadmin y
+# recepcion, cualquier turno; el profesional solo los de SU agenda. El actor
+# profesional de la matriz no tiene ficha de staff (el turno es de
+# ``tienda.staff``), asi que aca recibe 403; el caso del profesional duenio
+# del turno lo prueba tests/integration/test_agenda_rol_duenio_y_horario.py.
+GESTORES_DE_CUALQUIER_TURNO = frozenset({RECEPCIONISTA, ADMIN_TIENDA, SUPERADMIN})
 SOLO_SUPER = frozenset({SUPERADMIN})
 SOLO_OTP = frozenset({CLIENTE_OTP})
 
@@ -307,6 +313,14 @@ async def _crear_staff(m: Mundo, a: Actor, t: Tienda) -> Llamada:
     )
 
 
+async def _agregarme_como_staff(m: Mundo, a: Actor, t: Tienda) -> Llamada:
+    # La ficha es la de la cuenta que llama: la segunda vez del mismo actor
+    # responde 409 (ya figura), por eso la fila acepta 201 y 409. El
+    # superadmin queda afuera: la cuenta global no atiende (403
+    # STAFF_SELF_GLOBAL_ADMIN_DENIED, revision de #133).
+    return Llamada("POST", "/staff/me", json={"service_ids": [t.servicio]})
+
+
 async def _ver_staff(m: Mundo, a: Actor, t: Tienda) -> Llamada:
     return Llamada("GET", f"/staff/{t.staff}")
 
@@ -316,6 +330,18 @@ async def _crear_horario(m: Mundo, a: Actor, t: Tienda) -> Llamada:
         "POST",
         f"/staff/{await m.staff(t)}/schedules",
         json={"day_of_week": 1, "start_time": "08:00:00", "end_time": "12:00:00"},
+    )
+
+
+async def _reemplazar_semana(m: Mundo, a: Actor, t: Tienda) -> Llamada:
+    return Llamada(
+        "PUT",
+        f"/staff/{await m.staff(t)}/schedules",
+        json={
+            "schedules": [
+                {"day_of_week": 1, "start_time": "08:00:00", "end_time": "12:00:00"}
+            ]
+        },
     )
 
 
@@ -592,6 +618,40 @@ async def _confirmar_pago(m: Mundo, a: Actor, t: Tienda) -> Llamada:
         f"/payments/{await m.turno(t)}/manual-confirm",
         json={"amount": "100.00"},
     )
+
+
+async def _turno_con_sena(m: Mundo, t: Tienda) -> str:
+    """Turno con un cobro acreditado menor que su precio: tiene saldo
+    (D-20261008-01)."""
+    turno = await m.turno(t)
+    await m.ok(
+        "POST",
+        f"/payments/{turno}/manual-confirm",
+        t,
+        200,
+        json={"amount": "100.00"},
+    )
+    return turno
+
+
+async def _registrar_resto(m: Mundo, a: Actor, t: Tienda) -> Llamada:
+    return Llamada(
+        "POST",
+        f"/payments/{await _turno_con_sena(m, t)}/remaining-payment",
+        json={"amount": "1.00", "idempotency_key": m.unico("clave-resto")},
+    )
+
+
+async def _revertir_resto(m: Mundo, a: Actor, t: Tienda) -> Llamada:
+    turno = await _turno_con_sena(m, t)
+    await m.ok(
+        "POST",
+        f"/payments/{turno}/remaining-payment",
+        t,
+        201,
+        json={"amount": "1.00", "idempotency_key": m.unico("clave-resto")},
+    )
+    return Llamada("POST", f"/payments/{turno}/remaining-payment/revert")
 
 
 async def _reembolsar(m: Mundo, a: Actor, t: Tienda) -> Llamada:
@@ -1099,6 +1159,14 @@ TABLA: tuple[Ruta, ...] = (
     # personal
     R("GET", "/staff/", PERSONAL, A.PROPIA, _listar_staff),
     R("POST", "/staff/", ADMINS, A.RECURSO, _crear_staff, idor=IDOR_EN_BODY),
+    R(
+        "POST",
+        "/staff/me",
+        frozenset({ADMIN_TIENDA}),
+        A.PROPIA,
+        _agregarme_como_staff,
+        ok=frozenset({201, 409}),
+    ),
     R("GET", "/staff/{public_id}", PERSONAL, A.RECURSO, _ver_staff, idor=IDOR_POR_ID),
     R(
         "POST",
@@ -1106,6 +1174,14 @@ TABLA: tuple[Ruta, ...] = (
         ADMINS,
         A.RECURSO,
         _crear_horario,
+        idor=IDOR_POR_ID,
+    ),
+    R(
+        "PUT",
+        "/staff/{public_id}/schedules",
+        ADMINS,
+        A.RECURSO,
+        _reemplazar_semana,
         idor=IDOR_POR_ID,
     ),
     R(
@@ -1170,7 +1246,7 @@ TABLA: tuple[Ruta, ...] = (
     R(
         "PATCH",
         "/appointments/{public_id}/cancel",
-        PERSONAL,
+        GESTORES_DE_CUALQUIER_TURNO,
         A.RECURSO,
         _transicion("cancel"),
         idor=IDOR_POR_ID,
@@ -1210,7 +1286,7 @@ TABLA: tuple[Ruta, ...] = (
     R(
         "PATCH",
         "/appointments/{public_id}/reschedule",
-        PERSONAL,
+        GESTORES_DE_CUALQUIER_TURNO,
         A.RECURSO,
         _reprogramar,
         idor=IDOR_POR_ID,
@@ -1423,10 +1499,16 @@ TABLA: tuple[Ruta, ...] = (
         A.PROPIA,
         _sin_cuerpo("DELETE", "/payments/mercadopago/oauth/connection"),
     ),
+    # Link de pago y confirmacion manual (D-20260930-13): admin y superadmin,
+    # cualquier turno; el profesional solo los de SU ficha (la misma guarda que
+    # cancelar y reprogramar) y la recepcion no cobra. El actor profesional de
+    # la matriz no tiene ficha de staff (el turno es de ``tienda.staff``), asi
+    # que aca recibe 403; el profesional duenio lo prueba
+    # tests/integration/test_cobrar_solo_turnos_propios.py.
     R(
         "POST",
         "/payments/preferences/{appointment_id}",
-        OPERATIVOS,
+        ADMINS,
         A.RECURSO,
         _preferencia,
         idor=IDOR_POR_ID,
@@ -1434,9 +1516,28 @@ TABLA: tuple[Ruta, ...] = (
     R(
         "POST",
         "/payments/{appointment_id}/manual-confirm",
-        OPERATIVOS,
+        ADMINS,
         A.RECURSO,
         _confirmar_pago,
+        idor=IDOR_POR_ID,
+    ),
+    # Saldo restante por turno (D-20261008-01): registrar, con los permisos de
+    # ``manual-confirm`` (el profesional de la matriz no es duenio del turno:
+    # 403); revertir, ``_require_payment_admin``.
+    R(
+        "POST",
+        "/payments/{appointment_id}/remaining-payment",
+        ADMINS,
+        A.RECURSO,
+        _registrar_resto,
+        idor=IDOR_POR_ID,
+    ),
+    R(
+        "POST",
+        "/payments/{appointment_id}/remaining-payment/revert",
+        ADMINS,
+        A.RECURSO,
+        _revertir_resto,
         idor=IDOR_POR_ID,
     ),
     R(

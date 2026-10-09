@@ -7,6 +7,7 @@ import { Email } from '../../domain/value-objects/Email'
 import { UserRole } from '../../domain/value-objects/UserRole'
 import { ConflictError } from '../../shared/errors/ConflictError'
 import { InternalServerError } from '../../shared/errors/InternalServerError'
+import { NotFoundError } from '../../shared/errors/NotFoundError'
 
 const respuesta: UserResponseDTO = {
   public_id: 'usr-1',
@@ -52,7 +53,8 @@ describe('HttpUserRepository.update (F11c-11)', () => {
 
   it('no manda la clave vacia ni los campos ausentes', async () => {
     // Editar sin tocar la contraseña deja el campo en '': mandarlo seria un
-    // 422 del backend (min 12) o, peor, un intento de pisar la clave.
+    // 422 del backend (min 6; era 12 hasta 2026-10-01, D-20261001-01) o, peor,
+    // un intento de pisar la clave.
     const { patch, repository } = createRepository()
 
     await repository.update('usr-1', { firstName: 'Ana', password: '' })
@@ -144,9 +146,14 @@ describe('HttpUserRepository lecturas', () => {
     const { get, repository } = createReadRepository()
     get.mockRejectedValue(new Error('Network Error'))
 
-    await expect(repository.findAll()).rejects.toThrow(
-      new InternalServerError("Database operation 'findAll' failed: Network Error")
-    )
+    await expect(repository.findAll()).rejects.toThrow(InternalServerError)
+    await expect(repository.findAll()).rejects.toMatchObject({
+      message: 'No se pudo completar la operación.',
+      context: {
+        operation: 'findAll',
+        technicalMessage: "Database operation 'findAll' failed: Network Error"
+      }
+    })
   })
 
   it('findById devuelve el usuario mapeado', async () => {
@@ -161,7 +168,8 @@ describe('HttpUserRepository lecturas', () => {
 
   it('findById devuelve null ante un 404, no un error', async () => {
     const { get, repository } = createReadRepository()
-    get.mockRejectedValue({ response: { status: 404 } })
+    // Forma real: el cliente HTTP normaliza el 404 (FF-35).
+    get.mockRejectedValue(new NotFoundError('x', { statusCode: 404 }))
 
     await expect(repository.findById('usr-x')).resolves.toBeNull()
   })
@@ -191,9 +199,13 @@ describe('HttpUserRepository lecturas', () => {
     const { get, repository } = createReadRepository()
     get.mockRejectedValue(new Error('caido'))
 
-    await expect(repository.findByEmail(Email.create('ana@example.com'))).rejects.toThrow(
-      "Database operation 'findByEmail' failed: caido"
-    )
+    await expect(repository.findByEmail(Email.create('ana@example.com'))).rejects.toMatchObject({
+      message: 'No se pudo completar la operación.',
+      context: {
+        operation: 'findByEmail',
+        technicalMessage: "Database operation 'findByEmail' failed: caido"
+      }
+    })
   })
 
   it('findByRole filtra por el rol y mapea cada usuario', async () => {
@@ -216,6 +228,52 @@ describe('HttpUserRepository lecturas', () => {
   })
 })
 
+describe('HttpUserRepository.list', () => {
+  it('manda la busqueda como params de GET /users/ y omite lo ausente', async () => {
+    const get = jest.fn().mockResolvedValue({ data: [respuesta] })
+    const repository = new HttpUserRepository({ get } as unknown as AxiosInstance)
+
+    const users = await repository.list({ q: 'ana', limit: 200, includeInactive: true })
+
+    expect(get).toHaveBeenCalledWith('/users/', {
+      params: { include_inactive: true, q: 'ana', email: undefined, limit: 200 }
+    })
+    expect(users[0]?.id).toBe('usr-1')
+  })
+
+  it('la segunda pagina manda offset=100 (F4-03)', async () => {
+    // 2026-09-30: la lista de usuarios cortaba en 200 sin forma de ver el
+    // resto; no habia offset y el servidor siempre devolvia la primera pagina.
+    const get = jest.fn().mockResolvedValue({ data: [] })
+    const repository = new HttpUserRepository({ get } as unknown as AxiosInstance)
+
+    await repository.list({ limit: 100, includeInactive: true, offset: 100 })
+
+    expect(get.mock.calls[0][1]).toStrictEqual({
+      params: {
+        include_inactive: true,
+        q: undefined,
+        email: undefined,
+        limit: 100,
+        offset: 100
+      },
+      signal: undefined
+    })
+  })
+
+  it('pasa la senal de cancelacion a axios', async () => {
+    // 2026-10-02: la lista de usuarios no recibia el `signal` de react-query;
+    // una busqueda reemplazada seguia viajando hasta el final.
+    const get = jest.fn().mockResolvedValue({ data: [] })
+    const repository = new HttpUserRepository({ get } as unknown as AxiosInstance)
+    const controller = new AbortController()
+
+    await repository.list({ limit: 100 }, controller.signal)
+
+    expect(get.mock.calls[0][1].signal).toBe(controller.signal)
+  })
+})
+
 describe('HttpUserRepository.delete', () => {
   it('manda el DELETE a la ruta del usuario', async () => {
     const { remove, repository } = createReadRepository()
@@ -229,9 +287,13 @@ describe('HttpUserRepository.delete', () => {
     const { remove, repository } = createReadRepository()
     remove.mockRejectedValue(new Error('caido'))
 
-    await expect(repository.delete('usr-1')).rejects.toThrow(
-      "Database operation 'delete' failed: caido"
-    )
+    await expect(repository.delete('usr-1')).rejects.toMatchObject({
+      message: 'No se pudo completar la operación.',
+      context: {
+        operation: 'delete',
+        technicalMessage: "Database operation 'delete' failed: caido"
+      }
+    })
   })
 })
 
@@ -241,8 +303,15 @@ describe('HttpUserRepository escrituras que fallan', () => {
     patch.mockRejectedValue('respuesta rara')
 
     await expect(repository.update('usr-1', { firstName: 'Ana' })).rejects.toThrow(
-      new InternalServerError("Database operation 'update' failed: Unknown repository error")
+      InternalServerError
     )
+    await expect(repository.update('usr-1', { firstName: 'Ana' })).rejects.toMatchObject({
+      message: 'No se pudo completar la operación.',
+      context: {
+        operation: 'update',
+        technicalMessage: "Database operation 'update' failed: Unknown repository error"
+      }
+    })
   })
 
   it('create deja pasar un error de aplicacion sin envolverlo', async () => {

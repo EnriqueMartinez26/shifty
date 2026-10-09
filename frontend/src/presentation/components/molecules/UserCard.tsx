@@ -4,16 +4,34 @@ import { Shield, User as UserIcon, Mail, Phone, Check, X, Edit2, Trash2 } from '
 
 import { User } from '@domain/entities/User'
 
-import { colors2000s, buttonStyles2000s } from '../../../theme/colors'
+import { displayableEmail } from '@shared/utils/deliverableEmail'
+
+import { colors2000s, buttonStyles2000s, orangeCtaGradient } from '../../../theme/colors'
+import { userRoleLabel } from '../../lib/enumLabels'
 
 interface UserCardProps {
   user: User
   onEdit: (user: User) => void
   onDelete: (id: string) => void
+  /** Mostrar "Eliminar" (baja logica); lo decide `canDeactivateUser`. */
+  canDelete: boolean
+  /**
+   * Tienda suspendida: editar responde 402 (FF-15). Eliminar sigue: DELETE
+   * /users/{public_id} esta en SUSPENSION_ALLOWED_WRITES (D-20260930-10).
+   */
+  readOnlyReason?: string | null
 }
 
-export const UserCard: React.FC<UserCardProps> = ({ user, onEdit, onDelete }) => {
+export const UserCard: React.FC<UserCardProps> = ({
+  user,
+  onEdit,
+  onDelete,
+  canDelete,
+  readOnlyReason = null
+}) => {
   const isAdmin = user.role.isAdmin()
+  // El alta publica inventa un email tecnico (.noreply): no se muestra.
+  const email = displayableEmail(user.email.getValue())
 
   const getInitials = (name: string) => {
     const parts = name.split(' ')
@@ -28,7 +46,7 @@ export const UserCard: React.FC<UserCardProps> = ({ user, onEdit, onDelete }) =>
   const accentBorderColor = isAdmin ? colors2000s.status.info.dark : colors2000s.orange.light
   const avatarGradient = isAdmin
     ? `linear-gradient(180deg, ${colors2000s.status.info.light} 0%, ${colors2000s.status.info.dark} 100%)`
-    : `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`
+    : orangeCtaGradient
 
   return (
     <div
@@ -49,7 +67,7 @@ export const UserCard: React.FC<UserCardProps> = ({ user, onEdit, onDelete }) =>
           style={{
             background: 'white',
             boxShadow: colors2000s.shadows.insetDark,
-            color: user.isActive ? colors2000s.status.success.text : colors2000s.text.disabled
+            color: user.isActive ? colors2000s.status.success.text : colors2000s.text.secondary
           }}
         >
           {user.isActive ? (
@@ -82,9 +100,9 @@ export const UserCard: React.FC<UserCardProps> = ({ user, onEdit, onDelete }) =>
             </h3>
             <p
               className="text-[10px] font-black uppercase tracking-widest mt-1 truncate"
-              style={{ color: colors2000s.text.disabled }}
+              style={{ color: colors2000s.text.secondary }}
             >
-              {user.email.getValue()}
+              {email ?? 'Sin email'}
             </p>
           </div>
         </div>
@@ -100,7 +118,7 @@ export const UserCard: React.FC<UserCardProps> = ({ user, onEdit, onDelete }) =>
             }}
           >
             {isAdmin ? <Shield size={10} /> : <UserIcon size={10} />}
-            {user.role.getValue()}
+            {userRoleLabel(user.role.getValue())}
           </span>
         </div>
 
@@ -111,7 +129,7 @@ export const UserCard: React.FC<UserCardProps> = ({ user, onEdit, onDelete }) =>
             style={{ color: colors2000s.text.secondary }}
           >
             <Mail size={14} color={colors2000s.text.disabled} />
-            <span className="truncate">{user.email.getValue()}</span>
+            <span className="truncate">{email ?? 'Sin email'}</span>
           </div>
           {user.toPrimitives().phone && (
             <div
@@ -126,21 +144,25 @@ export const UserCard: React.FC<UserCardProps> = ({ user, onEdit, onDelete }) =>
       </div>
 
       {/* Outlined Action Buttons in Footer */}
-      <div className="grid grid-cols-2 gap-3 pt-4 mt-4">
+      <div className={`grid ${canDelete ? 'grid-cols-2' : 'grid-cols-1'} gap-3 pt-4 mt-4`}>
         <button
           onClick={() => onEdit(user)}
-          className="flex items-center justify-center gap-2 py-2.5 px-3 font-black text-[10px] uppercase tracking-widest transition-all active:scale-95"
+          disabled={readOnlyReason !== null}
+          title={readOnlyReason ?? undefined}
+          className="flex items-center justify-center gap-2 py-2.5 px-3 font-black text-[10px] uppercase tracking-widest transition-all active:scale-95 disabled:opacity-50"
           style={buttonStyles2000s.default}
         >
           <Edit2 size={14} /> Editar
         </button>
-        <button
-          onClick={() => onDelete(user.id)}
-          className="flex items-center justify-center gap-2 py-2.5 px-3 font-black text-[10px] uppercase tracking-widest transition-all active:scale-95"
-          style={{ ...buttonStyles2000s.default, color: colors2000s.status.danger.light }}
-        >
-          <Trash2 size={14} /> Eliminar
-        </button>
+        {canDelete && (
+          <button
+            onClick={() => onDelete(user.id)}
+            className="flex items-center justify-center gap-2 py-2.5 px-3 font-black text-[10px] uppercase tracking-widest transition-all active:scale-95"
+            style={{ ...buttonStyles2000s.default, color: colors2000s.status.danger.light }}
+          >
+            <Trash2 size={14} /> Eliminar
+          </button>
+        )}
       </div>
     </div>
   )

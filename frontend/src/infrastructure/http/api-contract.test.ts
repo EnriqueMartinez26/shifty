@@ -1,9 +1,16 @@
+import { CanceledError } from 'axios'
+
 import {
   ConflictError,
   ForbiddenError,
   InternalServerError,
   NetworkError,
   NotFoundError,
+  PaymentRequiredError,
+  RateLimitError,
+  RequestCanceledError,
+  RequestTimeoutError,
+  ServiceUnavailableError,
   UnauthorizedError,
   ValidationError
 } from '@shared/errors'
@@ -75,6 +82,51 @@ describe('normalizeApiError', () => {
         errorCode: 'NOT_FOUND'
       }
     })
+  })
+
+  it('maps a read timeout to its own typed error (D-20260930-02)', () => {
+    // F4-04 b (2026-10-01): un timeout decia "No se pudo conectar con el
+    // servidor." y se reintentaba como una conexion caida.
+    const error = normalizeApiError({
+      code: 'ETIMEDOUT',
+      message: 'timeout of 15000ms exceeded'
+    })
+
+    expect(error).toBeInstanceOf(RequestTimeoutError)
+    expect(error).toMatchObject({
+      code: 'REQUEST_TIMEOUT',
+      statusCode: 0,
+      message: 'La consulta tardó demasiado. Probá de nuevo.',
+      context: { errorCode: 'REQUEST_TIMEOUT', statusCode: 0 }
+    })
+  })
+
+  it('keeps an aborted request (ECONNABORTED without timeout) as a network error', () => {
+    // Con clarifyTimeoutError, ECONNABORTED solo significa "Request aborted".
+    const error = normalizeApiError({ code: 'ECONNABORTED', message: 'Request aborted' })
+
+    expect(error).toBeInstanceOf(NetworkError)
+    expect(error).not.toBeInstanceOf(RequestTimeoutError)
+    expect(error).not.toBeInstanceOf(RequestCanceledError)
+  })
+
+  it('maps a request canceled by its caller to its own typed error, not a network error', () => {
+    // 2026-10-02: una consulta cancelada por react-query se reportaba como
+    // error de red a Sentry. axios la rechaza con ERR_CANCELED.
+    const error = normalizeApiError({ code: 'ERR_CANCELED', message: 'canceled' })
+
+    expect(error).toBeInstanceOf(RequestCanceledError)
+    expect(error).not.toBeInstanceOf(NetworkError)
+    expect(error).toMatchObject({
+      code: 'REQUEST_CANCELED',
+      statusCode: 0,
+      isOperational: true,
+      context: { errorCode: 'REQUEST_CANCELED', statusCode: 0 }
+    })
+  })
+
+  it('maps a real axios CanceledError to the canceled error', () => {
+    expect(normalizeApiError(new CanceledError())).toBeInstanceOf(RequestCanceledError)
   })
 
   it('maps missing transport responses to the shared network error', () => {
@@ -157,6 +209,88 @@ describe('normalizeApiError', () => {
         statusCode: 500
       }
     })
+  })
+})
+
+describe('normalizeApiError: 402, 429 y 502/503 ya no son un 500', () => {
+  const envelope = (errorCode: string, message: string, detail?: unknown) => ({
+    success: false,
+    error_code: errorCode,
+    message,
+    detail
+  })
+
+  it('un 402 es PaymentRequiredError operacional con su codigo', () => {
+    const error = normalizeApiError({
+      response: {
+        status: 402,
+        data: envelope('SUBSCRIPTION_SUSPENDED', 'Tu suscripcion esta suspendida')
+      }
+    })
+
+    expect(error).toBeInstanceOf(PaymentRequiredError)
+    expect(error).toMatchObject({
+      isOperational: true,
+      context: { errorCode: 'SUBSCRIPTION_SUSPENDED', statusCode: 402 }
+    })
+  })
+
+  it('un 429 es RateLimitError y conserva el Retry-After en segundos', () => {
+    const error = normalizeApiError({
+      response: {
+        status: 429,
+        headers: { 'retry-after': '42' },
+        data: envelope('RATE_LIMITED', 'Demasiadas solicitudes')
+      }
+    })
+
+    expect(error).toBeInstanceOf(RateLimitError)
+    expect(error).toMatchObject({
+      isOperational: true,
+      context: { errorCode: 'RATE_LIMITED', statusCode: 429, retryAfter: 42 }
+    })
+  })
+
+  it('sin header, toma el retry_after del detail de RateLimitException', () => {
+    const error = normalizeApiError({
+      response: { status: 429, data: envelope('RATE_LIMITED', 'Espera', { retry_after: 30 }) }
+    })
+
+    expect(error.context).toMatchObject({ retryAfter: 30 })
+  })
+
+  it('un Retry-After que no son segundos se descarta', () => {
+    const error = normalizeApiError({
+      response: {
+        status: 429,
+        headers: { 'retry-after': 'Wed, 21 Oct 2026 07:28:00 GMT' },
+        data: envelope('RATE_LIMITED', 'Espera')
+      }
+    })
+
+    expect(error.context?.retryAfter).toBeUndefined()
+  })
+
+  it.each([502, 503])('un %i es ServiceUnavailableError con el status real', (status) => {
+    const error = normalizeApiError({
+      response: {
+        status,
+        headers: { 'retry-after': '5' },
+        data: envelope('RATE_LIMIT_UNAVAILABLE', 'Limitador caido')
+      }
+    })
+
+    expect(error).toBeInstanceOf(ServiceUnavailableError)
+    expect(error).toMatchObject({
+      isOperational: true,
+      context: { statusCode: status, retryAfter: 5 }
+    })
+  })
+
+  it('un error ya normalizado pasa tal cual, tambien las clases nuevas', () => {
+    const original = new RateLimitError('ya normalizado', { retryAfter: 3 })
+
+    expect(normalizeApiError(original)).toBe(original)
   })
 })
 

@@ -42,7 +42,7 @@ const LegalFooterLinks: React.FC<LegalFooterLinksProps> = ({ depositPolicy, clas
         </span>
         <span
           className="text-[10px] font-bold uppercase tracking-widest"
-          style={{ color: colors2000s.text.disabled }}
+          style={{ color: colors2000s.text.secondary }}
         >
           Política de seña publicada por la tienda
         </span>

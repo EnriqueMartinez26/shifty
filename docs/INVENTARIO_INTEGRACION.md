@@ -259,7 +259,7 @@ Fuente: `backend/core/config.py` y los archivos de ejemplo (`.env.example`, `bac
 | — | `.github/workflows/e2e.yml` | Fija npm 11.17.0 antes de `npm ci` |
 | — | `.github/workflows/monthly-backup-drill.yml` | Runner configurable (`vars.BACKUP_DRILL_RUNNER`) y chequeo temprano de secretos |
 | 53e1908 | `.github/dependabot.yml` (nuevo) | PRs semanales agrupados para `uv`, `npm` y `github-actions` |
-| — | `.pre-commit-config.yaml` | Solo un comentario: la compuerta no está activa hasta `core.hooksPath` |
+| — | `.pre-commit-config.yaml` | Borrado junto con la dependencia `pre-commit` y `test_pre_commit_config.py`: la única compuerta local es `.githooks/pre-commit` (se activa con `core.hooksPath`) |
 | **e68100e** | `.github/workflows/security-scan.yml` | **Pendiente de merge**: vive solo en `perf/cve-ci`. `pip-audit` sobre `uv.lock`, Trivy sobre las 3 imágenes, `npm audit` semanal |
 
 ### G6. Scripts y archivos de host
@@ -294,10 +294,10 @@ Fuente: `backend/core/config.py` y los archivos de ejemplo (`.env.example`, `bac
 | Paquete | Versión en `backend/uv.lock` hoy | Cómo entra | Estado |
 |---|---|---|---|
 | anyio | 4.13.0 | transitiva (starlette/httpx) | pendiente de OK |
-| cryptography | 48.0.0 | **solo** por el extra `python-jose[cryptography]` (`uv.lock:1452-1454`) | pendiente de OK (ver Q3) |
-| ecdsa | 0.19.2 | transitiva (python-jose) | pendiente de OK |
+| cryptography | 50.0.0 | directa (`>=50.0.0`, `backend/pyproject.toml:18`; `uv.lock:411-412`) | hecho: declarada directa en el bump de CVE (`191c1b28`); Q3 cerrada |
+| ecdsa | — (era 0.19.2) | ya no entra (era transitiva de python-jose) | fuera del lock desde el 2026-10-02: python-jose se reemplazó por PyJWT (D-20260930-04) |
 | pillow | 12.2.0 | transitiva (reportlab) | pendiente de OK |
-| pyasn1 | 0.6.3 | transitiva (python-jose, rsa) | pendiente de OK |
+| pyasn1 | — (era 0.6.4) | ya no entra (era transitiva de python-jose y rsa) | fuera del lock desde el 2026-10-02: python-jose se reemplazó por PyJWT (D-20260930-04) |
 | pydantic-settings | 2.14.1 | directa (`>=2.2.0`) | pendiente de OK |
 | starlette | 1.0.0 | transitiva (fastapi) | pendiente de OK |
 
@@ -332,10 +332,10 @@ Ninguno de estos cambios contradice una decisión del dueño listada en CLAUDE.m
 | # | Afirmación de Enrique | Veredicto | Evidencia | Qué hacer en el front |
 |---|---|---|---|---|
 | 1 | Horarios: un período por día y `open < close` → 422 | **Confirmado, con dos agregados.** También `"99:99"` o una hora vacía → 422 (antes 500), y `open == close` → 422. Un horario que cruza la medianoche (20:00-02:00) no se puede cargar. Los días cerrados siguen siendo lista vacía. | `stores/schemas.py:45-57` (`time` + `validate_time_order`, c49539f), `:141-156` (`reject_extra_periods`, e27be5c). Mensajes: `business_hours: Value error, Por ahora cada dia admite un solo periodo de apertura`; `…: Value error, open debe ser anterior a close` | Ocultar "+ Bloque" (`Settings.tsx:1024-1038`), validar `open < close` antes de guardar, `key` estable (FF-08) |
-| 2 | `/reports/export` solo admin → 403 para profesional | **Confirmado.** | `reports/router.py:114-124` usa `REPORT_EXPORTERS = {super_admin, store_admin}` (5ed39f4). 403 `PERMISSION_DENIED` "No tenés permiso para realizar esta acción: exportar reportes." | Ocultar los tres botones (`Reports.tsx:273,283,297`) si el rol no es admin; parsear el blob de error (FF-18) |
+| 2 | `/reports/export` solo admin → 403 para profesional | **Confirmado.** | `reports/router.py:114-124` usa `REPORT_EXPORTERS = {super_admin, store_admin}` (5ed39f4). 403 `PERMISSION_DENIED` "No tenés permiso para realizar esta acción: exportar reportes." | Ocultar los tres botones (`Reports.tsx:273,283,297`) si el rol no es admin; parsear el blob de error (FF-18). Hecho en 958c808 y 8772a46 |
 | 3 | Seña: monto > 0, percent ≤ 100, 2 decimales | **Confirmado, con precisiones.** "Monto > 0" aplica solo si `deposit_mode != none` y `deposit_type != full`. "2 decimales" aplica a `deposit_amount` **y a `price`**. Hay un CHECK en Postgres además del schema. | `services/schemas.py:32-64` (ae15ac8, cb2cb41), PATCH mezclado con la fila en `services/router.py:113-131`, CHECK en `d1f3b5a7c9e2` (41a40c8) | `service.validators.ts:26-31` hoy permite `min(0)` y no tiene tope de 100 (el comentario de `:52-57` dice que el tope "va en el backend": ya está). Cambiar a `> 0`, `≤ 100` si `percent`, múltiplo de 0,01 en precio y seña |
-| 4 | `GET /ledger/customers/{id}` pagina de a 50 con `total` | **Confirmado, con un agregado:** el orden se invirtió (más nuevo primero; antes más viejo primero). `limit` máx. 200, `offset` máx. 100.000. | `ledger/router.py:175-207` (f7c8cbf), `ledger/schemas.py:28-34` | `LedgerService.ts:42-44` sin `limit`/`offset` y `CustomerLedger` sin `total`; paginar o "ver más"; revisar el orden en `Ledger.tsx:250` (FF-20) |
-| 5 | `/reports/summary` `limit=2000` por defecto con `has_more` | **Confirmado.** `limit` 1..5000, `offset` 0..100.000, solo sobre `appointments`; `stats` y los top siguen siendo del rango completo. | `reports/router.py:37,65-66` (c88d2dc), `reports/schemas.py:91`, cálculo en `reports/service.py:831` (73c31b3) | Declarar `has_more` en `ReportSummary` (`ReportsService.ts:62-71`) y paginar o avisar (FF-30) |
+| 4 | `GET /ledger/customers/{id}` pagina de a 50 con `total` | **Confirmado, con un agregado:** el orden se invirtió (más nuevo primero; antes más viejo primero). `limit` máx. 200, `offset` máx. 100.000. | `ledger/router.py:175-207` (f7c8cbf), `ledger/schemas.py:28-34` | `LedgerService.ts:42-44` sin `limit`/`offset` y `CustomerLedger` sin `total`; paginar o "ver más"; revisar el orden en `Ledger.tsx:250` (FF-20). Hecho en 4d85593: cursor `after`/`next_cursor`, "Ver mas" y `total`; el orden del backend se respeta |
+| 5 | `/reports/summary` `limit=2000` por defecto con `has_more` | **Confirmado.** `limit` 1..5000, `offset` 0..100.000, solo sobre `appointments`; `stats` y los top siguen siendo del rango completo. | `reports/router.py:37,65-66` (c88d2dc), `reports/schemas.py:91`, cálculo en `reports/service.py:831` (73c31b3) | Declarar `has_more` en `ReportSummary` (`ReportsService.ts:62-71`) y paginar o avisar (FF-30). Hecho en 8772a46: páginas de 100 con `limit`/`offset` |
 | 6 | Alta de admin solo superadmin (403) y email duplicado → 409 | **Confirmado para `/users/`; corregido para `/superadmin/`.** Por `POST /users/`: `role=admin` de un admin de tienda → 403; email duplicado → 409 `RESOURCE_CONFLICT`. Por `POST /superadmin/stores/{id}/admins` el duplicado sigue siendo **400 `APP_ERROR` "Ya existe un usuario con ese email"** (pre-chequeo sin distinguir mayúsculas); solo una carrera llega al índice y da 409. | `users/router.py:31` + `core/roles.py:98-116` (90295b7); `users/service.py` (e6ba357); `superadmin/repository.py:426-431` + `superadmin/router.py:268-269` | `UserFormModal.tsx:190`: mostrar `admin` solo si `is_global_admin` o el editado ya es admin (FF-09). Traducir 409 en usuarios y 400 en el alta del superadmin a "ese email ya existe" |
 | 7 | Señuelo de OTP con `OTP_DEBUG_EXPOSE_CODE` | **Confirmado.** Con el flag activo (solo fuera de producción; en prod falla el arranque), `debug_code` es un código **falso** siempre que el canal sea email y el destino real no sea el email tipeado (tipee algo o no). Con `whatsapp`/`sms` (solo `OTP_PROVIDER=console`) sigue siendo el real. | `otp/service.py:187-209,373-379` (4f2e743, 31facf5); guarda de prod en `core/config.py:134-138` | `NewAppointmentModal.tsx:485-494` y `BookingStepConfirmation.tsx:456-465` muestran "Código debug": puede no verificar en dev si el teléfono ya es de un cliente con email. No es un bug; conviene aclararlo en el texto o no mostrarlo |
 
@@ -370,6 +370,8 @@ Cambia el contrato, así que va con acuerdo previo. Si no hay un caso real de "b
 3. Si más adelante se quiere retirarlo del todo: fixture de tests primero, después borrar la ruta y su fila en `SUSPENSION_ALLOWED_WRITES`.
 
 ### Q3. ¿Declarar `cryptography` explícito en `pyproject.toml`?
+
+**Cerrada (2026-10-02).** `cryptography` es dependencia directa (`>=50.0.0` en `backend/pyproject.toml:18`, 50.0.0 en `backend/uv.lock:411-412`) desde el bump de CVE (`191c1b28`), y D-20260930-04 (PR #100) reemplazó `python-jose` por `PyJWT`, lo que sacó `ecdsa` y `pyasn1` del árbol. Lo que sigue es el análisis original, que describe el estado previo.
 
 **Confirmado que hace falta.** `backend/core/crypto.py:6` hace `from cryptography.fernet import Fernet` (cifrado de secretos del gateway), pero `cryptography` no está en `[project].dependencies`: entra solo por el extra `python-jose[cryptography]` (`uv.lock:1452-1454`). Si mañana se reemplaza `python-jose` (que sigue trayendo `ecdsa` y `pyasn1`, dos de los CVE pendientes) o se le quita el extra, el import de `core/crypto.py` se rompe sin que el lock lo avise.
 
@@ -457,7 +459,7 @@ Resultado del gate sobre `integration/aud2` @ 6786cef (2026-09-24, un comando po
 | Mails | SMTP dentro del request | La reserva pública y las transiciones del panel responden sin esperar al mail; el mail sale por Celery/outbox con hasta ~20 s de demora. | No (solo expectativa de tiempos). |
 | "Pagué y sigue pendiente" | hasta 5-6 min | conciliación a demanda al consultar el estado pendiente > 20 s; el sondeo del front debería usar backoff (R12-05). | Recomendado: backoff 2 → 5 → 15 s. |
 | Errores de MP al cliente | texto crudo del proveedor | 503 `PAYMENT_PROVIDER_UNAVAILABLE`, 502 `PAYMENT_LINK_CREATION_FAILED`, 409 `PAYMENT_GATEWAY_NOT_CONNECTED`, mensajes fijos. | Mostrar `message`. |
-| `/ops/slo` | — | métricas de atraso (`oldest_pending_*`, `oldest_pending_email_send_seconds`). | No. |
+| `/ops/slo` | — | métricas de atraso (`oldest_pending_*`, `oldest_pending_email_send_seconds`, `oldest_overdue_hold_seconds`, `oldest_due_held_recheck_seconds`) y `integrity_held_holds` (contador sin umbral; atraso de reconsulta con umbral aparte). | No. |
 
 ## Cambios posteriores al inventario (Fase 3 y 5, 2026-09-24, `integration/aud2` @ 9214b37)
 
@@ -484,6 +486,6 @@ Detalle completo (parámetros, respuestas y códigos) en `docs/DOCUMENTACION_TUR
 | FF-24 | `GET /superadmin/stores?is_active=true\|false\|all`; total en el header `X-Total-Count`. | Sí: "Todas" y paginar. |
 | FF-12 / F4-07 | `GET /appointment-blocks/?from_date&to_date&include_inactive` (días locales, ≤ 400). Sin parámetros responde igual que antes. | Sí: pedir solo el rango visible. |
 | FF-14 | Recepción puede leer `GET /appointment-blocks/`. | Mostrar bloqueos en su agenda. |
-| FF-20 / F4-03 | `GET /users/?q=` (2..80 caracteres, nombre o teléfono), solo admin. La parte del profesional (fiado) sigue pendiente. | Autocompletado en Fiado y Usuarios. |
+| FF-20 / F4-03 | `GET /users/?q=` (2..80 caracteres, nombre o teléfono), solo admin. Para el fiado, `GET /ledger/clients?q=` (2..80, `limit` ≤ 100), también para el profesional. | Fiado: hecho en 4d85593 con `/ledger/clients`. Usuarios: pendiente. |
 | — | `can_cancel`/`can_reschedule` del historial del cliente reflejan las reglas reales (pago pendiente o acreditado ya no ofrece "Cambiar"). | Usar los flags. |
 | Topes | Reservar y reprogramar: ±2 años (solo anti-desborde). El cliente sigue limitado a 120 días por la grilla. La tienda puede agendar y reprogramar en el pasado; el cliente nunca. | Saber que un 422 "fuera de rango" solo aparece fuera de ±2 años. |

@@ -22,6 +22,7 @@ from core.circuit_breaker import CircuitBreakerOpenError
 from core.config import Environment, settings
 from core.crypto import encrypt_secret
 from core.database import _apply_tenant_context, get_db, tenant_bypass
+from core.idempotency import idempotency_guard, idempotency_release, idempotency_save
 from core.redis import get_redis
 from core.exceptions import (
     AppException,
@@ -35,11 +36,14 @@ from core.exceptions import (
 )
 from core.feature_flags import is_store_feature_enabled
 from core.validation import PUBLIC_ID_PATTERN
+from modules.appointments.guards import require_can_manage_appointment
 from modules.appointments.model import Appointment
 from modules.auth.dependencies import get_current_user
 from modules.payments.jobs import persist_gateway_refresh, process_outbox_batch
 from modules.payments.on_demand import request_inbox_retry
 from modules.payments.model import (
+    PAYMENT_PROVIDER_MANUAL,
+    AppointmentBalancePayment,
     OutboxMessage,
     Payment,
     PaymentGatewayConfig,
@@ -47,10 +51,18 @@ from modules.payments.model import (
     WebhookInbox,
 )
 from modules.payments.processing import (
+    EVENT_PAYMENT_ALERT_MARK,
+    PAGO_NO_VERIFICADO,
+    alert_integrity_rejection,
     apply_mercadopago_webhook_payload,
     enrich_mercadopago_webhook_payload,
+    mercadopago_event_identity,
 )
 from modules.payments.service import PaymentGatewayNotConnectedError
+from modules.payments.deposit_channels import (
+    deposit_channels_of,
+    warn_if_deposit_channel_lost,
+)
 from modules.payments.oauth_state import (
     InvalidOAuthStateError,
     create_mercadopago_oauth_state,
@@ -58,6 +70,7 @@ from modules.payments.oauth_state import (
     parse_mercadopago_oauth_state,
 )
 from modules.payments.service import (
+    OAUTH_PENDING_ACCESS_TOKEN,
     GatewayConfigs,
     apply_mercadopago_oauth_payload,
     build_mercadopago_oauth_authorization_url,
@@ -66,6 +79,7 @@ from modules.payments.service import (
     load_gateway_configs,
     exchange_mercadopago_oauth_code_without_transaction,
     mercadopago_oauth_is_configured,
+    oauth_payload_lacks_account,
     refresh_mercadopago_oauth_without_transaction,
 )
 from modules.payments.schemas import (
@@ -80,6 +94,8 @@ from modules.payments.schemas import (
     PaymentResponse,
     ReconciliationSummaryResponse,
     RefundRequest,
+    RemainingPaymentRequest,
+    RemainingPaymentResponse,
 )
 from modules.services.model import Service
 from modules.stores.model import Store
@@ -251,7 +267,13 @@ async def _validate_mercadopago_signature(
     payload: dict[str, Any],
     request: Request,
     store_reference: str | None,
-) -> str:
+) -> tuple[str, str]:
+    """(tienda, ``data.id`` que cubrio la firma).
+
+    Ese id es el UNICO al que despues se le pregunta a MP (revision 4R de la
+    PR #104): el resto del cuerpo no esta firmado, y antes la consulta podia
+    salir con un ``payment_id`` del cuerpo distinto del id firmado.
+    """
     resolved_store_id, _config = await _resolve_store_for_webhook(db, store_reference)
     secret = settings.MERCADOPAGO_WEBHOOK_SECRET
     if not secret and settings.ENV != "production":
@@ -298,7 +320,7 @@ async def _validate_mercadopago_signature(
             error_code="INVALID_SIGNATURE",
         )
 
-    return resolved_store_id
+    return resolved_store_id, data_id
 
 
 async def _get_appointment_with_service(
@@ -548,6 +570,14 @@ async def mercadopago_oauth_callback(
             )
         except RuntimeError:
             return _oauth_frontend_redirect("exchange_failed")
+        if oauth_payload_lacks_account(token_payload):
+            # En produccion, sin la cuenta de MP no se acredita ningun cobro:
+            # no se guarda como conectada (revision 4R de la PR #104).
+            logger.warning(
+                "mercadopago_oauth_without_user_id",
+                store_id=str(state_payload["store_id"]),
+            )
+            return _oauth_frontend_redirect("exchange_failed")
 
         result = await db.execute(
             select(PaymentGatewayConfig).where(
@@ -560,7 +590,7 @@ async def mercadopago_oauth_callback(
             config = PaymentGatewayConfig(
                 store_id=str(state_payload["store_id"]),
                 provider="mercadopago",
-                encrypted_access_token="pending",
+                encrypted_access_token=OAUTH_PENDING_ACCESS_TOKEN,
                 connection_mode="oauth",
             )
             db.add(config)
@@ -642,7 +672,13 @@ async def disconnect_mercadopago_oauth(
     if not config:
         return OAuthDisconnectResponse(disconnected=False)
 
+    store = await db.get(Store, user.store_id)
+    canales_antes = await deposit_channels_of(db, store) if store else None
     await db.delete(config)
+    await db.flush()  # sin autoflush: la lectura de canales ya no lo ve
+    # Desconectar MP puede dejar a la tienda sin canal de sena obligatoria.
+    if store is not None and canales_antes is not None:
+        await warn_if_deposit_channel_lost(db, store, canales_antes)
     await db.commit()
     return OAuthDisconnectResponse(disconnected=True)
 
@@ -658,6 +694,9 @@ async def create_payment_preference(
     appointment, service = await _get_appointment_with_service(
         db, appointment_id, user.store_id
     )
+    # Duenio del turno (D-20260930-13), antes del lock y de tocar el cobro; la
+    # recepcion ya quedo afuera en ``_require_payment_manager``.
+    require_can_manage_appointment(appointment, user, "cobrar este turno")
     try:
         # Sin override: si el turno ya tiene un cobro con la sena calculada
         # por la regla, se respeta ese importe y solo se refresca el link. El
@@ -706,9 +745,16 @@ async def manual_confirm_payment(
 ) -> PaymentResponse:
     _require_payment_manager(user)
     db = svc.uow.session
-    await _ensure_payments_feature_enabled(db, user)
+    # Sin el flag ``payments``: confirmar a mano registra plata que entro por
+    # fuera (la sena por WhatsApp, decision de Mateo 2026-10-03), no es una
+    # funcion de Mercado Pago. Con los cobros apagados respondia 403 y una
+    # sena por WhatsApp no tenia quien la confirmara (QA 2026-10-02). El flag
+    # sigue gateando lo de MP: link, pasarela, conciliacion.
     appointment, service = await _get_appointment_with_service(
         db, appointment_id, user.store_id
+    )
+    require_can_manage_appointment(
+        appointment, user, "confirmar el cobro de este turno"
     )
     payment = await svc.manual_confirm(
         appointment=appointment,
@@ -719,6 +765,110 @@ async def manual_confirm_payment(
     )
     await db.refresh(payment)
     return _payment_response(payment)
+
+
+def _remaining_payment_response(
+    resto: AppointmentBalancePayment, saldo: Decimal
+) -> RemainingPaymentResponse:
+    return RemainingPaymentResponse.model_validate(
+        {
+            "public_id": resto.id,
+            "appointment_id": resto.appointment_id,
+            "amount": resto.amount,
+            "method": resto.method,
+            "created_at": resto.created_at,
+            "reverted_at": resto.reverted_at,
+            "remaining_amount": saldo,
+        }
+    )
+
+
+async def _appointment_for_remaining_payment(
+    svc: PaymentService, appointment_id: str, user: User, action: str
+) -> Appointment:
+    """El turno de la tienda (404 si no) y su duenio (D-20260930-13), antes de
+    cualquier lock o escritura."""
+    appointment = await svc.uow.appointments.get_by_public_id(
+        appointment_id, user.store_id
+    )
+    if appointment is None:
+        raise AppointmentNotFoundException(public_id=appointment_id)
+    require_can_manage_appointment(appointment, user, action)
+    return appointment
+
+
+@router.post(
+    "/{appointment_id}/remaining-payment",
+    response_model=RemainingPaymentResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Registro del resto de un turno pagado aparte de su cobro",
+    description=(
+        "Saldo restante por turno (D-20261008-01): registra lo que el cliente "
+        "pago en el local despues de la sena acreditada. Un resto por turno; "
+        "sin amount registra el saldo entero. 409 sin cobro acreditado, sin "
+        "saldo, con un resto ya registrado, con un importe mayor al saldo o "
+        "sobre un turno soltado. No llama a Mercado Pago."
+    ),
+)
+async def record_remaining_payment(
+    appointment_id: PublicIdPath,
+    data: RemainingPaymentRequest,
+    user: User = Depends(get_current_user),
+    svc: PaymentService = Depends(get_payment_service),
+    redis: Redis = Depends(get_redis),
+) -> RemainingPaymentResponse:
+    # Mismos permisos que ``manual-confirm`` y, como ella, sin el flag
+    # ``payments``: es plata que entro por fuera de Mercado Pago.
+    _require_payment_manager(user)
+    appointment = await _appointment_for_remaining_payment(
+        svc, appointment_id, user, "registrar el resto de este turno"
+    )
+    # Por tienda y por turno: la misma clave en otra tienda u otro turno no
+    # devuelve esta respuesta (patron de ``_panel_cache_key``).
+    cache_key = (
+        f"remaining-payment:{user.store_id}:{appointment.id}:{data.idempotency_key}"
+    )
+    cached = await idempotency_guard(cache_key, redis)
+    if cached:
+        return RemainingPaymentResponse.model_validate(cached)
+    try:
+        resto, saldo = await svc.record_remaining_payment(
+            appointment=appointment,
+            actor=user,
+            amount=data.amount,
+            method=data.method,
+        )
+    except Exception:
+        await idempotency_release(cache_key, redis)
+        raise
+    payload = _remaining_payment_response(resto, saldo)
+    await idempotency_save(cache_key, payload.model_dump(mode="json"), redis)
+    return payload
+
+
+@router.post(
+    "/{appointment_id}/remaining-payment/revert",
+    response_model=RemainingPaymentResponse,
+    summary="Revierte el resto registrado de un turno",
+    description=(
+        "Solo administradores (D-20261008-01). La devolucion se hace fuera de "
+        "Shifty; esto marca el resto como revertido (la fila queda como "
+        "auditoria) y el saldo del turno vuelve. 409 si no hay un resto vivo."
+    ),
+)
+async def revert_remaining_payment(
+    appointment_id: PublicIdPath,
+    user: User = Depends(get_current_user),
+    svc: PaymentService = Depends(get_payment_service),
+) -> RemainingPaymentResponse:
+    _require_payment_admin(user)
+    appointment = await _appointment_for_remaining_payment(
+        svc, appointment_id, user, "revertir el resto de este turno"
+    )
+    resto, saldo = await svc.revert_remaining_payment(
+        appointment=appointment, actor=user
+    )
+    return _remaining_payment_response(resto, saldo)
 
 
 @router.post(
@@ -740,8 +890,14 @@ async def refund_payment(
 ) -> PaymentResponse:
     _require_payment_admin(user)
     db = svc.uow.session
-    await _ensure_payments_feature_enabled(db, user)
     payment = await _get_payment_by_id(db, payment_id, user.store_id)
+    # Una sena por WhatsApp (proveedor ``manual``) o un cobro confirmado a mano
+    # se registra sin el flag ``payments``: la plata entro y sale por fuera,
+    # como ``manual-confirm`` (revision 4R de la PR #108). Sin esto, una tienda
+    # sin cobros online no podia registrar la devolucion de una sena por
+    # WhatsApp. Lo que paso por Mercado Pago sigue detras del flag.
+    if not _settled_outside_mercadopago(payment):
+        await _ensure_payments_feature_enabled(db, user)
     payment = await svc.refund(
         payment=payment,
         actor=user,
@@ -750,12 +906,28 @@ async def refund_payment(
         manual=data.manual,
     )
     await db.refresh(payment)
-    return _payment_response(payment)
+    # El reembolso no toca el resto del turno (D-20261008-01), pero lo dice:
+    # si tambien se devolvio, se revierte aparte (revision de la PR #137, W1).
+    resto = await svc.uow.balance_payments.get_live(
+        payment.appointment_id, user.store_id
+    )
+    respuesta = _payment_response(payment)
+    respuesta.live_remainder_amount = resto.amount if resto is not None else None
+    return respuesta
+
+
+def _settled_outside_mercadopago(payment: Payment) -> bool:
+    """El cobro no movio plata por Mercado Pago: sena por WhatsApp o pago
+    registrado a mano."""
+    return (
+        payment.provider == PAYMENT_PROVIDER_MANUAL
+        or payment.status == PaymentStatus.MANUAL_CONFIRMED.value
+    )
 
 
 async def _enriquecer_sin_transaccion_abierta(
-    db: AsyncSession, *, store_id: str, payload: dict[str, Any]
-) -> tuple[dict[str, Any], GatewayConfigs]:
+    db: AsyncSession, *, store_id: str, payload: dict[str, Any], payment_id: str
+) -> tuple[dict[str, Any] | None, GatewayConfigs]:
     """Le pide a Mercado Pago el detalle del evento, sin transaccion abierta.
 
     Antes el handler consultaba a MP (``GET /v1/payments/{id}``, hasta
@@ -779,6 +951,7 @@ async def _enriquecer_sin_transaccion_abierta(
         db,
         store_id=store_id,
         payload=payload,
+        payment_id=payment_id,
         configs=configs,
         # Un 401 refresca el OAuth: se persiste en su propia transaccion corta,
         # que se cierra antes del segundo HTTP. Sin esto el default hace
@@ -787,6 +960,46 @@ async def _enriquecer_sin_transaccion_abierta(
     )
     await _apply_tenant_context(db)
     return enriquecido, configs
+
+
+async def _aplicar_y_anotar_en_el_inbox(
+    db: AsyncSession,
+    inbox: WebhookInbox,
+    *,
+    store_id: str,
+    verificado: dict[str, Any] | None,
+    configs: GatewayConfigs,
+) -> bool:
+    """Aplica el evento ya verificado contra MP y anota el resultado en el inbox.
+
+    Lo que no se aplica queda sin ``processed_at`` para que el worker del
+    inbox lo reintente: marcarlo aca perderia el cobro de forma permanente.
+    """
+    if verificado is None:
+        # MP no confirmo el pago y el cuerpo crudo no se aplica (2026-10-02):
+        # un intento, como en el lote de ``process_webhook_inbox_batch``.
+        inbox.register_failure(PAGO_NO_VERIFICADO)
+        return False
+    try:
+        applied = await apply_mercadopago_webhook_payload(
+            db, store_id=store_id, payload=verificado, configs=configs
+        )
+    except RuntimeError as exc:
+        # 2026-09-16 (B2-04): un importe, moneda, referencia o collector
+        # inconsistente llegaba como RuntimeError hasta el handler generico:
+        # 500 hacia Mercado Pago, sin commit, y la fila del inbox recien
+        # agregada se perdia con el rollback. El inbox es el mecanismo de
+        # reintento (regla 7): el motivo queda en `error`, `attempts` suma
+        # uno y `processed_at` sigue vacio hasta agotar los intentos, igual
+        # que hace el lote de `process_webhook_inbox_batch`.
+        inbox.register_failure(str(exc))
+        await alert_integrity_rejection(db, exc)
+        return False
+    if applied:
+        inbox.mark_processed()
+    else:
+        inbox.register_failure("No se pudo resolver el pago del webhook")
+    return applied
 
 
 @router.post("/webhooks/mercadopago")
@@ -804,17 +1017,25 @@ async def mercadopago_webhook(
             raise WebhookException(message="Body de webhook invalido") from exc
         if not isinstance(payload, dict):
             raise WebhookException(message="Body de webhook invalido")
-        resolved_store_id = await _validate_mercadopago_signature(
+        resolved_store_id, id_firmado = await _validate_mercadopago_signature(
             db,
             payload=payload,
             request=request,
             store_reference=store_id,
         )
-        payload, configs = await _enriquecer_sin_transaccion_abierta(
-            db, store_id=resolved_store_id, payload=payload
+        verificado, configs = await _enriquecer_sin_transaccion_abierta(
+            db, store_id=resolved_store_id, payload=payload, payment_id=id_firmado
+        )
+        # Lo que se guarda para el reintento: el evento verificado o, sin el
+        # detalle de MP, solo sus identificadores y el id firmado (2026-10-02).
+        # Nunca el cuerpo crudo: la firma no cubre el estado.
+        a_guardar = (
+            verificado
+            if verificado is not None
+            else mercadopago_event_identity(payload, id_firmado)
         )
 
-        event_id = _webhook_event_id(payload)
+        event_id = _webhook_event_id(a_guardar)
 
         existing = await db.execute(
             select(WebhookInbox).where(WebhookInbox.event_id == event_id)
@@ -823,40 +1044,24 @@ async def mercadopago_webhook(
         if inbox:
             if inbox.processed_at is not None:
                 return {"success": True, "data": {"status": "already_processed"}}
-            inbox.payload = payload
+            inbox.payload = a_guardar
         else:
             inbox = WebhookInbox(
                 store_id=resolved_store_id,
                 provider="mercadopago",
                 event_id=event_id,
-                event_type=str(payload.get("type") or payload.get("topic") or ""),
-                payload=payload,
+                event_type=str(a_guardar.get("type") or a_guardar.get("topic") or ""),
+                payload=a_guardar,
             )
             db.add(inbox)
 
-        # Si no pudimos resolver el pago (por ejemplo, porque la consulta a Mercado
-        # Pago fallo y el webhook crudo no trae estado), dejamos el evento sin
-        # procesar para que el worker del inbox lo reintente. Marcarlo aca perderia
-        # el cobro de forma permanente.
-        try:
-            applied = await apply_mercadopago_webhook_payload(
-                db, store_id=resolved_store_id, payload=payload, configs=configs
-            )
-        except RuntimeError as exc:
-            # 2026-09-16 (B2-04): un importe, moneda, referencia o collector
-            # inconsistente llegaba como RuntimeError hasta el handler generico:
-            # 500 hacia Mercado Pago, sin commit, y la fila del inbox recien
-            # agregada se perdia con el rollback. El inbox es el mecanismo de
-            # reintento (regla 7): el motivo queda en `error`, `attempts` suma
-            # uno y `processed_at` sigue vacio hasta agotar los intentos, igual
-            # que hace el lote de `process_webhook_inbox_batch`.
-            applied = False
-            inbox.register_failure(str(exc))
-        else:
-            if applied:
-                inbox.mark_processed()
-            else:
-                inbox.register_failure("No se pudo resolver el pago del webhook")
+        applied = await _aplicar_y_anotar_en_el_inbox(
+            db,
+            inbox,
+            store_id=resolved_store_id,
+            verificado=verificado,
+            configs=configs,
+        )
         await db.commit()
     if not applied and inbox.processed_at is None:
         # F1-21 (R9-09): sin esto el cobro esperaba al beat del inbox (60-120 s)
@@ -893,6 +1098,9 @@ async def outbox_stats(
         OutboxMessage,
         OutboxMessage.store_id == user.store_id,
         OutboxMessage.processed_at.is_not(None),
+        # La marca que deduplica una alerta a Sentry no es un evento que el
+        # outbox haya procesado (re-revision de la PR #104, S5).
+        OutboxMessage.event_type != EVENT_PAYMENT_ALERT_MARK,
     )
     return OutboxStatsResponse(
         pending=pending,
@@ -948,6 +1156,20 @@ async def reconciliation_summary(
         OutboxMessage.store_id == user.store_id,
         OutboxMessage.processed_at.is_(None),
     )
+    # Los restos vivos pagados aparte del cobro (D-20261008-01) van en campos
+    # propios: ``total_approved_amount`` sigue hablando de los mismos cobros
+    # que sus contadores (revision de la PR #137, S2).
+    restos, importe_restos = (
+        await db.execute(
+            select(
+                func.count(AppointmentBalancePayment.id),
+                func.coalesce(func.sum(AppointmentBalancePayment.amount), 0),
+            ).where(
+                AppointmentBalancePayment.store_id == user.store_id,
+                AppointmentBalancePayment.reverted_at.is_(None),
+            )
+        )
+    ).one()
 
     return ReconciliationSummaryResponse(
         pending_payments=pending_count,
@@ -957,6 +1179,8 @@ async def reconciliation_summary(
         refunded_payments=por_estado.get(PaymentStatus.REFUNDED.value, sin_filas)[0],
         total_pending_amount=pending_amount,
         total_approved_amount=approved_amount + manual_amount,
+        remainder_payments=int(restos or 0),
+        total_remainder_amount=Decimal(str(importe_restos or 0)),
         pending_webhooks=int(pending_webhooks or 0),
         failed_webhooks=int(failed_webhooks or 0),
         pending_outbox=pending_outbox,

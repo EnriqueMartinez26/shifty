@@ -1,9 +1,11 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import {
   appointmentBlocksService,
   type AppointmentBlock,
+  type AppointmentBlockListParams,
   type AppointmentBlockPayload,
+  type AppointmentBlockUpdatePayload,
   type BlockPreviewPayload,
   type BlockPreviewResult,
   type BlockTemplate,
@@ -14,16 +16,34 @@ import {
 // Un bloqueo puede cancelar turnos: la agenda tambien tiene que refrescarse.
 const BLOCK_QUERIES = [['appointment-blocks'], ['calendar-agenda']] as const
 
-export const useAppointmentBlocks = () =>
-  useQuery<AppointmentBlock[]>({
-    queryKey: ['appointment-blocks'],
-    queryFn: () => appointmentBlocksService.list()
+/**
+ * Bloqueos ACTIVOS del rango visible (F4-07, FF-12): antes se traia toda la
+ * historia de la tienda, activos e inactivos, y se filtraba en memoria. La
+ * clave empieza con 'appointment-blocks', asi que invalidar ese prefijo
+ * (BLOCK_QUERIES) sigue refrescando todos los rangos.
+ */
+export const useAppointmentBlocks = (fromDate: string, toDate: string) => {
+  const params: AppointmentBlockListParams = {
+    from_date: fromDate,
+    to_date: toDate,
+    include_inactive: false
+  }
+  return useQuery<AppointmentBlock[]>({
+    queryKey: ['appointment-blocks', fromDate, toDate],
+    queryFn: () => appointmentBlocksService.list(params),
+    enabled: Boolean(fromDate && toDate),
+    // Al cambiar de dia o de vista, los bloqueos del rango anterior quedan
+    // hasta que llegan los nuevos en vez de parpadear vacios.
+    placeholderData: keepPreviousData
   })
+}
 
-export const useBlockTemplates = () =>
+/** Recepcion recibe 403 en las plantillas: no se piden (D-20260929-09). */
+export const useBlockTemplates = ({ enabled }: { enabled: boolean }) =>
   useQuery<BlockTemplate[]>({
     queryKey: ['appointment-block-templates'],
-    queryFn: () => appointmentBlocksService.getTemplates()
+    queryFn: () => appointmentBlocksService.getTemplates(),
+    enabled
   })
 
 export const useCreateAppointmentBlock = () => {
@@ -55,7 +75,7 @@ export const useUpdateAppointmentBlock = () => {
   return useMutation<
     AppointmentBlock,
     Error,
-    { publicId: string; payload: Partial<AppointmentBlockPayload> & { is_active?: boolean } }
+    { publicId: string; payload: AppointmentBlockUpdatePayload }
   >({
     mutationFn: ({ publicId, payload }) => appointmentBlocksService.update(publicId, payload),
     onSuccess: () => {

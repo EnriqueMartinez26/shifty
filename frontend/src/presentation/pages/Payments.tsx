@@ -1,15 +1,19 @@
-import React, { useMemo, useState } from 'react'
+import React, { useState } from 'react'
 
 import { RefreshCcw, Settings2 } from 'lucide-react'
 import { useNavigate } from 'react-router'
 
+import { totalCollected } from '@domain/value-objects/AppointmentCharge'
+
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
+import { formatCurrency } from '@shared/utils/currency'
 
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
 import { MessageBanner } from '../components/molecules/MessageBanner'
 import { PageHeader } from '../components/molecules/PageHeader'
 import { QueryErrorNotice } from '../components/molecules/QueryErrorNotice'
 import { SummaryCards } from '../components/molecules/SummaryCards'
+import { useDocumentTitle } from '../hooks/useDocumentTitle'
 import {
   useGatewayConfig,
   useOutboxStats,
@@ -17,7 +21,6 @@ import {
   useReconciliationSummary,
   useRefundPayment
 } from '../hooks/usePayments'
-import { currencyFmtEsAr as currencyFmt } from '../lib/formatters'
 import {
   create2000sInputStyle,
   create2000sListCardStyle,
@@ -25,6 +28,7 @@ import {
 } from '../lib/surfaceStyles'
 
 const PaymentsPage: React.FC = () => {
+  useDocumentTitle('Cobros online · Shifty')
   // Navegacion dentro de la SPA: `window.location.assign` recargaba todo y
   // perdia el token en memoria camino a Configuracion (F11b-20).
   const navigate = useNavigate()
@@ -41,18 +45,18 @@ const PaymentsPage: React.FC = () => {
   })
   const [message, setMessage] = useState('')
 
-  const summaryCards = useMemo(() => {
-    const summary = summaryQuery.data
-    return [
-      { label: 'Por revisar', value: summary?.pending_payments ?? 0 },
-      { label: 'Aprobados', value: summary?.approved_payments ?? 0 },
-      { label: 'Confirmados manualmente', value: summary?.manual_confirmed_payments ?? 0 },
-      {
-        label: 'Total cobrado',
-        value: currencyFmt.format(Number(summary?.total_approved_amount ?? 0))
-      }
-    ]
-  }, [summaryQuery.data])
+  const summary = summaryQuery.data
+  const summaryCards = [
+    { label: 'Por revisar', value: summary?.pending_payments ?? 0 },
+    { label: 'Aprobados', value: summary?.approved_payments ?? 0 },
+    { label: 'Confirmados manualmente', value: summary?.manual_confirmed_payments ?? 0 },
+    {
+      label: 'Total cobrado',
+      value: formatCurrency(
+        totalCollected(summary?.total_approved_amount, summary?.total_remainder_amount)
+      )
+    }
+  ]
 
   const handleRefund = async () => {
     try {
@@ -62,16 +66,22 @@ const PaymentsPage: React.FC = () => {
         reason: refundForm.reason || undefined,
         manual: true
       })
-      setMessage(`Devolucion registrada: ${response.public_id}`)
+      // La devolucion no revierte el resto del turno (D-20261008-01).
+      const resto = response.live_remainder_amount
+      setMessage(
+        resto
+          ? `Devolución registrada: ${response.public_id}. Hay un resto de ${formatCurrency(Number(resto))} registrado en ese turno; revertilo desde Cobros si también lo devolviste.`
+          : `Devolución registrada: ${response.public_id}`
+      )
     } catch (error: unknown) {
-      setMessage(getErrorMessage(error, 'No se pudo registrar la devolucion'))
+      setMessage(getErrorMessage(error, 'No se pudo registrar la devolución'))
     }
   }
 
   const handleProcessOutbox = async () => {
     try {
       const response = await processOutbox.mutateAsync(100)
-      setMessage(`Actualizacion completada: ${response.processed} cobros revisados`)
+      setMessage(`Actualización completada: ${response.processed} cobros revisados`)
     } catch (error: unknown) {
       setMessage(getErrorMessage(error, 'No se pudo actualizar el estado de los cobros'))
     }
@@ -81,10 +91,10 @@ const PaymentsPage: React.FC = () => {
   const inputStyle = create2000sInputStyle()
 
   return (
-    <div className="space-y-8 animate-in fade-in duration-500">
+    <div className="space-y-8 duration-500">
       <PageHeader
         title="Cobros online"
-        description="Configura el cobro online, revisa el estado de los pagos y registra devoluciones."
+        description="Configurá el cobro online, revisá el estado de los pagos y registrá devoluciones."
         isLoading={gatewayQuery.isLoading || summaryQuery.isLoading}
         loadingText="Cargando cobros online..."
       />
@@ -105,7 +115,7 @@ const PaymentsPage: React.FC = () => {
               className="text-lg font-black uppercase tracking-tight"
               style={{ color: colors2000s.text.primary }}
             >
-              Integracion de cobros
+              Integración de cobros
             </h3>
             <span
               className="px-3 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest"
@@ -123,8 +133,8 @@ const PaymentsPage: React.FC = () => {
           </div>
 
           <p className="text-xs font-bold" style={{ color: colors2000s.text.secondary }}>
-            Las credenciales se administran mediante OAuth desde Configuración de tienda. Los tokens
-            privados nunca se ingresan ni se muestran en el frontend.
+            La cuenta de Mercado Pago se conecta desde Configuración de tienda. Shifty nunca te pide
+            ni muestra tus claves de Mercado Pago.
           </p>
           <button
             type="button"
@@ -142,7 +152,7 @@ const PaymentsPage: React.FC = () => {
               className="text-lg font-black uppercase tracking-tight"
               style={{ color: colors2000s.text.primary }}
             >
-              Estado de sincronizacion
+              Estado de sincronización
             </h3>
             <button
               type="button"
@@ -161,7 +171,7 @@ const PaymentsPage: React.FC = () => {
             <div className="rounded-2xl p-4 bg-white" style={create2000sListCardStyle()}>
               <p
                 className="text-[10px] font-black uppercase tracking-widest"
-                style={{ color: colors2000s.text.disabled }}
+                style={{ color: colors2000s.text.secondary }}
               >
                 Por revisar
               </p>
@@ -172,7 +182,7 @@ const PaymentsPage: React.FC = () => {
             <div className="rounded-2xl p-4 bg-white" style={create2000sListCardStyle()}>
               <p
                 className="text-[10px] font-black uppercase tracking-widest"
-                style={{ color: colors2000s.text.disabled }}
+                style={{ color: colors2000s.text.secondary }}
               >
                 Con error
               </p>
@@ -186,7 +196,7 @@ const PaymentsPage: React.FC = () => {
             <div className="rounded-2xl p-4 bg-white" style={create2000sListCardStyle()}>
               <p
                 className="text-[10px] font-black uppercase tracking-widest"
-                style={{ color: colors2000s.text.disabled }}
+                style={{ color: colors2000s.text.secondary }}
               >
                 Actualizados
               </p>
@@ -204,7 +214,7 @@ const PaymentsPage: React.FC = () => {
               className="text-[10px] font-black uppercase tracking-widest"
               style={{ color: colors2000s.text.secondary }}
             >
-              Devolucion manual
+              Devolución manual
             </label>
             <input
               value={refundForm.paymentId}
@@ -225,7 +235,7 @@ const PaymentsPage: React.FC = () => {
               onChange={(e) => setRefundForm((prev) => ({ ...prev, reason: e.target.value }))}
               className="w-full min-h-24 rounded-2xl px-4 py-3 font-bold outline-none resize-y"
               style={inputStyle}
-              placeholder="Motivo de la devolucion"
+              placeholder="Motivo de la devolución"
             />
             <button
               type="button"
@@ -236,7 +246,7 @@ const PaymentsPage: React.FC = () => {
               className="w-full px-4 py-3 rounded-2xl text-xs font-black uppercase tracking-widest disabled:opacity-50"
               style={buttonStyles2000s.selected}
             >
-              Registrar devolucion
+              Registrar devolución
             </button>
           </div>
         </div>
@@ -250,11 +260,10 @@ const PaymentsPage: React.FC = () => {
               className="text-lg font-black uppercase tracking-tight"
               style={{ color: colors2000s.text.primary }}
             >
-              Flujo separado
+              Otras secciones
             </h3>
             <p className="text-[11px] font-bold" style={{ color: colors2000s.text.secondary }}>
-              Las promociones y los turnos por cobrar ahora viven en sus propias secciones del menu
-              lateral.
+              Las promociones y los turnos por cobrar tienen su propia sección en el menú lateral.
             </p>
           </div>
         </div>

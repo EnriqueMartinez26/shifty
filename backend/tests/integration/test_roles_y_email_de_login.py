@@ -12,7 +12,9 @@ Dos consecuencias que la revision pidio fijar:
 - Un cambio de rol que lleva un cliente al conjunto de cuentas de login, con
   el email de otra cuenta de login, choca con el indice: 409 neutro (regla
   20), nunca 400 ni 500. Vale para ``/users/``, para
-  ``/superadmin/users/{id}`` y para ``/superadmin/users/{id}/global-admin``.
+  ``/superadmin/users/{id}`` y para ``/superadmin/users/{id}/global-admin``
+  (desde 2026-10-02 este ultimo corta antes, con
+  ``CLIENT_GLOBAL_ADMIN_DENIED``: un cliente no se promueve).
 """
 
 from __future__ import annotations
@@ -168,8 +170,70 @@ async def test_promover_a_global_un_cliente_con_email_de_login_da_409(
         json={"is_global_admin": True},
     )
     assert res.status_code == 409, res.text
-    assert res.json()["error_code"] == "RESOURCE_CONFLICT"
+    # Desde 2026-10-02 la guarda de cliente corta antes que el indice.
+    assert res.json()["error_code"] == "CLIENT_GLOBAL_ADMIN_DENIED"
     _es_409_neutro(res.json(), "raiz-promo", "uq_users")
+    test_session.expire_all()
+    fila = await test_session.get(User, cliente_id)
+    assert fila is not None
+    assert fila.role == "client" and not fila.is_global_admin
+
+
+@pytest.mark.asyncio
+async def test_a_un_cliente_que_ya_es_global_se_le_puede_revocar(
+    client: AsyncClient, test_session: AsyncSession
+) -> None:
+    """La guarda de cliente solo corta al promover: un flag global que haya
+    quedado en un cliente (datos previos a la guarda) se sigue pudiendo quitar.
+    """
+    headers = await _bootstrap_global_admin(
+        client, test_session, slug="qa-revoca-cliente", email="raiz-qa-revoca@demo.com"
+    )
+    raiz = await _usuario(test_session, "raiz-qa-revoca@demo.com")
+    cliente_id = await _cliente(
+        test_session, store_id=raiz.store_id, email="cliente-global@demo.com"
+    )
+    fila = await test_session.get(User, cliente_id)
+    assert fila is not None
+    fila.is_global_admin = True
+    await test_session.commit()
+
+    res = await client.patch(
+        f"/superadmin/users/{cliente_id}/global-admin",
+        headers=headers,
+        json={"is_global_admin": False},
+    )
+
+    assert res.status_code == 200, res.text
+    assert res.json()["is_global_admin"] is False
+
+
+@pytest.mark.asyncio
+async def test_promover_a_global_un_cliente_se_rechaza_aunque_su_email_este_libre(
+    client: AsyncClient, test_session: AsyncSession
+) -> None:
+    """2026-10-02, QA en navegador (S\\62): el panel ofrecia "Promover
+    SuperAdmin" sobre un cliente final y el backend lo aceptaba: le ponia
+    ``role = admin`` y la llave global de toda la plataforma (regla 14) a
+    alguien que solo reserva turnos. Un cliente no se promueve; si de verdad
+    es personal, primero se le cambia el rol y despues se lo promueve.
+    """
+    headers = await _bootstrap_global_admin(
+        client, test_session, slug="qa-promo-cliente", email="raiz-qa-promo@demo.com"
+    )
+    raiz = await _usuario(test_session, "raiz-qa-promo@demo.com")
+    cliente_id = await _cliente(
+        test_session, store_id=raiz.store_id, email="cliente-libre@demo.com"
+    )
+
+    res = await client.patch(
+        f"/superadmin/users/{cliente_id}/global-admin",
+        headers=headers,
+        json={"is_global_admin": True},
+    )
+
+    assert res.status_code == 409, res.text
+    assert res.json()["error_code"] == "CLIENT_GLOBAL_ADMIN_DENIED"
     test_session.expire_all()
     fila = await test_session.get(User, cliente_id)
     assert fila is not None

@@ -1,4 +1,5 @@
 from datetime import date, datetime, timezone
+from decimal import Decimal
 from typing import Dict, List, Optional
 
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
@@ -173,6 +174,10 @@ class AppointmentReschedule(BaseModel):
 
     new_starts_at: datetime
     idempotency_key: str = Field(..., min_length=10, max_length=128)
+    # D-20260929-04 (aditivo): mover fuera de la jornada del profesional, solo
+    # el admin y explicito (mismo nombre que en el alta del panel). Sin el,
+    # fuera de horario es 409 OUT_OF_SCHEDULE; con el y sin ser admin, 403.
+    allow_outside_schedule: bool = False
 
     @model_validator(mode="after")
     def new_date_within_range(self) -> "AppointmentReschedule":
@@ -216,6 +221,14 @@ class AppointmentFilterParams(BaseModel):
     page_size: int = Field(default=20, ge=1, le=100)
 
 
+class AppointmentRemainderPayment(BaseModel):
+    """El resto vivo de un turno, pagado aparte de su cobro (D-20261008-01)."""
+
+    amount: Decimal
+    method: Optional[str] = None
+    created_at: datetime
+
+
 class AppointmentSearchResult(BaseModel):
     """Respuesta enriquecida con nombres resueltos para la UI."""
 
@@ -235,6 +248,16 @@ class AppointmentSearchResult(BaseModel):
     client_name: str
     client_id: str
     client_phone: Optional[str] = None
+    # Aditivo (2026-10-08, decision de Mateo): Cobros precarga el importe y
+    # muestra lo pagado. ``price_amount`` es el precio congelado del turno;
+    # ``payment_*`` es su cobro (``None`` si no tiene).
+    price_amount: Optional[Decimal] = None
+    payment_status: Optional[str] = None
+    payment_amount: Optional[Decimal] = None
+    # Aditivo (D-20261008-01, saldo restante por turno): el saldo que falta
+    # cobrar (calculado en SQL) y el resto ya registrado aparte del cobro.
+    remaining_amount: Optional[Decimal] = None
+    remainder_payment: Optional[AppointmentRemainderPayment] = None
 
 
 class AppointmentSearchResponse(BaseModel):

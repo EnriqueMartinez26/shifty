@@ -9,6 +9,7 @@ movieron tambien los de horarios y servicios. El repositorio solo hace
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
 import structlog
@@ -19,13 +20,43 @@ from core.availability_cache import (
     AvailabilityCacheClient,
     invalidate_store_availability,
 )
+from core.exceptions import AppException, ScheduleOverlapException
 from modules.staff.model import Schedule, Staff
 from modules.staff.repository import StaffRepository
+from modules.users.model import User
 
 logger = structlog.get_logger()
 
 STAFF_KIND_PERSON = "person"
 STAFF_KIND_RESOURCE = "resource"
+
+
+def first_overlapping_day(franjas: Sequence[dict[str, Any]]) -> int | None:
+    """Primer dia (0 = lunes) con dos franjas que se pisan, o ``None``.
+
+    Misma regla que ``StaffRepository._assert_no_overlap``: dos franjas se
+    pisan si ``inicio < fin_de_la_otra`` y ``fin > inicio_de_la_otra``; las
+    que solo se tocan en el borde (09-13 y 13-17) son validas.
+    """
+    por_dia: dict[int, list[tuple[Any, Any]]] = {}
+    for franja in franjas:
+        por_dia.setdefault(franja["day_of_week"], []).append(
+            (franja["start_time"], franja["end_time"])
+        )
+    for dia in sorted(por_dia):
+        ordenadas = sorted(por_dia[dia])
+        for (_, fin_anterior), (inicio, _) in zip(ordenadas, ordenadas[1:]):
+            if inicio < fin_anterior:
+                return dia
+    return None
+
+
+def _account_display_name(account: User) -> str:
+    """Nombre con el que figura la cuenta si no eligio uno (minimo 2 letras)."""
+    nombre = (account.full_name or "").strip()
+    if len(nombre) >= 2:
+        return nombre[:100]
+    return account.email.split("@", 1)[0][:100].ljust(2, "_")
 
 
 class StaffService:
@@ -37,9 +68,10 @@ class StaffService:
     revierte lo ya guardado; en el peor caso el portal muestra lo viejo hasta
     que vencen los slots (``SLOTS_TTL_SECONDS``, 300 s).
 
-    ``create`` es el unico camino que no invalida: un profesional recien
-    creado no tiene franjas, asi que no aporta ni un horario a la grilla hasta
-    que pasa por ``add_schedule``, que si invalida.
+    ``create`` tambien invalida desde el 2026-09-29: un profesional recien
+    creado no tiene franjas y por eso atiende en el horario del local
+    (D-20260929-01/02, ``appointments.working_hours``); con los servicios que
+    ya trae aporta horarios a la grilla desde el alta.
     """
 
     def __init__(
@@ -67,6 +99,55 @@ class StaffService:
         staff = await self.repo.create(data, store_id, service_public_ids)
         await self.db.commit()
         await self.db.refresh(staff)
+        await self._invalidar_agenda(store_id)
+        return staff
+
+    async def add_self(
+        self,
+        account: User,
+        *,
+        display_name: str | None,
+        service_public_ids: list[str],
+    ) -> Staff:
+        """La cuenta que llama se agrega como profesional (decision de Mateo).
+
+        El dueno tambien atiende, con su nombre y su misma cuenta: sin usuario
+        nuevo ni email repetido (regla 16) y sin cambiar su rol. Si ya tuvo
+        ficha y se quito de la agenda, se reactiva la misma. Solo sobre uno
+        mismo: no hay forma de volver reservable a OTRA cuenta por aca.
+
+        La cuenta global no atiende: el panel de la tienda la esconde (S-15)
+        y el portal la ofreceria igual para reservar (revision de #133).
+        """
+        if account.is_global_admin:
+            raise AppException(
+                message="La cuenta SuperAdmin no se agrega como profesional.",
+                http_status=403,
+                error_code="STAFF_SELF_GLOBAL_ADMIN_DENIED",
+            )
+        # Leer y despues insertar, serializado por la fila de la cuenta: una
+        # rafaga da un 201 y el resto STAFF_SELF_ALREADY_EXISTS (§4).
+        await self.repo.lock_account(account)
+        existing = await self.repo.get_by_id(
+            account.id, account.store_id, include_global_admins=True
+        )
+        if existing is not None and existing.is_active:
+            raise AppException(
+                message="Ya figurás como profesional.",
+                http_status=409,
+                error_code="STAFF_SELF_ALREADY_EXISTS",
+            )
+        nombre = (display_name or "").strip() or _account_display_name(account)
+        if existing is not None:
+            staff = await self.repo.reactivate(
+                existing, account, nombre, service_public_ids
+            )
+        else:
+            staff = await self.repo.create_for_account(
+                account, nombre, service_public_ids
+            )
+        await self.db.commit()
+        await self._invalidar_agenda(account.store_id)
         return staff
 
     async def update_profile(self, staff: Staff, **changes: Any) -> Staff:
@@ -77,15 +158,16 @@ class StaffService:
         await self._invalidar_agenda(store_id)
         return updated
 
-    async def soft_delete(self, staff: Staff) -> None:
+    async def soft_delete(self, staff: Staff, *, keep_login: bool = False) -> None:
         store_id = staff.store_id
-        await self.repo.soft_delete(staff)
+        await self.repo.soft_delete(staff, keep_login=keep_login)
         await self.db.commit()
         await self._invalidar_agenda(store_id)
 
     async def add_schedule(
         self, staff: Staff, schedule_data: dict[str, Any], store_id: str
     ) -> Schedule:
+        await self.repo.lock_staff(staff)
         schedule = await self.repo.add_schedule(staff, schedule_data, store_id)
         await self.db.commit()
         await self.db.refresh(schedule)
@@ -93,20 +175,50 @@ class StaffService:
         return schedule
 
     async def update_schedule(
-        self, staff: Staff, schedule: Schedule, cambios: dict[str, Any]
-    ) -> Schedule:
-        store_id = schedule.store_id
+        self, staff: Staff, schedule_id: str, cambios: dict[str, Any]
+    ) -> Schedule | None:
+        await self.repo.lock_staff(staff)
+        schedule = await self.repo.get_schedule(staff, schedule_id)
+        if schedule is None:
+            return None
+        store_id = staff.store_id
         actualizado = await self.repo.update_schedule(staff, schedule, cambios)
         await self.db.commit()
         await self.db.refresh(actualizado)
         await self._invalidar_agenda(store_id)
         return actualizado
 
-    async def delete_schedule(self, schedule: Schedule) -> None:
-        store_id = schedule.store_id
+    async def replace_schedules(
+        self, staff: Staff, franjas: list[dict[str, Any]]
+    ) -> list[Schedule]:
+        """Reemplaza la semana entera del profesional en UNA transaccion.
+
+        Armar la semana con una llamada por franja dejaba estados intermedios
+        a la vista del portal: con la primera franja guardada el profesional
+        dejaba de atender todos los demas dias (D-20260929-01). Lista vacia =
+        vuelve al horario del local. Una superposicion rechaza el cuerpo
+        entero antes de tocar nada.
+        """
+        store_id = staff.store_id
+        await self.repo.lock_staff(staff)
+        superpuesto = first_overlapping_day(franjas)
+        if superpuesto is not None:
+            raise ScheduleOverlapException(day_of_week=superpuesto)
+        nuevas = await self.repo.replace_schedules(staff, franjas)
+        await self.db.commit()
+        await self._invalidar_agenda(store_id)
+        return sorted(nuevas, key=lambda f: (f.day_of_week, f.start_time))
+
+    async def delete_schedule(self, staff: Staff, schedule_id: str) -> bool:
+        await self.repo.lock_staff(staff)
+        schedule = await self.repo.get_schedule(staff, schedule_id)
+        if schedule is None:
+            return False
+        store_id = staff.store_id
         await self.repo.delete_schedule(schedule)
         await self.db.commit()
         await self._invalidar_agenda(store_id)
+        return True
 
     async def update_services(
         self, staff: Staff, service_public_ids: list[str]

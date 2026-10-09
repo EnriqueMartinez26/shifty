@@ -7,11 +7,15 @@ import { UserRole } from '../value-objects/UserRole'
  * Forma de escritura del PATCH de usuarios. Todo campo es opcional y solo los
  * PRESENTES se mandan; `password` vacio tampoco viaja (editar sin tocar la
  * clave no la cambia). Mismo criterio que `ServiceWriteInput`.
+ *
+ * `null` en nombre, apellido o telefono BORRA el dato (el backend aplica
+ * `exclude_unset`); ausente lo deja como esta. Nunca `''`: el backend exige
+ * `min_length=1` en los nombres y responde 422 (FF-10).
  */
 export interface UserWriteInput {
-  firstName?: string
-  lastName?: string
-  phone?: string
+  firstName?: string | null
+  lastName?: string | null
+  phone?: string | null
   role?: string
   isActive?: boolean
   password?: string

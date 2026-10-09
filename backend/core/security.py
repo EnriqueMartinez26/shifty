@@ -6,10 +6,10 @@ import hmac
 import os
 import secrets
 import uuid
-from typing import Any, cast
+from typing import Any
 
 import bcrypt
-from jose import jwt
+import jwt
 
 from core.config import settings
 
@@ -75,28 +75,39 @@ def create_access_token(
             "aud": settings.JWT_AUDIENCE,
         }
     )
-    return cast(
-        str,
-        jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM),
-    )
+    return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 
 
 def decode_token(token: str) -> dict[str, Any]:
-    return cast(
-        dict[str, Any],
-        jwt.decode(
-            token,
-            settings.SECRET_KEY,
-            algorithms=[settings.ALGORITHM],
-            issuer=settings.JWT_ISSUER,
-            audience=settings.JWT_AUDIENCE,
-            options={
-                "require_exp": True,
-                "require_iat": True,
-                "require_aud": True,
-                "require_sub": True,
-            },
-        ),
+    """Payload verificado del access token; un token invalido levanta
+    ``jwt.InvalidTokenError`` (o una subclase).
+
+    PyJWT desde 2026-10-02 (D-20260930-04; antes python-jose, que arrastraba
+    ``ecdsa``): mismo HS256 y mismos claims, asi que los tokens ya emitidos
+    siguen valiendo. ``algorithms`` es una lista cerrada: ni ``none`` ni otro
+    algoritmo que el configurado. Con ``issuer``/``audience`` PyJWT ya exige
+    ``iss`` y ``aud``; ``require`` los repite junto a exp, iat y sub.
+
+    Igual que python-jose: ``sub`` y ``jti``, si vienen, tienen que ser string.
+
+    Cambio respecto de python-jose: un ``iat`` futuro se rechaza
+    (``ImmatureSignatureError``); python-jose solo exigia que fuera entero.
+
+    ``leeway`` 0, invariante: todas las replicas de la API corren en el mismo
+    host y comparten su reloj, asi que quien emite y quien verifica ven la
+    misma hora. Si la API llega a correr en mas de un host, hay que sumar
+    leeway. Un desfasaje pasajero se cura solo: ante un 401 el front refresca
+    una vez y reintenta con un token nuevo
+    (``frontend/src/infrastructure/http/client.ts``); uno persistente no.
+    """
+    return jwt.decode(
+        token,
+        settings.SECRET_KEY,
+        algorithms=[settings.ALGORITHM],
+        issuer=settings.JWT_ISSUER,
+        audience=settings.JWT_AUDIENCE,
+        options={"require": ["exp", "iat", "aud", "iss", "sub"]},
+        leeway=0,
     )
 
 

@@ -1,4 +1,4 @@
-import { fireEvent, screen, render, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, screen, render, waitFor, within } from '@testing-library/react'
 
 import type {
   SuperAdminCoupon,
@@ -7,6 +7,8 @@ import type {
   SuperAdminStoreRow,
   SuperAdminUser
 } from '@application/services/SuperAdminService'
+
+import { ValidationError } from '@shared/errors/ValidationError'
 
 import SuperAdminPage from './SuperAdmin'
 
@@ -148,13 +150,26 @@ const mockOverview: SuperAdminStoreOverview = {
 
 let mockStores: SuperAdminStoreRow[] = [mockStoreUno]
 const mockOverviewFor = jest.fn()
+const mockStoresFor = jest.fn()
+const mockStoresPage = {
+  total: null as number | null,
+  hasNextPage: false,
+  isFetchingNextPage: false,
+  fetchNextPage: jest.fn()
+}
 
 jest.mock('../hooks/useSuperAdmin', () => ({
-  useSuperAdminStores: () => ({
-    data: mockStores,
-    isLoading: false,
-    isFetching: false
-  }),
+  // Con busqueda el listado trae otra tienda: si la busqueda se aplicara por
+  // tecla, el detalle se pediria una vez por cada tienda intermedia.
+  useSuperAdminStores: (params: { search?: string }) => {
+    mockStoresFor(params)
+    return {
+      data: params.search ? [{ ...mockStoreUno, public_id: `store-${params.search}` }] : mockStores,
+      isLoading: false,
+      isFetching: false,
+      ...mockStoresPage
+    }
+  },
   useSuperAdminOverview: (storeId: string | null) => {
     mockOverviewFor(storeId)
     return { data: mockOverview, isLoading: false, isFetching: false }
@@ -221,6 +236,10 @@ describe('SuperAdminPage', () => {
   beforeEach(() => {
     mockStores = [mockStoreUno]
     mockOverviewFor.mockReset()
+    mockStoresFor.mockReset()
+    mockStoresPage.total = null
+    mockStoresPage.hasNextPage = false
+    mockStoresPage.fetchNextPage.mockReset()
     Object.values(mockMutations).forEach((mutation) => mutation.mockReset())
     mockMutations.createStore.mockResolvedValue({
       ...mockStoreUno,
@@ -249,8 +268,35 @@ describe('SuperAdminPage', () => {
     expect(sectionOf('Catalogo global').getByText('Plan Oro')).toBeInTheDocument()
     expect(sectionOf('Maestro editable').getByText('WELCOME10')).toBeInTheDocument()
     expect(
-      sectionOf('Detalle del tenant').getAllByText('root@barberuno.com').length
+      sectionOf('Detalle de la tienda').getAllByText('root@barberuno.com').length
     ).toBeGreaterThan(0)
+  })
+
+  // 2026-10-02, QA en navegador: estados de suscripcion e intervalos salian
+  // crudos de la API (ACTIVE, MONTHLY con uppercase).
+  it('muestra estado de suscripcion, intervalo y rol en castellano', () => {
+    render(<SuperAdminPage />)
+
+    expect(screen.queryByText(/\bactive\b/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/monthly/)).not.toBeInTheDocument()
+    expect(screen.getAllByText(/Mensual/).length).toBeGreaterThan(0)
+    expect(sectionOf('Operación por tienda').getByText('Activa', { selector: 'p' })).toBeTruthy()
+    expect(sectionOf('Detalle de la tienda').getAllByText('Administrador').length).toBeGreaterThan(
+      0
+    )
+  })
+
+  // QA 2026-10-02 (S\55): los filtros de suscripcion quedaban tapados por la
+  // columna derecha; ahora pasan de linea bajo el titulo.
+  it('los filtros de tiendas pasan de linea en vez de desbordar', () => {
+    render(<SuperAdminPage />)
+
+    const grupo = screen.getByRole('button', { name: 'Con suscripción' })
+      .parentElement as HTMLElement
+    const filtros = grupo.parentElement as HTMLElement
+    expect(grupo.className).toContain('flex-wrap')
+    expect(filtros.className).toContain('flex-wrap')
+    expect((filtros.parentElement as HTMLElement).className).not.toContain('lg:flex-row')
   })
 
   it('sin eleccion toma la primera tienda desde el primer render (F11b-21)', () => {
@@ -278,6 +324,44 @@ describe('SuperAdminPage', () => {
     rerender(<SuperAdminPage />)
 
     expect(mockOverviewFor).toHaveBeenLastCalledWith('store-2')
+  })
+
+  // 2026-10-02, QA en navegador (S\56): un slug invalido daba "No se pudo
+  // guardar la tienda", sin decir que corregir.
+  it('un slug invalido no se envia y explica el formato', () => {
+    render(<SuperAdminPage />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Crear tienda' }))
+    const form = openModalForm()
+    const textboxes = within(form).getAllByRole('textbox')
+    fireEvent.change(first(textboxes), { target: { value: 'Barber Dos' } })
+    fireEvent.change(first(textboxes.slice(1)), { target: { value: 'Barber Dos!' } })
+    fireEvent.submit(form)
+
+    expect(mockMutations.createStore).not.toHaveBeenCalled()
+    expect(within(form).getByRole('alert')).toHaveTextContent(/minúsculas, números y guiones/)
+  })
+
+  it('un 422 en el slug dice el formato, nunca el texto crudo', async () => {
+    mockMutations.createStore.mockRejectedValueOnce(
+      new ValidationError("slug: String should match pattern '^[a-z0-9]'", {
+        errorCode: 'VALIDATION_ERROR',
+        statusCode: 422,
+        detail: ["slug: String should match pattern '^[a-z0-9][a-z0-9-]{0,98}[a-z0-9]$'"]
+      })
+    )
+    render(<SuperAdminPage />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Crear tienda' }))
+    const form = openModalForm()
+    const textboxes = within(form).getAllByRole('textbox')
+    fireEvent.change(first(textboxes), { target: { value: 'Barber Dos' } })
+    fireEvent.change(first(textboxes.slice(1)), { target: { value: 'barber-dos' } })
+    fireEvent.submit(form)
+
+    const alerta = await within(form).findByRole('alert')
+    expect(alerta).toHaveTextContent(/minúsculas, números y guiones/)
+    expect(alerta).not.toHaveTextContent(/pattern/)
   })
 
   it('crea una tienda con el payload del formulario', async () => {
@@ -357,7 +441,7 @@ describe('SuperAdminPage', () => {
     render(<SuperAdminPage />)
 
     fireEvent.click(
-      first(sectionOf('Detalle del tenant').getAllByRole('button', { name: 'Editar' }))
+      first(sectionOf('Detalle de la tienda').getAllByRole('button', { name: 'Editar' }))
     )
     fireEvent.submit(openModalForm())
 
@@ -374,6 +458,72 @@ describe('SuperAdminPage', () => {
         }
       })
     })
+  })
+
+  // 2026-10-01, D-20261001-01: una clave viaja exactamente como se tipeó (antes
+  // la edición la recortaba con `trim()`) y se valida con las reglas del backend.
+  const passwordField = (): HTMLInputElement => {
+    const input = document.querySelector<HTMLInputElement>('input[type="password"]')
+    if (!input) throw new Error('El modal no tiene campo de contraseña')
+    return input
+  }
+
+  it('edita la clave de un usuario sin recortarla', async () => {
+    render(<SuperAdminPage />)
+
+    fireEvent.click(
+      first(sectionOf('Detalle de la tienda').getAllByRole('button', { name: 'Editar' }))
+    )
+    fireEvent.change(passwordField(), { target: { value: ' abc123 ' } })
+    fireEvent.submit(openModalForm())
+
+    await waitFor(() => {
+      expect(mockMutations.updateUser).toHaveBeenCalledTimes(1)
+    })
+    expect(mockMutations.updateUser.mock.calls[0][0].payload.password).toBe(' abc123 ')
+  })
+
+  it('edita un usuario con la clave de más de 72 bytes: avisa y no llama al servidor', async () => {
+    render(<SuperAdminPage />)
+
+    fireEvent.click(
+      first(sectionOf('Detalle de la tienda').getAllByRole('button', { name: 'Editar' }))
+    )
+    fireEvent.change(passwordField(), { target: { value: `${'é'.repeat(36)}12` } })
+    fireEvent.submit(openModalForm())
+
+    expect(
+      await screen.findByText(
+        'La contraseña ocupa más de 72 bytes (los acentos, la ñ, los símbolos y los emojis ocupan más de uno)'
+      )
+    ).toBeInTheDocument()
+    expect(mockMutations.updateUser).not.toHaveBeenCalled()
+  })
+
+  it('crea un admin mandando la clave tal cual, sin recortar', async () => {
+    render(<SuperAdminPage />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Crear admin' }))
+    fireEvent.change(passwordField(), { target: { value: ' abc123 ' } })
+    fireEvent.submit(openModalForm())
+
+    await waitFor(() => {
+      expect(mockMutations.createAdmin).toHaveBeenCalledTimes(1)
+    })
+    expect(mockMutations.createAdmin.mock.calls[0][0].payload.password).toBe(' abc123 ')
+  })
+
+  it('crea un admin con la clave sin número: avisa y no llama al servidor', async () => {
+    render(<SuperAdminPage />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Crear admin' }))
+    fireEvent.change(passwordField(), { target: { value: 'abcdefgh' } })
+    fireEvent.submit(openModalForm())
+
+    expect(
+      await screen.findByText('La contraseña debe incluir al menos un número')
+    ).toBeInTheDocument()
+    expect(mockMutations.createAdmin).not.toHaveBeenCalled()
   })
 
   it('asigna un plan a la tienda seleccionada', async () => {
@@ -400,7 +550,7 @@ describe('SuperAdminPage', () => {
   it('canjea un cupon sobre la tienda seleccionada', async () => {
     render(<SuperAdminPage />)
 
-    fireEvent.click(first(screen.getAllByRole('button', { name: 'Canjear cupon' })))
+    fireEvent.click(first(screen.getAllByRole('button', { name: 'Canjear cupón' })))
     fireEvent.submit(openModalForm())
 
     await waitFor(() => {
@@ -409,7 +559,66 @@ describe('SuperAdminPage', () => {
         couponCode: 'WELCOME10'
       })
     })
-    expect(await screen.findByText('Cupon WELCOME10 canjeado en Barber Uno')).toBeInTheDocument()
+    expect(await screen.findByText('Cupón WELCOME10 canjeado en Barber Uno')).toBeInTheDocument()
+  })
+
+  // 2026-09-30 (FF-24, F4-10): "Todas" mostraba solo activas, la lista cortaba
+  // en 50 y cada tecla disparaba hasta 3 requests (listado, detalle y auditoria).
+  describe('listado de tiendas', () => {
+    it('"Todas" pide is_active=all', () => {
+      render(<SuperAdminPage />)
+
+      fireEvent.click(
+        first(sectionOf('Operación por tienda').getAllByRole('button', { name: 'Todas' }))
+      )
+
+      expect(mockStoresFor).toHaveBeenLastCalledWith(expect.objectContaining({ is_active: 'all' }))
+    })
+
+    it('"Cargar mas" pide la pagina siguiente', () => {
+      mockStoresPage.hasNextPage = true
+      render(<SuperAdminPage />)
+
+      fireEvent.click(screen.getByRole('button', { name: 'Cargar más' }))
+
+      expect(mockStoresPage.fetchNextPage).toHaveBeenCalledTimes(1)
+    })
+
+    it('muestra cuantas tiendas hay cargadas sobre el total', () => {
+      mockStoresPage.total = 120
+      const { rerender } = render(<SuperAdminPage />)
+      expect(screen.getByText('Mostrando 1 de 120')).toBeInTheDocument()
+
+      mockStoresPage.total = null
+      rerender(<SuperAdminPage />)
+      expect(screen.getByText('Mostrando 1')).toBeInTheDocument()
+    })
+
+    describe('busqueda con espera', () => {
+      beforeEach(() => jest.useFakeTimers())
+      afterEach(() => jest.useRealTimers())
+
+      it('cuatro teclas hacen UNA busqueda a los 300 ms y el detalle no se pide por tecla', () => {
+        render(<SuperAdminPage />)
+        const input = screen.getByPlaceholderText('Buscar por nombre o slug')
+
+        for (const value of ['b', 'ba', 'bar', 'barb']) {
+          fireEvent.change(input, { target: { value } })
+          act(() => jest.advanceTimersByTime(100))
+        }
+        expect((input as HTMLInputElement).value).toBe('barb')
+        expect(mockStoresFor).not.toHaveBeenCalledWith(expect.objectContaining({ search: 'b' }))
+
+        act(() => jest.advanceTimersByTime(300))
+
+        const searches = mockStoresFor.mock.calls
+          .map(([params]: [{ search?: string }]) => params.search)
+          .filter(Boolean)
+        expect(new Set(searches)).toEqual(new Set(['barb']))
+        const overviews = new Set(mockOverviewFor.mock.calls.map(([id]: [string]) => id))
+        expect(overviews).toEqual(new Set(['store-1', 'store-barb']))
+      })
+    })
   })
 
   // F11b-10: los cinco toggles comparten confirmar -> mutar -> avisar. Antes
@@ -424,9 +633,9 @@ describe('SuperAdminPage', () => {
     it('desactiva una tienda despues de confirmar y avisa en tono de advertencia', async () => {
       render(<SuperAdminPage />)
 
-      fireEvent.click(sectionOf('Operacion por tenant').getByRole('button', { name: 'Desactivar' }))
+      fireEvent.click(sectionOf('Operación por tienda').getByRole('button', { name: 'Desactivar' }))
       answerDialog(
-        'Desactivar Barber Uno? Esto puede bloquear nuevas operaciones del tenant.',
+        'Desactivar Barber Uno? Esto puede bloquear nuevas operaciones de la tienda.',
         'Confirmar'
       )
 
@@ -456,14 +665,14 @@ describe('SuperAdminPage', () => {
       fireEvent.click(sectionOf('Maestro editable').getByRole('button', { name: 'Desactivar' }))
       fireEvent.click(screen.getByRole('button', { name: 'Confirmar' }))
 
-      expect(await screen.findByText('No se pudo actualizar el cupon')).toBeInTheDocument()
+      expect(await screen.findByText('No se pudo actualizar el cupón')).toBeInTheDocument()
     })
 
     it('desactiva un usuario del tenant', async () => {
       render(<SuperAdminPage />)
 
       fireEvent.click(
-        first(sectionOf('Detalle del tenant').getAllByRole('button', { name: 'Desactivar' }))
+        first(sectionOf('Detalle de la tienda').getAllByRole('button', { name: 'Desactivar' }))
       )
       fireEvent.click(screen.getByRole('button', { name: 'Confirmar' }))
 
@@ -480,7 +689,7 @@ describe('SuperAdminPage', () => {
 
       fireEvent.click(
         first(
-          sectionOf('Detalle del tenant').getAllByRole('button', { name: 'Promover SuperAdmin' })
+          sectionOf('Detalle de la tienda').getAllByRole('button', { name: 'Promover SuperAdmin' })
         )
       )
       fireEvent.click(screen.getByRole('button', { name: 'Confirmar' }))
@@ -494,6 +703,59 @@ describe('SuperAdminPage', () => {
       expect(await screen.findByText('root@barberuno.com ahora es Super Admin')).toBeInTheDocument()
     })
 
+    // 2026-10-02, QA en navegador (S\62): "Promover SuperAdmin" se ofrecia
+    // sobre un cliente final. El backend lo rechaza
+    // (CLIENT_GLOBAL_ADMIN_DENIED); el panel ni lo ofrece.
+    it('no ofrece promover a SuperAdmin a un cliente', () => {
+      const cliente: SuperAdminUser = {
+        ...mockAdminUser,
+        public_id: 'user-client-1',
+        email: 'cliente@example.com',
+        first_name: 'Clara',
+        last_name: 'Cliente',
+        role: 'client'
+      }
+      const usuarios = mockOverview.users.users
+      mockOverview.users.users = [cliente]
+      try {
+        render(<SuperAdminPage />)
+
+        const detalle = sectionOf('Detalle de la tienda')
+        // El unico "Promover" que queda es el del admin, en su propia lista.
+        expect(detalle.getAllByRole('button', { name: 'Promover SuperAdmin' })).toHaveLength(1)
+        const tarjeta = detalle.getByText('Clara Cliente').closest('div.rounded-2xl') as HTMLElement
+        expect(within(tarjeta).queryByRole('button', { name: /SuperAdmin/ })).toBeNull()
+        expect(within(tarjeta).getByRole('button', { name: 'Editar' })).toBeInTheDocument()
+      } finally {
+        mockOverview.users.users = usuarios
+      }
+    })
+
+    it('a un cliente que ya es SuperAdmin se le puede revocar', () => {
+      const cliente: SuperAdminUser = {
+        ...mockAdminUser,
+        public_id: 'user-client-2',
+        first_name: 'Carla',
+        last_name: 'Global',
+        role: 'client',
+        is_global_admin: true
+      }
+      const usuarios = mockOverview.users.users
+      mockOverview.users.users = [cliente]
+      try {
+        render(<SuperAdminPage />)
+
+        const tarjeta = sectionOf('Detalle de la tienda')
+          .getByText('Carla Global')
+          .closest('div.rounded-2xl') as HTMLElement
+        expect(
+          within(tarjeta).getByRole('button', { name: 'Revocar SuperAdmin' })
+        ).toBeInTheDocument()
+      } finally {
+        mockOverview.users.users = usuarios
+      }
+    })
+
     it('no deja revocarse el propio permiso global y ni siquiera pregunta', () => {
       // Guarda espejo de la regla 14; la garantia real vive en el backend.
       mockAuthUser.public_id = 'user-admin-1'
@@ -503,19 +765,143 @@ describe('SuperAdminPage', () => {
 
         fireEvent.click(
           first(
-            sectionOf('Detalle del tenant').getAllByRole('button', { name: 'Revocar SuperAdmin' })
+            sectionOf('Detalle de la tienda').getAllByRole('button', { name: 'Revocar SuperAdmin' })
           )
         )
 
         expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
         expect(mockMutations.setGlobalAdmin).not.toHaveBeenCalled()
         expect(
-          screen.getByText('No podés revocarte tu propio permiso global desde esta sesion.')
+          screen.getByText('No podés revocar tu propio permiso de SuperAdmin.')
         ).toBeInTheDocument()
       } finally {
         mockAuthUser.public_id = 'root-user'
         mockAdminUser.is_global_admin = false
       }
     })
+
+    describe('la propia cuenta (D-20260930-05)', () => {
+      // D-20260930-05: sobre la propia cuenta "Desactivar" y "Revocar
+      // SuperAdmin" no se deshabilitan; al hacer clic avisan y cortan sin
+      // pedir confirmacion ni llamar al backend.
+      const propiaCuenta = () => {
+        mockAuthUser.public_id = 'user-admin-1'
+        mockAdminUser.is_global_admin = true
+      }
+
+      afterEach(() => {
+        mockAuthUser.public_id = 'root-user'
+        mockAdminUser.is_global_admin = false
+      })
+
+      it('"Desactivar" sobre la propia cuenta avisa y corta sin preguntar', () => {
+        // 2026-10-01: desactivar la propia cuenta pedia confirmacion y llamaba
+        // al backend, que la rechazaba con 400
+        // (SELF_SUPERADMIN_DEACTIVATION_DENIED); la autorrevocacion ya cortaba.
+        propiaCuenta()
+        render(<SuperAdminPage />)
+
+        const boton = first(
+          sectionOf('Detalle de la tienda').getAllByRole('button', { name: 'Desactivar' })
+        )
+        expect(boton).not.toBeDisabled()
+        fireEvent.click(boton)
+
+        expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+        expect(mockMutations.updateUser).not.toHaveBeenCalled()
+        expect(
+          screen.getByText('No podés desactivar tu propia cuenta de SuperAdmin.')
+        ).toBeInTheDocument()
+      })
+
+      it('"Revocar SuperAdmin" sobre la propia cuenta esta habilitado, avisa y corta', () => {
+        propiaCuenta()
+        render(<SuperAdminPage />)
+
+        const boton = first(
+          sectionOf('Detalle de la tienda').getAllByRole('button', { name: 'Revocar SuperAdmin' })
+        )
+        expect(boton).not.toBeDisabled()
+        fireEvent.click(boton)
+
+        expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+        expect(mockMutations.setGlobalAdmin).not.toHaveBeenCalled()
+        expect(
+          screen.getByText('No podés revocar tu propio permiso de SuperAdmin.')
+        ).toBeInTheDocument()
+      })
+
+      it('sobre la cuenta de otro, "Desactivar" y "Revocar SuperAdmin" siguen preguntando', async () => {
+        mockAdminUser.is_global_admin = true
+        render(<SuperAdminPage />)
+        const detalle = sectionOf('Detalle de la tienda')
+
+        fireEvent.click(first(detalle.getAllByRole('button', { name: 'Desactivar' })))
+        answerDialog('Desactivar root@barberuno.com?', 'Cancelar')
+        await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
+
+        fireEvent.click(first(detalle.getAllByRole('button', { name: 'Revocar SuperAdmin' })))
+        answerDialog(
+          'Revocar Super Admin global a root@barberuno.com? Shifty no permite dejar el sistema sin un admin global activo.',
+          'Cancelar'
+        )
+        await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
+
+        expect(mockMutations.updateUser).not.toHaveBeenCalled()
+        expect(mockMutations.setGlobalAdmin).not.toHaveBeenCalled()
+      })
+    })
+
+    // D-20260930-05: "ultimo SuperAdmin activo" lo sigue resolviendo el 400
+    // del backend (regla 14). Su error_code se traduce a un texto neutro.
+    it.each([
+      [
+        'Desactivar',
+        'updateUser',
+        'SELF_SUPERADMIN_DEACTIVATION_DENIED',
+        'No podés desactivar tu propia cuenta de SuperAdmin.'
+      ],
+      [
+        'Desactivar',
+        'updateUser',
+        'LAST_SUPERADMIN_DEACTIVATION_DENIED',
+        'No se puede desactivar al último SuperAdmin activo.'
+      ],
+      [
+        'Revocar SuperAdmin',
+        'setGlobalAdmin',
+        'SELF_SUPERADMIN_REVOCATION_DENIED',
+        'No podés revocar tu propio permiso de SuperAdmin.'
+      ],
+      [
+        'Revocar SuperAdmin',
+        'setGlobalAdmin',
+        'LAST_SUPERADMIN_REVOCATION_DENIED',
+        'No se puede revocar al último SuperAdmin activo.'
+      ]
+    ] as const)(
+      '"%s" (%s) muestra el texto neutro de %s',
+      async (boton, mutacion, errorCode, mensaje) => {
+        // 2026-10-01: los cuatro codigos de la regla 14 no estaban en
+        // ERROR_CODE_MESSAGES y el panel mostraba el texto crudo del servidor.
+        mockMutations[mutacion].mockRejectedValue(
+          new ValidationError('texto crudo del servidor', { errorCode, statusCode: 400 })
+        )
+        mockAdminUser.is_global_admin = true
+        try {
+          render(<SuperAdminPage />)
+
+          fireEvent.click(
+            first(sectionOf('Detalle de la tienda').getAllByRole('button', { name: boton }))
+          )
+          fireEvent.click(screen.getByRole('button', { name: 'Confirmar' }))
+
+          expect(await screen.findByText(mensaje)).toBeInTheDocument()
+          expect(screen.queryByText('texto crudo del servidor')).not.toBeInTheDocument()
+        } finally {
+          mockAdminUser.is_global_admin = false
+        }
+      }
+    )
   })
 })

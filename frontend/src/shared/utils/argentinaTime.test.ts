@@ -3,8 +3,11 @@ import {
   argentinaMinutesOfDay,
   formatArgentinaDate,
   formatArgentinaDateDisplay,
+  formatArgentinaDayHeading,
   formatArgentinaDayMonth,
+  formatArgentinaLongDate,
   formatArgentinaTime,
+  formatArgentinaWeekdayShort,
   fromDateTimeInput,
   toDateTimeInput
 } from './argentinaTime'
@@ -102,6 +105,32 @@ describe('inputs datetime-local', () => {
 
   it('devuelve null si el valor no tiene hora', () => {
     expect(fromDateTimeInput('2026-12-31')).toBeNull()
+  })
+})
+
+// 2026-10-02, QA en navegador: la agenda mostraba "02 DE OCTOBER" y "MON":
+// date-fns sin locale. Los nombres salen de Intl en es-AR, sobre el dia
+// argentino.
+describe('nombres de dias y meses en castellano', () => {
+  it('dia de la semana abreviado, sin punto', () => {
+    expect(formatArgentinaWeekdayShort('2026-10-02')).toBe('vie')
+    expect(formatArgentinaWeekdayShort('2026-10-05')).toBe('lun')
+  })
+
+  it('fecha larga y encabezado de dia', () => {
+    expect(formatArgentinaLongDate('2026-10-02')).toBe('02 de octubre')
+    expect(formatArgentinaDayHeading('2026-10-02')).toBe('viernes 02/10')
+  })
+
+  it('un instante se lleva al dia argentino antes de nombrarlo', () => {
+    // 01:00Z del 3 son las 22:00 del 2 en Argentina.
+    expect(formatArgentinaDayHeading('2026-10-03T01:00:00Z')).toBe('viernes 02/10')
+  })
+
+  it('un valor ilegible da cadena vacia', () => {
+    expect(formatArgentinaWeekdayShort('x')).toBe('')
+    expect(formatArgentinaLongDate('x')).toBe('')
+    expect(formatArgentinaDayHeading('x')).toBe('')
   })
 })
 

@@ -1,7 +1,7 @@
 import { BaseRepository } from './BaseRepository'
 import { User, type UserWriteInput } from '../../domain/entities/User'
 import { QueryOptions } from '../../domain/repositories/IRepository'
-import { IUserRepository } from '../../domain/repositories/IUserRepository'
+import type { IUserRepository, UserListQuery } from '../../domain/repositories/IUserRepository'
 import { Email } from '../../domain/value-objects/Email'
 import { UserRole } from '../../domain/value-objects/UserRole'
 import { NotFoundError } from '../../shared/errors/NotFoundError'
@@ -35,6 +35,22 @@ export class InMemoryUserRepository
       }
     }
     return result
+  }
+
+  /** Mismo criterio que el backend: `q` en nombre o digitos del telefono. */
+  public async list(query: UserListQuery): Promise<User[]> {
+    const term = query.q?.toLowerCase()
+    const digits = query.q?.replace(/\D/g, '')
+    return Array.from(this.store.values())
+      .filter((u) => query.includeInactive || u.isActive)
+      .filter((u) => !query.email || u.email.getValue() === query.email)
+      .filter(
+        (u) =>
+          !term ||
+          u.fullName.toLowerCase().includes(term) ||
+          Boolean(digits && u.phone?.replace(/\D/g, '').includes(digits))
+      )
+      .slice(0, query.limit)
   }
 
   // --- Implementación de Hooks Abstractos (Template Method Pattern) ---

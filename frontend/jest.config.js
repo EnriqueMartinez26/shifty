@@ -33,7 +33,9 @@ export default {
   // abajo). Solo se sube; bajarlo exige justificarlo en el PR.
   coverageThreshold: {
     './src/domain/': { statements: 88, branches: 77, functions: 79, lines: 88 },
-    './src/application/': { statements: 49, branches: 57, functions: 39, lines: 48 },
+    // F9-08 (2026-09-30): medido con solo los tests de application (67/74/59/66)
+    // menos 2 puntos; la corrida completa de CI solo puede dar mas.
+    './src/application/': { statements: 65, branches: 72, functions: 57, lines: 64 },
     './src/infrastructure/': { statements: 71, branches: 68, functions: 59, lines: 69 },
     './src/shared/': { statements: 89, branches: 67, functions: 84, lines: 90 },
     './src/presentation/': { statements: 45, branches: 41, functions: 30, lines: 45 }
@@ -45,7 +47,8 @@ export default {
     // y cookie-es (.mjs).
     '^.+\\.(mjs|[jt]sx?)$': '<rootDir>/jest.ts-transformer.cjs'
   },
-  // Por defecto Jest ignora node_modules. react-router v8 (+cookie-es) son ESM
-  // puros, asi que hay que exceptuarlos para que el transform de arriba los tome.
-  transformIgnorePatterns: ['/node_modules/(?!(react-router|cookie-es)/)']
+  // Por defecto Jest ignora node_modules. react-router v8, su dependencia
+  // @remix-run/route-pattern y cookie-es son ESM puros: el transform de arriba
+  // tiene que convertirlos a CommonJS para Jest.
+  transformIgnorePatterns: ['/node_modules/(?!(react-router|cookie-es|@remix-run/route-pattern)/)']
 }

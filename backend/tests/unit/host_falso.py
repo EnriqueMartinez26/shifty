@@ -7,7 +7,8 @@ el certificado o el disco (R11-02, R11-03, R11-05, R11-17, R11-20).
 
 Los scripts corren en el VPS, pero su logica se prueba aca: cada test levanta
 el script REAL con `bash` y un PATH con binarios falsos (`docker`, `curl`,
-`rclone`, `df`, `timedatectl`, `openssl`, `sleep`) que anotan cada llamada en
+`rclone`, `df`, `timedatectl`, `openssl`, `sleep`, `sshd`, `ufw`, `apt-config`,
+`fail2ban-client`) que anotan cada llamada en
 un archivo. Se afirma sobre el ORDEN y la presencia de esas llamadas: migrar
 antes de recrear, no migrar en el rollback, no pasar de 3 reinicios por hora,
 no marcar exito si la copia fuera del host fallo.
@@ -55,6 +56,9 @@ requiere_bash = pytest.mark.skipif(BASH is None, reason="hace falta bash")
 
 _DOCKER = r"""#!/bin/sh
 printf '%s\n' "docker $*" >> "$FAKE_DIR/calls"
+# El token de GitHub no tiene por que llegar a docker/compose: se anota si un
+# `docker` lo hereda en el entorno.
+[ -z "${DEPLOY_GITHUB_TOKEN:-}" ] || printf '%s\n' "docker $1 $2" >> "$FAKE_DIR/docker_ve_el_token"
 ids_backend="$FAKE_DIR/backend_ids"
 if [ "$1" = compose ]; then
   # docker-compose.prod.yml interpola ${APP_VERSION:?...}: sin la variable,
@@ -120,9 +124,17 @@ if [ "$1" = compose ]; then
         echo toc > "$destino/toc.dat"
         exit "${FAKE_PG_DUMP_EXIT:-0}"
       fi
+      if [ "$3" = redis_state ]; then
+        # redis-cli INFO memory; checks.sh lee used_memory y maxmemory.
+        cat "$FAKE_DIR/redis_info" 2>/dev/null
+        exit "${FAKE_REDIS_EXIT:-0}"
+      fi
       if [ "$3" = rabbitmq ]; then
+        # Por defecto, lo que imprime RabbitMQ 3.13.7 sin alarmas. Sin `:`:
+        # FAKE_RABBIT_ALARMS='' es una salida vacia de verdad.
+        sin_alarmas='{"alarms":[],"node":"rabbit@rabbitmq","result":"ok"}'
         printf '%s
-' "${FAKE_RABBIT_ALARMS:-[]}"
+' "${FAKE_RABBIT_ALARMS-$sin_alarmas}"
         exit "${FAKE_RABBIT_EXIT:-0}"
       fi
       exit "${FAKE_NGINX_EXIT:-0}" ;;
@@ -171,6 +183,131 @@ printf '%s\n' "{nombre} $*" >> "$FAKE_DIR/calls"
 exit "${{{variable}:-0}}"
 """
 
+# curl: la API de GitHub (deploy.sh pregunta si Quality paso para el sha)
+# contesta lo que diga gh_runs, con su propio codigo de salida; el resto
+# (compuerta, alertas) sale con FAKE_CURL_EXIT, como siempre. Lo que curl lee
+# por stdin con `-K -` (cabeceras con secretos, fuera de argv) queda en
+# curl_config.
+_CURL = r"""#!/bin/sh
+printf '%s\n' "curl $*" >> "$FAKE_DIR/calls"
+case " $* " in
+  *" -K - "* | *" --config - "*) cat >> "$FAKE_DIR/curl_config" ;;
+esac
+case "$*" in
+  *api.github.com/*/actions/workflows/*)
+    cat "$FAKE_DIR/gh_runs" 2>/dev/null
+    exit "${FAKE_GH_EXIT:-0}" ;;
+esac
+exit "${FAKE_CURL_EXIT:-0}"
+"""
+
+# Endurecimiento del host (scripts/host-hardening-check.sh). Cada falso
+# devuelve el archivo homonimo de FAKE_DIR; crear_host deja el host sano.
+_DESDE_ARCHIVO = r"""#!/bin/sh
+printf '%s\n' "{nombre} $*" >> "$FAKE_DIR/calls"
+cat "$FAKE_DIR/{archivo}" 2>/dev/null
+exit "${{{variable}:-0}}"
+"""
+
+_SSHD = r"""#!/bin/sh
+printf '%s\n' "sshd $*" >> "$FAKE_DIR/calls"
+case "$*" in
+  *"-C user=deploy,"*) cat "$FAKE_DIR/sshd_T_deploy" ;;
+  *) cat "$FAKE_DIR/sshd_T" ;;
+esac
+exit "${FAKE_SSHD_EXIT:-0}"
+"""
+
+# `sshd -T` (minusculas, como lo imprime OpenSSH) del host endurecido.
+SSHD_SANO = (
+    "port 22\n"
+    "permitrootlogin no\n"
+    "pubkeyauthentication yes\n"
+    "passwordauthentication no\n"
+    "kbdinteractiveauthentication no\n"
+)
+# /etc/ssh/sshd_config de Ubuntu 24.04 (lo relevante): incluye los drop-ins
+# antes de sus propias lineas y trae el ejemplo de Match comentado. Ubuntu
+# escribe la ruta absoluta; aca va relativa (sshd la resuelve contra el
+# directorio del archivo) porque en Windows la ruta del test es `C:/...`.
+SSHD_CONFIG_SANO = (
+    "Include sshd_config.d/*.conf\n"
+    "KbdInteractiveAuthentication no\n"
+    "UsePAM yes\n"
+    "Subsystem sftp /usr/lib/openssh/sftp-server\n"
+    "# Example of overriding settings on a per-user basis\n"
+    "#Match User anoncvs\n"
+    "#\tX11Forwarding no\n"
+    "#\tPasswordAuthentication yes\n"
+)
+# Los drop-ins del runbook (00) y el de cloud-init (50, gana el 00).
+SSHD_DROPINS_SANOS = {
+    "00-shifty-hardening.conf": (
+        "PubkeyAuthentication yes\n"
+        "PasswordAuthentication no\n"
+        "KbdInteractiveAuthentication no\n"
+        "PermitRootLogin no\n"
+    ),
+    "50-cloud-init.conf": "PasswordAuthentication yes\n",
+}
+# `ufw status verbose` con solo 22, 80 y 443 abiertos.
+UFW_SANO = (
+    "Status: active\n"
+    "Logging: on (low)\n"
+    "Default: deny (incoming), allow (outgoing), disabled (routed)\n"
+    "New profiles: skip\n"
+    "\n"
+    "To                         Action      From\n"
+    "--                         ------      ----\n"
+    "22/tcp                     ALLOW IN    Anywhere\n"
+    "80/tcp                     ALLOW IN    Anywhere\n"
+    "443/tcp                    ALLOW IN    Anywhere\n"
+    "22/tcp (v6)                ALLOW IN    Anywhere (v6)\n"
+    "80/tcp (v6)                ALLOW IN    Anywhere (v6)\n"
+    "443/tcp (v6)               ALLOW IN    Anywhere (v6)\n"
+)
+# `apt-config dump` (lo relevante) de un Ubuntu con unattended-upgrades de
+# fabrica: solo el bolsillo de la version y los de seguridad.
+APT_SANO = (
+    'APT::Periodic::Update-Package-Lists "1";\n'
+    'APT::Periodic::Unattended-Upgrade "1";\n'
+    'Unattended-Upgrade::Allowed-Origins "";\n'
+    'Unattended-Upgrade::Allowed-Origins:: "${distro_id}:${distro_codename}";\n'
+    'Unattended-Upgrade::Allowed-Origins:: "${distro_id}:${distro_codename}-security";\n'
+    'Unattended-Upgrade::Allowed-Origins:: "${distro_id}ESMApps:${distro_codename}-apps-security";\n'
+    'Unattended-Upgrade::Automatic-Reboot "false";\n'
+)
+
+
+def escribir_redis_info(ruta: Path, *, usada: int, maxima: int = 48 * 1048576) -> None:
+    """Lo que devuelve `redis-cli INFO memory` (lineas con CRLF, como Redis).
+    Por defecto, el maxmemory de redis_state (48mb)."""
+    ruta.write_bytes(
+        (
+            "# Memory\r\n"
+            f"used_memory:{usada}\r\n"
+            f"used_memory_human:{usada / 1048576:.2f}M\r\n"
+            f"maxmemory:{maxima}\r\n"
+            f"maxmemory_human:{maxima / 1048576:.2f}M\r\n"
+            "maxmemory_policy:noeviction\r\n"
+        ).encode()
+    )
+
+
+def escribir_corridas_de_quality(ruta: Path, *, verdes: int) -> None:
+    """Respuesta de la API de GitHub a la busqueda de corridas verdes de
+    Quality, indentada como la devuelve api.github.com."""
+    corrida = (
+        '    {\n      "conclusion": "success",\n      "head_branch": "main"\n    }\n'
+    )
+    ruta.write_text(
+        f'{{\n  "total_count": {verdes},\n  "workflow_runs": [\n'
+        f"{corrida if verdes else ''}  ]\n}}\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+
+
 _DF = r"""#!/bin/sh
 echo "Filesystem 1024-blocks Used Available Capacity Mounted on"
 echo "/dev/sda1 100 50 50 ${FAKE_DISK_USE:-42}% /"
@@ -187,6 +324,191 @@ case "$1" in
 esac
 exit 0
 """
+
+
+# --- flags que entiende Compose ---------------------------------------------
+#
+# 2026-10-02: `scripts/deploy.sh` migraba con `compose run ... --no-build`, un
+# flag que `docker compose run` no tuvo nunca (solo `up`/`create`): Compose
+# 5.5.1 frena con "unknown flag: --no-build" y el deploy muere al migrar. El
+# `docker` falso aceptaba cualquier cosa y el test afirmaba ese mismo string,
+# asi que no podia verlo. Ahora cada llamada a compose que hacen los scripts
+# se valida contra los flags de la version MINIMA soportada (Compose 2.24.0,
+# DEPLOY_MIN_COMPOSE): lo que entienda la minima lo entienden las siguientes.
+# Fuente: docker/compose v2.24.0, cmd/compose/{up,create,run,exec,config,ps,
+# pull,logs,version}.go. Un flag nuevo en un script va aca solo si existe en
+# esa version (`--pull` de `run` aparecio recien en 2.33.0).
+#
+# Por subcomando: (flags booleanos, flags con valor). Largo y corto, sin guion.
+_GLOBALES: tuple[set[str], set[str]] = ({"dry-run"}, set())
+_FLAGS_COMPOSE_2_24: dict[str, tuple[set[str], set[str]]] = {
+    "up": (
+        {
+            "detach",
+            "d",
+            "build",
+            "no-build",
+            "remove-orphans",
+            "no-color",
+            "no-log-prefix",
+            "force-recreate",
+            "no-recreate",
+            "no-start",
+            "abort-on-container-exit",
+            "timestamps",
+            "no-deps",
+            "always-recreate-deps",
+            "renew-anon-volumes",
+            "V",
+            "quiet-pull",
+            "attach-dependencies",
+            "wait",
+        },
+        {
+            "pull",
+            "scale",
+            "exit-code-from",
+            "timeout",
+            "t",
+            "attach",
+            "no-attach",
+            "wait-timeout",
+        },
+    ),
+    "run": (
+        {
+            "detach",
+            "d",
+            "rm",
+            "no-TTY",
+            "T",
+            "no-deps",
+            "use-aliases",
+            "service-ports",
+            "P",
+            "quiet-pull",
+            "build",
+            "remove-orphans",
+            "interactive",
+            "i",
+            "tty",
+            "t",
+        },
+        {
+            "env",
+            "e",
+            "label",
+            "l",
+            "name",
+            "user",
+            "u",
+            "workdir",
+            "w",
+            "entrypoint",
+            "cap-add",
+            "cap-drop",
+            "volume",
+            "v",
+            "publish",
+            "p",
+        },
+    ),
+    "exec": (
+        {"detach", "d", "privileged", "no-TTY", "T", "interactive", "i", "tty", "t"},
+        {"env", "e", "index", "user", "u", "workdir", "w"},
+    ),
+    "config": (
+        {
+            "resolve-image-digests",
+            "quiet",
+            "q",
+            "no-interpolate",
+            "no-normalize",
+            "no-path-resolution",
+            "no-consistency",
+            "services",
+            "volumes",
+            "profiles",
+            "images",
+        },
+        {"format", "hash", "output", "o"},
+    ),
+    "ps": (
+        {"quiet", "q", "services", "orphans", "all", "a", "no-trunc"},
+        {"format", "filter", "status"},
+    ),
+    "pull": (
+        {
+            "quiet",
+            "q",
+            "include-deps",
+            "parallel",
+            "no-parallel",
+            "ignore-pull-failures",
+            "ignore-buildable",
+        },
+        {"policy"},
+    ),
+    "logs": (
+        {"follow", "f", "no-color", "no-log-prefix", "timestamps", "t"},
+        {"index", "since", "until", "tail", "n"},
+    ),
+    "version": ({"short"}, {"format", "f"}),
+}
+# `run` y `exec` cortan los flags en el primer argumento suelto (el servicio):
+# lo que sigue es el comando del contenedor. El resto los acepta en cualquier
+# lugar (por defecto cobra intercala flags y argumentos).
+_SIN_INTERCALAR = {"run", "exec"}
+
+
+def flags_rechazados_por_compose(argumentos: list[str]) -> list[str]:
+    """Los flags de `docker compose <argumentos>` que Compose 2.24 rechaza.
+
+    `argumentos` empieza en el subcomando (sin `docker compose`). Un
+    subcomando que los scripts no usan no se valida."""
+    if not argumentos or argumentos[0] not in _FLAGS_COMPOSE_2_24:
+        return []
+    subcomando, resto = argumentos[0], argumentos[1:]
+    booleanos = _FLAGS_COMPOSE_2_24[subcomando][0] | _GLOBALES[0]
+    con_valor = _FLAGS_COMPOSE_2_24[subcomando][1] | _GLOBALES[1]
+    rechazados: list[str] = []
+    i = 0
+    while i < len(resto):
+        arg = resto[i]
+        i += 1
+        if arg == "--":
+            break
+        if not arg.startswith("-") or arg == "-":
+            if subcomando in _SIN_INTERCALAR:
+                break
+            continue
+        if arg.startswith("--"):
+            nombre, igual, _ = arg[2:].partition("=")
+            if nombre in con_valor:
+                i += 0 if igual else 1
+            elif nombre not in booleanos:
+                rechazados.append(f"{subcomando} --{nombre}")
+            continue
+        # Cortos, quiza juntos (`-dT`); uno con valor se come el resto.
+        cortos = arg[1:]
+        for j, letra in enumerate(cortos):
+            if letra in con_valor:
+                i += 0 if cortos[j + 1 :] else 1
+                break
+            if letra not in booleanos:
+                rechazados.append(f"{subcomando} -{letra}")
+    return rechazados
+
+
+def _llamadas_con_flags_invalidos(llamadas: list[str]) -> list[str]:
+    malas = []
+    for llamada in llamadas:
+        partes = llamada.split()
+        if partes[:2] == ["docker", "compose"]:
+            rechazados = flags_rechazados_por_compose(partes[2:])
+            if rechazados:
+                malas.append(f"{llamada}  <- {', '.join(rechazados)}")
+    return malas
 
 
 @dataclass
@@ -212,9 +534,12 @@ class Host:
     def correr_desde(
         self, cwd: Path, script: str, *args: str, **extra: str
     ) -> subprocess.CompletedProcess[str]:
-        """Como `correr`, pero con otro directorio actual."""
+        """Como `correr`, pero con otro directorio actual.
+
+        Falla si el script le paso a compose un flag que Compose 2.24 no
+        entiende: el `docker` falso lo aceptaria y el real no."""
         assert BASH is not None
-        return subprocess.run(
+        resultado = subprocess.run(
             [BASH, str(SCRIPTS / script), *args],
             cwd=cwd,
             env={**self.env, **extra},
@@ -223,11 +548,38 @@ class Host:
             timeout=60,
             check=False,
         )
+        malas = _llamadas_con_flags_invalidos(self.llamadas())
+        assert not malas, "flags que `docker compose` 2.24 no acepta:\n" + "\n".join(
+            malas
+        )
+        return resultado
 
 
 def _ejecutable(ruta: Path, contenido: str) -> None:
     ruta.write_text(contenido, encoding="utf-8", newline="\n")
     ruta.chmod(0o755)
+
+
+def escribir_meminfo(
+    ruta: Path,
+    *,
+    total_mib: int = 7936,
+    disponible_mib: int = 2048,
+    swap_mib: int = 2048,
+    swap_libre_mib: int = 2048,
+) -> None:
+    """Un /proc/meminfo con los campos que lee checks.sh (en kB, como el
+    kernel). Por defecto, el VPS de 8 GB sano: 2 GiB disponibles y swap sin
+    usar."""
+    ruta.write_text(
+        f"MemTotal:       {total_mib * 1024} kB\n"
+        f"MemFree:        {disponible_mib * 512} kB\n"
+        f"MemAvailable:   {disponible_mib * 1024} kB\n"
+        f"SwapTotal:      {swap_mib * 1024} kB\n"
+        f"SwapFree:       {swap_libre_mib * 1024} kB\n",
+        encoding="utf-8",
+        newline="\n",
+    )
 
 
 def crear_host(tmp_path: Path) -> Host:
@@ -242,8 +594,8 @@ def crear_host(tmp_path: Path) -> Host:
     for d in (fake, bin_dir, repo, state, backups):
         d.mkdir()
     _ejecutable(bin_dir / "docker", _DOCKER)
+    _ejecutable(bin_dir / "curl", _CURL)
     for nombre, variable in (
-        ("curl", "FAKE_CURL_EXIT"),
         ("rclone", "FAKE_RCLONE_EXIT"),
         ("sleep", "FAKE_SLEEP_EXIT"),
         ("logger", "FAKE_LOGGER_EXIT"),
@@ -254,6 +606,35 @@ def crear_host(tmp_path: Path) -> Host:
     _ejecutable(bin_dir / "df", _DF)
     _ejecutable(bin_dir / "timedatectl", _TIMEDATECTL)
     _ejecutable(bin_dir / "openssl", _OPENSSL)
+    # checks.sh lee la memoria del host de aca, no del /proc/meminfo de la
+    # maquina que corre los tests: un runner con poca memoria libre no puede
+    # volver rojo un test.
+    escribir_meminfo(fake / "meminfo")
+    (fake / "os-release").write_text(
+        "ID=ubuntu\nVERSION_CODENAME=noble\n", encoding="utf-8", newline="\n"
+    )
+    for nombre, archivo, variable, contenido in (
+        ("ufw", "ufw_status", "FAKE_UFW_EXIT", UFW_SANO),
+        ("apt-config", "apt_config", "FAKE_APT_EXIT", APT_SANO),
+        ("fail2ban-client", "fail2ban", "FAKE_FAIL2BAN_EXIT", ""),
+    ):
+        _ejecutable(
+            bin_dir / nombre,
+            _DESDE_ARCHIVO.format(nombre=nombre, archivo=archivo, variable=variable),
+        )
+        (fake / archivo).write_text(contenido, encoding="utf-8", newline="\n")
+    _ejecutable(bin_dir / "sshd", _SSHD)
+    for nombre in ("sshd_T", "sshd_T_deploy"):
+        (fake / nombre).write_text(SSHD_SANO, encoding="utf-8", newline="\n")
+    dropins = fake / "sshd_config.d"
+    dropins.mkdir()
+    for nombre, contenido in SSHD_DROPINS_SANOS.items():
+        (dropins / nombre).write_text(contenido, encoding="utf-8", newline="\n")
+    (fake / "sshd_config").write_text(SSHD_CONFIG_SANO, encoding="utf-8", newline="\n")
+    # redis_state al 20 % de sus 48 MB.
+    escribir_redis_info(fake / "redis_info", usada=10 * 1048576)
+    # El sha que se despliega paso Quality en main.
+    escribir_corridas_de_quality(fake / "gh_runs", verdes=1)
     # Git Bash en Windows: /usr/bin (find, sort, sha256sum de GNU) antes que
     # System32, donde `find` es otro programa.
     herramientas = str(Path(BASH).parent)
@@ -268,6 +649,11 @@ def crear_host(tmp_path: Path) -> Host:
         "SHIFTY_STATE_DIR": state.as_posix(),
         "BACKUP_DIR": backups.as_posix(),
         "COMPOSE_PROJECT_NAME": "shifty",
+        "HOST_MEMINFO": (fake / "meminfo").as_posix(),
+        # El runner puede tener su propio /var/run/reboot-required.
+        "HARDENING_REBOOT_FLAG": (fake / "reboot-required").as_posix(),
+        "HARDENING_OS_RELEASE": (fake / "os-release").as_posix(),
+        "HARDENING_SSHD_CONFIG": (fake / "sshd_config").as_posix(),
     }
     for variable in (
         "APP_VERSION",
@@ -275,6 +661,7 @@ def crear_host(tmp_path: Path) -> Host:
         "ALERT_WEBHOOK_URL",
         "ALERT_EMAIL",
         "COMPOSE_FILE",
+        "DEPLOY_SKIP_QUALITY_CHECK",
     ):
         env.pop(variable, None)
     return Host(tmp_path, fake, repo, state, backups, env)

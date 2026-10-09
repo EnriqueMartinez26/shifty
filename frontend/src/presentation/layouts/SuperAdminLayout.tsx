@@ -60,7 +60,7 @@ const SuperAdminLayout: React.FC = () => {
                 </span>
               </div>
               <p className="text-xs font-bold" style={{ color: colors2000s.text.secondary }}>
-                Control multi-tenant separado del backoffice de tienda.
+                Control de todas las tiendas, separado del panel de cada una.
               </p>
             </div>
           </div>
@@ -106,8 +106,8 @@ const SuperAdminLayout: React.FC = () => {
         >
           <ArrowLeftRight className="h-5 w-5" style={{ color: colors2000s.orange.accent }} />
           <p className="text-sm font-bold" style={{ color: colors2000s.text.secondary }}>
-            Esta superficie administra dueños de tiendas y configuración SaaS global. No navega
-            dentro de una tienda ni reutiliza el backoffice tenant.
+            Esta sección administra dueños de tiendas y la configuración global de Shifty. No entra
+            al panel de ninguna tienda.
           </p>
         </div>
 

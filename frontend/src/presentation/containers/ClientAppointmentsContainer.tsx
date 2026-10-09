@@ -6,17 +6,19 @@ import { isBookingStatus, type BookingStatusValue } from '@domain/value-objects/
 
 import type { ClientAppointmentItem, PublicStore } from '@application/services/PublicBookingService'
 
-import { getErrorMessage } from '@shared/errors/getErrorMessage'
 import {
-  argentinaLocalToUtcIso,
-  formatArgentinaDate,
-  formatArgentinaDateDisplay,
-  formatArgentinaTime
-} from '@shared/utils/argentinaTime'
+  getErrorCode,
+  getErrorMessage,
+  getHttpStatus,
+  isStateConflictError
+} from '@shared/errors/getErrorMessage'
+import { formatArgentinaDateDisplay, formatArgentinaTime } from '@shared/utils/argentinaTime'
 import { createUuid } from '@shared/utils/uuid'
 
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
+import { BookingStepDateTime } from '../components/organisms/booking/BookingStepDateTime'
 import { ClientOtpGate } from '../components/organisms/ClientOtpGate'
+import { useConfirm } from '../hooks/useConfirm'
 import {
   useCancelClientAppointment,
   usePublicClientAppointments,
@@ -35,7 +37,7 @@ const ESTADO: Record<BookingStatusValue, { label: string; color: string }> = {
 }
 
 interface ClientAppointmentsContainerProps {
-  store: PublicStore
+  store: Pick<PublicStore, 'public_id' | 'name' | 'slug'>
 }
 
 /**
@@ -47,14 +49,14 @@ export const ClientAppointmentsContainer: React.FC<ClientAppointmentsContainerPr
 }) => {
   const [phone, setPhone] = useState<string | null>(null)
   const [message, setMessage] = useState('')
-  const [rescheduling, setRescheduling] = useState<{
-    id: string
-    date: string
-    time: string
-  } | null>(null)
+  const [rescheduling, setRescheduling] = useState<{ id: string } | null>(null)
   const appointments = usePublicClientAppointments(store.public_id, phone ?? '', Boolean(phone))
+  const code = getErrorCode(appointments.error)
+  const status = getHttpStatus(appointments.error)
+
   const cancelAppointment = useCancelClientAppointment()
   const rescheduleAppointment = useRescheduleClientAppointment()
+  const { confirm, confirmDialog } = useConfirm()
 
   if (!phone) {
     return (
@@ -62,30 +64,93 @@ export const ClientAppointmentsContainer: React.FC<ClientAppointmentsContainerPr
     )
   }
 
+  if (code === 'OTP_VERIFICATION_REQUIRED') {
+    // FF-05 (2026-09-30): la verificacion recordada (la del wizard, 30 min)
+    // no alcanza si la ficha no tiene ese email o ya vencio en el backend: el
+    // GET respondia 403 y el atajo de la puerta volvia a entrar con ella, en
+    // bucle. Con skipRemembered la puerta la olvida al pedir el codigo y
+    // siempre manda uno nuevo; tras verificar se vuelve a pedir la lista (con
+    // el mismo telefono la clave de la consulta no cambia).
+    return (
+      <ClientOtpGate
+        storePublicId={store.public_id}
+        storeSlug={store.slug}
+        skipRemembered
+        notice={`Para ver tus turnos verificá el email que tenés registrado en ${store.name}. Pedí un código nuevo.`}
+        initialPhone={phone}
+        onVerified={(p) => {
+          setPhone(p)
+          void appointments.refetch()
+        }}
+      />
+    )
+  }
+
+  // 403 y 404 no se arreglan reintentando; 429, 503 y el resto quiza si.
+  const reintentable = status !== 403 && status !== 404
+
+  // Un toque cancelaba sin preguntar (FF-07): se confirma con el dialogo propio.
   const cancelar = async (item: ClientAppointmentItem) => {
+    const question = `¿Cancelar tu turno de ${item.service_name} del ${formatArgentinaDateDisplay(
+      item.starts_at
+    )} a las ${formatArgentinaTime(item.starts_at)} hs? No se puede deshacer.`
+    // "Cancelar" en el dialogo seria NO cancelar el turno: los botones dicen
+    // lo que hacen.
+    const confirmed = await confirm(question, {
+      confirmLabel: 'Sí, cancelar turno',
+      cancelLabel: 'Conservar turno'
+    })
+    if (!confirmed) return
     setMessage('')
     try {
       await cancelAppointment.mutateAsync({ publicId: item.public_id, phone })
       setMessage('Cancelamos tu turno y le avisamos a la tienda.')
     } catch (error: unknown) {
       setMessage(getErrorMessage(error, 'No pudimos cancelar el turno'))
+      // La lista quedo vieja (la tienda ya lo cancelo, o tiene un cobro vivo):
+      // se recarga para no seguir ofreciendo la accion.
+      if (isStateConflictError(error)) void appointments.refetch()
     }
   }
 
-  const reprogramar = async (item: ClientAppointmentItem) => {
-    if (!rescheduling) return
+  // FF-06 (D-20260930-06): el horario sale de la grilla y se manda el
+  // `starts_at` del slot tal cual, nunca recompuesto desde fecha + hora.
+  const reprogramar = async (item: ClientAppointmentItem, startsAt: string) => {
+    if (rescheduleAppointment.isPending) return
+    const question = `¿Mover tu turno del ${formatArgentinaDateDisplay(
+      item.starts_at
+    )} ${formatArgentinaTime(item.starts_at)} hs al ${formatArgentinaDateDisplay(
+      startsAt
+    )} ${formatArgentinaTime(startsAt)} hs?`
+    const confirmed = await confirm(question, {
+      confirmLabel: 'Sí, mover turno',
+      cancelLabel: 'Dejarlo como está'
+    })
+    if (!confirmed) return
     setMessage('')
     try {
       await rescheduleAppointment.mutateAsync({
         publicId: item.public_id,
         phone,
-        newStartsAt: argentinaLocalToUtcIso(rescheduling.date, rescheduling.time),
+        newStartsAt: startsAt,
         idempotencyKey: createUuid()
       })
       setRescheduling(null)
       setMessage('Listo, movimos tu turno.')
     } catch (error: unknown) {
-      setMessage(getErrorMessage(error, 'No pudimos mover el turno a ese horario'))
+      // La grilla queda abierta para elegir otro horario; el hook ya la
+      // vuelve a pedir. Si el turno cambio de estado, tambien la lista.
+      // BOOKING_NOTICE_REQUIRED muestra el texto del servidor, que dice las
+      // horas de anticipacion; el de CANCELLATION_WINDOW_EXPIRED habla de
+      // cancelar y aca se esta moviendo el turno.
+      setMessage(
+        getErrorMessage(error, 'No pudimos mover el turno a ese horario', {
+          APPOINTMENT_NOT_ACTIVE: 'Este turno ya terminó o fue cancelado: no se puede mover.',
+          CANCELLATION_WINDOW_EXPIRED:
+            'Ya pasó el plazo para cambiar este turno. Si necesitás moverlo, comunicate con el negocio.'
+        })
+      )
+      if (isStateConflictError(error)) void appointments.refetch()
     }
   }
 
@@ -93,6 +158,7 @@ export const ClientAppointmentsContainer: React.FC<ClientAppointmentsContainerPr
 
   return (
     <section className="max-w-2xl mx-auto space-y-4">
+      {confirmDialog}
       <div className="flex items-center justify-between gap-3">
         <h2
           className="text-lg font-black uppercase tracking-tight"
@@ -123,9 +189,30 @@ export const ClientAppointmentsContainer: React.FC<ClientAppointmentsContainerPr
       )}
 
       {appointments.isError && (
-        <p role="alert" className="text-xs font-bold text-red-600">
-          No encontramos turnos para ese teléfono en {store.name}.
-        </p>
+        <div className="space-y-2">
+          <p role="alert" className="text-xs font-bold text-red-600">
+            {/* FF-05: 404, 429 y 5xx decian todos "No encontramos turnos". */}
+            {getErrorMessage(
+              appointments.error,
+              'No pudimos cargar tus turnos. Probá de nuevo en unos minutos.',
+              {
+                CLIENT_APPOINTMENTS_NOT_FOUND: `No encontramos turnos para ese teléfono en ${store.name}.`
+              }
+            )}
+          </p>
+          {reintentable && (
+            <button
+              type="button"
+              onClick={() => {
+                void appointments.refetch()
+              }}
+              className="px-3 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest"
+              style={buttonStyles2000s.default}
+            >
+              Reintentar
+            </button>
+          )}
+        </div>
       )}
 
       {!appointments.isLoading && !appointments.isError && items.length === 0 && (
@@ -164,19 +251,7 @@ export const ClientAppointmentsContainer: React.FC<ClientAppointmentsContainerPr
                 {item.can_reschedule && (
                   <button
                     type="button"
-                    onClick={() =>
-                      setRescheduling(
-                        editando
-                          ? null
-                          : {
-                              id: item.public_id,
-                              // El dia LOCAL del turno: slice(0,10) del ISO da
-                              // el dia UTC y corre el turno de la noche.
-                              date: formatArgentinaDate(item.starts_at),
-                              time: formatArgentinaTime(item.starts_at)
-                            }
-                      )
-                    }
+                    onClick={() => setRescheduling(editando ? null : { id: item.public_id })}
                     className="inline-flex items-center gap-1 rounded-lg px-3 py-2 text-[9px] font-black uppercase tracking-widest"
                     style={buttonStyles2000s.default}
                   >
@@ -199,40 +274,24 @@ export const ClientAppointmentsContainer: React.FC<ClientAppointmentsContainerPr
               </div>
             )}
 
-            {editando && rescheduling && (
-              <div className="grid grid-cols-[1fr_auto_auto] gap-2 items-end">
-                <label className="text-[9px] font-black uppercase tracking-widest text-gray-500">
-                  Nueva fecha
-                  <input
-                    type="date"
-                    value={rescheduling.date}
-                    onChange={(e) => setRescheduling({ ...rescheduling, date: e.target.value })}
-                    className="mt-1 w-full rounded-lg px-2 py-2 text-xs font-bold border"
-                    style={{ borderColor: colors2000s.border.default }}
-                  />
-                </label>
-                <label className="text-[9px] font-black uppercase tracking-widest text-gray-500">
-                  Hora
-                  <input
-                    type="time"
-                    value={rescheduling.time}
-                    onChange={(e) => setRescheduling({ ...rescheduling, time: e.target.value })}
-                    className="mt-1 rounded-lg px-2 py-2 text-xs font-bold border"
-                    style={{ borderColor: colors2000s.border.default }}
-                  />
-                </label>
-                <button
-                  type="button"
-                  disabled={rescheduleAppointment.isPending}
-                  onClick={() => {
-                    void reprogramar(item)
-                  }}
-                  className="px-4 py-2 rounded-lg text-white text-[9px] font-black uppercase tracking-widest disabled:opacity-60"
-                  style={buttonStyles2000s.selected}
-                >
-                  {rescheduleAppointment.isPending ? '...' : 'Mover'}
-                </button>
-              </div>
+            {editando && item.can_reschedule && (
+              // El backend reprograma siempre con el mismo profesional y para
+              // el mismo servicio: la grilla queda fija en los dos y sin lista
+              // de espera, porque el cliente ya tiene turno.
+              <BookingStepDateTime
+                storePublicId={store.public_id}
+                serviceId={item.service_id}
+                staffId={item.staff_id}
+                lockedStaffId={item.staff_id}
+                selectedDate={null}
+                selectedTime={null}
+                showWaitlist={false}
+                heading="Elegí el nuevo horario"
+                onBack={() => setRescheduling(null)}
+                onSelect={(_date, _time, _assigned, _requested, startsAt) => {
+                  void reprogramar(item, startsAt)
+                }}
+              />
             )}
           </article>
         )

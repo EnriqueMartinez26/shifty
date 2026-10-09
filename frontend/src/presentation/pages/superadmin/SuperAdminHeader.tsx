@@ -69,7 +69,7 @@ export const SuperAdminHeader: React.FC<SuperAdminHeaderProps> = ({
             Control Global
           </h1>
           <p className="text-xs font-bold" style={{ color: colors2000s.text.secondary }}>
-            Operacion multi-tenant para tiendas, admins, suscripciones y cupones.
+            Operación de todas las tiendas: admins, suscripciones y cupones.
           </p>
         </div>
       </div>
@@ -92,7 +92,7 @@ export const SuperAdminHeader: React.FC<SuperAdminHeaderProps> = ({
           disabled={!selectedStore || !activePlans.length}
         />
         <ActionButton
-          label="Canjear cupon"
+          label="Canjear cupón"
           onClick={openRedeemCouponModal}
           disabled={!selectedStore || !hasSelectedStoreSubscription || !activeCoupons.length}
         />
@@ -166,11 +166,12 @@ export const SuperAdminHeader: React.FC<SuperAdminHeaderProps> = ({
                 className="text-[10px] font-black uppercase tracking-widest"
                 style={{ color: colors2000s.text.secondary }}
               >
-                SLA booking
+                Reglas de reserva
               </p>
               <p className="font-black" style={{ color: colors2000s.text.primary }}>
-                {overview?.store.cancellation_hours ?? selectedStore.cancellation_hours}h cancel. /{' '}
-                {overview?.store.buffer_minutes ?? selectedStore.buffer_minutes}m buffer
+                {overview?.store.cancellation_hours ?? selectedStore.cancellation_hours} h para
+                cancelar / {overview?.store.buffer_minutes ?? selectedStore.buffer_minutes} min
+                entre turnos
               </p>
             </div>
             <div>
@@ -178,10 +179,10 @@ export const SuperAdminHeader: React.FC<SuperAdminHeaderProps> = ({
                 className="text-[10px] font-black uppercase tracking-widest"
                 style={{ color: colors2000s.text.secondary }}
               >
-                Suscripcion
+                Suscripción
               </p>
               <p className="font-black" style={{ color: colors2000s.text.primary }}>
-                {selectedStore.current_plan_name || 'Sin suscripcion'}
+                {selectedStore.current_plan_name || 'Sin suscripción'}
               </p>
             </div>
           </div>
@@ -192,8 +193,8 @@ export const SuperAdminHeader: React.FC<SuperAdminHeaderProps> = ({
           >
             <p className="text-[10px] font-black uppercase tracking-widest">Protecciones</p>
             <p className="mt-1 text-[11px] font-bold">
-              Revocar Super Admin, desactivar tienda, reemplazar suscripcion y canjear cupon tienen
-              confirmacion y reglas de backend.
+              Revocar Super Admin, desactivar tienda, reemplazar suscripción y canjear cupón piden
+              confirmación y las valida el servidor.
             </p>
           </div>
         </div>

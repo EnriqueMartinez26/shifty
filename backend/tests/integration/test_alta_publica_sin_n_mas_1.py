@@ -23,6 +23,7 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.util import find_tables
 
 from modules.staff.model import Staff, StaffBlock
 from tests.integration.test_feature_flags_finance_and_public_privacy import (
@@ -49,8 +50,11 @@ def _espiar(
 
     async def execute_espiado(statement: Any, *args: Any, **kwargs: Any) -> Any:
         obtener_froms = getattr(statement, "get_final_froms", None)
+        # Las tablas de cada FROM, tambien dentro de un JOIN: el horario
+        # efectivo (D-20260929-01/02, ``working_hours``) lee ``staff LEFT
+        # JOIN schedules`` en UNA sentencia y un JOIN no tiene ``name``.
         tablas = (
-            {getattr(f, "name", None) for f in obtener_froms()}
+            {t.name for f in obtener_froms() for t in find_tables(f)}
             if obtener_froms
             else set()
         )

@@ -16,7 +16,6 @@ export interface BookingWizardState {
   startsAt: string | null
   client: BookingClientData
   promotionCode: string
-  idempotencyKey: string
 }
 
 export interface BookingOtpState {
@@ -27,7 +26,30 @@ export interface BookingOtpState {
   email: string
   verified: boolean
   verifiedPhone: string
-  debugCode: string
   expiresAt: string
   error: string
+  /**
+   * El backend respondio OTP_RATE_LIMITED: no se ofrece pedir otro codigo
+   * hasta recargar. Sin cuenta regresiva: la ventana del backend es
+   * deslizante y cualquier numero seria una promesa falsa (F4-11).
+   */
+  rateLimited: boolean
+  /**
+   * `debug_code` tal cual lo devolvio la API (solo con
+   * OTP_DEBUG_EXPOSE_CODE, fuera de produccion); vacio si no vino. Si el
+   * codigo fue al email de la ficha y no al tipeado es un senuelo
+   * (AUD2-SYNC-01): se muestra con el aviso de que puede no servir (J7).
+   */
+  debugCode: string
+}
+
+/**
+ * Cambio de paso que el wizard le pide a quien guarda el paso (la URL, F4-15):
+ * `push` al avanzar, `replace` en los saltos automaticos y correcciones, y
+ * `back` al tocar "atras".
+ */
+export interface BookingStepChange {
+  to: number
+  from: number
+  mode: 'push' | 'replace' | 'back'
 }

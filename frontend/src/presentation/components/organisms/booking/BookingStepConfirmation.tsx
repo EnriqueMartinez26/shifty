@@ -1,16 +1,12 @@
 import React, { useReducer, useRef, useState } from 'react'
 
 import {
-  Calendar,
-  Check,
+  CalendarCheck,
   ChevronLeft,
-  Clock,
-  ExternalLink,
   FileText,
   Loader2,
   Mail,
   Phone,
-  ShieldCheck,
   Tag,
   TriangleAlert,
   User,
@@ -23,25 +19,42 @@ import type {
 } from '@application/services/PublicBookingService'
 import type { StoreCustomField } from '@application/services/StoreSettingsService'
 
+import { useDebouncedValue } from '@presentation/hooks/useDebouncedValue'
 import {
   usePreviewPublicPromotion,
   usePublicDepositPreview,
   usePublicServices
 } from '@presentation/hooks/usePublic'
 
-import { getErrorMessage } from '@shared/errors/getErrorMessage'
-import { asSafeHttpsUrl, navigateExternal, sanitizePhoneForUrl } from '@shared/utils/safeUrl'
+import { getErrorCode, getErrorMessage } from '@shared/errors/getErrorMessage'
+import { formatArgentinaDateDisplay } from '@shared/utils/argentinaTime'
+import { CLIENT_PHONE_HINT, isValidClientPhone } from '@shared/utils/clientPhone'
+import { formatCurrency } from '@shared/utils/currency'
+import { phoneDigits } from '@shared/utils/otpSession'
+import { navigateExternal } from '@shared/utils/safeUrl'
 
+import { BookingOtpSection } from './BookingOtpSection'
+import { BookingSuccess } from './BookingSuccess'
 import { depositBreakdownText } from './depositReasons'
 import type { BookingClientData, BookingOtpState, BookingWizardState } from './types'
-import { buttonStyles2000s, colors2000s } from '../../../../theme/colors'
-import { currencyFmtEsAr as currencyFmt } from '../../../lib/formatters'
+import { buttonStyles2000s, colors2000s, orangeCtaGradient } from '../../../../theme/colors'
+import { revealOnMount } from '../../../lib/revealOnMount'
 import {
   createBookingBackButtonStyle,
+  createBookingClientInputStyle,
   createBookingInputStyle,
   createBookingSurfaceStyle,
   createBookingAccentBoxStyle
 } from '../../../lib/surfaceStyles'
+
+// Un 422 nombra el campo; el texto crudo de Pydantic nunca llega (regla 20).
+const BOOKING_FIELD_MESSAGES: Partial<Record<string, string>> = {
+  client_phone: `Revisá el teléfono. ${CLIENT_PHONE_HINT}`,
+  client_name: 'Revisá tu nombre: no puede quedar vacío ni tener caracteres raros.',
+  client_email: 'Revisá el email: no parece válido.',
+  notes: 'Las notas son demasiado largas o tienen caracteres no permitidos.',
+  custom_fields: 'Revisá los datos adicionales que pide el negocio.'
+}
 
 interface BookingStepConfirmationProps {
   storePublicId: string
@@ -58,6 +71,8 @@ interface BookingStepConfirmationProps {
   requiresOtp: boolean
   otpState: BookingOtpState
   isRequestingOtp: boolean
+  /** Segundos que faltan para poder pedir otro codigo (0: se puede). */
+  otpResendSeconds: number
   isVerifyingOtp: boolean
   onRequestOtp: () => void
   onVerifyOtp: () => void
@@ -76,10 +91,12 @@ type SubmissionState =
   | { phase: 'idle' }
   | { phase: 'submitting' }
   | { phase: 'success'; confirmation: BookingConfirmation }
-  | { phase: 'error' }
+  | { phase: 'error'; slotMayBeTaken: boolean }
 
 type SubmissionAction =
-  { type: 'submit' } | { type: 'succeed'; confirmation: BookingConfirmation } | { type: 'fail' }
+  | { type: 'submit' }
+  | { type: 'succeed'; confirmation: BookingConfirmation }
+  | { type: 'fail'; slotMayBeTaken: boolean }
 
 function submissionReducer(_state: SubmissionState, action: SubmissionAction): SubmissionState {
   switch (action.type) {
@@ -88,7 +105,7 @@ function submissionReducer(_state: SubmissionState, action: SubmissionAction): S
     case 'succeed':
       return { phase: 'success', confirmation: action.confirmation }
     case 'fail':
-      return { phase: 'error' }
+      return { phase: 'error', slotMayBeTaken: action.slotMayBeTaken }
   }
 }
 
@@ -106,6 +123,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
   requiresOtp,
   otpState,
   isRequestingOtp,
+  otpResendSeconds,
   isVerifyingOtp,
   onRequestOtp,
   onVerifyOtp,
@@ -133,12 +151,17 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
   // El telefono solo viaja dentro del rango que acepta el backend
   // (client_phone 6..30): a medio tipear era un 422 por tecla (F11a-05). Sin
   // el, el backend decide la seña sin historial, igual que con uno sin OTP.
+  // Viaja con 8 digitos o mas y 400 ms sin tipear: desde el sexto caracter
+  // era una request por tecla (F4-06).
   const depositPhone = bookingState.client.phone.trim()
+  const eligibleDepositPhone =
+    phoneDigits(depositPhone).length >= 8 && depositPhone.length <= 30 ? depositPhone : undefined
+  const debouncedDepositPhone = useDebouncedValue(eligibleDepositPhone, 400)
   const depositQuery = usePublicDepositPreview({
     storePublicId,
     serviceId,
     startsAt: bookingState.startsAt,
-    clientPhone: depositPhone.length >= 6 && depositPhone.length <= 30 ? depositPhone : undefined,
+    clientPhone: debouncedDepositPhone,
     promotionCode: bookingState.promotionCode || undefined
   })
   const inferredDeposit = Boolean(
@@ -147,9 +170,14 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
     Number(selectedService.deposit_amount ?? (selectedService.deposit_type === 'full' ? 1 : 0)) > 0
   )
   const depositPreview = depositQuery.data ?? null
-  const canPayDeposit = Boolean(
-    paymentsEnabled && (depositPreview ? depositPreview.amount > 0 : inferredDeposit)
-  )
+  // Lleva seña (obligatoria u opcional), se cobre online o no.
+  const hasDeposit = depositPreview ? depositPreview.amount > 0 : inferredDeposit
+  const canPayDeposit = Boolean(paymentsEnabled && hasDeposit)
+  // Solo una seña OBLIGATORIA queda debiendose al reservar sin Mercado Pago:
+  // con una opcional el backend no genera cobro manual
+  // (deposit_channels.resolve_deposit_channel), asi que no hay nada que pagar
+  // por WhatsApp. Sin el servicio cargado no se sabe y se cae a confirmar.
+  const owesDepositByWhatsApp = hasDeposit && selectedService?.deposit_mode === 'required'
   // Con seña obligatoria y coordinación manual deshabilitada por la tienda, la
   // única vía válida es pagar online. El backend lo rechaza igual, pero no tiene
   // sentido ofrecer un botón que va a fallar.
@@ -168,8 +196,10 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
   const customFieldsValid = customFields.every(
     (field) => !field.required || Boolean(client.customFields[field.key]?.trim())
   )
-  const clientValid =
-    Boolean(client.name.trim()) && Boolean(client.phone.trim()) && customFieldsValid
+  // El telefono con el criterio del backend: con menos de 6 digitos era un 422
+  // que se leia como horario ocupado (QA 2026-10-02).
+  const phoneValid = isValidClientPhone(client.phone)
+  const clientValid = Boolean(client.name.trim()) && phoneValid && customFieldsValid
   // Gate duro: el backend rechaza la reserva si la tienda exige OTP y el
   // telefono no quedo verificado (create_public_booking, public_api/router.py).
   // No se debilita: el boton final queda deshabilitado hasta otpState.verified.
@@ -199,7 +229,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
     } catch (error: unknown) {
       setPromotionPreview(null)
       onPromotionCodeChange('')
-      setErrorMessage(getErrorMessage(error, 'No pudimos validar ese codigo'))
+      setErrorMessage(getErrorMessage(error, 'No pudimos validar ese código'))
     }
   }
 
@@ -220,28 +250,32 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
       const result = await onConfirm(paymentMethod, acceptsTerms)
       if (paymentMethod === 'mercadopago') {
         if (!navigateExternal(result.payment_link)) {
-          throw new Error('Mercado Pago no devolvio un enlace de pago valido')
+          throw new Error('Mercado Pago no devolvió un enlace de pago válido')
         }
         return
       }
       dispatchSubmission({ type: 'succeed', confirmation: result })
     } catch (error: unknown) {
-      dispatchSubmission({ type: 'fail' })
+      // Sin canal para cobrar la seña (409 DEPOSIT_CHANNEL_UNAVAILABLE) el
+      // horario no tiene nada que ver: no se sugiere elegir otro.
+      dispatchSubmission({
+        type: 'fail',
+        slotMayBeTaken: getErrorCode(error) !== 'DEPOSIT_CHANNEL_UNAVAILABLE'
+      })
       setErrorMessage(
-        getErrorMessage(error, 'No pudimos procesar tu reserva. El horario podria estar ocupado.')
+        getErrorMessage(
+          error,
+          'No pudimos procesar tu reserva. El horario podria estar ocupado.',
+          {},
+          BOOKING_FIELD_MESSAGES
+        )
       )
     } finally {
       isSubmittingRef.current = false
     }
   }
 
-  const clientInputStyle = {
-    ...createBookingInputStyle(),
-    borderRadius: 6,
-    fontFamily: 'inherit',
-    outline: 'none',
-    transition: 'all 0.15s'
-  }
+  const clientInputStyle = createBookingClientInputStyle()
 
   const renderCustomField = (field: StoreCustomField) => {
     const commonProps = {
@@ -308,6 +342,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
           <input
             type="text"
             required
+            autoComplete="name"
             value={client.name}
             onChange={(e) => updateClient({ name: e.target.value })}
             className="w-full pl-12 pr-4 py-3.5 font-bold"
@@ -326,6 +361,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
             <Mail size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
             <input
               type="email"
+              autoComplete="email"
               value={client.email}
               onChange={(e) => updateClient({ email: e.target.value })}
               className="w-full pl-12 pr-4 py-3.5 font-bold"
@@ -337,20 +373,25 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
 
         <div className="relative">
           <label className="text-[10px] font-black uppercase tracking-widest text-gray-400 ml-1 block mb-1">
-            Telefono
+            Teléfono
           </label>
           <div className="relative">
             <Phone size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
             <input
               type="tel"
               required
+              autoComplete="tel"
               value={client.phone}
               onChange={(e) => updateClient({ phone: e.target.value })}
               className="w-full pl-12 pr-4 py-3.5 font-bold"
               style={clientInputStyle}
               placeholder="PREFIJO + NUM"
+              aria-invalid={Boolean(client.phone.trim()) && !phoneValid}
             />
           </div>
+          {client.phone.trim() && !phoneValid && (
+            <p className="mt-1 ml-1 text-[11px] font-bold text-red-600">{CLIENT_PHONE_HINT}</p>
+          )}
         </div>
       </div>
 
@@ -368,7 +409,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
               Datos extra del turno
             </p>
             <p className="text-xs font-bold text-gray-500 mt-1">
-              Completalos para que el negocio prepare mejor tu atencion.
+              Completalos para que el negocio prepare mejor tu atención.
             </p>
           </div>
           {customFields.map((field) => (
@@ -404,117 +445,9 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
     </div>
   )
 
-  const renderOtpSection = () => (
-    <div className="p-5 bg-white space-y-4" style={createBookingSurfaceStyle()}>
-      <div className="flex items-start gap-3">
-        <ShieldCheck className="w-5 h-5 mt-0.5 text-orange-500" />
-        <div>
-          <p className="text-sm font-black" style={{ color: colors2000s.text.primary }}>
-            Verificamos tu telefono
-          </p>
-          <p className="text-xs font-bold" style={{ color: colors2000s.text.secondary }}>
-            Te mandamos un codigo por email para confirmar el {client.phone}
-          </p>
-          {/* Si el telefono ya tiene ficha con email cargado, el backend manda
-              el codigo a ESE email y no al que se tipee aca: quien pide el
-              codigo no elige el buzon (2026-09-20). Decirlo evita que alguien
-              espere el mail en una casilla que nunca lo va a recibir. */}
-          <p className="text-xs font-bold" style={{ color: colors2000s.text.secondary }}>
-            Si ya reservaste en este negocio, el codigo va al email que tenes registrado.
-          </p>
-        </div>
-      </div>
-
-      <div className="grid sm:grid-cols-[1fr_auto] gap-3">
-        <input
-          type="email"
-          inputMode="email"
-          aria-label="Email para el codigo"
-          value={otpState.email}
-          onChange={(e) => onOtpEmailChange(e.target.value)}
-          className="px-4 py-3 font-bold outline-none"
-          style={clientInputStyle}
-          placeholder="tu@email.com"
-        />
-        <button
-          type="button"
-          disabled={isRequestingOtp || !otpState.email.trim()}
-          onClick={onRequestOtp}
-          className="px-4 py-3 text-xs font-black uppercase tracking-widest"
-          style={{ ...buttonStyles2000s.default, borderRadius: 6 }}
-        >
-          {isRequestingOtp ? 'Enviando...' : 'Enviar codigo'}
-        </button>
-      </div>
-
-      <div className="space-y-3">
-        <input
-          value={otpState.code}
-          onChange={(e) => onOtpCodeChange(e.target.value)}
-          className="w-full px-4 py-3 font-bold outline-none"
-          style={clientInputStyle}
-          placeholder="Codigo que te llego por email"
-        />
-
-        {otpState.debugCode && (
-          <div
-            className="p-3 text-xs font-black uppercase tracking-widest"
-            style={createBookingAccentBoxStyle(
-              colors2000s.status.info.bg,
-              colors2000s.status.info.border,
-              colors2000s.status.info.text
-            )}
-          >
-            Codigo debug: {otpState.debugCode}
-          </div>
-        )}
-
-        {otpState.error && (
-          <div
-            role="alert"
-            aria-live="polite"
-            className="p-3 text-xs font-bold flex items-center gap-2"
-            style={createBookingAccentBoxStyle(
-              colors2000s.status.danger.bg,
-              colors2000s.status.danger.border,
-              colors2000s.status.danger.text
-            )}
-          >
-            <TriangleAlert className="w-4 h-4" />
-            {otpState.error}
-          </div>
-        )}
-
-        {otpState.verified ? (
-          <div
-            className="p-3 text-xs font-bold flex items-center gap-2"
-            style={createBookingAccentBoxStyle(
-              colors2000s.status.success.bg,
-              colors2000s.status.success.border,
-              colors2000s.status.success.text
-            )}
-          >
-            <ShieldCheck className="w-4 h-4" />
-            Telefono validado correctamente
-          </div>
-        ) : (
-          <button
-            type="button"
-            disabled={!otpState.code || isVerifyingOtp}
-            onClick={onVerifyOtp}
-            className="w-full px-4 py-3 text-xs font-black uppercase tracking-widest disabled:opacity-50"
-            style={{ ...buttonStyles2000s.selected, borderRadius: 6 }}
-          >
-            {isVerifyingOtp ? 'Verificando...' : 'Verificar codigo'}
-          </button>
-        )}
-      </div>
-    </div>
-  )
-
   if (submission.phase === 'submitting') {
     return (
-      <div className="flex flex-col items-center justify-center py-20 animate-in fade-in duration-500">
+      <div className="flex flex-col items-center justify-center py-20 duration-500">
         <Loader2 className="w-16 h-16 animate-spin text-orange-500 mb-6" />
         <h2
           className="text-2xl font-black uppercase tracking-tight"
@@ -527,225 +460,20 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
     )
   }
 
-  const whatsappPhone = (whatsappNumber || '').replace(/\D/g, '')
-
   if (submission.phase === 'success') {
-    const { confirmation } = submission
-    const isPendingPayment = confirmation.status === 'pending_payment'
-    const isPendingReview = confirmation.status === 'pending'
-    const title = isPendingPayment
-      ? 'Reserva Pendiente de Pago'
-      : isPendingReview
-        ? 'Reserva Registrada'
-        : 'Reserva Confirmada'
-    const subtitle = confirmation.payment_required
-      ? 'Tu turno se confirma cuando el cobro quede aprobado.'
-      : isPendingReview
-        ? 'Tu solicitud ya fue enviada y queda pendiente de confirmacion.'
-        : bookingState.client.email
-          ? `Te enviamos los detalles a ${bookingState.client.email}`
-          : 'Tu reserva ya quedo registrada.'
-
     return (
-      <div className="flex flex-col items-center py-10 text-center animate-in fade-in zoom-in-95 duration-500">
-        <div className="relative mb-8">
-          <div
-            className={`absolute inset-0 rounded-full blur-xl opacity-20 animate-pulse ${isPendingPayment || isPendingReview ? 'bg-amber-500' : 'bg-green-500'}`}
-          />
-          <div
-            className="w-24 h-24 rounded-full flex items-center justify-center text-white shadow-2xl relative z-10 border-4 border-white"
-            style={{
-              background:
-                isPendingPayment || isPendingReview
-                  ? `linear-gradient(135deg, ${colors2000s.status.warning.light} 0%, ${colors2000s.status.warning.dark} 100%)`
-                  : `linear-gradient(135deg, ${colors2000s.status.success.light} 0%, ${colors2000s.status.success.dark} 100%)`,
-              boxShadow:
-                isPendingPayment || isPendingReview
-                  ? 'inset 0 2px 4px rgba(255,255,255,0.4), 0 4px 12px rgba(217,119,6,0.3)'
-                  : 'inset 0 2px 4px rgba(255,255,255,0.4), 0 4px 12px rgba(22,163,74,0.3)'
-            }}
-          >
-            <Check className="w-12 h-12 stroke-[3px]" />
-          </div>
-        </div>
-
-        <h2
-          className="text-3xl font-black uppercase tracking-tight leading-none mb-2"
-          style={{ color: colors2000s.orange.accent }}
-        >
-          {title}
-        </h2>
-        <p className="text-sm font-bold text-gray-500 mb-10">{subtitle}</p>
-
-        <div
-          className="w-full rounded-lg p-6 text-left border"
-          style={{
-            background: '#ffffff',
-            borderColor: colors2000s.border.light,
-            boxShadow: colors2000s.shadows.insetDark
-          }}
-        >
-          <h3 className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-4 ml-1">
-            Detalles del Turno
-          </h3>
-
-          <div className="grid gap-4">
-            <div className="flex items-center gap-3">
-              <div
-                className="p-2.5 rounded-md text-orange-500"
-                style={{
-                  background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
-                  boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`
-                }}
-              >
-                <Calendar size={18} className="stroke-[2.5px]" />
-              </div>
-              <div>
-                <p className="text-[9px] font-black uppercase tracking-wider text-gray-400">
-                  Fecha del turno
-                </p>
-                <p className="font-black text-gray-700 text-lg leading-tight">
-                  {bookingState.date}
-                </p>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-3">
-              <div
-                className="p-2.5 rounded-md text-blue-500"
-                style={{
-                  background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
-                  boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`
-                }}
-              >
-                <Clock size={18} className="stroke-[2.5px]" />
-              </div>
-              <div>
-                <p className="text-[9px] font-black uppercase tracking-wider text-gray-400">
-                  Hora de inicio
-                </p>
-                <p className="font-black text-gray-700 text-lg leading-tight">
-                  {bookingState.startTime} hs
-                </p>
-              </div>
-            </div>
-
-            {(confirmation.service_price || confirmation.final_price) && (
-              <div
-                className="rounded-md p-4 border"
-                style={{ background: '#f8fafc', borderColor: '#cbd5e1' }}
-              >
-                <p className="text-[10px] font-black uppercase tracking-widest text-slate-600 mb-1">
-                  Resumen comercial
-                </p>
-                <div className="space-y-1 text-sm font-black text-slate-900">
-                  <p>Servicio: {currencyFmt.format(Number(confirmation.service_price || 0))}</p>
-                  {(confirmation.discount_amount || 0) > 0 && (
-                    <p>
-                      Descuento: -{currencyFmt.format(Number(confirmation.discount_amount || 0))}
-                    </p>
-                  )}
-                  <p>
-                    Total final:{' '}
-                    {currencyFmt.format(
-                      Number(confirmation.final_price || confirmation.service_price || 0)
-                    )}
-                  </p>
-                </div>
-              </div>
-            )}
-
-            {confirmation.payment_required && (
-              <div
-                className="rounded-md p-4 border"
-                style={{ background: '#fff7ed', borderColor: '#fed7aa' }}
-              >
-                <p className="text-[10px] font-black uppercase tracking-widest text-amber-700 mb-1">
-                  Pago requerido
-                </p>
-                <p className="text-sm font-black text-amber-900">
-                  {confirmation.payment_amount
-                    ? currencyFmt.format(Number(confirmation.payment_amount))
-                    : 'Importe a confirmar'}
-                </p>
-                <p className="text-xs font-bold text-amber-800 mt-2">
-                  Estado: {confirmation.payment_status || 'pendiente'}
-                </p>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {confirmation.payment_link && (
-          <a
-            href={asSafeHttpsUrl(confirmation.payment_link) ?? '#'}
-            target="_blank"
-            rel="noreferrer"
-            className="w-full mt-6 text-white font-black py-4 rounded-xl transition-all uppercase tracking-widest text-xs border cursor-pointer select-none inline-flex items-center justify-center gap-2"
-            style={{
-              background: `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`,
-              borderColor: colors2000s.orange.accent,
-              boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerOrange}`
-            }}
-          >
-            Ir a pagar
-            <ExternalLink className="w-4 h-4" />
-          </a>
-        )}
-
-        {whatsappPhone && !confirmation.payment_link && (
-          <a
-            href={`https://wa.me/${sanitizePhoneForUrl(whatsappPhone)}?text=${encodeURIComponent(
-              `Hola ${storeName}, reservé el turno ${confirmation.public_id ?? ''} para el ${bookingState.date} a las ${bookingState.startTime}. Quiero coordinar el pago.`
-            )}`}
-            target="_blank"
-            rel="noreferrer"
-            className="w-full mt-6 font-black py-4 rounded-xl transition-all uppercase tracking-widest text-xs border cursor-pointer select-none inline-flex items-center justify-center gap-2"
-            style={{
-              background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
-              borderColor: colors2000s.border.default,
-              color: colors2000s.orange.accent,
-              boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`
-            }}
-          >
-            Coordinar el pago por WhatsApp
-            <ExternalLink className="w-4 h-4" />
-          </a>
-        )}
-
-        {storeSlug && (
-          <a
-            href={`/b/${storeSlug}/mis-turnos`}
-            className="w-full mt-4 font-black py-4 rounded-xl transition-all uppercase tracking-widest text-xs border cursor-pointer select-none inline-flex items-center justify-center gap-2"
-            style={{
-              background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
-              borderColor: colors2000s.border.default,
-              color: colors2000s.text.primary,
-              boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`
-            }}
-          >
-            Quiero cambiar o cancelar mi turno
-          </a>
-        )}
-
-        <button
-          onClick={() => window.location.reload()}
-          className="w-full mt-4 font-black py-4 rounded-xl transition-all uppercase tracking-widest text-xs active:scale-95 border cursor-pointer select-none"
-          style={{
-            background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
-            borderColor: colors2000s.border.default,
-            color: colors2000s.text.primary,
-            boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`
-          }}
-        >
-          Hacer otra reserva
-        </button>
-      </div>
+      <BookingSuccess
+        confirmation={submission.confirmation}
+        bookingState={bookingState}
+        storeSlug={storeSlug}
+        storeName={storeName}
+        whatsappNumber={whatsappNumber}
+      />
     )
   }
 
   return (
-    <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-500">
+    <div className="space-y-6 duration-500">
       <div className="flex items-center gap-4 mb-2">
         <button
           onClick={onBack}
@@ -760,20 +488,32 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
             className="text-2xl font-black uppercase tracking-tight"
             style={{ color: colors2000s.orange.accent }}
           >
-            Tus datos y confirmacion
+            Tus datos y confirmación
           </h2>
           <p className="text-sm font-bold text-gray-500">
-            Completa tus datos, revisa el turno y confirma la reserva.
+            Completá tus datos, revisá el turno y confirmá la reserva.
           </p>
         </div>
       </div>
 
       {renderClientFields()}
 
-      {showOtpSection && renderOtpSection()}
+      {showOtpSection && (
+        <BookingOtpSection
+          phone={client.phone}
+          otpState={otpState}
+          isRequestingOtp={isRequestingOtp}
+          otpResendSeconds={otpResendSeconds}
+          isVerifyingOtp={isVerifyingOtp}
+          onRequestOtp={onRequestOtp}
+          onVerifyOtp={onVerifyOtp}
+          onOtpEmailChange={onOtpEmailChange}
+          onOtpCodeChange={onOtpCodeChange}
+        />
+      )}
       {requiresOtp && !showOtpSection && (
         <p className="text-xs font-bold text-center" style={{ color: colors2000s.text.secondary }}>
-          Completa tu telefono para verificarlo antes de confirmar.
+          Completá tu teléfono para verificarlo antes de confirmar.
         </p>
       )}
 
@@ -786,7 +526,9 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
             <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-1">
               Fecha
             </p>
-            <p className="text-lg font-black text-gray-800">{bookingState.date}</p>
+            <p className="text-lg font-black text-gray-800">
+              {formatArgentinaDateDisplay(bookingState.date ?? '')}
+            </p>
           </div>
           <div
             className="p-4 border"
@@ -806,7 +548,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
           <div className="flex items-center gap-2">
             <Tag className="w-4 h-4 text-orange-500" />
             <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">
-              Codigo promocional
+              Código promocional
             </p>
           </div>
           <div className="grid sm:grid-cols-[1fr_auto] gap-3">
@@ -855,9 +597,9 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
                 {promotionPreview.title}
               </p>
               <div className="mt-2 space-y-1 text-sm font-black text-green-900">
-                <p>Servicio: {currencyFmt.format(Number(promotionPreview.base_amount))}</p>
-                <p>Descuento: -{currencyFmt.format(Number(promotionPreview.discount_amount))}</p>
-                <p>Total final: {currencyFmt.format(Number(promotionPreview.final_amount))}</p>
+                <p>Servicio: {formatCurrency(Number(promotionPreview.base_amount))}</p>
+                <p>Descuento: -{formatCurrency(Number(promotionPreview.discount_amount))}</p>
+                <p>Total final: {formatCurrency(Number(promotionPreview.final_amount))}</p>
               </div>
             </div>
           )}
@@ -865,6 +607,8 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
 
         {errorMessage && (
           <div
+            key={errorMessage}
+            ref={revealOnMount}
             role="alert"
             aria-live="polite"
             className="p-3 text-xs font-bold flex items-center gap-2"
@@ -886,10 +630,10 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
             data-testid="deposit-preview"
           >
             <p className="font-black uppercase tracking-widest text-[10px] mb-1">Seña</p>
-            <p className="text-sm font-black">{currencyFmt.format(depositPreview.amount)}</p>
+            <p className="text-sm font-black">{formatCurrency(depositPreview.amount)}</p>
             {depositPreview.extra_percent > 0 && (
               <p className="font-medium mt-1">
-                {depositBreakdownText(depositPreview, (n) => currencyFmt.format(n))}
+                {depositBreakdownText(depositPreview, (n) => formatCurrency(n))}
               </p>
             )}
           </div>
@@ -905,7 +649,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
             )}
           >
             <p className="font-black uppercase tracking-widest text-[10px] mb-1">
-              Politica de seña de {storeName}
+              Política de seña de {storeName}
             </p>
             <p className="font-medium whitespace-pre-line">{depositPolicy}</p>
           </div>
@@ -930,7 +674,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
               className="underline"
               style={{ color: colors2000s.orange.accent }}
             >
-              terminos y condiciones
+              términos y condiciones
             </a>
             , la{' '}
             <a
@@ -940,9 +684,9 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
               className="underline"
               style={{ color: colors2000s.orange.accent }}
             >
-              politica de privacidad
+              política de privacidad
             </a>
-            {depositPolicy ? ' y la politica de seña de la tienda.' : '.'}
+            {depositPolicy ? ' y la política de seña de la tienda.' : '.'}
           </span>
         </label>
 
@@ -957,15 +701,24 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
             style={
               canSubmit
                 ? {
-                    background: `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`,
+                    background: orangeCtaGradient,
                     borderColor: colors2000s.orange.accent,
                     boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerOrange}`
                   }
                 : buttonStyles2000s.disabled
             }
           >
-            <Phone className="w-4 h-4 inline mr-2" />
-            Reservar y pagar por WhatsApp
+            {owesDepositByWhatsApp ? (
+              <>
+                <Phone className="w-4 h-4 inline mr-2" />
+                Reservar y pagar la seña por WhatsApp
+              </>
+            ) : (
+              <>
+                <CalendarCheck className="w-4 h-4 inline mr-2" />
+                Confirmar reserva
+              </>
+            )}
           </button>
         )}
         {canPayDeposit && (
@@ -979,7 +732,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
             style={
               canSubmit
                 ? {
-                    background: `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`,
+                    background: orangeCtaGradient,
                     borderColor: colors2000s.orange.accent,
                     boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerOrange}`
                   }
@@ -992,7 +745,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
         )}
       </div>
 
-      {submission.phase === 'error' && (
+      {submission.phase === 'error' && submission.slotMayBeTaken && (
         <div
           role="alert"
           aria-live="polite"
@@ -1005,7 +758,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
         >
           <TriangleAlert className="w-4 h-4 flex-shrink-0" />
           El horario podria haberse ocupado mientras completabas el formulario. Volve un paso atras
-          y elegi otro.
+          y elegí otro.
         </div>
       )}
     </div>

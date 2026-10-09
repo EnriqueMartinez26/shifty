@@ -71,8 +71,20 @@ def read_unsubscribe_token(
     return store_id, client_id
 
 
+# Pagina del front que confirma la baja (``Unsubscribe.tsx``, ruta de
+# ``App.tsx``). No toca la API al abrirse: los escaneres de correo abren los
+# links del mail y darian de baja sin que la persona lo pidiera.
+UNSUBSCRIBE_PAGE_PATH = "/baja"
+
+
 def unsubscribe_url(store_id: str, client_id: str) -> str:
-    """Link de baja para el mail: la API publica (``PUBLIC_API_URL``)."""
+    """Link de baja para el mail: la pagina del front (``FRONTEND_URL``), que
+    pide confirmar y recien ahi hace ``POST /public/unsubscribe``.
+
+    2026-10-02: el link iba a ``GET /public/unsubscribe`` de la API; la
+    persona veia el JSON crudo y un escaner que abre los links la daba de
+    baja. El GET sigue para los mails ya enviados (su token vale 90 dias).
+    """
     query = urlencode({"token": make_unsubscribe_token(store_id, client_id)})
-    base = settings.PUBLIC_API_URL.rstrip("/")
-    return f"{base}/public/unsubscribe" + "?" + query
+    base = settings.FRONTEND_URL.rstrip("/")
+    return f"{base}{UNSUBSCRIBE_PAGE_PATH}?{query}"

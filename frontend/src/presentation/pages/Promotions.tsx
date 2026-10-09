@@ -1,9 +1,10 @@
-import React, { useMemo, useState } from 'react'
+import React, { useState } from 'react'
 
 import { Loader2, Save, TicketPercent } from 'lucide-react'
 
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
 import { fromDateTimeInput, toDateTimeInput } from '@shared/utils/argentinaTime'
+import { formatCurrency } from '@shared/utils/currency'
 
 import type { PromotionPayload, PromotionRecord } from '../../application/services/PaymentsService'
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
@@ -12,8 +13,10 @@ import { PageHeader } from '../components/molecules/PageHeader'
 import { QueryErrorNotice } from '../components/molecules/QueryErrorNotice'
 import { SummaryCards } from '../components/molecules/SummaryCards'
 import { ToggleSwitch } from '../components/molecules/ToggleSwitch'
+import { useDocumentTitle } from '../hooks/useDocumentTitle'
 import { useCreatePromotion, usePromotions, useUpdatePromotion } from '../hooks/usePayments'
-import { currencyFmtEsAr as currencyFmt, formatDateTimeEsAr } from '../lib/formatters'
+import { useStoreWriteAccess } from '../hooks/useStoreWriteAccess'
+import { formatDateTimeEsAr } from '../lib/formatters'
 import {
   create2000sInputStyle,
   create2000sListCardStyle,
@@ -34,11 +37,16 @@ const createEmptyPromotionForm = () => ({
 })
 
 const PromotionsPage: React.FC = () => {
+  useDocumentTitle('Promociones · Shifty')
   const promotionsQuery = usePromotions(true, true)
   const createPromotion = useCreatePromotion()
   const updatePromotion = useUpdatePromotion()
   // Evita el doble alta/actualizacion si se clickea mientras la mutacion vuela.
   const isSaving = createPromotion.isPending || updatePromotion.isPending
+  // Tienda suspendida (FF-15): POST /promotions/ y PATCH /promotions/{id}
+  // (crear, actualizar, pausar y reactivar) responden 402.
+  const writeAccess = useStoreWriteAccess()
+  const readOnlyTitle = writeAccess.readOnly ? writeAccess.reason : undefined
 
   const [promotionForm, setPromotionForm] = useState(createEmptyPromotionForm())
   const [editingPromotionId, setEditingPromotionId] = useState<string | null>(null)
@@ -47,36 +55,39 @@ const PromotionsPage: React.FC = () => {
   const cardStyle = create2000sPanelStyle()
   const inputStyle = create2000sInputStyle()
 
-  const promotionCards = useMemo(() => {
-    const promotions = promotionsQuery.data ?? []
-    return [
-      { label: 'Activas', value: promotions.filter((promotion) => promotion.is_active).length },
-      { label: 'Totales', value: promotions.length },
-      {
-        label: 'Con límite',
-        value: promotions.filter((promotion) => promotion.max_uses !== null).length
-      }
-    ]
-  }, [promotionsQuery.data])
+  const promotions = promotionsQuery.data ?? []
+  const promotionCards = [
+    { label: 'Activas', value: promotions.filter((promotion) => promotion.is_active).length },
+    { label: 'Totales', value: promotions.length },
+    {
+      label: 'Con límite',
+      value: promotions.filter((promotion) => promotion.max_uses !== null).length
+    }
+  ]
 
   const handleSavePromotion = async () => {
     if (isSaving) return
     try {
+      // Al editar, un opcional vaciado viaja en null: axios omite undefined y
+      // el PATCH (exclude_unset) dejaba el valor viejo guardado (2026-09-30).
+      // En el alta se sigue omitiendo. code, title, promotion_type y value
+      // nunca van en null.
+      const vacio = editingPromotionId ? null : undefined
       const payload: PromotionPayload = {
         code: promotionForm.code.trim().toUpperCase(),
         title: promotionForm.title.trim(),
-        description: promotionForm.description.trim() || undefined,
+        description: promotionForm.description.trim() || vacio,
         promotion_type: promotionForm.promotion_type,
         value: Number(promotionForm.value),
         min_service_amount: promotionForm.min_service_amount
           ? Number(promotionForm.min_service_amount)
-          : undefined,
-        max_uses: promotionForm.max_uses ? Number(promotionForm.max_uses) : undefined,
+          : vacio,
+        max_uses: promotionForm.max_uses ? Number(promotionForm.max_uses) : vacio,
         // El input entrega una hora de pared argentina sin offset. Mandarla
         // cruda dejaba que el backend la leyera como UTC: la promo vencia tres
         // horas antes de lo que el dueno habia tipeado (2026-09-20).
-        valid_from: fromDateTimeInput(promotionForm.valid_from) ?? undefined,
-        valid_until: fromDateTimeInput(promotionForm.valid_until) ?? undefined,
+        valid_from: fromDateTimeInput(promotionForm.valid_from) ?? vacio,
+        valid_until: fromDateTimeInput(promotionForm.valid_until) ?? vacio,
         is_active: promotionForm.is_active
       }
 
@@ -128,10 +139,10 @@ const PromotionsPage: React.FC = () => {
   }
 
   return (
-    <div className="space-y-8 animate-in fade-in duration-500">
+    <div className="space-y-8 duration-500">
       <PageHeader
         title="Promociones"
-        description="Códigos y descuentos del booking público en una pantalla separada de pagos."
+        description="Códigos y descuentos para la reserva pública."
         isLoading={promotionsQuery.isLoading}
         loadingText="Cargando promociones..."
       />
@@ -164,7 +175,8 @@ const PromotionsPage: React.FC = () => {
             </div>
             <button
               type="button"
-              disabled={isSaving}
+              disabled={isSaving || writeAccess.readOnly}
+              title={readOnlyTitle}
               onClick={() => {
                 void handleSavePromotion()
               }}
@@ -365,7 +377,7 @@ const PromotionsPage: React.FC = () => {
                 Activa
               </p>
               <p className="text-xs font-bold" style={{ color: colors2000s.text.secondary }}>
-                La promo queda visible para el booking público.
+                La promo queda visible en la reserva pública.
               </p>
             </div>
             <ToggleSwitch
@@ -428,7 +440,7 @@ const PromotionsPage: React.FC = () => {
                       {promotion.code} ·{' '}
                       {promotion.promotion_type === 'percent'
                         ? `${promotion.value}%`
-                        : currencyFmt.format(Number(promotion.value))}
+                        : formatCurrency(Number(promotion.value))}
                     </p>
                     {promotion.description && (
                       <p
@@ -461,7 +473,7 @@ const PromotionsPage: React.FC = () => {
                   <span>
                     Mínimo:{' '}
                     {promotion.min_service_amount
-                      ? currencyFmt.format(Number(promotion.min_service_amount))
+                      ? formatCurrency(Number(promotion.min_service_amount))
                       : 'sin mínimo'}
                   </span>
                   <span>
@@ -486,7 +498,9 @@ const PromotionsPage: React.FC = () => {
                     onClick={() => {
                       void handleTogglePromotion(promotion)
                     }}
-                    className="px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest"
+                    disabled={writeAccess.readOnly}
+                    title={readOnlyTitle}
+                    className="px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest disabled:opacity-50"
                     style={
                       promotion.is_active ? buttonStyles2000s.selected : buttonStyles2000s.default
                     }

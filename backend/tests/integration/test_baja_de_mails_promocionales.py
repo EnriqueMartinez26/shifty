@@ -16,6 +16,7 @@ era de la tienda. Ahora:
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from httpx import AsyncClient
@@ -23,11 +24,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import modules.notifications.tasks as tasks
+from core.config import settings
 from modules.appointments.model import Appointment
 from modules.legal.model import MarketingOptOut
 from modules.legal.unsubscribe import (
     make_unsubscribe_token,
     read_unsubscribe_token,
+    unsubscribe_url,
 )
 from modules.payments.jobs import process_outbox_batch
 from tests.integration.test_feature_flags_finance_and_public_privacy import (
@@ -174,14 +177,29 @@ async def test_el_mail_de_volver_trae_el_link_de_baja_que_funciona(
         c for _t, a, c in buzon.enviados if a.startswith("Gracias por tu visita")
     ]
     assert "darte de baja" in cuerpo
-    link = next(
-        palabra for palabra in cuerpo.split() if "/public/unsubscribe" in palabra
-    )
-    res = await client.get(
-        "/public/unsubscribe", params={"token": link.split("token=", 1)[1]}
-    )
+    # 2026-10-02, QA en navegador: el link iba a GET /public/unsubscribe de la
+    # API y la persona veia el JSON crudo; ademas un escaner de correo que
+    # abre los links daba de baja sin que nadie lo pidiera. Ahora abre la
+    # pagina del front, que pide confirmar y hace el POST.
+    link = next(palabra for palabra in cuerpo.split() if "/baja?token=" in palabra)
+    assert link.startswith(f"{settings.FRONTEND_URL.rstrip('/')}/baja?token=")
+    assert "/public/unsubscribe" not in cuerpo
+    [token_del_link] = parse_qs(urlsplit(link).query)["token"]
+    res = await client.post("/public/unsubscribe", json={"token": token_del_link})
     assert res.status_code == 200, res.text
     assert len(await _bajas(test_session)) == 1
+
+
+def test_el_link_de_baja_abre_la_pagina_del_front() -> None:
+    """El link del mail es ``{FRONTEND_URL}/baja?token=...``, no la API: la
+    pagina pide confirmar antes de dar de baja (2026-10-02)."""
+    link = urlsplit(unsubscribe_url("tienda-1", "cliente-1"))
+    front = urlsplit(settings.FRONTEND_URL)
+
+    assert (link.scheme, link.netloc) == (front.scheme, front.netloc)
+    assert link.path == front.path.rstrip("/") + "/baja"
+    [token] = parse_qs(link.query)["token"]
+    assert read_unsubscribe_token(token) == ("tienda-1", "cliente-1")
 
 
 @pytest.mark.parametrize(

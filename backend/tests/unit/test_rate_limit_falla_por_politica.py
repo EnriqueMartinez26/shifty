@@ -233,3 +233,49 @@ def test_el_aviso_a_sentry_se_acota_a_uno_por_intervalo(
 
     assert len(migas) == 3
     assert eventos == ["rate_limit_fail_open"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "action",
+    ["public:otp:mail-destination:hour", "public:otp:mail-destination:day"],
+)
+async def test_la_cuota_por_sujeto_del_otp_falla_cerrada(
+    redis_caido: list[str], action: str
+) -> None:
+    """El tope de mails por buzon del OTP (2026-10-03) cierra como el OTP."""
+    with pytest.raises(AppException) as exc_info:
+        await rate_limit.subject_quota_allows(
+            action, "victima@example.com", limit=5, window_seconds=3600
+        )
+
+    assert exc_info.value.http_status == 503
+    assert exc_info.value.error_code == "RATE_LIMIT_UNAVAILABLE"
+    assert redis_caido == []
+
+
+@pytest.mark.asyncio
+async def test_la_cuota_por_sujeto_sin_el_flag_deja_pasar_con_aviso(
+    redis_caido: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "RATE_LIMIT_FAIL_CLOSED", False)
+
+    permitido = await rate_limit.subject_quota_allows(
+        "public:otp:mail-destination:hour",
+        "victima@example.com",
+        limit=5,
+        window_seconds=3600,
+    )
+
+    assert permitido is True
+    assert redis_caido == ["otp"]
+
+
+def test_las_acciones_del_tope_por_buzon_del_otp_tienen_politica_otp() -> None:
+    import modules.otp.service as otp_service
+
+    for accion in (
+        otp_service.DESTINATION_HOUR_ACTION,
+        otp_service.DESTINATION_DAY_ACTION,
+    ):
+        assert rate_limit.ACTION_POLICIES.get(accion) == "otp", accion
