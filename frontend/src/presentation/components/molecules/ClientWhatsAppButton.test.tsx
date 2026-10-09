@@ -39,4 +39,30 @@ describe('ClientWhatsAppButton', () => {
     )
     expect(sinTelefono.container.innerHTML).toBe('')
   })
+
+  // 2026-10-02, QA en navegador: el telefono solo se limpiaba de simbolos y un
+  // numero local quedaba como uno de otro pais.
+  it('un telefono local argentino va con 549 y uno ilegible no arma link', () => {
+    render(<ClientWhatsAppButton phone="011 15-5555-0031" status="confirmed" message={message} />)
+    const href = screen.getByRole('link', { name: 'Recordar por WhatsApp' }).getAttribute('href')
+    expect(href?.startsWith('https://wa.me/5491155550031?text=')).toBe(true)
+
+    const ilegible = render(
+      <ClientWhatsAppButton phone="pedir al local" status="confirmed" message={message} />
+    )
+    expect(ilegible.container.innerHTML).toBe('')
+  })
+
+  // QA movil 2026-10-08: el boton compacto media 30x22.
+  it.each([false, true])('es un blanco tactil de 40x40 (compacto: %s)', (compact) => {
+    render(
+      <ClientWhatsAppButton
+        phone="+5491155550031"
+        status="confirmed"
+        message={message}
+        compact={compact}
+      />
+    )
+    expect(screen.getByRole('link')).toHaveClass('min-h-10', 'min-w-10')
+  })
 })

@@ -15,7 +15,7 @@ describe('depositBreakdownText', () => {
         },
         pesos
       )
-    ).toBe('Incluye $1000 de seña base mas $500 por ser tu primera visita (10% del precio).')
+    ).toBe('Incluye $1000 de seña base más $500 por ser tu primera visita (10% del precio).')
   })
 
   it('cuando la seña se topea al precio, el recargo es el que queda y lo dice', () => {
@@ -32,7 +32,7 @@ describe('depositBreakdownText', () => {
         pesos
       )
     ).toBe(
-      'Incluye $4500 de seña base mas $500 por ausencias anteriores (la seña se topea al precio del servicio).'
+      'Incluye $4500 de seña base más $500 por ausencias anteriores (la seña se topea al precio del servicio).'
     )
   })
 })
@@ -42,10 +42,10 @@ describe('depositReasonsText', () => {
     expect(depositReasonsText(['base'])).toBe('')
     expect(depositReasonsText(['base', 'new_client'])).toBe('ser tu primera visita')
     expect(depositReasonsText(['base', 'far_notice', 'absences'])).toBe(
-      'reservar con mucha antelacion y ausencias anteriores'
+      'reservar con mucha antelación y ausencias anteriores'
     )
     expect(depositReasonsText(['base', 'far_notice', 'new_client', 'absences'])).toBe(
-      'reservar con mucha antelacion, ser tu primera visita y ausencias anteriores'
+      'reservar con mucha antelación, ser tu primera visita y ausencias anteriores'
     )
   })
 })

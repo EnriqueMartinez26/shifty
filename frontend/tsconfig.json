@@ -12,6 +12,7 @@
     "verbatimModuleSyntax": false,
     "moduleDetection": "force",
     "noEmit": true,
+    "resolveJsonModule": true,
 
     /* Architecture Aliases */
     "paths": {
@@ -30,6 +31,9 @@
     "noUnusedParameters": true,
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true,
+    "noImplicitReturns": true,
+    "allowUnreachableCode": false,
+    "noUncheckedSideEffectImports": true,
     "jsx": "react-jsx"
   },
   "include": ["src"]

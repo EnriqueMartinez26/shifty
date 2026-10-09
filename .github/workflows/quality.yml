@@ -180,7 +180,13 @@ jobs:
     # commiteadas por error. Antes CI solo corria `npm audit` (dependencias);
     # esto cubre el otro flanco de la cadena de suministro. Falla el pipeline
     # si encuentra un secreto de alta confianza.
+    # Permisos explicitos: con el repo privado el token por defecto no lee
+    # los commits del PR y gitleaks-action cae en 403 "Resource not
+    # accessible by integration" (2026-10-08).
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
       - name: Checkout
         uses: actions/checkout@v7.0.0

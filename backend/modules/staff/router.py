@@ -17,6 +17,7 @@ from core.roles import assert_can_change_access
 from core.validation import PUBLIC_ID_PATTERN
 from modules.auth.dependencies import get_current_admin
 from modules.auth.dependencies import get_current_staff
+from modules.auth.service import normalize_email
 from modules.staff.mappers import to_schedule_response, to_staff_response
 from modules.staff.model import Staff
 from modules.staff.repository import StaffRepository
@@ -27,8 +28,10 @@ from modules.staff.schemas import (
     ScheduleCreate,
     ScheduleUpdate,
     ScheduleResponse,
+    ScheduleWeekReplace,
     StaffCreate,
     StaffResponse,
+    StaffSelfCreate,
     StaffUpdate,
 )
 from modules.users.model import User
@@ -44,9 +47,11 @@ async def create_staff(
     data: StaffCreate,
     admin: User = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
+    availability_cache: Redis = Depends(get_availability_cache),
 ) -> StaffResponse:
     repo = StaffRepository(db)
-    service = StaffService(db)
+    # Con cache: el alta invalida la agenda (sin franjas, horario del local).
+    service = StaffService(db, availability_cache)
     try:
         created = await service.create(
             data.model_dump(exclude={"service_ids"}), admin.store_id, data.service_ids
@@ -65,6 +70,42 @@ async def create_staff(
         return to_staff_response(loaded)
     except ValueError as exc:
         raise ValidationException(str(exc))
+
+
+@router.post("/me", response_model=StaffResponse, status_code=status.HTTP_201_CREATED)
+async def add_myself_as_staff(
+    data: StaffSelfCreate,
+    admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+    availability_cache: Redis = Depends(get_availability_cache),
+) -> StaffResponse:
+    """El admin que llama se agrega como profesional ("Agregarme como profesional").
+
+    Decision de Mateo (2026-10-08): el dueno tiene que poder figurar y recibir
+    reservas con SU nombre. Por ``POST /staff/`` no podia: crea un usuario de
+    login y su email ya es de su cuenta (unico global, regla 16). La ficha usa
+    el id de su cuenta; no cambia su rol ni crea otra cuenta, y solo sirve
+    para uno mismo (nunca vuelve reservable a otro admin). Ya activa: 409
+    ``STAFF_SELF_ALREADY_EXISTS``; dada de baja: se reactiva.
+    """
+    try:
+        staff = await StaffService(db, availability_cache).add_self(
+            admin,
+            display_name=data.display_name,
+            service_public_ids=data.service_ids,
+        )
+    except ValueError as exc:
+        raise ValidationException(str(exc))
+    loaded = await StaffRepository(db).get_by_id(
+        staff.public_id, admin.store_id, include_global_admins=True
+    )
+    if not loaded:
+        raise AppException(
+            message="No se pudo recargar el staff creado",
+            http_status=500,
+            error_code="STAFF_RELOAD_FAILED",
+        )
+    return to_staff_response(loaded)
 
 
 @router.get("/", response_model=list[StaffResponse])
@@ -119,6 +160,33 @@ async def add_staff_schedule(
     return to_schedule_response(schedule)
 
 
+@router.put("/{public_id}/schedules", response_model=list[ScheduleResponse])
+async def replace_staff_schedules(
+    public_id: PublicIdPath,
+    data: ScheduleWeekReplace,
+    admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+    availability_cache: Redis = Depends(get_availability_cache),
+) -> list[ScheduleResponse]:
+    """Reemplaza la semana entera del profesional (lista vacia = horario del local).
+
+    Es lo que usa el editor de horarios del panel: una sola transaccion, sin
+    estados intermedios a la vista del portal. Superposiciones del mismo dia:
+    422 ``SCHEDULE_OVERLAP`` con el dia en ``detail``, sin tocar lo guardado.
+    """
+    repo = StaffRepository(db)
+    staff = await repo.get_by_id(
+        public_id, admin.store_id, include_global_admins=admin.is_global_admin
+    )
+    if not staff:
+        raise StaffNotFoundException(identifier=public_id)
+
+    guardadas = await StaffService(db, availability_cache).replace_schedules(
+        staff, [franja.model_dump() for franja in data.schedules]
+    )
+    return [to_schedule_response(franja) for franja in guardadas]
+
+
 @router.patch("/{public_id}/schedules/{schedule_id}", response_model=ScheduleResponse)
 async def update_staff_schedule(
     public_id: PublicIdPath,
@@ -136,16 +204,14 @@ async def update_staff_schedule(
     if not staff:
         raise StaffNotFoundException(identifier=public_id)
 
-    schedule = await repo.get_schedule(staff, schedule_id)
-    if not schedule:
-        raise ResourceNotFoundException(resource="Horario", identifier=schedule_id)
-
     try:
         actualizado = await StaffService(db, availability_cache).update_schedule(
-            staff, schedule, data.model_dump(exclude_unset=True)
+            staff, schedule_id, data.model_dump(exclude_unset=True)
         )
     except ValueError as exc:
         raise ValidationException(str(exc))
+    if not actualizado:
+        raise ResourceNotFoundException(resource="Horario", identifier=schedule_id)
     return to_schedule_response(actualizado)
 
 
@@ -171,11 +237,11 @@ async def delete_staff_schedule(
     if not staff:
         raise StaffNotFoundException(identifier=public_id)
 
-    schedule = await repo.get_schedule(staff, schedule_id)
-    if not schedule:
+    eliminada = await StaffService(db, availability_cache).delete_schedule(
+        staff, schedule_id
+    )
+    if not eliminada:
         raise ResourceNotFoundException(resource="Horario", identifier=schedule_id)
-
-    await StaffService(db, availability_cache).delete_schedule(schedule)
 
 
 @router.patch("/{public_id}/services")
@@ -243,6 +309,22 @@ async def update_staff(
     )
     if not staff:
         raise StaffNotFoundException(identifier=public_id)
+    # Revision de #133: con su ficha de profesional, el admin cambiaba el email
+    # de LOGIN de su propia cuenta sin la contrasena (update_profile sincroniza
+    # user.email y assert_can_change_access deja pasar a uno mismo); con una
+    # sesion robada, el "olvide mi contrasena" le llegaba al atacante. Mismo
+    # criterio que SELF_PASSWORD_CHANGE_DENIED en /users/. Reenviar el mismo
+    # email (otra caja o espacios) sigue valiendo: el formulario lo manda.
+    if (
+        staff.id == admin.id
+        and data.email is not None
+        and normalize_email(data.email) != admin.email
+    ):
+        raise AppException(
+            message="Tu email de acceso no se cambia desde Personal",
+            http_status=400,
+            error_code="SELF_EMAIL_CHANGE_DENIED",
+        )
     await _guardar_cuenta_vinculada(
         repo, staff, admin, public_id, email=data.email, is_active=data.is_active
     )
@@ -250,6 +332,9 @@ async def update_staff(
     try:
         updated = await StaffService(db, availability_cache).update_profile(
             staff,
+            # Editarse a uno mismo (el dueno que atiende): pausar la ficha no
+            # le desactiva la cuenta, igual que /users/ niega la autobaja.
+            keep_login=staff.id == admin.id,
             first_name=data.first_name,
             last_name=data.last_name,
             email=data.email,
@@ -285,7 +370,11 @@ async def delete_staff(
     )
     if not staff:
         raise StaffNotFoundException(identifier=public_id)
-    # La baja desactiva la cuenta de login vinculada.
+    # La baja desactiva la cuenta de login vinculada, salvo la propia: quitarse
+    # de la agenda no es darse de baja (/users/ responde SELF_DEACTIVATION_DENIED
+    # y por aca el dueno que tambien atiende se dejaba afuera del panel).
     await _guardar_cuenta_vinculada(repo, staff, admin, public_id, is_active=False)
-    await StaffService(db, availability_cache).soft_delete(staff)
+    await StaffService(db, availability_cache).soft_delete(
+        staff, keep_login=staff.id == admin.id
+    )
     return Response(status_code=status.HTTP_204_NO_CONTENT)

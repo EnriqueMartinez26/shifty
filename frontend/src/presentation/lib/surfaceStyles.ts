@@ -1,6 +1,6 @@
 import type { CSSProperties } from 'react'
 
-import { colors2000s } from '../../theme/colors'
+import { colors2000s, orangeCtaGradient } from '../../theme/colors'
 
 // Superficies 2000s: fondo + borde + sombra + radio, un solo lugar.
 //
@@ -21,7 +21,7 @@ import { colors2000s } from '../../theme/colors'
 
 const SURFACE_BACKGROUNDS = {
   brand: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
-  orange: `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`,
+  orange: orangeCtaGradient,
   plain: '#ffffff'
 } as const
 
@@ -101,6 +101,16 @@ export const create2000sModalInputStyle = (): CSSProperties => ({
 export const createBookingInputStyle = (): CSSProperties => ({
   ...create2000sInputStyle(),
   borderRadius: 6
+})
+
+// Campos del cliente y del codigo OTP en la confirmacion de la reserva: los
+// comparten BookingStepConfirmation y BookingOtpSection (F11a-06).
+export const createBookingClientInputStyle = (): CSSProperties => ({
+  ...createBookingInputStyle(),
+  borderRadius: 6,
+  fontFamily: 'inherit',
+  outline: 'none',
+  transition: 'all 0.15s'
 })
 
 export const createSettingsInputStyle = create2000sInputStyle

@@ -1,0 +1,377 @@
+import React from 'react'
+
+import { render, screen } from '@testing-library/react'
+
+import type { BookingConfirmation } from '@application/services/PublicBookingService'
+
+import { BookingSuccess } from './BookingSuccess'
+import type { BookingWizardState } from './types'
+
+const estado = (patch: Partial<BookingWizardState> = {}): BookingWizardState => ({
+  serviceId: 'svc-1',
+  requestedStaffId: null,
+  assignedStaffId: 'st-1',
+  date: '2026-09-25',
+  startTime: '09:00',
+  startsAt: '2026-09-25T12:00:00+00:00',
+  client: { name: 'Lucia', email: '', phone: '1155550101', notes: '', customFields: {} },
+  promotionCode: '',
+  ...patch
+})
+
+const confirmacion = (patch: Partial<BookingConfirmation> = {}): BookingConfirmation => ({
+  public_id: 'apt-1',
+  service_id: 'svc-1',
+  service_name: 'Corte',
+  staff_id: 'st-1',
+  staff_name: 'Pro',
+  starts_at: '2026-09-25T12:00:00+00:00',
+  ends_at: '2026-09-25T12:30:00+00:00',
+  status: 'confirmed',
+  client_name: 'Lucia',
+  client_phone: '1155550101',
+  payment_required: false,
+  ...patch
+})
+
+type Props = React.ComponentProps<typeof BookingSuccess>
+
+const props = (patch: Partial<Props> = {}): Props => ({
+  confirmation: confirmacion(),
+  bookingState: estado(),
+  storeSlug: 'tienda',
+  storeName: 'Tienda',
+  whatsappNumber: null,
+  ...patch
+})
+
+const IR_A_PAGAR = 'Ir a pagar'
+const COORDINAR = 'Coordinar el pago por WhatsApp'
+const MIS_TURNOS = 'Quiero cambiar o cancelar mi turno'
+
+describe('BookingSuccess', () => {
+  describe('titulo segun el estado del turno', () => {
+    it('con pago pendiente anuncia la reserva pendiente de pago', () => {
+      render(
+        <BookingSuccess
+          {...props({
+            confirmation: confirmacion({
+              status: 'pending_payment',
+              payment_required: true,
+              payment_link: 'https://www.mercadopago.com.ar/checkout/v1/redirect?pref_id=1'
+            })
+          })}
+        />
+      )
+
+      expect(screen.getByText('Reserva Pendiente de Pago')).toBeInTheDocument()
+      expect(
+        screen.getByText('Tu turno se confirma cuando el cobro quede aprobado.')
+      ).toBeInTheDocument()
+    })
+
+    it('pendiente de revision anuncia la reserva registrada', () => {
+      render(<BookingSuccess {...props({ confirmation: confirmacion({ status: 'pending' }) })} />)
+
+      expect(screen.getByText('Reserva Registrada')).toBeInTheDocument()
+      expect(
+        screen.getByText('Tu solicitud ya fue enviada y queda pendiente de confirmación.')
+      ).toBeInTheDocument()
+    })
+
+    it('confirmada anuncia la reserva confirmada con el email del cliente', () => {
+      render(
+        <BookingSuccess
+          {...props({
+            bookingState: estado({
+              client: {
+                name: 'Lucia',
+                email: 'lucia@example.com',
+                phone: '1155550101',
+                notes: '',
+                customFields: {}
+              }
+            })
+          })}
+        />
+      )
+
+      expect(screen.getByText('Reserva Confirmada')).toBeInTheDocument()
+      expect(screen.getByText('Te enviamos los detalles a lucia@example.com')).toBeInTheDocument()
+    })
+
+    it('muestra la fecha del turno como dd/MM/yyyy, no en ISO', () => {
+      // 2026-10-02, QA en navegador: el resumen mostraba "2026-09-25".
+      render(<BookingSuccess {...props()} />)
+
+      expect(screen.getByText('25/09/2026')).toBeInTheDocument()
+      expect(screen.queryByText('2026-09-25')).not.toBeInTheDocument()
+    })
+  })
+
+  describe('pago', () => {
+    it('con link de pago ofrece ir a pagar y no coordinar por WhatsApp', () => {
+      render(
+        <BookingSuccess
+          {...props({
+            whatsappNumber: '+54 9 11 5555-0000',
+            confirmation: confirmacion({
+              status: 'pending_payment',
+              payment_required: true,
+              payment_link: 'https://www.mercadopago.com.ar/checkout/v1/redirect?pref_id=1'
+            })
+          })}
+        />
+      )
+
+      expect(screen.getByRole('link', { name: IR_A_PAGAR })).toHaveAttribute(
+        'href',
+        'https://www.mercadopago.com.ar/checkout/v1/redirect?pref_id=1'
+      )
+      expect(screen.queryByRole('link', { name: COORDINAR })).not.toBeInTheDocument()
+    })
+
+    // 2026-10-02, QA en navegador: el WhatsApp de la tienda es texto libre.
+    it('con un WhatsApp de la tienda que no se puede leer no ofrece coordinar', () => {
+      render(<BookingSuccess {...props({ whatsappNumber: 'consultar en el local' })} />)
+
+      expect(screen.queryByText(COORDINAR)).not.toBeInTheDocument()
+    })
+
+    it('sin link de pago ofrece coordinar por WhatsApp con el numero de la tienda', () => {
+      render(<BookingSuccess {...props({ whatsappNumber: '+54 9 11 5555-0000' })} />)
+
+      expect(screen.queryByRole('link', { name: IR_A_PAGAR })).not.toBeInTheDocument()
+      expect(screen.getByRole('link', { name: COORDINAR }).getAttribute('href')).toMatch(
+        /^https:\/\/wa\.me\/5491155550000\?text=/
+      )
+    })
+
+    // Decision de Mateo (2026-10-03): una sena obligatoria se paga por Mercado
+    // Pago o por WhatsApp. QA 2026-10-02 (barberia-sentinel): la pantalla de
+    // exito no mencionaba la sena cuando se pagaba por fuera.
+    it('con sena por WhatsApp muestra el importe y el boton para coordinar el pago', () => {
+      render(
+        <BookingSuccess
+          {...props({
+            whatsappNumber: '11 5555 0303',
+            confirmation: confirmacion({
+              status: 'pending_payment',
+              payment_required: true,
+              deposit_channel: 'whatsapp',
+              deposit_deadline: '2026-10-10T18:00:00+00:00',
+              payment_link: null,
+              payment_amount: 3000,
+              payment_status: 'pending'
+            })
+          })}
+        />
+      )
+
+      expect(screen.getByText('Reserva Pendiente de Pago')).toBeInTheDocument()
+      expect(
+        screen.getByText(
+          'Pagá la seña por WhatsApp: tu turno se confirma cuando Tienda reciba el pago.'
+        )
+      ).toBeInTheDocument()
+      expect(screen.getByText('Seña a pagar por WhatsApp')).toBeInTheDocument()
+      expect(screen.getByText('$ 3.000')).toBeInTheDocument()
+      // Decision de Mateo (2026-10-03): el cliente ve el plazo exacto, en hora
+      // argentina (18:00 UTC son las 15:00).
+      expect(
+        screen.getByText(
+          'Tenés hasta el sábado 10/10 a las 15:00 para pagar la seña por WhatsApp. Si no, el turno se libera.'
+        )
+      ).toBeInTheDocument()
+      expect(screen.getByText('Estado: pendiente')).toBeInTheDocument()
+      const boton = screen.getByRole('link', { name: COORDINAR })
+      const href = boton.getAttribute('href') ?? ''
+      expect(href).toMatch(/^https:\/\/wa\.me\/5491155550303\?text=/)
+      // El mensaje ya le dice a la tienda que es para pagar la sena y cuanto
+      // (Intl separa "$" del importe con un espacio duro).
+      const texto = decodeURIComponent(href.split('text=')[1] ?? '').replace(/\s/g, ' ')
+      expect(texto).toContain('Quiero pagar la seña de $ 3.000.')
+      expect(screen.queryByRole('link', { name: IR_A_PAGAR })).not.toBeInTheDocument()
+    })
+
+    it('con sena por WhatsApp y sin numero que se pueda leer pide hablar con la tienda', () => {
+      render(
+        <BookingSuccess
+          {...props({
+            whatsappNumber: 'consultar en el local',
+            confirmation: confirmacion({
+              status: 'pending_payment',
+              payment_required: true,
+              deposit_channel: 'whatsapp',
+              payment_amount: 3000
+            })
+          })}
+        />
+      )
+
+      expect(screen.queryByRole('link', { name: COORDINAR })).not.toBeInTheDocument()
+      expect(screen.getByText('Comunicate con Tienda para pagar la seña.')).toBeInTheDocument()
+    })
+
+    it('sin link y sin WhatsApp de la tienda no ofrece coordinar', () => {
+      render(<BookingSuccess {...props()} />)
+
+      expect(screen.queryByRole('link', { name: COORDINAR })).not.toBeInTheDocument()
+    })
+  })
+
+  describe('resumen de precio y pago requerido', () => {
+    // 2026-10-02: el resumen comercial y el bloque de pago requerido no tenian
+    // test; un cambio en los importes o en la condicion de mostrarlos pasaba
+    // sin que nada fallara.
+    it('muestra servicio, descuento y total con sus importes', () => {
+      render(
+        <BookingSuccess
+          {...props({
+            confirmation: confirmacion({
+              service_price: 12000,
+              discount_amount: 1500,
+              final_price: 10500
+            })
+          })}
+        />
+      )
+
+      expect(screen.getByText('Resumen comercial')).toBeInTheDocument()
+      expect(screen.getByText('Servicio: $ 12.000')).toBeInTheDocument()
+      expect(screen.getByText('Descuento: -$ 1.500')).toBeInTheDocument()
+      expect(screen.getByText('Total final: $ 10.500')).toBeInTheDocument()
+    })
+
+    it('sin descuento no muestra la linea y el total cae al precio del servicio', () => {
+      render(
+        <BookingSuccess
+          {...props({
+            confirmation: confirmacion({ service_price: 12000, discount_amount: 0 })
+          })}
+        />
+      )
+
+      expect(screen.getByText('Servicio: $ 12.000')).toBeInTheDocument()
+      expect(screen.queryByText(/Descuento:/)).not.toBeInTheDocument()
+      expect(screen.getByText('Total final: $ 12.000')).toBeInTheDocument()
+    })
+
+    it('sin precio no muestra el resumen comercial', () => {
+      render(<BookingSuccess {...props()} />)
+
+      expect(screen.queryByText('Resumen comercial')).not.toBeInTheDocument()
+    })
+
+    it('con pago requerido muestra la sena a pagar y su estado', () => {
+      render(
+        <BookingSuccess
+          {...props({
+            confirmation: confirmacion({
+              status: 'pending_payment',
+              payment_required: true,
+              deposit_channel: 'whatsapp',
+              payment_amount: 3150,
+              payment_status: 'pending'
+            })
+          })}
+        />
+      )
+
+      expect(screen.getByText('Seña a pagar por WhatsApp')).toBeInTheDocument()
+      expect(screen.getByText('$ 3.150')).toBeInTheDocument()
+      // El estado en castellano: antes decia "Estado: pending".
+      expect(screen.getByText('Estado: pendiente')).toBeInTheDocument()
+      // Sin plazo en la respuesta no se inventa uno.
+      expect(screen.queryByText(/Tenés hasta/)).not.toBeInTheDocument()
+    })
+
+    it('con link de pago muestra el pago requerido de Mercado Pago', () => {
+      render(
+        <BookingSuccess
+          {...props({
+            confirmation: confirmacion({
+              status: 'pending_payment',
+              payment_required: true,
+              deposit_channel: 'mercadopago',
+              deposit_deadline: '2026-10-10T18:00:00+00:00',
+              payment_amount: 3150,
+              payment_status: 'approved',
+              payment_link: 'https://www.mercadopago.com.ar/checkout/v1/redirect?pref_id=1'
+            })
+          })}
+        />
+      )
+
+      expect(screen.getByText('Pago requerido')).toBeInTheDocument()
+      expect(screen.queryByText('Seña a pagar por WhatsApp')).not.toBeInTheDocument()
+      // El plazo de WhatsApp no aplica al checkout de MP.
+      expect(screen.queryByText(/Tenés hasta/)).not.toBeInTheDocument()
+      expect(screen.getByText('Estado: aprobado')).toBeInTheDocument()
+    })
+
+    it('el canal sale de la respuesta: sin link y sin canal no es una sena por WhatsApp', () => {
+      // Revision 4R de la PR #108 (R2): antes "pago requerido sin link" se
+      // leia como sena por WhatsApp.
+      render(
+        <BookingSuccess
+          {...props({
+            confirmation: confirmacion({
+              status: 'pending_payment',
+              payment_required: true,
+              deposit_channel: null,
+              payment_amount: 3150
+            })
+          })}
+        />
+      )
+
+      expect(screen.getByText('Pago requerido')).toBeInTheDocument()
+      expect(screen.queryByText('Seña a pagar por WhatsApp')).not.toBeInTheDocument()
+    })
+
+    it('con pago requerido sin importe ni estado avisa que el importe se confirma', () => {
+      render(
+        <BookingSuccess
+          {...props({
+            confirmation: confirmacion({ status: 'pending_payment', payment_required: true })
+          })}
+        />
+      )
+
+      expect(screen.getByText('Importe a confirmar')).toBeInTheDocument()
+      expect(screen.getByText('Estado: pendiente')).toBeInTheDocument()
+    })
+
+    it('sin pago requerido no muestra el bloque aunque traiga importe', () => {
+      render(
+        <BookingSuccess
+          {...props({
+            confirmation: confirmacion({ payment_required: false, payment_amount: 3150 })
+          })}
+        />
+      )
+
+      expect(screen.queryByText('Pago requerido')).not.toBeInTheDocument()
+      expect(screen.queryByText('Seña a pagar por WhatsApp')).not.toBeInTheDocument()
+      expect(screen.queryByText('$ 3.150')).not.toBeInTheDocument()
+    })
+  })
+
+  describe('mis turnos', () => {
+    it('con el slug de la tienda ofrece cambiar o cancelar el turno', () => {
+      render(<BookingSuccess {...props()} />)
+
+      expect(screen.getByRole('link', { name: MIS_TURNOS })).toHaveAttribute(
+        'href',
+        '/b/tienda/mis-turnos'
+      )
+    })
+
+    it('sin slug no ofrece cambiar o cancelar el turno', () => {
+      render(<BookingSuccess {...props({ storeSlug: undefined })} />)
+
+      expect(screen.queryByRole('link', { name: MIS_TURNOS })).not.toBeInTheDocument()
+    })
+  })
+})

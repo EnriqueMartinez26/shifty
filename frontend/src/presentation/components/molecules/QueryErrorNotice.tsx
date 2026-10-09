@@ -1,5 +1,7 @@
 import React from 'react'
 
+import { getErrorCode, getErrorMessage } from '@shared/errors/getErrorMessage'
+
 import { colors2000s } from '../../../theme/colors'
 
 interface QueryErrorNoticeProps {
@@ -9,21 +11,12 @@ interface QueryErrorNoticeProps {
   message: string
 }
 
-type ErrorWithCode = {
-  context?: { errorCode?: unknown }
-  originalError?: { context?: { errorCode?: unknown } }
-}
-
 /**
  * Un 403 FEATURE_DISABLED no es una falla: la funcion esta apagada para el
  * negocio. Llega como ApplicationError (servicios que usan apiClient directo)
  * o envuelto por BaseService en `originalError`.
  */
-const isFeatureDisabled = (error: unknown): boolean => {
-  const candidate = error as ErrorWithCode | null
-  const code = candidate?.context?.errorCode ?? candidate?.originalError?.context?.errorCode
-  return code === 'FEATURE_DISABLED'
-}
+const isFeatureDisabled = (error: unknown): boolean => getErrorCode(error) === 'FEATURE_DISABLED'
 
 /**
  * Aviso en linea de que un GET de la pantalla fallo, para que una consulta
@@ -44,7 +37,7 @@ export const QueryErrorNotice: React.FC<QueryErrorNoticeProps> = ({ error, messa
         boxShadow: colors2000s.shadows.insetDark
       }}
     >
-      {isFeatureDisabled(error) ? 'Esta función no está habilitada para tu negocio.' : message}
+      {isFeatureDisabled(error) ? getErrorMessage(error, message) : message}
     </div>
   )
 }

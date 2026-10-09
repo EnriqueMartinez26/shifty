@@ -8,13 +8,15 @@ jest.mock('@infrastructure/http/client', () => ({
   default: { get: (...args: unknown[]) => mockGet(...args) }
 }))
 
+import { ledgerService } from './LedgerService'
 import { reportsService } from './ReportsService'
 import { superAdminService } from './SuperAdminService'
 
 describe('query strings por params (F9-11)', () => {
   beforeEach(() => {
     mockGet.mockReset()
-    mockGet.mockResolvedValue({ data: [] })
+    // axios siempre trae headers; listStores lee X-Total-Count (FF-24).
+    mockGet.mockResolvedValue({ data: [], headers: {} })
   })
 
   it('reportes: el rango de fechas viaja como params', async () => {
@@ -26,6 +28,24 @@ describe('query strings por params (F9-11)', () => {
     expect(mockGet).toHaveBeenNthCalledWith(1, '/reports/summary', rango)
     expect(mockGet).toHaveBeenNthCalledWith(2, '/reports/professionals', rango)
     expect(mockGet).toHaveBeenNthCalledWith(3, '/reports/trend', { params: { months: 6 } })
+  })
+
+  it('reportes: la pagina del detalle viaja como limit y offset (FF-30)', async () => {
+    await reportsService.getSummary('2026-09-01', '2026-09-30', { limit: 100, offset: 200 })
+
+    expect(mockGet).toHaveBeenCalledWith('/reports/summary', {
+      params: { from_date: '2026-09-01', to_date: '2026-09-30', limit: 100, offset: 200 }
+    })
+  })
+
+  it('fiado: el cursor viaja como after (nunca offset) y la busqueda como q (FF-20)', async () => {
+    await ledgerService.getCustomerLedger('cli-a', 'cur-1')
+    await ledgerService.searchClients('ana')
+
+    expect(mockGet).toHaveBeenNthCalledWith(1, '/ledger/customers/cli-a', {
+      params: { after: 'cur-1' }
+    })
+    expect(mockGet).toHaveBeenNthCalledWith(2, '/ledger/clients', { params: { q: 'ana' } })
   })
 
   it('superadmin: filtros, limite e inactivos viajan como params', async () => {

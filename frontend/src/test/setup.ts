@@ -10,7 +10,10 @@ import './jest-dom'
 // en tests; por defecto se comporta como entorno de desarrollo.
 jest.mock('@shared/utils/env', () => ({
   isProduction: () => false,
-  isDevelopment: () => true
+  isDevelopment: () => true,
+  // Sin contacto configurado, como un build sin las variables: los tests que
+  // lo necesitan lo fijan con jest.mocked(getContactEnv).
+  getContactEnv: jest.fn(() => ({}))
 }))
 
 const customGlobal = globalThis as typeof globalThis & {
@@ -40,6 +43,22 @@ if (typeof customGlobal.crypto?.randomUUID !== 'function') {
   try {
     Object.defineProperty(customGlobal.crypto, 'randomUUID', {
       value: createTestUuid,
+      writable: true
+    })
+  } catch (_error) {
+    // Fail-safe fallback if the environment disallows redefining globals.
+  }
+}
+
+// jsdom no trae crypto.subtle (2026-10-01, F4-04: la huella de la reserva se
+// guarda como SHA-256). Se toma el WebCrypto de Node, el mismo algoritmo que
+// el del navegador.
+if (customGlobal.crypto && typeof customGlobal.crypto.subtle === 'undefined') {
+  try {
+    const { webcrypto } = jest.requireActual<{ webcrypto: Crypto }>('node:crypto')
+    Object.defineProperty(customGlobal.crypto, 'subtle', {
+      value: webcrypto.subtle,
+      configurable: true,
       writable: true
     })
   } catch (_error) {

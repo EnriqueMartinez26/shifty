@@ -1,47 +1,28 @@
 import React, { Suspense, lazy } from 'react'
 
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router'
+import { Loader2 } from 'lucide-react'
+import { BrowserRouter, Navigate, Outlet, Route, Routes, useLocation } from 'react-router'
 
 import { Sentry } from './infrastructure/observability/sentry'
 import { ErrorBoundaryFallback } from './presentation/components/error-boundary'
+import { LoadingScreen } from './presentation/components/molecules/LoadingScreen'
+import { AuthShell } from './presentation/components/organisms/AuthShell'
 import { AuthProvider, useAuth } from './presentation/context/AuthContext'
-import {
-  ROLE_PROFESSIONAL,
-  ROLE_STORE_ADMIN,
-  ROLE_SUPER_ADMIN,
-  getDefaultAppRoute,
-  hasAnyRole
-} from './presentation/context/roles'
+import { getDefaultAppRoute, hasAnyRole } from './presentation/context/roles'
+import { PUBLIC_ROUTES, SESSION_ROUTES, type AppRoute } from './presentation/routes/appRoutes'
+import { buttonStyles2000s, colors2000s } from './theme/colors'
 
-const LoginPage = lazy(() => import('./presentation/pages/Login'))
-const ForgotPasswordPage = lazy(() => import('./presentation/pages/ForgotPassword'))
-const ResetPasswordPage = lazy(() => import('./presentation/pages/ResetPassword'))
-const AdminLayout = lazy(() => import('./presentation/layouts/AdminLayout'))
-const SuperAdminLayout = lazy(() => import('./presentation/layouts/SuperAdminLayout'))
-const Dashboard = lazy(() => import('./presentation/pages/Dashboard'))
-const CalendarPage = lazy(() => import('./presentation/pages/Calendar'))
-const ReportsPage = lazy(() => import('./presentation/pages/Reports'))
-const PaymentsPage = lazy(() => import('./presentation/pages/Payments'))
-const CollectionsPage = lazy(() => import('./presentation/pages/Collections'))
-const PromotionsPage = lazy(() => import('./presentation/pages/Promotions'))
-const LedgerPage = lazy(() => import('./presentation/pages/Ledger'))
-const ServicesPage = lazy(() => import('./presentation/pages/Services'))
-const StaffPage = lazy(() => import('./presentation/pages/Staff'))
-const WaitlistPage = lazy(() => import('./presentation/pages/Waitlist'))
-const SuperAdminPage = lazy(() => import('./presentation/pages/SuperAdmin'))
-const UsersPage = lazy(() => import('./presentation/pages/Users'))
-const PublicBookingPage = lazy(() => import('./presentation/pages/PublicBooking'))
-const ClientAppointmentsPage = lazy(() => import('./presentation/pages/ClientAppointments'))
-const SettingsPage = lazy(() => import('./presentation/pages/Settings'))
-const LegalPage = lazy(() => import('./presentation/pages/Legal'))
-const ManualPage = lazy(() => import('./presentation/pages/Manual'))
+const NotFoundPage = lazy(() => import('./presentation/pages/NotFound'))
+// Link de baja del mail promocional (`modules/legal/unsubscribe.py`). Vive
+// aca y no en la tabla de rutas, como el 404: es publica y sin sesion.
+const UnsubscribePage = lazy(() => import('./presentation/pages/Unsubscribe'))
 
 const ModuleBoundary = ({ children, title }: { children: React.ReactNode; title: string }) => (
   <Sentry.ErrorBoundary
     fallback={
       <ErrorBoundaryFallback
         title={title}
-        description="This section could not be loaded safely. Please refresh and try again."
+        description="No pudimos cargar esta sección. Actualizá la página y probá de nuevo."
       />
     }
   >
@@ -49,23 +30,50 @@ const ModuleBoundary = ({ children, title }: { children: React.ReactNode; title:
   </Sentry.ErrorBoundary>
 )
 
+/**
+ * La sesion no se pudo validar por una falla transitoria (red, 429, 503):
+ * no es un logout, asi que no se manda a /login (D-20260928-03).
+ */
+const SessionUnavailable = () => {
+  const { retrySession } = useAuth()
+  return (
+    <div role="alert">
+      <AuthShell title="Sin conexión" subtitle="No pudimos conectar con el servidor.">
+        <div className="space-y-4">
+          <p
+            className="text-sm font-medium text-center"
+            style={{ color: colors2000s.text.primary }}
+          >
+            Tu sesión sigue abierta.
+          </p>
+          <button
+            type="button"
+            onClick={retrySession}
+            className="w-full font-bold py-4 rounded-2xl transition-all active:scale-[0.98]"
+            style={buttonStyles2000s.selected}
+          >
+            Reintentar
+          </button>
+        </div>
+      </AuthShell>
+    </div>
+  )
+}
+
 const ProtectedRoute = ({
   children,
   allowedRoles
 }: {
   children: React.ReactNode
-  allowedRoles?: string[]
+  allowedRoles?: readonly string[]
 }) => {
-  const { token, isLoading, user } = useAuth()
+  const { token, isLoading, user, sessionUnavailable } = useAuth()
+  const { pathname, search } = useLocation()
 
-  if (isLoading) {
-    return (
-      <div role="status" aria-live="polite">
-        Cargando...
-      </div>
-    )
-  }
-  if (!token) return <Navigate to="/login" replace />
+  if (isLoading) return <LoadingScreen />
+  if (!token && sessionUnavailable) return <SessionUnavailable />
+  // Se recuerda adonde iba: el login vuelve ahi si es segura (FF-36).
+  if (!token) return <Navigate to="/login" replace state={{ from: pathname + search }} />
   if (allowedRoles && user && !hasAnyRole(user.role, allowedRoles, user.is_global_admin)) {
     return <Navigate to={getDefaultAppRoute(user.role, user.is_global_admin)} replace />
   }
@@ -74,184 +82,100 @@ const ProtectedRoute = ({
 }
 
 const RootRedirect = () => {
-  const { token, isLoading, user } = useAuth()
+  const { token, isLoading, user, sessionUnavailable } = useAuth()
 
-  if (isLoading) {
-    return (
-      <div role="status" aria-live="polite">
-        Cargando...
-      </div>
-    )
-  }
+  if (isLoading) return <LoadingScreen />
+  if (!token && sessionUnavailable) return <SessionUnavailable />
   if (!token) return <Navigate to="/login" replace />
 
   return <Navigate to={getDefaultAppRoute(user?.role, user?.is_global_admin)} replace />
 }
 
+const ReconnectingBanner = () => {
+  const { isReconnecting } = useAuth()
+  if (!isReconnecting) return null
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className="fixed top-3 inset-x-0 z-50 flex justify-center px-4 pointer-events-none"
+    >
+      <span
+        className="inline-flex items-center gap-2 rounded-full px-4 py-2 text-xs font-bold"
+        style={{
+          background: colors2000s.status.warning.bg,
+          border: `1px solid ${colors2000s.status.warning.border}`,
+          color: colors2000s.status.warning.text,
+          boxShadow: colors2000s.shadows.outerMedium
+        }}
+      >
+        <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />
+        Reconectando...
+      </span>
+    </div>
+  )
+}
+
+/**
+ * Sesion solo en el arbol autenticado (D-20260928-04): el portal publico
+ * (/booking, /b, /legal) no monta AuthProvider y no hace un POST /auth/refresh
+ * inutil en cada visita.
+ */
+const AuthLayout = () => (
+  <AuthProvider>
+    <ReconnectingBanner />
+    <Outlet />
+  </AuthProvider>
+)
+
+/**
+ * Envuelve la pagina como lo hacia el JSX a mano: la guarda por fuera, el
+ * `ModuleBoundary` por dentro.
+ */
+const routeElement = (route: AppRoute) => {
+  const target = 'page' in route ? <route.page /> : <Navigate to={route.redirectTo} replace />
+  const bounded = route.boundary ? (
+    <ModuleBoundary title={route.boundary}>{target}</ModuleBoundary>
+  ) : (
+    target
+  )
+  if (!route.access) return bounded
+  return (
+    <ProtectedRoute allowedRoles={route.access === 'authenticated' ? undefined : route.access}>
+      {bounded}
+    </ProtectedRoute>
+  )
+}
+
+const renderRoute = (route: AppRoute): React.ReactNode => {
+  const element = routeElement(route)
+  if (route.index) return <Route key="index" index element={element} />
+  return (
+    <Route key={route.path} path={route.path} element={element}>
+      {route.children?.map(renderRoute)}
+    </Route>
+  )
+}
+
 function App() {
   return (
-    <AuthProvider>
-      <BrowserRouter>
-        <Suspense
-          fallback={
-            <div
-              className="min-h-screen flex items-center justify-center"
-              role="status"
-              aria-live="polite"
-            >
-              Cargando...
-            </div>
-          }
-        >
-          <Routes>
-            <Route path="/login" element={<LoginPage />} />
-            <Route path="/forgot-password" element={<ForgotPasswordPage />} />
-            <Route path="/reset-password" element={<ResetPasswordPage />} />
-            <Route path="/legal/:document" element={<LegalPage />} />
-            <Route path="/legal" element={<Navigate to="/legal/terminos" replace />} />
-            <Route
-              path="/dashboard"
-              element={
-                <ProtectedRoute>
-                  <ModuleBoundary title="The admin area is temporarily unavailable">
-                    <AdminLayout />
-                  </ModuleBoundary>
-                </ProtectedRoute>
-              }
-            >
-              <Route index element={<Dashboard />} />
-              <Route path="manual" element={<ManualPage />} />
-              <Route path="calendar" element={<CalendarPage />} />
-              <Route path="waitlist" element={<WaitlistPage />} />
-              <Route
-                path="reports"
-                element={
-                  <ProtectedRoute
-                    allowedRoles={[ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN, ROLE_PROFESSIONAL]}
-                  >
-                    <ReportsPage />
-                  </ProtectedRoute>
-                }
-              />
-              <Route
-                path="payments"
-                element={
-                  <ProtectedRoute
-                    allowedRoles={[ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN, ROLE_PROFESSIONAL]}
-                  >
-                    <ModuleBoundary title="Payments are temporarily unavailable">
-                      <PaymentsPage />
-                    </ModuleBoundary>
-                  </ProtectedRoute>
-                }
-              />
-              <Route
-                path="collections"
-                element={
-                  <ProtectedRoute
-                    allowedRoles={[ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN, ROLE_PROFESSIONAL]}
-                  >
-                    <CollectionsPage />
-                  </ProtectedRoute>
-                }
-              />
-              <Route
-                path="promotions"
-                element={
-                  <ProtectedRoute allowedRoles={[ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN]}>
-                    <PromotionsPage />
-                  </ProtectedRoute>
-                }
-              />
-              <Route
-                path="ledger"
-                element={
-                  <ProtectedRoute
-                    allowedRoles={[ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN, ROLE_PROFESSIONAL]}
-                  >
-                    <LedgerPage />
-                  </ProtectedRoute>
-                }
-              />
-              <Route
-                path="services"
-                element={
-                  <ProtectedRoute allowedRoles={[ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN]}>
-                    <ServicesPage />
-                  </ProtectedRoute>
-                }
-              />
-              <Route
-                path="staff"
-                element={
-                  <ProtectedRoute allowedRoles={[ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN]}>
-                    <StaffPage />
-                  </ProtectedRoute>
-                }
-              />
-              <Route
-                path="superadmin"
-                element={
-                  <ProtectedRoute allowedRoles={[ROLE_SUPER_ADMIN]}>
-                    <Navigate to="/control-global" replace />
-                  </ProtectedRoute>
-                }
-              />
-              <Route
-                path="users"
-                element={
-                  <ProtectedRoute allowedRoles={[ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN]}>
-                    <UsersPage />
-                  </ProtectedRoute>
-                }
-              />
-              <Route
-                path="settings"
-                element={
-                  <ProtectedRoute allowedRoles={[ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN]}>
-                    <SettingsPage />
-                  </ProtectedRoute>
-                }
-              />
-            </Route>
-            <Route
-              path="/booking/:slug"
-              element={
-                <ModuleBoundary title="Booking is temporarily unavailable">
-                  <PublicBookingPage />
-                </ModuleBoundary>
-              }
-            />
-            <Route path="/b/:slug/mis-turnos" element={<ClientAppointmentsPage />} />
-            <Route path="/booking/:slug/mis-turnos" element={<ClientAppointmentsPage />} />
-            <Route
-              path="/b/:slug"
-              element={
-                <ModuleBoundary title="Booking is temporarily unavailable">
-                  <PublicBookingPage />
-                </ModuleBoundary>
-              }
-            />
-            <Route
-              path="/control-global"
-              element={
-                <ProtectedRoute allowedRoles={[ROLE_SUPER_ADMIN]}>
-                  <ModuleBoundary title="Global control is temporarily unavailable">
-                    <SuperAdminLayout />
-                  </ModuleBoundary>
-                </ProtectedRoute>
-              }
-            >
-              <Route index element={<SuperAdminPage />} />
-            </Route>
+    <BrowserRouter>
+      <Suspense fallback={<LoadingScreen />}>
+        <Routes>
+          <Route element={<AuthLayout />}>
+            {SESSION_ROUTES.map(renderRoute)}
             <Route path="/" element={<RootRedirect />} />
-            {/* Cualquier ruta desconocida (p.ej. el viejo /register) vuelve al
-                inicio: sin sesion va al login, con sesion a su panel. */}
-            <Route path="*" element={<RootRedirect />} />
-          </Routes>
-        </Suspense>
-      </BrowserRouter>
-    </AuthProvider>
+          </Route>
+          {/* Portal publico: sin AuthProvider (D-20260928-04). */}
+          {PUBLIC_ROUTES.map(renderRoute)}
+          <Route path="/baja" element={<UnsubscribePage />} />
+          {/* Cualquier ruta desconocida (p.ej. el viejo /register) es un 404
+              propio, fuera del AuthProvider: no espera a la sesion y ofrece
+              volver al inicio (o a la tienda, si la direccion es de una). */}
+          <Route path="*" element={<NotFoundPage />} />
+        </Routes>
+      </Suspense>
+    </BrowserRouter>
   )
 }
 

@@ -182,6 +182,27 @@ def assert_global_admin_keeps_login_role(target: User, role: object) -> None:
     )
 
 
+def assert_client_not_global_admin(target: User, enabled: bool) -> None:
+    """Un cliente final no se promueve a SuperAdmin (409).
+
+    2026-10-02, QA en navegador: ``/superadmin/users/{id}/global-admin``
+    aceptaba un cliente, le ponia ``role = admin`` y la llave global de toda
+    la plataforma (regla 14) a alguien que solo reserva turnos. Si la cuenta
+    de verdad es del personal, primero se le cambia el rol
+    (``/superadmin/users/{id}``) y despues se la promueve. Revocar no pasa por
+    aca: siempre se puede quitar el flag.
+    """
+    if not enabled:
+        return
+    if _valor(getattr(target, "role", None)) != ROLE_CLIENT:
+        return
+    raise AppException(
+        message="Una cuenta de cliente no puede ser SuperAdmin",
+        http_status=status.HTTP_409_CONFLICT,
+        error_code="CLIENT_GLOBAL_ADMIN_DENIED",
+    )
+
+
 def require_roles(user: User, allowed_roles: Iterable[str], detail: str) -> None:
     if not has_any_role(user, allowed_roles):
         raise AppException(

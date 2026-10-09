@@ -68,6 +68,14 @@ export interface ReportSummary {
   top_clients: ReportTopClientItem[]
   debt_summary: ReportDebtSummary
   appointments: ReportAppointmentItem[]
+  /** `appointments` es una pagina; `true` si quedan turnos despues de ella. */
+  has_more: boolean
+}
+
+/** Pagina del detalle `appointments`; sin ella el backend usa su default (2000). */
+export interface ReportDetailPage {
+  limit: number
+  offset: number
 }
 
 export interface ProfessionalReportItem {
@@ -111,23 +119,35 @@ export interface ReportTrend {
 }
 
 class ReportsService {
-  async getSummary(fromDate: string, toDate: string): Promise<ReportSummary> {
+  async getSummary(
+    fromDate: string,
+    toDate: string,
+    page?: ReportDetailPage,
+    signal?: AbortSignal
+  ): Promise<ReportSummary> {
     const { data } = await apiClient.get<ReportSummary>('/reports/summary', {
-      params: { from_date: fromDate, to_date: toDate }
+      params: { from_date: fromDate, to_date: toDate, ...page },
+      signal
     })
     return data
   }
 
-  async getProfessionalReports(fromDate: string, toDate: string): Promise<ProfessionalReports> {
+  async getProfessionalReports(
+    fromDate: string,
+    toDate: string,
+    signal?: AbortSignal
+  ): Promise<ProfessionalReports> {
     const { data } = await apiClient.get<ProfessionalReports>('/reports/professionals', {
-      params: { from_date: fromDate, to_date: toDate }
+      params: { from_date: fromDate, to_date: toDate },
+      signal
     })
     return data
   }
 
-  async getTrend(months: number): Promise<ReportTrend> {
+  async getTrend(months: number, signal?: AbortSignal): Promise<ReportTrend> {
     const { data } = await apiClient.get<ReportTrend>('/reports/trend', {
-      params: { months }
+      params: { months },
+      signal
     })
     return data
   }

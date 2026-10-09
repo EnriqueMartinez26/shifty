@@ -5,9 +5,10 @@ import { UserResponseDTO } from '../../application/dtos/UserDTO'
 import { UserMapper } from '../../application/mappers/UserMapper'
 import { User, type UserWriteInput } from '../../domain/entities/User'
 import { QueryOptions } from '../../domain/repositories/IRepository'
-import { IUserRepository } from '../../domain/repositories/IUserRepository'
+import type { IUserRepository, UserListQuery } from '../../domain/repositories/IUserRepository'
 import { Email } from '../../domain/value-objects/Email'
 import { UserRole } from '../../domain/value-objects/UserRole'
+import { NotFoundError } from '../../shared/errors/NotFoundError'
 
 type UserPayloadInput = {
   [K in keyof UserWriteInput]?: UserWriteInput[K] | null
@@ -75,6 +76,25 @@ export class HttpUserRepository
     }
   }
 
+  public async list(query: UserListQuery, signal?: AbortSignal): Promise<User[]> {
+    try {
+      // axios omite los params undefined: sin termino no viaja `q` ni `email`.
+      const { data } = await this.client.get<UserResponseDTO[]>('/users/', {
+        params: {
+          include_inactive: query.includeInactive ?? false,
+          q: query.q,
+          email: query.email,
+          limit: query.limit,
+          offset: query.offset
+        },
+        signal
+      })
+      return data.map(UserMapper.toDomain)
+    } catch (error) {
+      this.handleRepositoryError('list', error)
+    }
+  }
+
   // --- Implementación de Hooks Abstractos (Template Method Pattern) ---
 
   protected async findAllImpl(options?: QueryOptions | boolean): Promise<User[]> {
@@ -96,10 +116,8 @@ export class HttpUserRepository
       const { data } = await this.client.get<UserResponseDTO>(`/users/${id}`)
       return UserMapper.toDomain(data)
     } catch (error: unknown) {
-      const maybeError = error as { response?: { status?: number } }
-      if (maybeError.response?.status === 404) {
-        return null
-      }
+      // El cliente HTTP ya normalizo el 404 (FF-35): no trae `response`.
+      if (error instanceof NotFoundError) return null
       throw error
     }
   }

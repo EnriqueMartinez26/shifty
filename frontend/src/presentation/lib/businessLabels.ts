@@ -19,7 +19,7 @@ export const BUSINESS_TYPE_OPTIONS: BusinessTypeOption[] = [
   {
     value: 'generic',
     label: 'General',
-    description: 'Negocios con agenda y atencion profesional.'
+    description: 'Negocios con agenda y atención profesional.'
   },
   {
     value: 'beauty',
@@ -29,17 +29,17 @@ export const BUSINESS_TYPE_OPTIONS: BusinessTypeOption[] = [
   {
     value: 'medical',
     label: 'Salud',
-    description: 'Consultorios, atencion medica y profesionales de salud.'
+    description: 'Consultorios, atención médica y profesionales de salud.'
   },
   {
     value: 'wellness',
     label: 'Bienestar',
-    description: 'Kinesiologia, nutricion, terapias y servicios wellness.'
+    description: 'Kinesiología, nutrición, terapias y servicios wellness.'
   },
   {
     value: 'professional_services',
     label: 'Servicios Profesionales',
-    description: 'Estudios, asesorias y atencion por cita.'
+    description: 'Estudios, asesorías y atención por cita.'
   }
 ]
 

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useMemo, useState } from 'react'
 
 import {
   addDays,
@@ -10,51 +10,42 @@ import {
   startOfWeek,
   subDays
 } from 'date-fns'
-import {
-  Calendar as CalendarIcon,
-  ChevronLeft,
-  ChevronRight,
-  Clock,
-  Loader2,
-  Plus,
-  ShieldBan
-} from 'lucide-react'
-
-import { isBookingStatus } from '@domain/value-objects/BookingStatus'
-
-import type { BlockPreviewResult } from '@application/services/AppointmentBlocksService'
 
 import { getErrorMessage, isStateConflictError } from '@shared/errors/getErrorMessage'
-import {
-  argentinaLocalToUtcIso,
-  formatArgentinaDate,
-  formatArgentinaDayMonth,
-  formatArgentinaTime
-} from '@shared/utils/argentinaTime'
+import { formatArgentinaDate, formatArgentinaTime } from '@shared/utils/argentinaTime'
 import { buildRebookUrl } from '@shared/utils/clientWhatsApp'
 
-import { buttonStyles2000s, colors2000s } from '../../theme/colors'
+import { BlocksPanel, type EditableBlock } from './BlocksPanel'
+import {
+  RescheduleAppointmentDialog,
+  type ReschedulableAppointment
+} from './RescheduleAppointmentDialog'
 import {
   AppointmentActions,
   type AppointmentAction
 } from '../components/molecules/AppointmentActions'
 import { ClientWhatsAppButton } from '../components/molecules/ClientWhatsAppButton'
 import { QueryErrorNotice } from '../components/molecules/QueryErrorNotice'
-import { BlockPreviewModal } from '../components/organisms/BlockPreviewModal'
+import { AbsencesTimeline } from '../components/organisms/calendar/AbsencesTimeline'
+import { AgendaDayView } from '../components/organisms/calendar/AgendaDayView'
+import { AgendaEventPill } from '../components/organisms/calendar/AgendaEventPill'
+import { AgendaListView } from '../components/organisms/calendar/AgendaListView'
+import { AgendaRangeGrid } from '../components/organisms/calendar/AgendaRangeGrid'
+import { AgendaToolbar, type CalendarView } from '../components/organisms/calendar/AgendaToolbar'
 import { NewAppointmentModal } from '../components/organisms/NewAppointmentModal'
 import { useAuth } from '../context/AuthContext'
-import { ROLE_PROFESSIONAL, ROLE_STORE_ADMIN } from '../context/roles'
 import {
-  useAppointmentBlocks,
-  useBlockPreview,
-  useBlockTemplates,
-  useCreateAppointmentBlock,
-  useCreateRecurringAppointmentBlock,
-  useDeleteAppointmentBlock,
-  useUpdateAppointmentBlock
-} from '../hooks/useAppointmentBlocks'
+  ROLE_PROFESSIONAL,
+  ROLE_RECEPTIONIST,
+  ROLE_STORE_ADMIN,
+  ROLE_SUPER_ADMIN,
+  canonicalRole,
+  hasAnyRole
+} from '../context/roles'
+import { useAppointmentBlocks, useDeleteAppointmentBlock } from '../hooks/useAppointmentBlocks'
 import {
   useCalendarAgenda,
+  useCancelAppointment,
   useCompleteAppointment,
   useConfirmAppointment,
   useMarkAbsentAppointment,
@@ -63,151 +54,66 @@ import {
 import { useConfirm } from '../hooks/useConfirm'
 import { useManagedStaff } from '../hooks/useManagedStaff'
 import { useStoreSettings } from '../hooks/useStores'
+import { useStoreWriteAccess } from '../hooks/useStoreWriteAccess'
+import { initialAgendaView, saveAgendaView } from '../lib/agendaViewPreference'
+import {
+  NO_EVENTS,
+  buildUnifiedEvents,
+  groupEventsByDay,
+  toInstantIso,
+  type UnifiedCalendarEvent
+} from '../lib/calendarEvents'
 import {
   MIN_APPOINTMENT_MINUTES,
-  SLOT_HEIGHT_PX,
   buildDayGrid,
   gridPlacement,
-  parseHhMm,
   rangeFromInstants
 } from '../lib/calendarGrid'
-import { reportUnknownStatus } from '../lib/reportUnreadableInstant'
-import { create2000sPanelStyle } from '../lib/surfaceStyles'
-
-type CalendarView = 'day' | 'week' | 'month' | 'list'
-
-type UnifiedCalendarEvent =
-  | {
-      id: string
-      type: 'appointment' | 'absence'
-      staffId: string
-      staffName: string
-      title: string
-      subtitle: string
-      startsAt: Date
-      endsAt: Date
-      status: string
-      /** Solo llega para administradores (dato personal). */
-      clientPhone: string | null
-      serviceId: string
-    }
-  | {
-      id: string
-      type: 'block'
-      staffId: string
-      staffName: string
-      title: string
-      subtitle: string
-      startsAt: Date
-      endsAt: Date
-      status: 'blocked'
-    }
-
-/** Claves de `business_hours`, en el orden de `Date.getDay()` (0 = domingo). */
-const BUSINESS_HOURS_DAY_KEYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'] as const
-
-const VIEW_LABELS: Record<CalendarView, string> = {
-  day: 'Dia',
-  week: 'Semana',
-  month: 'Mes',
-  list: 'Lista'
-}
-
-const panelStyle = create2000sPanelStyle()
-
-const canvasStyle = {
-  background: 'white',
-  border: `1px solid ${colors2000s.border.default}`,
-  boxShadow: colors2000s.shadows.outerMedium
-}
-
-const cardStyle = {
-  background: 'white',
-  border: `1px solid ${colors2000s.border.light}`,
-  boxShadow: colors2000s.shadows.insetDark
-}
-
-const fieldStyle = {
-  ...cardStyle,
-  color: colors2000s.text.primary
-}
-
-/**
- * `toISOString()` de un `Date` invalido no devuelve vacio: lanza `RangeError`.
- * En un camino de render eso tumba la agenda entera por un solo turno con
- * fecha corrupta, asi que la cadena vacia entra a los formateadores de
- * `argentinaTime`, que ya la resuelven como "sin dato".
- */
-const toInstantIso = (date: Date) => (Number.isNaN(date.getTime()) ? '' : date.toISOString())
-
-const toDateInput = (date: Date) => formatArgentinaDate(toInstantIso(date))
-const toTimeInput = (date: Date) => formatArgentinaTime(toInstantIso(date))
-
-const eventPriority = (event: UnifiedCalendarEvent) => {
-  if (event.type === 'block') return 0
-  if (event.type === 'absence') return 1
-  return 2
-}
-
-const statusStyle = (status: string) => {
-  if (status === 'absent') {
-    return {
-      accent: '#b91c1c',
-      background: 'linear-gradient(180deg, #fef2f2 0%, #fecaca 100%)',
-      text: '#7f1d1d'
-    }
-  }
-  if (status === 'pending_payment') {
-    return {
-      accent: '#d97706',
-      background: 'linear-gradient(180deg, #fff7ed 0%, #fed7aa 100%)',
-      text: '#9a3412'
-    }
-  }
-  if (status === 'confirmed') {
-    return {
-      accent: '#2563eb',
-      background: 'linear-gradient(180deg, #eff6ff 0%, #dbeafe 100%)',
-      text: '#1d4ed8'
-    }
-  }
-  if (status === 'completed') {
-    return {
-      accent: '#15803d',
-      background: 'linear-gradient(180deg, #ecfdf5 0%, #dcfce7 100%)',
-      text: '#166534'
-    }
-  }
-  return {
-    accent: colors2000s.orange.accent,
-    background: 'linear-gradient(180deg, #ffffff 0%, #f6f8f9 100%)',
-    text: colors2000s.text.primary
-  }
-}
+import { mondayBasedWeekday, storeRangesFor, workingRangesFor } from '../lib/staffHours'
 
 export const CalendarContainer: React.FC = () => {
   const { confirm, confirmDialog } = useConfirm()
   const { user } = useAuth()
-  const canReleaseAppointments = user?.role === ROLE_STORE_ADMIN || Boolean(user?.is_global_admin)
+  // Roles canonicos (legacy 'admin'/'staff' incluidos), como el backend (FF-14).
+  const canReleaseAppointments = hasAnyRole(
+    user?.role,
+    [ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN],
+    user?.is_global_admin
+  )
   // Confirmar, completar y ausente: admin o personal (mismo criterio que la API).
-  const canManageAppointments = canReleaseAppointments || user?.role === ROLE_PROFESSIONAL
+  const canManageAppointments =
+    canReleaseAppointments || canonicalRole(user?.role) === ROLE_PROFESSIONAL
+  // Bloqueos: admin y profesional (este, para cualquier profesional,
+  // D-20260929-08); recepcion los ve sin gestionarlos (D-20260929-09).
+  // Cancelar turnos en bloque es solo de administradores (FF-34).
+  const canManageBlocks = canManageAppointments
+  const canCancelAffected = canReleaseAppointments
+  // Cancelar o reprogramar (D-20260929-03): administracion y recepcion,
+  // cualquier turno; el profesional, solo los de su agenda (su ficha comparte
+  // id con su usuario). Es solo lo que se ofrece: la guarda es el backend (403).
+  const currentRole = canonicalRole(user?.role, user?.is_global_admin)
+  const cancelsAnyAppointment = canReleaseAppointments || currentRole === ROLE_RECEPTIONIST
+  const canCancelOrRescheduleOf = (staffId: string) =>
+    cancelsAnyAppointment ||
+    (currentRole === ROLE_PROFESSIONAL && Boolean(user?.public_id) && staffId === user?.public_id)
+  // Tienda suspendida (FF-15): se deshabilita lo que el backend responde con
+  // 402; cancelar y liberar siguen (D-20260930-12).
+  const writeAccess = useStoreWriteAccess()
+  const readOnlyReason = writeAccess.readOnly ? writeAccess.reason : null
   const [selectedDate, setSelectedDate] = useState(new Date())
-  const [view, setView] = useState<CalendarView>('day')
-  const [editingBlockId, setEditingBlockId] = useState<string | null>(null)
+  // Lista en el telefono, Día en pantallas grandes, o la que eligio la ultima
+  // vez (QA movil 2026-10-08: volvia a "Día" en cada navegacion).
+  const [view, setView] = useState<CalendarView>(() => initialAgendaView(user?.public_id))
+  const changeView = (next: CalendarView) => {
+    setView(next)
+    saveAgendaView(user?.public_id, next)
+  }
   const [message, setMessage] = useState('')
   const [isNewAppointmentOpen, setIsNewAppointmentOpen] = useState(false)
-  const [blockForm, setBlockForm] = useState({
-    staff_id: '',
-    // null = el bloqueo nuevo sigue al dia que muestra el calendario. Una fecha
-    // la fija quien edita un bloqueo o la tipea (F11c-05).
-    date: null as string | null,
-    starts_at: '10:00',
-    ends_at: '11:00',
-    reason: 'No atender',
-    recurrence: 'none' as 'none' | 'daily' | 'weekly',
-    recurrence_until: toDateInput(addDays(new Date(), 7)),
-    max_occurrences: 5
-  })
+  // El panel de bloqueos se remonta con `key` al elegir otro bloqueo: sin
+  // efecto que copie el bloqueo al formulario (regla 27).
+  const [blockToEdit, setBlockToEdit] = useState<EditableBlock | null>(null)
+  const [rescheduleTarget, setRescheduleTarget] = useState<ReschedulableAppointment | null>(null)
 
   const rangeStart = useMemo(() => {
     if (view === 'day' || view === 'list') return selectedDate
@@ -225,10 +131,6 @@ export const CalendarContainer: React.FC = () => {
   const rangeKeyFrom = format(rangeStart, 'yyyy-MM-dd')
   const rangeKeyTo = format(rangeEnd, 'yyyy-MM-dd')
   const dateStr = format(selectedDate, 'yyyy-MM-dd')
-  // Antes un efecto copiaba dateStr a blockForm.date en cada navegacion, tambien
-  // mientras se editaba un bloqueo: "Editar" el del 20, flecha ">" y "Actualizar
-  // bloqueo" lo movia al 21 sin que nadie tocara la fecha.
-  const blockDate = blockForm.date ?? dateStr
 
   const { data: staffMembers, isLoading: loadingStaff, error: staffError } = useManagedStaff()
   // Nombre y slug de la tienda para el texto de WhatsApp y el deep-link.
@@ -241,15 +143,9 @@ export const CalendarContainer: React.FC = () => {
     agendaRange && agendaRange.total > agendaRange.appointments.length
       ? { shown: agendaRange.appointments.length, total: agendaRange.total }
       : null
-  const blocksQuery = useAppointmentBlocks()
-  const templatesQuery = useBlockTemplates()
-  const createBlock = useCreateAppointmentBlock()
-  const createRecurringBlock = useCreateRecurringAppointmentBlock()
-  const updateBlock = useUpdateAppointmentBlock()
+  const blocksQuery = useAppointmentBlocks(rangeKeyFrom, rangeKeyTo)
   const deleteBlock = useDeleteAppointmentBlock()
   const releaseAppointment = useReleaseAppointment()
-  const previewBlock = useBlockPreview()
-  const [blockPreview, setBlockPreview] = useState<BlockPreviewResult | null>(null)
   /** Huecos de la jornada partida que el dueno decidio ver a escala real. */
   const [expandedGaps, setExpandedGaps] = useState<ReadonlySet<string>>(() => new Set())
 
@@ -262,21 +158,19 @@ export const CalendarContainer: React.FC = () => {
   const confirmAppointment = useConfirmAppointment()
   const completeAppointment = useCompleteAppointment()
   const markAbsentAppointment = useMarkAbsentAppointment()
+  const cancelAppointment = useCancelAppointment()
   const transitionBusy =
     releaseAppointment.isPending ||
+    cancelAppointment.isPending ||
     confirmAppointment.isPending ||
     completeAppointment.isPending ||
     markAbsentAppointment.isPending
 
-  useEffect(() => {
-    const firstStaff = staffMembers?.[0]
-    if (firstStaff && !blockForm.staff_id) {
-      setBlockForm((prev) => ({ ...prev, staff_id: firstStaff.id }))
-    }
-  }, [blockForm.staff_id, staffMembers])
-
   const blocksInRange = useMemo(() => {
+    // El servidor ya manda solo los activos del rango (F4-07); el filtro de
+    // is_active queda por si llega uno igual (FF-12).
     return (blocksQuery.data || []).filter((block) => {
+      if (!block.is_active) return false
       const startsAt = new Date(block.starts_at)
       return startsAt >= startOfDay(rangeStart) && startsAt <= addDays(startOfDay(rangeEnd), 1)
     })
@@ -288,80 +182,46 @@ export const CalendarContainer: React.FC = () => {
     return blocksInRange.filter((block) => formatArgentinaDate(block.starts_at) === dateStr)
   }, [blocksInRange, dateStr])
 
-  const unifiedEvents = useMemo<UnifiedCalendarEvent[]>(() => {
-    const appointmentEvents: UnifiedCalendarEvent[] = (agendaQuery.data?.appointments ?? []).map(
-      (appointment) => {
-        // Un estado nuevo del backend se muestra crudo y sin acciones; esto
-        // deja la senal en vez de pasar inadvertido (F8-03).
-        if (!isBookingStatus(appointment.status)) {
-          reportUnknownStatus('agenda', appointment.status)
-        }
-        return {
-          id: appointment.id,
-          type: appointment.status === 'absent' ? 'absence' : 'appointment',
-          staffId: appointment.staffId,
-          // Primero el nombre autoritativo que manda el backend (del join, vale
-          // aunque el profesional este dado de baja o el listado de staff no
-          // haya cargado); el cruce por id queda como respaldo.
-          staffName:
-            appointment.staffName ||
-            staffMembers?.find((staff) => staff.id === appointment.staffId)?.displayName ||
-            'Profesional',
-          title: appointment.clientName,
-          subtitle: appointment.serviceName,
-          startsAt: appointment.timeSpan.getStartsAt(),
-          endsAt: appointment.timeSpan.getEndsAt(),
-          status: appointment.status,
-          clientPhone: appointment.clientPhone,
-          serviceId: appointment.serviceId
-        }
-      }
-    )
-
-    const blockEvents: UnifiedCalendarEvent[] = blocksInRange.map((block) => {
-      const staffName =
-        staffMembers?.find((staff) => staff.id === block.staff_id)?.displayName || 'Profesional'
-      return {
-        id: block.public_id,
-        type: 'block',
-        staffId: block.staff_id,
-        staffName,
-        title: block.reason,
-        subtitle: 'Bloqueo de agenda',
-        startsAt: new Date(block.starts_at),
-        endsAt: new Date(block.ends_at),
-        status: 'blocked'
-      }
-    })
-
-    return [...blockEvents, ...appointmentEvents].sort((a, b) => {
-      const startDiff = a.startsAt.getTime() - b.startsAt.getTime()
-      if (startDiff !== 0) return startDiff
-      return eventPriority(a) - eventPriority(b)
-    })
-  }, [agendaQuery.data, blocksInRange, staffMembers])
-
-  const eventsForSelectedDate = useMemo(
+  const unifiedEvents = useMemo<UnifiedCalendarEvent[]>(
     () =>
-      unifiedEvents.filter(
-        (event) => formatArgentinaDate(toInstantIso(event.startsAt)) === dateStr
-      ),
-    [dateStr, unifiedEvents]
+      buildUnifiedEvents({
+        appointments: agendaQuery.data?.appointments ?? [],
+        blocks: blocksInRange,
+        staffMembers
+      }),
+    [agendaQuery.data, blocksInRange, staffMembers]
   )
 
+  const eventsByDay = useMemo(() => groupEventsByDay(unifiedEvents), [unifiedEvents])
+
+  const eventsForSelectedDate = eventsByDay.get(dateStr) ?? NO_EVENTS
+
+  // Horario efectivo de cada profesional el dia elegido (FF-03): el suyo o,
+  // sin ninguna franja cargada, el del local (D-20260929-01). `null` = todavia
+  // no se sabe (la ficha del local no cargo): no se pinta nada.
+  const weekday = mondayBasedWeekday(selectedDate)
+  const hoursOfDay = useMemo(() => {
+    const storeRanges = storeRangesFor(storeSettings?.business_hours, weekday)
+    const byStaff = new Map(
+      (staffMembers ?? []).map((staff) => [
+        staff.id,
+        workingRangesFor(staff.schedules, weekday, storeRanges)
+      ])
+    )
+    return { storeRanges, byStaff }
+  }, [staffMembers, storeSettings?.business_hours, weekday])
+
   /**
-   * El rango visible es la union de los horarios de atencion y los eventos del
-   * dia. Acotar la grilla solo con los horarios volveria a esconder lo que
-   * queda afuera: un turno movido a mano, uno heredado de un horario viejo, un
-   * bloqueo cargado fuera de hora.
+   * El rango visible es la union de los horarios de atencion (del local y de
+   * cada profesional) y los eventos del dia. Acotar la grilla solo con los
+   * horarios volveria a esconder lo que queda afuera: un turno movido a mano,
+   * uno heredado de un horario viejo, un bloqueo cargado fuera de hora.
    */
   const dayGrid = useMemo(() => {
-    const dayKey = BUSINESS_HOURS_DAY_KEYS[selectedDate.getDay()]
-    const openRanges = (storeSettings?.business_hours?.[dayKey ?? ''] ?? []).flatMap((period) => {
-      const startMinutes = parseHhMm(period.open)
-      const endMinutes = parseHhMm(period.close)
-      return startMinutes === null || endMinutes === null ? [] : [{ startMinutes, endMinutes }]
-    })
+    const openRanges = [
+      ...(hoursOfDay.storeRanges ?? []),
+      ...[...hoursOfDay.byStaff.values()].flatMap((ranges) => ranges ?? [])
+    ]
 
     const eventRanges = eventsForSelectedDate.flatMap((event) => {
       const eventRange = rangeFromInstants(toInstantIso(event.startsAt), toInstantIso(event.endsAt))
@@ -369,7 +229,7 @@ export const CalendarContainer: React.FC = () => {
     })
 
     return buildDayGrid([...openRanges, ...eventRanges], expandedGaps)
-  }, [eventsForSelectedDate, expandedGaps, selectedDate, storeSettings?.business_hours])
+  }, [eventsForSelectedDate, expandedGaps, hoursOfDay])
 
   const appointmentCards = useMemo(() => {
     return eventsForSelectedDate
@@ -403,130 +263,6 @@ export const CalendarContainer: React.FC = () => {
     return days
   }, [rangeEnd, rangeStart])
 
-  const handleEditBlock = (block: {
-    public_id: string
-    staff_id: string
-    starts_at: string
-    ends_at: string
-    reason: string
-  }) => {
-    const startsAt = new Date(block.starts_at)
-    const endsAt = new Date(block.ends_at)
-    setEditingBlockId(block.public_id)
-    setBlockForm({
-      staff_id: block.staff_id,
-      date: toDateInput(startsAt),
-      starts_at: toTimeInput(startsAt),
-      ends_at: toTimeInput(endsAt),
-      reason: block.reason,
-      recurrence: 'none',
-      recurrence_until: toDateInput(addDays(startsAt, 7)),
-      max_occurrences: 5
-    })
-  }
-
-  const handleResetBlockForm = () => {
-    setEditingBlockId(null)
-    setBlockForm((prev) => ({
-      ...prev,
-      date: null,
-      starts_at: '10:00',
-      ends_at: '11:00',
-      reason: 'No atender',
-      recurrence: 'none',
-      recurrence_until: toDateInput(addDays(selectedDate, 7)),
-      max_occurrences: 5
-    }))
-  }
-
-  const blockPayloadFromForm = () => {
-    // La hora tipeada es hora argentina; antes se mandaba como si fuera UTC
-    // (el bloqueo quedaba corrido 3 horas respecto de lo que el dueno veia).
-    const startsAt = argentinaLocalToUtcIso(blockDate, blockForm.starts_at)
-    const endsAt = argentinaLocalToUtcIso(blockDate, blockForm.ends_at)
-    const recurrenceUntil =
-      blockForm.recurrence === 'none'
-        ? undefined
-        : argentinaLocalToUtcIso(blockForm.recurrence_until, blockForm.ends_at)
-    return { startsAt, endsAt, recurrenceUntil }
-  }
-
-  const submitBlock = async (cancelAffected: boolean) => {
-    const { startsAt, endsAt, recurrenceUntil } = blockPayloadFromForm()
-    if (blockForm.recurrence === 'none') {
-      await createBlock.mutateAsync({
-        staff_id: blockForm.staff_id,
-        starts_at: startsAt,
-        ends_at: endsAt,
-        reason: blockForm.reason,
-        cancel_affected: cancelAffected
-      })
-      setMessage(cancelAffected ? 'Bloqueo creado y turnos cancelados' : 'Bloqueo creado')
-    } else {
-      await createRecurringBlock.mutateAsync({
-        staff_id: blockForm.staff_id,
-        starts_at: startsAt,
-        ends_at: endsAt,
-        reason: blockForm.reason,
-        recurrence: blockForm.recurrence,
-        recurrence_until: recurrenceUntil,
-        max_occurrences: blockForm.max_occurrences,
-        cancel_affected: cancelAffected
-      })
-      setMessage(
-        cancelAffected ? 'Serie de bloqueos creada y turnos cancelados' : 'Serie de bloqueos creada'
-      )
-    }
-    handleResetBlockForm()
-  }
-
-  const handleSaveBlock = async () => {
-    const { startsAt, endsAt, recurrenceUntil } = blockPayloadFromForm()
-
-    try {
-      if (editingBlockId) {
-        await updateBlock.mutateAsync({
-          publicId: editingBlockId,
-          payload: {
-            staff_id: blockForm.staff_id,
-            starts_at: startsAt,
-            ends_at: endsAt,
-            reason: blockForm.reason
-          }
-        })
-        setMessage('Bloqueo actualizado')
-        handleResetBlockForm()
-        return
-      }
-      // Antes de bloquear: que turnos quedan adentro. Si hay, el dueno los ve
-      // y confirma la cancelacion en bloque; el backend responde 409 sin eso.
-      const preview = await previewBlock.mutateAsync({
-        staff_id: blockForm.staff_id,
-        starts_at: startsAt,
-        ends_at: endsAt,
-        recurrence: blockForm.recurrence,
-        recurrence_until: recurrenceUntil,
-        max_occurrences: blockForm.max_occurrences
-      })
-      if (preview.affected.length > 0) {
-        setBlockPreview(preview)
-        return
-      }
-      await submitBlock(false)
-    } catch (error: unknown) {
-      setMessage(getErrorMessage(error, 'No se pudo guardar el bloqueo'))
-    }
-  }
-
-  const handleConfirmBlockWithCancellations = async () => {
-    try {
-      await submitBlock(true)
-      setBlockPreview(null)
-    } catch (error: unknown) {
-      setMessage(getErrorMessage(error, 'No se pudo guardar el bloqueo'))
-    }
-  }
-
   const handleReleaseAppointment = async (event: UnifiedCalendarEvent) => {
     if (event.type === 'block') return
     const confirmed = await confirm(
@@ -546,6 +282,34 @@ export const CalendarContainer: React.FC = () => {
     }
   }
 
+  const handleCancelAppointment = async (event: UnifiedCalendarEvent) => {
+    if (event.type === 'block') return
+    // Siempre se confirma; si hay un cobro vivo, se avisa que vence (D-20260929-07).
+    const liveChargeWarning =
+      event.status === 'pending_payment'
+        ? ' El cobro pendiente se va a vencer y su link de pago deja de servir.'
+        : ''
+    // "Cancelar"/"Confirmar" en un dialogo que cancela era ambiguo (QA 2026-10-02).
+    const confirmed = await confirm(`¿Cancelar el turno de ${event.title}?${liveChargeWarning}`, {
+      confirmLabel: 'Cancelar turno',
+      cancelLabel: 'Volver'
+    })
+    if (!confirmed) return
+    try {
+      await cancelAppointment.mutateAsync(event.id)
+      setMessage('Turno cancelado')
+    } catch (error: unknown) {
+      setMessage(
+        getErrorMessage(error, 'No se pudo cancelar el turno', {
+          PERMISSION_DENIED: 'Solo podés cancelar los turnos de tu agenda.'
+        })
+      )
+      if (isStateConflictError(error)) {
+        void agendaQuery.refetch()
+      }
+    }
+  }
+
   const handleAppointmentAction = async (
     event: UnifiedCalendarEvent,
     action: AppointmentAction
@@ -555,7 +319,24 @@ export const CalendarContainer: React.FC = () => {
       await handleReleaseAppointment(event)
       return
     }
-    const textos: Record<Exclude<AppointmentAction, 'release'>, [string, string, string]> = {
+    if (action === 'cancel') {
+      await handleCancelAppointment(event)
+      return
+    }
+    if (action === 'reschedule') {
+      setRescheduleTarget({
+        id: event.id,
+        clientName: event.title,
+        serviceName: event.subtitle,
+        staffName: event.staffName,
+        startsAt: toInstantIso(event.startsAt)
+      })
+      return
+    }
+    const textos: Record<
+      Exclude<AppointmentAction, 'release' | 'cancel' | 'reschedule'>,
+      [string, string, string]
+    > = {
       confirm: ['¿Confirmar el turno de', 'Turno confirmado', 'No se pudo confirmar el turno'],
       complete: [
         '¿Marcar como completado el turno de',
@@ -583,6 +364,22 @@ export const CalendarContainer: React.FC = () => {
     }
   }
 
+  const goPrev = () =>
+    setSelectedDate((prev) => subDays(prev, view === 'month' ? 30 : view === 'week' ? 7 : 1))
+  const goNext = () =>
+    setSelectedDate((prev) => addDays(prev, view === 'month' ? 30 : view === 'week' ? 7 : 1))
+
+  const handleDeactivateBlock = (blockId: string) => {
+    void (async () => {
+      try {
+        await deleteBlock.mutateAsync(blockId)
+        setMessage('Bloqueo desactivado')
+      } catch (error: unknown) {
+        setMessage(getErrorMessage(error, 'No se pudo desactivar'))
+      }
+    })()
+  }
+
   const renderActions = (event: UnifiedCalendarEvent, compact: boolean) => {
     if (event.type !== 'appointment') return null
     return (
@@ -591,7 +388,9 @@ export const CalendarContainer: React.FC = () => {
         hasStarted={event.startsAt <= new Date()}
         canRelease={canReleaseAppointments}
         canManage={canManageAppointments}
+        canCancelOrReschedule={canCancelOrRescheduleOf(event.staffId)}
         busy={transitionBusy}
+        readOnlyReason={readOnlyReason}
         compact={compact}
         onAction={(action) => {
           void handleAppointmentAction(event, action)
@@ -629,410 +428,32 @@ export const CalendarContainer: React.FC = () => {
     )
   }
 
-  const renderEventPill = (event: UnifiedCalendarEvent, compact = false) => {
-    const style =
-      event.type === 'block'
-        ? {
-            accent: '#c2410c',
-            background: 'linear-gradient(180deg, #fff7ed 0%, #fed7aa 100%)',
-            text: '#9a3412'
-          }
-        : statusStyle(event.status)
-    return (
-      <div
-        key={`${event.type}-${event.id}`}
-        className={`relative rounded-[6px] border ${compact ? 'p-2' : 'p-3'}`}
-        style={{
-          background: style.background,
-          borderColor: style.accent,
-          boxShadow: '0 3px 6px rgba(0,0,0,0.05)'
-        }}
-      >
-        <p
-          className={`${compact ? 'text-[8px]' : 'text-[9px]'} font-black uppercase tracking-widest`}
-          style={{ color: style.text }}
-        >
-          {event.type === 'block' ? 'Bloqueo' : event.status}
-        </p>
-        <p
-          className={`${compact ? 'text-[11px]' : 'text-xs'} font-black`}
-          style={{ color: colors2000s.text.primary }}
-        >
-          {event.title}
-        </p>
-        <p className="text-[10px] font-bold" style={{ color: colors2000s.text.secondary }}>
-          {formatArgentinaTime(toInstantIso(event.startsAt))} -{' '}
-          {formatArgentinaTime(toInstantIso(event.endsAt))} · {event.staffName}
-        </p>
-        {renderActions(event, compact)}
-        {renderClientWhatsApp(event, compact)}
-      </div>
-    )
-  }
-
-  const renderDayView = () => (
-    <div className="rounded-[8px] border overflow-hidden relative" style={canvasStyle}>
-      {(loadingStaff || agendaQuery.isLoading) && (
-        <div className="absolute inset-0 z-50 bg-white/60 backdrop-blur-[2px] flex flex-col items-center justify-center">
-          <Loader2 className="w-12 h-12 animate-spin text-orange-500 mb-4" />
-          <p className="text-xs font-black text-gray-400 uppercase tracking-widest">
-            Actualizando agenda...
-          </p>
-        </div>
-      )}
-
-      <div className="overflow-x-auto">
-        <div className="min-w-[800px]">
-          <div className="flex border-b" style={{ borderColor: colors2000s.border.light }}>
-            <div
-              className="w-20 flex-shrink-0 flex items-center justify-center border-r"
-              style={{ borderColor: colors2000s.border.light }}
-            >
-              <Clock size={16} className="text-gray-400" />
-            </div>
-            <div className="flex flex-1" style={panelStyle}>
-              {staffMembers?.map((staff, idx) => (
-                <div
-                  key={staff.id}
-                  className="flex-1 min-w-[150px] p-4 text-center border-r"
-                  style={{ borderColor: colors2000s.border.light }}
-                >
-                  <div
-                    className="w-10 h-10 rounded-full text-white flex items-center justify-center mx-auto mb-2 font-black text-xs shadow-md"
-                    style={{
-                      background:
-                        idx % 2 === 0
-                          ? 'linear-gradient(180deg, #3b82f6 0%, #2563eb 100%)'
-                          : `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`,
-                      boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`
-                    }}
-                  >
-                    {staff.displayName
-                      .split(' ')
-                      .map((word) => word[0])
-                      .join('')
-                      .toUpperCase()}
-                  </div>
-                  <p className="text-[10px] font-black uppercase tracking-tight text-gray-800">
-                    {staff.displayName}
-                  </p>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="h-[600px] overflow-y-auto relative bg-white">
-            <div className="flex">
-              <div
-                className="w-20 flex-shrink-0 bg-white sticky left-0 z-10 border-r"
-                style={{ borderColor: colors2000s.border.light }}
-              >
-                <div className="relative" style={{ height: dayGrid.totalHeightPx }}>
-                  {dayGrid.bands.map((band) =>
-                    band.kind === 'open' ? (
-                      band.labels.map((label) => (
-                        <div
-                          key={label.text}
-                          className="absolute inset-x-0 border-b border-gray-50 flex items-start justify-center pt-2"
-                          style={{ top: label.topPx, height: SLOT_HEIGHT_PX }}
-                        >
-                          <span className="text-[10px] font-black text-gray-400">{label.text}</span>
-                        </div>
-                      ))
-                    ) : (
-                      <button
-                        key={band.key}
-                        type="button"
-                        onClick={() => toggleGap(band.key)}
-                        title={`Cerrado ${band.label}`}
-                        aria-expanded={band.expanded}
-                        className="absolute inset-x-0 border-y border-dashed flex items-center justify-center gap-1 text-[9px] font-black uppercase tracking-widest"
-                        style={{
-                          top: band.topPx,
-                          height: band.heightPx,
-                          background: colors2000s.bg.disabled,
-                          borderColor: colors2000s.border.default,
-                          color: colors2000s.text.secondary
-                        }}
-                      >
-                        {band.expanded ? '▾' : '▸'} Cerrado
-                      </button>
-                    )
-                  )}
-                </div>
-              </div>
-
-              <div className="flex flex-1">
-                {staffMembers?.map((staff) => (
-                  <div
-                    key={staff.id}
-                    className="flex-1 min-w-[150px] relative border-r border-gray-50"
-                  >
-                    {dayGrid.bands.map((band) =>
-                      band.kind === 'open' ? (
-                        band.labels.map((label) => (
-                          <div
-                            key={label.text}
-                            className="absolute inset-x-0 border-b border-gray-50/50"
-                            style={{ top: label.topPx, height: SLOT_HEIGHT_PX }}
-                          />
-                        ))
-                      ) : (
-                        <div
-                          key={band.key}
-                          className="absolute inset-x-0 border-y border-dashed flex items-center justify-center text-[9px] font-black uppercase tracking-widest"
-                          style={{
-                            top: band.topPx,
-                            height: band.heightPx,
-                            background: colors2000s.bg.disabled,
-                            borderColor: colors2000s.border.default,
-                            color: colors2000s.text.secondary
-                          }}
-                        >
-                          {band.label}
-                        </div>
-                      )
-                    )}
-
-                    {blocksForSelectedDate
-                      .filter((block) => block.staff_id === staff.id && block.is_active)
-                      .flatMap((block) => {
-                        const placement = gridPlacement(dayGrid, block.starts_at, block.ends_at)
-                        if (!placement) return []
-                        return (
-                          <button
-                            key={block.public_id}
-                            type="button"
-                            onClick={() => handleEditBlock(block)}
-                            className="absolute left-2 right-2 rounded-[6px] p-3 border border-l-[5px] text-left"
-                            style={{
-                              ...placement,
-                              background: 'linear-gradient(180deg, #fff7ed 0%, #fed7aa 100%)',
-                              borderColor: '#fb923c',
-                              borderLeftColor: '#c2410c',
-                              boxShadow: '0 3px 6px rgba(0,0,0,0.05)'
-                            }}
-                          >
-                            <p className="text-[8px] font-black uppercase tracking-widest text-orange-700 mb-1">
-                              {block.reason}
-                            </p>
-                            <p className="text-[10px] font-black text-orange-900">
-                              {formatArgentinaTime(block.starts_at)} -{' '}
-                              {formatArgentinaTime(block.ends_at)}
-                            </p>
-                          </button>
-                        )
-                      })}
-
-                    {appointmentCards
-                      .filter((event) => event.staffId === staff.id)
-                      .map((event) => {
-                        const style = statusStyle(event.status)
-                        return (
-                          <div
-                            key={event.id}
-                            className="absolute left-2 right-2 rounded-[6px] p-3 border border-l-[5px] transition-all hover:scale-[1.02] active:scale-95 cursor-pointer flex flex-col justify-between"
-                            style={{
-                              top: event.top,
-                              height: event.height,
-                              background: style.background,
-                              borderColor: colors2000s.border.default,
-                              borderLeftColor: style.accent,
-                              boxShadow:
-                                'inset 0 1px 0 rgba(255,255,255,0.8), 0 3px 6px rgba(0,0,0,0.05)'
-                            }}
-                          >
-                            <div className="absolute top-1 right-1 z-10 flex items-center gap-1">
-                              {renderActions(event, true)}
-                              {renderClientWhatsApp(event, true)}
-                            </div>
-                            <div>
-                              <p
-                                className="text-[8px] font-black uppercase tracking-widest mb-0.5"
-                                style={{ color: style.text }}
-                              >
-                                {event.subtitle}
-                              </p>
-                              <h4
-                                className="text-[11px] font-black uppercase truncate leading-tight"
-                                style={{ color: colors2000s.text.primary }}
-                              >
-                                {event.title}
-                              </h4>
-                            </div>
-                            <span
-                              className="self-start px-2 py-0.5 rounded-[4px] text-[8px] font-black tracking-widest uppercase"
-                              style={{
-                                background: 'white',
-                                boxShadow: colors2000s.shadows.insetDark,
-                                color: style.text
-                              }}
-                            >
-                              {event.timeLabel} - {event.status}
-                            </span>
-                          </div>
-                        )
-                      })}
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  )
-
-  const renderRangeGrid = (compact = false) => (
-    <div className={compact ? 'overflow-x-auto' : undefined}>
-      <div
-        className={`grid ${compact ? 'grid-cols-7 min-w-[900px]' : 'grid-cols-1 md:grid-cols-2 xl:grid-cols-4'} gap-4`}
-      >
-        {daysInRange.map((day) => {
-          const dayKey = format(day, 'yyyy-MM-dd')
-          const dayEvents = unifiedEvents.filter(
-            (event) => formatArgentinaDate(toInstantIso(event.startsAt)) === dayKey
-          )
-          return (
-            <div key={day.toISOString()} className="rounded-[6px] p-4 bg-white" style={cardStyle}>
-              <div className="mb-3">
-                <p
-                  className="text-[9px] font-black uppercase tracking-widest"
-                  style={{ color: colors2000s.orange.accent }}
-                >
-                  {format(day, 'EEE')}
-                </p>
-                <p className="text-lg font-black" style={{ color: colors2000s.text.primary }}>
-                  {format(day, 'dd/MM')}
-                </p>
-              </div>
-              <div className="space-y-2 max-h-64 overflow-auto">
-                {dayEvents
-                  .slice(0, compact ? 4 : dayEvents.length)
-                  .map((event) => renderEventPill(event, compact))}
-                {compact && dayEvents.length > 4 && (
-                  <div
-                    className="text-[10px] font-black uppercase tracking-widest"
-                    style={{ color: colors2000s.text.secondary }}
-                  >
-                    +{dayEvents.length - 4} eventos
-                  </div>
-                )}
-                {dayEvents.length === 0 && (
-                  <div
-                    className="text-[10px] font-bold uppercase tracking-widest"
-                    style={{ color: colors2000s.text.disabled }}
-                  >
-                    Sin eventos
-                  </div>
-                )}
-              </div>
-            </div>
-          )
-        })}
-      </div>
-    </div>
+  const renderEventPill = (event: UnifiedCalendarEvent, compact = false) => (
+    <AgendaEventPill
+      key={`${event.type}-${event.id}`}
+      event={event}
+      compact={compact}
+      actions={
+        <>
+          {renderActions(event, compact)}
+          {renderClientWhatsApp(event, compact)}
+        </>
+      }
+    />
   )
 
   return (
-    <div className="space-y-6 animate-in fade-in duration-700">
+    <div className="space-y-6 duration-700">
       {confirmDialog}
-      <div
-        className="flex flex-col md:flex-row items-center justify-between gap-6 p-4 sm:p-6 rounded-[8px]"
-        style={panelStyle}
-      >
-        <div className="flex items-center gap-4">
-          <div
-            className="w-12 h-12 rounded-[6px] text-white flex items-center justify-center flex-shrink-0"
-            style={{
-              background: `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`,
-              boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`
-            }}
-          >
-            <CalendarIcon size={24} />
-          </div>
-          <div>
-            <h2
-              className="text-2xl font-black uppercase tracking-tight leading-none mb-1"
-              style={{ color: colors2000s.text.primary }}
-            >
-              Agenda
-            </h2>
-            <p
-              className="text-[10px] font-black uppercase tracking-widest"
-              style={{ color: colors2000s.text.secondary }}
-            >
-              Vistas dia, semana, mes y lista
-            </p>
-          </div>
-        </div>
-
-        <div
-          className="flex flex-wrap items-center justify-center gap-2 sm:gap-3 p-2 rounded-[6px] border"
-          style={fieldStyle}
-        >
-          <button
-            type="button"
-            onClick={() =>
-              setSelectedDate((prev) =>
-                subDays(prev, view === 'month' ? 30 : view === 'week' ? 7 : 1)
-              )
-            }
-            className="w-10 h-10 flex items-center justify-center transition-all active:scale-90"
-            style={buttonStyles2000s.default}
-          >
-            <ChevronLeft size={20} className="text-gray-600" />
-          </button>
-          <div className="px-4 sm:px-6 text-center min-w-[140px] sm:min-w-[200px]">
-            <p
-              className="text-[9px] font-black uppercase tracking-widest mb-0.5"
-              style={{ color: colors2000s.orange.accent }}
-            >
-              {VIEW_LABELS[view]}
-            </p>
-            <p
-              className="text-base font-black uppercase tracking-tight"
-              style={{ color: colors2000s.text.primary }}
-            >
-              {format(selectedDate, "dd 'de' MMMM")}
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={() =>
-              setSelectedDate((prev) =>
-                addDays(prev, view === 'month' ? 30 : view === 'week' ? 7 : 1)
-              )
-            }
-            className="w-10 h-10 flex items-center justify-center transition-all active:scale-90"
-            style={buttonStyles2000s.default}
-          >
-            <ChevronRight size={20} className="text-gray-600" />
-          </button>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2">
-          {(Object.keys(VIEW_LABELS) as CalendarView[]).map((viewKey) => (
-            <button
-              key={viewKey}
-              type="button"
-              onClick={() => setView(viewKey)}
-              className="px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest"
-              style={view === viewKey ? buttonStyles2000s.selected : buttonStyles2000s.default}
-            >
-              {VIEW_LABELS[viewKey]}
-            </button>
-          ))}
-          <button
-            type="button"
-            onClick={() => setIsNewAppointmentOpen(true)}
-            className="px-6 py-4 rounded-xl flex items-center gap-2 font-black uppercase tracking-widest text-xs"
-            style={buttonStyles2000s.selected}
-          >
-            <Plus size={18} /> Nuevo turno
-          </button>
-        </div>
-      </div>
+      <AgendaToolbar
+        view={view}
+        selectedDate={selectedDate}
+        onPrev={goPrev}
+        onNext={goNext}
+        onViewChange={changeView}
+        onNewAppointment={() => setIsNewAppointmentOpen(true)}
+        readOnlyReason={readOnlyReason}
+      />
 
       <QueryErrorNotice
         error={agendaQuery.error ?? staffError ?? blocksQuery.error}
@@ -1058,270 +479,87 @@ export const CalendarContainer: React.FC = () => {
         </div>
       )}
 
-      {view === 'day' && renderDayView()}
-      {view === 'week' && renderRangeGrid(false)}
-      {view === 'month' && renderRangeGrid(true)}
-      {view === 'list' && (
-        <div className="space-y-3">
-          {unifiedEvents.map((event) => renderEventPill(event))}
-          {!unifiedEvents.length && (
-            <div
-              className="rounded-[6px] p-6 bg-white text-sm font-bold"
-              style={{
-                border: `1px solid ${colors2000s.border.light}`,
-                boxShadow: colors2000s.shadows.insetDark,
-                color: colors2000s.text.secondary
-              }}
-            >
-              No hay eventos para el rango seleccionado.
-            </div>
+      {view === 'day' && (
+        <AgendaDayView
+          staffMembers={staffMembers}
+          loading={loadingStaff || agendaQuery.isLoading}
+          dayGrid={dayGrid}
+          hoursOfDay={hoursOfDay}
+          blocks={blocksForSelectedDate}
+          cards={appointmentCards}
+          // Tocar un bloqueo abre su edicion (PATCH, 402 con la tienda suspendida).
+          canManageBlocks={canManageBlocks && readOnlyReason === null}
+          onToggleGap={toggleGap}
+          onEditBlock={setBlockToEdit}
+          renderControls={(event) => (
+            <>
+              {renderActions(event, true)}
+              {renderClientWhatsApp(event, true)}
+            </>
           )}
-        </div>
+        />
+      )}
+      {view === 'week' && (
+        <AgendaRangeGrid
+          days={daysInRange}
+          eventsByDay={eventsByDay}
+          compact={false}
+          renderEvent={renderEventPill}
+        />
+      )}
+      {view === 'month' && (
+        <AgendaRangeGrid
+          days={daysInRange}
+          eventsByDay={eventsByDay}
+          compact
+          renderEvent={renderEventPill}
+        />
+      )}
+      {view === 'list' && (
+        <AgendaListView eventsByDay={eventsByDay} renderEvent={(event) => renderEventPill(event)} />
       )}
 
-      <div className="grid xl:grid-cols-[1.05fr_0.95fr] gap-6">
-        <div className="p-6 rounded-[8px] space-y-4" style={panelStyle}>
-          <div className="flex items-center gap-3">
-            <ShieldBan className="w-5 h-5" style={{ color: colors2000s.orange.accent }} />
-            <h3
-              className="text-lg font-black uppercase tracking-tight"
-              style={{ color: colors2000s.text.primary }}
-            >
-              Bloqueos de agenda
-            </h3>
-          </div>
+      <div className={`grid gap-6 ${canManageBlocks ? 'xl:grid-cols-[1.05fr_0.95fr]' : ''}`}>
+        <BlocksPanel
+          key={blockToEdit?.public_id ?? 'new'}
+          staffMembers={staffMembers}
+          dateStr={dateStr}
+          canManageBlocks={canManageBlocks}
+          canCancelAffected={canCancelAffected}
+          editTarget={blockToEdit}
+          onDoneEditing={() => setBlockToEdit(null)}
+          onMessage={setMessage}
+        />
 
-          <div className="flex flex-wrap gap-2">
-            {templatesQuery.data?.map((template) => (
-              <button
-                key={template.key}
-                type="button"
-                onClick={() => setBlockForm((prev) => ({ ...prev, reason: template.reason }))}
-                className="px-3 py-2 text-[10px] font-black uppercase tracking-widest"
-                style={buttonStyles2000s.default}
-              >
-                {template.label}
-              </button>
-            ))}
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <select
-              value={blockForm.staff_id}
-              onChange={(e) => setBlockForm((prev) => ({ ...prev, staff_id: e.target.value }))}
-              className="rounded-[6px] px-4 py-3 font-bold outline-none"
-              style={fieldStyle}
-            >
-              {staffMembers?.map((staff) => (
-                <option key={staff.id} value={staff.id}>
-                  {staff.displayName}
-                </option>
-              ))}
-            </select>
-            <input
-              value={blockForm.reason}
-              onChange={(e) => setBlockForm((prev) => ({ ...prev, reason: e.target.value }))}
-              className="rounded-[6px] px-4 py-3 font-bold outline-none"
-              style={fieldStyle}
-              placeholder="Motivo interno"
-            />
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <input
-              type="date"
-              value={blockDate}
-              onChange={(e) => setBlockForm((prev) => ({ ...prev, date: e.target.value }))}
-              className="rounded-[6px] px-4 py-3 font-bold outline-none"
-              style={fieldStyle}
-            />
-            <input
-              type="time"
-              value={blockForm.starts_at}
-              onChange={(e) => setBlockForm((prev) => ({ ...prev, starts_at: e.target.value }))}
-              className="rounded-[6px] px-4 py-3 font-bold outline-none"
-              style={fieldStyle}
-            />
-            <input
-              type="time"
-              value={blockForm.ends_at}
-              onChange={(e) => setBlockForm((prev) => ({ ...prev, ends_at: e.target.value }))}
-              className="rounded-[6px] px-4 py-3 font-bold outline-none"
-              style={fieldStyle}
-            />
-          </div>
-
-          {!editingBlockId && (
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <select
-                value={blockForm.recurrence}
-                onChange={(e) =>
-                  setBlockForm((prev) => ({
-                    ...prev,
-                    recurrence: e.target.value as 'none' | 'daily' | 'weekly'
-                  }))
-                }
-                className="rounded-[6px] px-4 py-3 font-bold outline-none"
-                style={fieldStyle}
-              >
-                <option value="none">Sin recurrencia</option>
-                <option value="daily">Diaria</option>
-                <option value="weekly">Semanal</option>
-              </select>
-              <input
-                type="date"
-                value={blockForm.recurrence_until}
-                onChange={(e) =>
-                  setBlockForm((prev) => ({ ...prev, recurrence_until: e.target.value }))
-                }
-                className="rounded-[6px] px-4 py-3 font-bold outline-none"
-                style={fieldStyle}
-              />
-              <input
-                type="number"
-                min={1}
-                max={60}
-                value={blockForm.max_occurrences}
-                onChange={(e) =>
-                  setBlockForm((prev) => ({
-                    ...prev,
-                    max_occurrences: Number(e.target.value) || 1
-                  }))
-                }
-                className="rounded-[6px] px-4 py-3 font-bold outline-none"
-                style={fieldStyle}
-              />
-            </div>
-          )}
-
-          <div className="flex flex-wrap gap-3">
-            <button
-              type="button"
-              onClick={() => {
-                void handleSaveBlock()
-              }}
-              disabled={!blockForm.staff_id}
-              className="px-4 py-3 rounded-2xl text-xs font-black uppercase tracking-widest disabled:opacity-50"
-              style={buttonStyles2000s.selected}
-            >
-              {editingBlockId ? 'Actualizar bloqueo' : 'Guardar bloqueo'}
-            </button>
-            <button
-              type="button"
-              onClick={handleResetBlockForm}
-              className="px-4 py-3 text-xs font-black uppercase tracking-widest"
-              style={buttonStyles2000s.default}
-            >
-              Limpiar
-            </button>
-          </div>
-        </div>
-
-        <div className="p-6 rounded-[8px] space-y-4" style={panelStyle}>
-          <h3
-            className="text-lg font-black uppercase tracking-tight"
-            style={{ color: colors2000s.text.primary }}
-          >
-            Bloqueos y ausencias
-          </h3>
-          <div className="space-y-3">
-            {timelineEvents.map((event) => (
-              <div
-                key={`${event.type}-${event.id}`}
-                className="rounded-[6px] p-4 bg-white flex flex-col gap-3"
-                style={cardStyle}
-              >
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <p className="text-sm font-black" style={{ color: colors2000s.text.primary }}>
-                      {event.title}
-                    </p>
-                    <p
-                      className="text-[11px] font-bold"
-                      style={{ color: colors2000s.text.secondary }}
-                    >
-                      {formatArgentinaDayMonth(toInstantIso(event.startsAt))}{' '}
-                      {formatArgentinaTime(toInstantIso(event.startsAt))} -{' '}
-                      {formatArgentinaTime(toInstantIso(event.endsAt))} · {event.staffName}
-                    </p>
-                  </div>
-                  <span
-                    className="px-2 py-1 rounded-[4px] text-[10px] font-black uppercase tracking-widest"
-                    style={{
-                      background: event.type === 'block' ? '#ffedd5' : '#fee2e2',
-                      color: event.type === 'block' ? '#c2410c' : '#b91c1c'
-                    }}
-                  >
-                    {event.type === 'block' ? 'Bloqueo' : 'Ausencia'}
-                  </span>
-                </div>
-                {event.type === 'block' && (
-                  <div className="flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      onClick={() =>
-                        handleEditBlock({
-                          public_id: event.id,
-                          staff_id: event.staffId,
-                          starts_at: event.startsAt.toISOString(),
-                          ends_at: event.endsAt.toISOString(),
-                          reason: event.title
-                        })
-                      }
-                      className="px-3 py-2 text-[10px] font-black uppercase tracking-widest"
-                      style={buttonStyles2000s.default}
-                    >
-                      Editar
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        void (async () => {
-                          try {
-                            await deleteBlock.mutateAsync(event.id)
-                            setMessage('Bloqueo desactivado')
-                          } catch (error: unknown) {
-                            setMessage(getErrorMessage(error, 'No se pudo desactivar'))
-                          }
-                        })()
-                      }}
-                      className="px-3 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest"
-                      style={buttonStyles2000s.selected}
-                    >
-                      Desactivar
-                    </button>
-                  </div>
-                )}
-              </div>
-            ))}
-            {!timelineEvents.length && (
-              <div
-                className="rounded-[6px] p-6 bg-white text-sm font-bold"
-                style={{ ...cardStyle, color: colors2000s.text.secondary }}
-              >
-                No hay bloqueos ni ausencias en el rango actual.
-              </div>
-            )}
-          </div>
-        </div>
+        <AbsencesTimeline
+          events={timelineEvents}
+          canManageBlocks={canManageBlocks}
+          onEdit={setBlockToEdit}
+          onDeactivate={handleDeactivateBlock}
+          readOnlyReason={readOnlyReason}
+        />
       </div>
-      {blockPreview && (
-        <BlockPreviewModal
-          preview={blockPreview}
-          reason={blockForm.reason}
-          busy={createBlock.isPending || createRecurringBlock.isPending}
-          onCancel={() => setBlockPreview(null)}
-          onConfirm={() => {
-            void handleConfirmBlockWithCancellations()
+      {isNewAppointmentOpen && (
+        <NewAppointmentModal
+          onClose={() => setIsNewAppointmentOpen(false)}
+          defaultDate={selectedDate}
+          isProfessional={user?.role === ROLE_PROFESSIONAL}
+        />
+      )}
+      {rescheduleTarget && (
+        <RescheduleAppointmentDialog
+          appointment={rescheduleTarget}
+          isAdmin={canReleaseAppointments}
+          onClose={() => setRescheduleTarget(null)}
+          onDone={(text) => {
+            setRescheduleTarget(null)
+            setMessage(text)
+          }}
+          onStateConflict={() => {
+            void agendaQuery.refetch()
           }}
         />
       )}
-
-      <NewAppointmentModal
-        isOpen={isNewAppointmentOpen}
-        onClose={() => setIsNewAppointmentOpen(false)}
-        defaultDate={selectedDate}
-      />
     </div>
   )
 }

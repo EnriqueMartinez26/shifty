@@ -36,6 +36,7 @@ from tests.integration.test_feature_flags_finance_and_public_privacy import (
     create_staff,
     register_and_login,
     seed_store_and_admin,
+    set_store_whatsapp,
     webhook_signature_headers,
 )
 
@@ -116,6 +117,7 @@ async def _book_with_mercadopago(
     *,
     slug_suffix: str,
     hour: int,
+    staff_email: str = "pro-demo@test.com",
 ) -> str:
     service_public_id = await create_service(
         client,
@@ -124,7 +126,11 @@ async def _book_with_mercadopago(
         deposit_type="percent",
         deposit_amount=30,
     )
-    staff_public_id = await create_staff(client, token, service_public_id)
+    # El email del personal es unico global: con dos tiendas en el mismo test
+    # la segunda pasa otro.
+    staff_public_id = await create_staff(
+        client, token, service_public_id, email=staff_email
+    )
     starts_at = datetime.now(timezone.utc) + timedelta(days=6)
     await add_staff_schedule(client, token, staff_public_id, target_date=starts_at)
     slot = starts_at.replace(hour=hour, minute=0, second=0, microsecond=0)
@@ -268,9 +274,12 @@ async def test_expiry_releases_the_slot_when_nothing_was_paid(
 
 @pytest.mark.asyncio
 async def test_webhook_inbox_gives_up_after_exhausting_retries(
-    client: AsyncClient, test_session: AsyncSession
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Un evento irrecuperable deja de reintentarse y queda contabilizado como fallido."""
+    # MP simulado: sin esto la consulta del pago salia a la red real (revision
+    # 4R de la PR #104, R3 W3). El pago no existe en MP.
+    _stub_mercadopago(monkeypatch, remote_payment=None)
     store_public_id, token = await register_and_login(
         client, slug="tienda-agota", email="agota@test.com"
     )
@@ -302,13 +311,14 @@ async def test_webhook_inbox_gives_up_after_exhausting_retries(
 
 @pytest.mark.asyncio
 async def test_unresolvable_webhook_stays_pending_for_retry(
-    client: AsyncClient, test_session: AsyncSession
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Un webhook que no pudimos aplicar no debe darse por procesado.
 
     Marcarlo perderia el cobro de forma permanente: el turno venceria aunque el
     cliente haya pagado.
     """
+    _stub_mercadopago(monkeypatch, remote_payment=None)
     store_public_id, token = await register_and_login(
         client, slug="tienda-retry", email="retry@test.com"
     )
@@ -392,13 +402,20 @@ async def test_required_deposit_blocks_manual_when_store_disallows_coordination(
 async def test_required_deposit_allows_manual_when_store_opts_in(
     client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Si la tienda acepta coordinar por fuera, la reserva manual sigue siendo valida."""
+    """Si la tienda acepta coordinar por fuera, la reserva manual sigue siendo valida.
+
+    Desde 2026-10-03 (decision de Mateo, ``payments.deposit_channels``)
+    "coordinar por fuera" una sena obligatoria es pagarla por WhatsApp: el
+    turno queda retenido (``pending_payment``) como con MP, sin link, hasta que
+    la tienda confirma el pago a mano. Antes nacia ``pending`` sin cobro.
+    """
     _stub_preference(monkeypatch)
     store_public_id, token = await register_and_login(
         client, slug="tienda-flexible", email="flexible@test.com"
     )
     await _enable_payments(client, token)
     await _configure_gateway(client, token)
+    await set_store_whatsapp(client, token)
 
     service_public_id = await create_service(
         client,
@@ -427,7 +444,8 @@ async def test_required_deposit_allows_manual_when_store_opts_in(
         },
     )
     assert booking.status_code == 201, booking.text
-    assert booking.json()["status"] == "pending"
+    assert booking.json()["status"] == "pending_payment"
+    assert booking.json()["payment_link"] is None
 
 
 @pytest.mark.asyncio

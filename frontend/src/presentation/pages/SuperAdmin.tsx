@@ -1,6 +1,8 @@
-import React, { useState } from 'react'
+import React, { useRef, useState } from 'react'
 
 import { AlertTriangle } from 'lucide-react'
+
+import { validateNewPassword } from '@domain/value-objects/PasswordRules'
 
 import {
   type SuperAdminCoupon,
@@ -53,9 +55,12 @@ import {
   createEmptyStoreForm,
   createEmptySubscriptionForm,
   createEmptyUserForm,
+  isValidSlug,
   panelStyle,
   parseOptionalInt,
   scopeBadgeStyle,
+  SLUG_RULE_TEXT,
+  SUPERADMIN_FIELD_ERRORS,
   type AdminFormState,
   type CouponFormState,
   type PlanFormState,
@@ -70,12 +75,23 @@ import { SubscriptionSection } from './superadmin/SubscriptionSection'
 import { SuperAdminHeader } from './superadmin/SuperAdminHeader'
 import { TenantUsersSection } from './superadmin/TenantUsersSection'
 import { UserModals } from './superadmin/UserModals'
+import { useDocumentTitle } from '../hooks/useDocumentTitle'
+
+const SEARCH_DEBOUNCE_MS = 300
 
 const SuperAdminPage: React.FC = () => {
+  useDocumentTitle('Control global · Shifty')
   const { user } = useAuth()
   const { confirm, confirmDialog } = useConfirm()
 
+  // Lo que se tipea (draftSearch) y lo que se consulta (search) van aparte:
+  // cada tecla rearma el timer en el mismo evento, sin efecto (regla 27), y
+  // solo la ultima llega al listado. Antes cada tecla pedia listado, detalle y
+  // auditoria (F4-10). Si la pagina se desmonta con el timer armado, el
+  // setState tardio es un no-op en React 18+, asi que no hace falta limpiarlo.
+  const [draftSearch, setDraftSearch] = useState('')
   const [search, setSearch] = useState('')
+  const searchTimer = useRef<number | undefined>(undefined)
   const [activityFilter, setActivityFilter] = useState<ActivityFilter>('active')
   const [subscriptionFilter, setSubscriptionFilter] = useState<SubscriptionFilter>('all')
   // La tienda que el usuario eligio. La efectiva se deriva en el render.
@@ -98,10 +114,18 @@ const SuperAdminPage: React.FC = () => {
   const [editingPlan, setEditingPlan] = useState<SuperAdminPlan | null>(null)
   const [editingCoupon, setEditingCoupon] = useState<SuperAdminCoupon | null>(null)
 
+  const changeSearch = (value: string) => {
+    setDraftSearch(value)
+    window.clearTimeout(searchTimer.current)
+    searchTimer.current = window.setTimeout(() => setSearch(value), SEARCH_DEBOUNCE_MS)
+  }
+
   // Va a la query key, pero react-query la compara por valor: no hace falta memo.
+  // "Todas" viaja como `all`: con null axios lo omitia y el backend traia solo
+  // activas (FF-24).
   const storeParams = {
     search: search.trim() || undefined,
-    is_active: activityFilter === 'all' ? null : activityFilter === 'active',
+    is_active: activityFilter === 'all' ? ('all' as const) : activityFilter === 'active',
     has_subscription: subscriptionFilter === 'all' ? null : subscriptionFilter === 'with'
   }
 
@@ -278,6 +302,12 @@ const SuperAdminPage: React.FC = () => {
     event.preventDefault()
     setModalError(null)
 
+    // El backend lo rechaza con un 422; aca se explica el formato sin ir.
+    if (!isValidSlug(storeForm.slug.trim())) {
+      setModalError(SLUG_RULE_TEXT)
+      return
+    }
+
     try {
       const payload = {
         name: storeForm.name.trim(),
@@ -307,7 +337,9 @@ const SuperAdminPage: React.FC = () => {
 
       closeModal()
     } catch (error) {
-      setModalError(getErrorMessage(error, 'No se pudo guardar la tienda'))
+      setModalError(
+        getErrorMessage(error, 'No se pudo guardar la tienda', {}, SUPERADMIN_FIELD_ERRORS)
+      )
     }
   }
 
@@ -315,6 +347,12 @@ const SuperAdminPage: React.FC = () => {
     event.preventDefault()
     if (!selectedStore) return
     setModalError(null)
+
+    const passwordError = validateNewPassword(adminForm.password)
+    if (passwordError) {
+      setModalError(passwordError)
+      return
+    }
 
     try {
       const created = await createAdminMutation.mutateAsync({
@@ -330,7 +368,9 @@ const SuperAdminPage: React.FC = () => {
       setFeedback({ tone: 'success', text: `Admin creado: ${created.email}` })
       closeModal()
     } catch (error) {
-      setModalError(getErrorMessage(error, 'No se pudo crear el admin'))
+      setModalError(
+        getErrorMessage(error, 'No se pudo crear el admin', {}, SUPERADMIN_FIELD_ERRORS)
+      )
     }
   }
 
@@ -338,6 +378,14 @@ const SuperAdminPage: React.FC = () => {
     event.preventDefault()
     if (!editingUser) return
     setModalError(null)
+
+    // La clave es opcional: vacía no viaja, pero una escrita se valida y se
+    // manda tal cual, sin recortar (D-20261001-01).
+    const passwordError = userForm.password ? validateNewPassword(userForm.password) : null
+    if (passwordError) {
+      setModalError(passwordError)
+      return
+    }
 
     try {
       const updated = await updateUserMutation.mutateAsync({
@@ -347,14 +395,16 @@ const SuperAdminPage: React.FC = () => {
           last_name: userForm.last_name.trim() || undefined,
           phone: userForm.phone.trim() || null,
           role: userForm.role,
-          password: userForm.password.trim() || undefined,
+          password: userForm.password || undefined,
           is_active: userForm.is_active
         }
       })
       setFeedback({ tone: 'success', text: `Usuario actualizado: ${updated.email}` })
       closeModal()
     } catch (error) {
-      setModalError(getErrorMessage(error, 'No se pudo actualizar el usuario'))
+      setModalError(
+        getErrorMessage(error, 'No se pudo actualizar el usuario', {}, SUPERADMIN_FIELD_ERRORS)
+      )
     }
   }
 
@@ -389,7 +439,9 @@ const SuperAdminPage: React.FC = () => {
 
       closeModal()
     } catch (error) {
-      setModalError(getErrorMessage(error, 'No se pudo guardar el plan'))
+      setModalError(
+        getErrorMessage(error, 'No se pudo guardar el plan', {}, SUPERADMIN_FIELD_ERRORS)
+      )
     }
   }
 
@@ -410,10 +462,12 @@ const SuperAdminPage: React.FC = () => {
           current_period_end: fromDateTimeInput(subscriptionForm.current_period_end)
         }
       })
-      setFeedback({ tone: 'success', text: `Suscripcion actualizada para ${selectedStore.name}` })
+      setFeedback({ tone: 'success', text: `Suscripción actualizada para ${selectedStore.name}` })
       closeModal()
     } catch (error) {
-      setModalError(getErrorMessage(error, 'No se pudo asignar el plan'))
+      setModalError(
+        getErrorMessage(error, 'No se pudo asignar el plan', {}, SUPERADMIN_FIELD_ERRORS)
+      )
     }
   }
 
@@ -436,7 +490,7 @@ const SuperAdminPage: React.FC = () => {
 
       if (modal === 'create-coupon') {
         const created = await createCouponMutation.mutateAsync(payload)
-        setFeedback({ tone: 'success', text: `Cupon creado: ${created.code}` })
+        setFeedback({ tone: 'success', text: `Cupón creado: ${created.code}` })
       } else if (editingCoupon) {
         const updated = await updateCouponMutation.mutateAsync({
           couponPublicId: editingCoupon.public_id,
@@ -445,12 +499,14 @@ const SuperAdminPage: React.FC = () => {
             is_active: couponForm.is_active
           }
         })
-        setFeedback({ tone: 'success', text: `Cupon actualizado: ${updated.code}` })
+        setFeedback({ tone: 'success', text: `Cupón actualizado: ${updated.code}` })
       }
 
       closeModal()
     } catch (error) {
-      setModalError(getErrorMessage(error, 'No se pudo guardar el cupon'))
+      setModalError(
+        getErrorMessage(error, 'No se pudo guardar el cupón', {}, SUPERADMIN_FIELD_ERRORS)
+      )
     }
   }
 
@@ -466,11 +522,13 @@ const SuperAdminPage: React.FC = () => {
       })
       setFeedback({
         tone: 'success',
-        text: `Cupon ${redemption.code_snapshot} canjeado en ${selectedStore.name}`
+        text: `Cupón ${redemption.code_snapshot} canjeado en ${selectedStore.name}`
       })
       closeModal()
     } catch (error) {
-      setModalError(getErrorMessage(error, 'No se pudo canjear el cupon'))
+      setModalError(
+        getErrorMessage(error, 'No se pudo canjear el cupón', {}, SUPERADMIN_FIELD_ERRORS)
+      )
     }
   }
 
@@ -506,7 +564,7 @@ const SuperAdminPage: React.FC = () => {
       nextState,
       question: nextState
         ? `Activar ${store.name}?`
-        : `Desactivar ${store.name}? Esto puede bloquear nuevas operaciones del tenant.`,
+        : `Desactivar ${store.name}? Esto puede bloquear nuevas operaciones de la tienda.`,
       run: () =>
         updateStoreMutation.mutateAsync({
           storePublicId: store.public_id,
@@ -517,9 +575,22 @@ const SuperAdminPage: React.FC = () => {
     })
   }
 
-  const toggleUserActive = (targetUser: SuperAdminUser) => {
+  const toggleUserActive = async (targetUser: SuperAdminUser) => {
     const nextState = !targetUser.is_active
-    return confirmAndToggle({
+    // D-20260930-05, espejo de la regla 14 como en `toggleGlobalAdmin`: sobre
+    // la propia cuenta el boton no se deshabilita; avisa y corta sin preguntar
+    // ni llamar al backend. La garantia real es el 400 de
+    // `backend/modules/users/guards.py`, que tambien resuelve "ultimo
+    // SuperAdmin activo".
+    if (!nextState && user?.public_id === targetUser.public_id) {
+      setFeedback({
+        tone: 'warning',
+        text: 'No podés desactivar tu propia cuenta de SuperAdmin.'
+      })
+      return
+    }
+
+    await confirmAndToggle({
       nextState,
       question: nextState ? `Activar ${targetUser.email}?` : `Desactivar ${targetUser.email}?`,
       run: () =>
@@ -540,7 +611,7 @@ const SuperAdminPage: React.FC = () => {
     if (!nextState && user?.public_id === targetUser.public_id) {
       setFeedback({
         tone: 'warning',
-        text: 'No podés revocarte tu propio permiso global desde esta sesion.'
+        text: 'No podés revocar tu propio permiso de SuperAdmin.'
       })
       return
     }
@@ -549,7 +620,7 @@ const SuperAdminPage: React.FC = () => {
       nextState,
       question: nextState
         ? `Promover a ${targetUser.email} como Super Admin global?`
-        : `Revocar Super Admin global a ${targetUser.email}? El backend impedira dejar al sistema sin un admin global activo.`,
+        : `Revocar Super Admin global a ${targetUser.email}? Shifty no permite dejar el sistema sin un admin global activo.`,
       run: () =>
         setGlobalAdminMutation.mutateAsync({
           userPublicId: targetUser.public_id,
@@ -579,14 +650,14 @@ const SuperAdminPage: React.FC = () => {
     const nextState = !coupon.is_active
     return confirmAndToggle({
       nextState,
-      question: nextState ? `Activar cupon ${coupon.code}?` : `Desactivar cupon ${coupon.code}?`,
+      question: nextState ? `Activar cupón ${coupon.code}?` : `Desactivar cupón ${coupon.code}?`,
       run: () =>
         updateCouponMutation.mutateAsync({
           couponPublicId: coupon.public_id,
           payload: { is_active: nextState }
         }),
-      doneText: `Cupon ${nextState ? 'activado' : 'desactivado'}: ${coupon.code}`,
-      failText: 'No se pudo actualizar el cupon'
+      doneText: `Cupón ${nextState ? 'activado' : 'desactivado'}: ${coupon.code}`,
+      failText: 'No se pudo actualizar el cupón'
     })
   }
 
@@ -645,8 +716,8 @@ const SuperAdminPage: React.FC = () => {
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1.45fr)_420px]">
         <div className="space-y-6">
           <StoresSection
-            search={search}
-            setSearch={setSearch}
+            search={draftSearch}
+            onSearchChange={changeSearch}
             activityFilter={activityFilter}
             setActivityFilter={setActivityFilter}
             subscriptionFilter={subscriptionFilter}
@@ -727,8 +798,8 @@ const SuperAdminPage: React.FC = () => {
                   Estados sensibles
                 </p>
                 <p className="mt-2 text-xs font-bold">
-                  La UI diferencia acciones globales, acciones sobre tienda seleccionada y
-                  operaciones delicadas para evitar errores de tenant.
+                  Las acciones globales, las de la tienda seleccionada y las delicadas se muestran
+                  separadas para evitar errores.
                 </p>
               </div>
             </div>

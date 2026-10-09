@@ -23,6 +23,7 @@ from tests.integration.test_feature_flags_finance_and_public_privacy import (
     create_service,
     create_staff,
     register_and_login,
+    set_store_whatsapp,
 )
 from tests.integration.test_mails_al_cliente import Buzon
 
@@ -68,6 +69,9 @@ async def _tienda_con_sena(client: AsyncClient, slug: str) -> tuple[str, str, st
     reglas = await client.patch("/stores/me", headers=auth_headers(token), json=REGLAS)
     assert reglas.status_code == 200, reglas.text
     assert reglas.json()["deposit_far_notice_extra_percent"] == 20
+    # Con WhatsApp la sena tambien se puede pagar por fuera (decision de
+    # Mateo, 2026-10-03): ni el preview la obliga online ni "manual" rebota.
+    await set_store_whatsapp(client, token)
     service = await create_service(
         client,
         token,
@@ -124,8 +128,8 @@ async def _verificar_telefono(
         channel="email",
         email=contacto,
         store_name="Demo",
-        # El envio (post-respuesta desde B4-01) no importa aca.
-        schedule_dispatch=lambda *args: None,
+        # El envio no importa aca; la cola lo acepta y el codigo se guarda.
+        schedule_dispatch=lambda *args: True,
     )
     await servicio.verify_code(
         store_id=tienda.store_id,
@@ -240,11 +244,11 @@ async def test_el_historial_del_cliente_cambia_la_sena(
     )
     assert reserva.status_code == 201, reserva.text
     pid = reserva.json()["public_id"]
-    for accion in ("confirm", "complete"):
-        res = await client.patch(
-            f"/appointments/{pid}/{accion}", headers=auth_headers(token)
-        )
-        assert res.status_code == 200, res.text
+    await _pagar_la_sena_por_whatsapp(client, token, pid)
+    res = await client.patch(
+        f"/appointments/{pid}/complete", headers=auth_headers(token)
+    )
+    assert res.status_code == 200, res.text
     habitual = await _preview(client, store, service, 2, telefono)
     assert _reasons(habitual) == ["base"]
     assert habitual["amount"] == 3000.0
@@ -266,14 +270,28 @@ async def test_el_historial_del_cliente_cambia_la_sena(
     )
     assert otra.status_code == 201, otra.text
     pid2 = otra.json()["public_id"]
-    for accion in ("confirm", "absent"):
-        res = await client.patch(
-            f"/appointments/{pid2}/{accion}", headers=auth_headers(token)
-        )
-        assert res.status_code == 200, res.text
+    await _pagar_la_sena_por_whatsapp(client, token, pid2)
+    res = await client.patch(
+        f"/appointments/{pid2}/absent", headers=auth_headers(token)
+    )
+    assert res.status_code == 200, res.text
     faltador = await _preview(client, store, service, 2, telefono)
     assert _reasons(faltador) == ["base", "absences"]
     assert faltador["amount"] == 6000.0
+
+
+async def _pagar_la_sena_por_whatsapp(
+    client: AsyncClient, token: str, turno: str
+) -> None:
+    """Revision 4R de la PR #108 (R3 W1): la sena por WhatsApp se cierra
+    registrando el pago (``manual-confirm``), que confirma el turno y el cobro
+    juntos. Antes este test confirmaba con ``PATCH /confirm`` y dejaba el cobro
+    vivo sobre un turno confirmado; hoy eso es 409."""
+    res = await client.post(
+        f"/payments/{turno}/manual-confirm", headers=auth_headers(token), json={}
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["status"] == "manual_confirmed"
 
 
 def _reasons(preview: dict[str, Any]) -> list[str]:

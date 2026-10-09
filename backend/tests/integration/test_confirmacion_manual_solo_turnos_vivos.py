@@ -6,8 +6,10 @@ leia el turno sin lock y sin mirar su estado: marcaba como pagado un turno
 que el personal acababa de cancelar (o uno vencido, completado o ausente).
 
 Ahora lockea el turno primero (orden turno -> pago, regla 7), lo relee bajo
-el lock y rechaza un turno SOLTADO (``cancelled``, ``expired``) con 409
-``APPOINTMENT_NOT_PAYABLE`` sin crear ni tocar el cobro. Un turno
+el lock y rechaza un turno SOLTADO sin crear ni tocar el cobro: ``cancelled``
+es 409 ``APPOINTMENT_NOT_PAYABLE`` y ``expired`` es 409
+``APPOINTMENT_HOLD_EXPIRED``, que le dice al personal como reagendar (revision
+4R de la PR #108). Un turno
 ``completed`` o ``absent`` se sigue pudiendo cobrar a mano: registrar el
 efectivo despues de atender es un flujo real (correccion de alcance del
 coordinador, 2026-09-25).
@@ -39,12 +41,19 @@ async def _cobros(session: AsyncSession, turno: str) -> list[Payment]:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("estado", ["cancelled", "expired"])
+@pytest.mark.parametrize(
+    ("estado", "codigo"),
+    [
+        ("cancelled", "APPOINTMENT_NOT_PAYABLE"),
+        ("expired", "APPOINTMENT_HOLD_EXPIRED"),
+    ],
+)
 async def test_no_se_confirma_a_mano_el_cobro_de_un_turno_soltado(
     client: AsyncClient,
     test_session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
     estado: str,
+    codigo: str,
 ) -> None:
     t = await _tienda(client, monkeypatch, f"manual-terminal-{estado}", sena=False)
     turno = await _confirmado(client, t, 13)
@@ -58,7 +67,7 @@ async def test_no_se_confirma_a_mano_el_cobro_de_un_turno_soltado(
     )
 
     assert res.status_code == 409, res.text
-    assert res.json()["error_code"] == "APPOINTMENT_NOT_PAYABLE"
+    assert res.json()["error_code"] == codigo
     assert await _cobros(test_session, turno) == []
 
 

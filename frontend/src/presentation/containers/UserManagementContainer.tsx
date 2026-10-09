@@ -1,13 +1,18 @@
 import React, { useState } from 'react'
 
-import { Plus, Search, Loader2, User as UserIcon } from 'lucide-react'
+import { Plus, Loader2, User as UserIcon } from 'lucide-react'
 
 import { User } from '@domain/entities/User'
 
+import { getErrorMessage } from '@shared/errors/getErrorMessage'
+
 import { colors2000s, buttonStyles2000s } from '../../theme/colors'
+import { MessageBanner } from '../components/molecules/MessageBanner'
 import { QueryErrorNotice } from '../components/molecules/QueryErrorNotice'
 import { UserCard } from '../components/molecules/UserCard'
+import { UserSearchForm } from '../components/molecules/UserSearchForm'
 import { UserFormModal } from '../components/organisms/UserFormModal'
+import { useAuth } from '../context/AuthContext'
 import { useConfirm } from '../hooks/useConfirm'
 import {
   useCreateManagedDomainUser,
@@ -15,28 +20,50 @@ import {
   useManagedDomainUsers,
   useUpdateManagedDomainUser
 } from '../hooks/useManagedDomainUsers'
+import { useStoreWriteAccess } from '../hooks/useStoreWriteAccess'
+import { canDeactivateUser, userFormRules } from '../lib/userAccessRules'
+import { toCreateUserInput, toUserWriteInput } from '../lib/userFormPayload'
+import { toUserListQuery } from '../lib/userSearch'
 import type { UserFormValues } from '../types/forms'
+
+/** Neutro (regla 20); el texto del backend no aclara que la baja es de otro admin. */
+const USER_DELETE_ERRORS = {
+  PERMISSION_DENIED: 'Solo el soporte global puede cambiar el acceso de otro administrador.'
+}
 
 export const UserManagementContainer: React.FC = () => {
   const { confirm, confirmDialog } = useConfirm()
-  const [searchTerm, setSearchTerm] = useState('')
+  const { user: viewer } = useAuth()
+  const [message, setMessage] = useState('')
+  const [listQuery, setListQuery] = useState(() => toUserListQuery(''))
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [editingUser, setEditingUser] = useState<User | null>(null)
 
-  const { data: users, isLoading, error } = useManagedDomainUsers()
+  const {
+    data: users,
+    isLoading,
+    error,
+    hasNextPage,
+    fetchNextPage,
+    isFetchingNextPage
+  } = useManagedDomainUsers(listQuery)
   const createMutation = useCreateManagedDomainUser()
   const updateMutation = useUpdateManagedDomainUser()
   const deleteMutation = useDeleteManagedDomainUser()
-
-  const filteredUsers = users?.filter(
-    (user) =>
-      user.fullName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      user.email.getValue().toLowerCase().includes(searchTerm.toLowerCase())
-  )
+  // Tienda suspendida (FF-15): POST /users/ y PATCH /users/{id} responden 402;
+  // la baja sigue (DELETE /users/{public_id}, D-20260930-10).
+  const writeAccess = useStoreWriteAccess()
+  const readOnlyReason = writeAccess.readOnly ? writeAccess.reason : null
 
   const handleDelete = async (id: string) => {
-    if (await confirm('¿Estás seguro de eliminar este usuario?')) {
-      deleteMutation.mutate(id)
+    if (!(await confirm('¿Estás seguro de eliminar este usuario?'))) return
+    // La baja es una desactivacion (soft delete). Con `mutate` un 403 o un
+    // 400 se perdia en silencio: ahora se avisa.
+    setMessage('')
+    try {
+      await deleteMutation.mutateAsync(id)
+    } catch (err) {
+      setMessage(getErrorMessage(err, 'No se pudo eliminar el usuario.', USER_DELETE_ERRORS))
     }
   }
 
@@ -51,31 +78,15 @@ export const UserManagementContainer: React.FC = () => {
   }
 
   const handleFormSubmit = async (formData: UserFormValues) => {
+    // El recorte de blancos y el diff del PATCH viven en userFormPayload
+    // (FF-10): `''` en un nombre era un 422 del backend.
     if (editingUser) {
-      // Mapeo explicito, sin `as unknown as`: el formulario habla snake_case y
-      // el PATCH recibe `UserWriteInput`. El email no va: no se edita.
       await updateMutation.mutateAsync({
         id: editingUser.id,
-        data: {
-          firstName: formData.first_name,
-          lastName: formData.last_name,
-          phone: formData.phone,
-          role: formData.role,
-          password: formData.password
-        }
+        data: toUserWriteInput(formData, editingUser)
       })
     } else {
-      // Mismo mapeo para el alta: `CreateUserInput` es camelCase. Mandar el
-      // formulario crudo compilaba (los nombres son opcionales) y obligaba al
-      // servicio a leer snake_case por un cast.
-      await createMutation.mutateAsync({
-        email: formData.email,
-        password: formData.password,
-        firstName: formData.first_name,
-        lastName: formData.last_name,
-        phone: formData.phone,
-        role: formData.role
-      })
+      await createMutation.mutateAsync(toCreateUserInput(formData))
     }
   }
 
@@ -104,35 +115,20 @@ export const UserManagementContainer: React.FC = () => {
         </div>
 
         <button
-          className="px-6 py-4 rounded-xl flex items-center gap-2 font-black uppercase tracking-widest text-xs transition-all active:scale-95 group"
+          className="px-6 py-4 rounded-xl flex items-center gap-2 font-black uppercase tracking-widest text-xs transition-all active:scale-95 group disabled:opacity-50"
           style={buttonStyles2000s.selected}
           onClick={handleCreate}
+          disabled={readOnlyReason !== null}
+          title={readOnlyReason ?? undefined}
         >
           <Plus size={18} className="group-hover:rotate-90 transition-transform duration-300" />
           NUEVO USUARIO
         </button>
       </div>
 
-      {/* Unified Brand Styled Search Input */}
-      <div className="relative group">
-        <Search
-          className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 group-focus-within:text-orange-500 transition-colors"
-          size={20}
-        />
-        <input
-          type="text"
-          placeholder="BUSCAR USUARIO..."
-          className="w-full pl-12 pr-4 py-3.5 rounded-2xl font-black uppercase tracking-widest text-xs outline-none"
-          style={{
-            background: 'white',
-            border: `1px solid ${colors2000s.border.default}`,
-            boxShadow: colors2000s.shadows.insetDark,
-            color: colors2000s.text.primary
-          }}
-          value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
-        />
-      </div>
+      <UserSearchForm onSearch={(term) => setListQuery(toUserListQuery(term))} />
+
+      <MessageBanner message={message} />
 
       <QueryErrorNotice error={error} message="No se pudieron cargar los usuarios." />
 
@@ -156,7 +152,7 @@ export const UserManagementContainer: React.FC = () => {
             Cargando usuarios...
           </p>
         </div>
-      ) : filteredUsers?.length === 0 ? (
+      ) : users?.length === 0 ? (
         <div
           className="flex flex-col items-center justify-center py-20 rounded-lg text-center"
           style={{
@@ -187,23 +183,44 @@ export const UserManagementContainer: React.FC = () => {
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {filteredUsers?.map((user) => (
+          {users?.map((user) => (
             <UserCard
               key={user.id}
               user={user}
               onEdit={handleEdit}
               onDelete={(id) => void handleDelete(id)}
+              canDelete={canDeactivateUser(viewer, user)}
+              readOnlyReason={readOnlyReason}
             />
           ))}
         </div>
       )}
 
-      <UserFormModal
-        isOpen={isModalOpen}
-        onClose={() => setIsModalOpen(false)}
-        onSubmit={handleFormSubmit}
-        editingUser={editingUser}
-      />
+      {/* El servidor corta en `limit`: el resto llega por paginas (F4-03). */}
+      {!isLoading && hasNextPage && (
+        <button
+          type="button"
+          onClick={() => {
+            void fetchNextPage()
+          }}
+          disabled={isFetchingNextPage}
+          className="w-full px-4 py-3 rounded-2xl text-xs font-black uppercase tracking-widest disabled:opacity-50"
+          style={buttonStyles2000s.default}
+        >
+          {isFetchingNextPage ? 'Cargando...' : 'Ver más'}
+        </button>
+      )}
+
+      {isModalOpen && (
+        <UserFormModal
+          key={editingUser?.id ?? 'new'}
+          onClose={() => setIsModalOpen(false)}
+          onSubmit={handleFormSubmit}
+          editingUser={editingUser}
+          rules={userFormRules(viewer, editingUser)}
+          readOnlyReason={readOnlyReason}
+        />
+      )}
     </div>
   )
 }

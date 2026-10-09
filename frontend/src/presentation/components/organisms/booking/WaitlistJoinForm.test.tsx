@@ -1,5 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 
+import { ConflictError } from '@shared/errors'
+
 import { dayWindow, WaitlistJoinForm } from './WaitlistJoinForm'
 
 const mockJoin = jest.fn()
@@ -36,7 +38,7 @@ describe('WaitlistJoinForm', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Avisame si se libera/ }))
     fireEvent.change(screen.getByLabelText('Nombre'), { target: { value: 'Lucia' } })
-    fireEvent.change(screen.getByLabelText('Telefono'), { target: { value: '11 5555 0101' } })
+    fireEvent.change(screen.getByLabelText('Teléfono'), { target: { value: '11 5555 0101' } })
     fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'lucia@example.com' } })
     fireEvent.click(screen.getByRole('button', { name: 'Anotarme' }))
 
@@ -54,7 +56,12 @@ describe('WaitlistJoinForm', () => {
   })
 
   it('muestra el error del backend (por ejemplo, ya anotado)', async () => {
-    mockJoin.mockRejectedValue(new Error('Ya estas anotado en la lista de espera'))
+    mockJoin.mockRejectedValue(
+      new ConflictError('Ya estas anotado en la lista de espera', {
+        errorCode: 'WAITLIST_DUPLICATE',
+        statusCode: 409
+      })
+    )
     render(
       <WaitlistJoinForm
         storePublicId="store-1"
@@ -66,7 +73,8 @@ describe('WaitlistJoinForm', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Avisame si se libera/ }))
     fireEvent.change(screen.getByLabelText('Nombre'), { target: { value: 'Lucia' } })
-    fireEvent.change(screen.getByLabelText('Telefono'), { target: { value: '1155550101' } })
+    fireEvent.change(screen.getByLabelText('Teléfono'), { target: { value: '1155550101' } })
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'lucia@example.com' } })
     fireEvent.click(screen.getByRole('button', { name: 'Anotarme' }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Ya estas anotado')
@@ -95,7 +103,8 @@ describe('cambio de dia', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Avisame si se libera/ }))
     fireEvent.change(screen.getByLabelText('Nombre'), { target: { value: 'Lucia' } })
-    fireEvent.change(screen.getByLabelText('Telefono'), { target: { value: '1155550101' } })
+    fireEvent.change(screen.getByLabelText('Teléfono'), { target: { value: '1155550101' } })
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'lucia@example.com' } })
     fireEvent.click(screen.getByRole('button', { name: 'Anotarme' }))
     await waitFor(() => expect(mockJoin).toHaveBeenCalledTimes(1))
 
@@ -112,5 +121,56 @@ describe('cambio de dia', () => {
 
     expect(screen.getByRole('button', { name: /Avisame si se libera/ })).toBeInTheDocument()
     expect(screen.queryByText(/Quedaste en lista de espera/)).not.toBeInTheDocument()
+  })
+})
+
+describe('email obligatorio (FF-25, D-20260930-11)', () => {
+  beforeEach(() => {
+    mockJoin.mockReset()
+    mockState.isSuccess = false
+  })
+
+  const abrirYCompletar = (email: string) => {
+    render(
+      <WaitlistJoinForm
+        storePublicId="store-1"
+        serviceId="svc-1"
+        staffId={null}
+        date="2026-09-20"
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: /Avisame si se libera/ }))
+    fireEvent.change(screen.getByLabelText('Nombre'), { target: { value: 'Lucia' } })
+    fireEvent.change(screen.getByLabelText('Teléfono'), { target: { value: '1155550101' } })
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: email } })
+  }
+
+  it('el input de email es obligatorio', () => {
+    // 2026-10-01: el email era opcional y una entrada sin email recibia la
+    // oferta del cupo sin que le llegara nada; ahora el portal lo exige.
+    abrirYCompletar('')
+    expect(screen.getByLabelText<HTMLInputElement>('Email').required).toBe(true)
+  })
+
+  it('manda el email recortado, nunca null', async () => {
+    // 2026-10-01: el payload mandaba `form.email.trim() || null`.
+    mockJoin.mockResolvedValue({ public_id: 'wl-1' })
+    abrirYCompletar('  lucia@example.com  ')
+    fireEvent.click(screen.getByRole('button', { name: 'Anotarme' }))
+
+    await waitFor(() => expect(mockJoin).toHaveBeenCalledTimes(1))
+    expect(mockJoin.mock.calls[0][0]).toMatchObject({ client_email: 'lucia@example.com' })
+  })
+
+  it('el cartel de exito siempre dice que el aviso llega por email', async () => {
+    // 2026-10-01: el texto condicionaba " por email" a que hubiera uno.
+    mockJoin.mockImplementation(() => {
+      mockState.isSuccess = true
+      return Promise.resolve({ public_id: 'wl-1' })
+    })
+    abrirYCompletar('lucia@example.com')
+    fireEvent.click(screen.getByRole('button', { name: 'Anotarme' }))
+
+    expect(await screen.findByRole('status')).toHaveTextContent(/te\s+avisamos por email/)
   })
 })

@@ -131,7 +131,10 @@ async def test_reprogramar_un_pendiente_de_pago_es_409_y_no_toca_nada(
     rol: str,
 ) -> None:
     t = await _tienda(client, monkeypatch, f"rp-sena-{rol}", sena=True)
-    token = t.admin if rol == "admin" else await _personal(client, t, rol, "rp-sena")
+    # El profesional es EL del turno (D-20260929-03): el slug es el de su tienda.
+    token = (
+        t.admin if rol == "admin" else await _personal(client, t, rol, f"rp-sena-{rol}")
+    )
     turno = await _con_sena(client, t, 12)
     cobro = await _cobro(test_session, turno)
     antes = (cobro.status, cobro.preference_id, cobro.version, cobro.amount)

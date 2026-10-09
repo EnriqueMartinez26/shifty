@@ -17,6 +17,17 @@ export interface StaffWriteInput {
   serviceIds?: string[]
 }
 
+/**
+ * Franja de atencion propia del profesional (solo lectura en el front). Las
+ * horas son de pared argentina, como las guarda el backend (`HH:MM:SS`);
+ * `dayOfWeek` va de 0 = lunes a 6 = domingo, igual que `schedules.day_of_week`.
+ */
+export interface StaffSchedule {
+  dayOfWeek: number
+  startTime: string
+  endTime: string
+}
+
 interface StaffProps {
   id: UserId
   /** 'person' = profesional con login; 'resource' = cancha, sala, box (sin email ni usuario). */
@@ -27,6 +38,7 @@ interface StaffProps {
   displayName: string | null
   isActive: boolean
   serviceIds: string[]
+  schedules: readonly StaffSchedule[]
 }
 
 export class Staff {
@@ -36,11 +48,12 @@ export class Staff {
     this.props = props
   }
 
-  static create(props: Omit<StaffProps, 'id' | 'isActive'>): Staff {
+  static create(props: Omit<StaffProps, 'id' | 'isActive' | 'schedules'>): Staff {
     return new Staff({
       ...props,
       id: UserId.create(createUuid()),
-      isActive: true
+      isActive: true,
+      schedules: []
     })
   }
 
@@ -53,6 +66,7 @@ export class Staff {
     display_name: string | null
     is_active: boolean
     service_ids: string[]
+    schedules?: readonly { day_of_week: number; start_time: string; end_time: string }[] | null
   }): Staff {
     // Un recurso no tiene email: Email.create('') explotaba y tiraba abajo
     // la pagina entera de personal (2026-09-10).
@@ -65,7 +79,12 @@ export class Staff {
       email,
       displayName: props.display_name,
       isActive: props.is_active,
-      serviceIds: props.service_ids
+      serviceIds: props.service_ids,
+      schedules: (props.schedules ?? []).map((row) => ({
+        dayOfWeek: row.day_of_week,
+        startTime: row.start_time,
+        endTime: row.end_time
+      }))
     })
   }
 
@@ -96,6 +115,10 @@ export class Staff {
   }
   get serviceIds() {
     return [...this.props.serviceIds]
+  }
+  /** Franjas propias; ninguna = atiende en el horario del local (D-20260929-01). */
+  get schedules(): readonly StaffSchedule[] {
+    return this.props.schedules
   }
 
   get fullName(): string {

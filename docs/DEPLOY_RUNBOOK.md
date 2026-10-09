@@ -16,17 +16,230 @@ make deploy-edge                   # only when nginx's image or nginx/nginx.prod
 
 | Prerequisite | How to check |
 | --- | --- |
+| Host hardened, **first, before anything else**: a non-root sudo user, SSH with keys only and no root login, `ufw` allowing only 22/80/443, `unattended-upgrades` with security updates only and no automatic reboot, `fail2ban` for sshd, timezone UTC with chrony (see "Host: hardening" below) | `sudo bash scripts/host-hardening-check.sh` exits 0 and prints `endurecimiento: todo en orden`; `timedatectl` shows `Etc/UTC` and `System clock synchronized: yes` |
 | Docker Compose >= 2.24 (`ports: !reset []` in `docker-compose.prod.yml`) | `docker compose version` |
 | Server `.env` sets `COMPOSE_FILE=docker-compose.yml:docker-compose.prod.yml` and `COMPOSE_PROJECT_NAME=shifty` | `docker compose config --services` lists the prod services without `-f` |
 | Server `.env` does **not** set `APP_VERSION`. `docker-compose.prod.yml` requires it for every compose command (`${APP_VERSION:?}`); the deploy passes it and records it in `.deploy/current`, and the host scripts (backup, latency) read it from there. A value pinned in `.env` goes stale after the first deploy, and a bare `docker compose up -d` would bring that old version back | `grep -c APP_VERSION .env` is 0 |
+| Server `.env` copied from `backend/.env.production.example` with every placeholder replaced. Mercado Pago and Sentry are **required** in production: `MERCADOPAGO_WEBHOOK_SECRET` (the webhook only verifies signatures with this global secret in production), `MERCADOPAGO_OAUTH_CLIENT_ID`, `MERCADOPAGO_OAUTH_CLIENT_SECRET` and `MERCADOPAGO_OAUTH_REDIRECT_URI` (stores link their account only through OAuth), all from the production Mercado Pago app (a `TEST-` client secret is rejected), and `SENTRY_DSN`. `docker-compose.prod.yml` refuses to start without them (`:?`), and the API and Celery refuse to boot if one is empty or still a placeholder (`core/config.py`). The boot also requires `https://` in `PUBLIC_API_URL` and in every `CORS_ORIGINS` origin, `OTP_PROVIDER=email` (the only implemented provider) and `OPS_ENABLE_PUBLIC_HEALTH=false`. Error messages name the variable, never its value | `docker compose config --quiet` exits 0; after the deploy, `docker compose logs backend` shows no `ValueError` |
 | The deploy user is in the `docker` group (the scripts never use `sudo`) | `docker ps` as that user |
 | `docker login ghcr.io` with a token that has `read:packages` (the packages are private) | `docker pull ghcr.io/enriquemartinez26/shifty-backend:latest` |
-| `/etc/shifty/ops.env` from `deploy/ops.env.example` (`DOMAIN`, `BACKUP_REMOTE`, alerts) | `sudo cat /etc/shifty/ops.env` |
+| `/etc/shifty/ops.env` from `deploy/ops.env.example` (`DOMAIN`, `BACKUP_REMOTE`, alerts, `RCLONE_CONFIG`, `DEPLOY_GITHUB_TOKEN` while the repository is private). Readable by root (backup timer, cron) **and** by `deploy` (`scripts/deploy.sh` never uses sudo): `/etc/shifty` root:deploy 0750, `ops.env` root:deploy 0640, `/var/backups/shifty` root:deploy 0750 (the deploy reads `last-success`). With root 0600/0700 the deploy ran without `ops.env` and could not see the backup (first deploy, 2026-10-08); an unreadable `ops.env` (or an `/etc/shifty` that `deploy` cannot enter) now logs an `AVISO`. With 0640 **every member of the `deploy` group reads the whole file**, token and alert webhook included: keep only the `deploy` user in that group and never add people to it "so they can deploy" | `sudo -u deploy test -r /etc/shifty/ops.env && sudo -u deploy test -r /var/backups/shifty/last-success && echo ok`; `getent group deploy` lists no extra members (`deploy:x:<gid>:`) |
 | Daily backup timer enabled, rclone remote and bucket (`docs/BACKUP_RESTORE_RUNBOOK.md`) | `systemctl list-timers shifty-backup.timer`, `cat /var/backups/shifty/last-success` |
 | Host cron installed: `deploy/cron/shifty-guard`, `deploy/cron/shifty-latency`, `deploy/cron/shifty-pg-top`, `deploy/logrotate/shifty` | `ls /etc/cron.d/shifty-*` |
 | certbot on the host with webroot `/opt/shifty/nginx/acme` (compose mounts `./nginx/acme` at `/var/www/acme` in nginx) and `scripts/cert-deploy-hook.sh` as deploy hook | `certbot renew --dry-run` |
 | After adding the `pg_backups` volume to `docker-compose.prod.yml`, the `db` container was recreated once so the volume attaches (see below) | `docker compose exec db ls /backups` |
 | python3 on the host (the latency report is stdlib only) | `python3 --version` |
+| Sending domain verified with the SMTP provider, with SPF, DKIM and DMARC published and the provider sandbox lifted (see "Mail deliverability" below) | a test OTP to a Gmail account shows `SPF: PASS`, `DKIM: PASS`, `DMARC: PASS` |
+| 2 GB swapfile with `vm.swappiness=10`, and Docker started at boot (see "Host: memory budget, swap and boot" below) | `swapon --show`, `sysctl vm.swappiness`, `systemctl is-enabled docker containerd` |
+| The reboot test passed once (see below) | after `sudo reboot`, `APP_VERSION=$(cat .deploy/current) docker compose ps` shows every service `healthy` without anyone running `up` |
+
+### Host: hardening
+
+Once, on the fresh VPS, before installing Docker or cloning the repo. The steps assume **Ubuntu 24.04 LTS** (pick it as the OS template when the VPS is created); check with `cat /etc/os-release` and adapt them if the image is another release. Run them in order: the SSH step must be tested in a second session before the first one is closed, and the firewall must allow SSH before it is enabled.
+
+**0. Update the base image**, as root (the password or key set in hPanel when the VPS was created):
+
+```bash
+apt update && apt full-upgrade -y
+[ -f /var/run/reboot-required ] && reboot    # then log in again as root
+```
+
+**1. A non-root sudo user.** The steps use `deploy`, the user that later runs `make deploy` (it joins the `docker` group once Docker is installed). Every person who operates the server puts their own public key in its `authorized_keys`, one per line.
+
+```bash
+adduser --gecos "" deploy            # a long password, for sudo only: after step 2 SSH never accepts it
+usermod -aG sudo deploy
+install -d -m 0700 -o deploy -g deploy /home/deploy/.ssh
+# Reuse root's key if you added one in hPanel:
+[ -s /root/.ssh/authorized_keys ] && cp /root/.ssh/authorized_keys /home/deploy/.ssh/authorized_keys
+# Add every other person's PUBLIC key (ssh-ed25519 AAAA... name@laptop), one per line:
+nano /home/deploy/.ssh/authorized_keys
+chown deploy:deploy /home/deploy/.ssh/authorized_keys
+chmod 0600 /home/deploy/.ssh/authorized_keys
+```
+
+From your machine, in a new terminal: `ssh deploy@<ip>`, then `sudo -v` (asks for the sudo password). Do not continue until both work. From here on, everything runs as `deploy` with `sudo`.
+
+**2. SSH with keys only, no root.** A drop-in named `00-...` wins: sshd keeps the **first** value it reads for each option, and Ubuntu's `sshd_config` includes `/etc/ssh/sshd_config.d/*.conf` (in name order) before its own lines, so this file also beats a `50-cloud-init.conf` that some images ship with `PasswordAuthentication yes`.
+
+```bash
+sudo tee /etc/ssh/sshd_config.d/00-shifty-hardening.conf >/dev/null <<'EOF'
+# Shifty: SSH with keys only, no root login (docs/DEPLOY_RUNBOOK.md section 1).
+PubkeyAuthentication yes
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitRootLogin no
+EOF
+sudo sshd -t     # no output means valid; never reload a config that fails here
+sudo sshd -T | grep -E '^(pubkeyauthentication|passwordauthentication|kbdinteractiveauthentication|permitrootlogin) '
+# pubkeyauthentication yes, passwordauthentication no, kbdinteractiveauthentication no, permitrootlogin no
+sudo systemctl reload ssh     # the unit is `ssh` on Ubuntu; a reload keeps the open sessions
+```
+
+**Keep this session open.** In a second terminal, from your machine:
+
+```bash
+ssh deploy@<ip>                       # must log in
+ssh root@<ip>                         # must fail: Permission denied (publickey)
+ssh -o PubkeyAuthentication=no -o PreferredAuthentications=password,keyboard-interactive deploy@<ip>
+                                      # must fail: Permission denied (publickey)
+```
+
+Only when the first command logs in and the other two are refused, close the first session. If the second session cannot log in, undo it from the first one (`sudo rm /etc/ssh/sshd_config.d/00-shifty-hardening.conf && sudo systemctl reload ssh`), find the problem (usually the key or the permissions of `~/.ssh`) and repeat. If both sessions are lost, use the provider's web console in hPanel (browser terminal or recovery mode): it does not go through sshd. If `sshd -t` complains about a missing `/run/sshd`, run `sudo mkdir -p /run/sshd` and repeat.
+
+**3. Firewall: only 22, 80 and 443.** Allow SSH before enabling, or the enable cuts the session.
+
+```bash
+sudo apt install -y ufw
+sudo ufw default deny incoming
+sudo ufw default allow outgoing
+sudo ufw allow 22/tcp
+sudo ufw allow 80/tcp
+sudo ufw allow 443/tcp
+sudo ufw enable              # answers "may disrupt existing ssh connections": 22 is already allowed
+sudo ufw status verbose      # Status: active; Default: deny (incoming); only 22, 80, 443 (and their v6)
+```
+
+**Docker publishes ports around ufw.** For a published port Docker writes its own iptables rules (its chains in `FORWARD`, `DOCKER-USER` first), which run before ufw's: a container port published on the host is reachable from the internet even if ufw does not allow it. That is safe here only because **in production nothing publishes a port except nginx, on 80 and 443**, which ufw allows anyway: every other service has `ports: !reset []` in `docker-compose.prod.yml` (their development ports in `docker-compose.yml` are bound to `127.0.0.1`, and production removes them anyway), and `test_en_produccion_solo_nginx_publica_puertos` (`backend/tests/unit/test_compose_contract.py`) fails if that changes. Consequences:
+
+- Never publish another port in production, not even "for a minute" to debug: use `docker compose exec`, or an SSH tunnel (`ssh -L`) to a port bound to `127.0.0.1`.
+- Never set `"iptables": false` in Docker's `daemon.json` to "make ufw work": it breaks container networking.
+- After the first deploy, check what listens publicly:
+
+  ```bash
+  cd /opt/shifty
+  APP_VERSION=$(cat .deploy/current) docker compose ps --format '{{.Service}}: {{.Ports}}'   # only nginx shows 0.0.0.0:80 and :443
+  sudo ss -tlnp     # on public addresses only sshd (22) and docker-proxy (80, 443); the rest on 127.0.0.x or ::1
+  ```
+
+**4. Automatic security updates, without automatic reboot.**
+
+```bash
+sudo apt install -y unattended-upgrades
+sudo tee /etc/apt/apt.conf.d/20auto-upgrades >/dev/null <<'EOF'
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Unattended-Upgrade "1";
+EOF
+sudo tee /etc/apt/apt.conf.d/52shifty-unattended-upgrades >/dev/null <<'EOF'
+// Shifty: never reboot by itself; reboots are manual (docs/DEPLOY_RUNBOOK.md section 1).
+Unattended-Upgrade::Automatic-Reboot "false";
+EOF
+# needrestart (installed on Ubuntu) runs after every apt run, unattended ones
+# included, and may restart services that use an upgraded library. List only:
+# a libc or openssl update must not restart containerd/docker at a random hour.
+echo "\$nrconf{restart} = 'l';" | sudo tee /etc/needrestart/conf.d/50-shifty.conf
+```
+
+Security only: Ubuntu's `/etc/apt/apt.conf.d/50unattended-upgrades` allows the release pocket and the `-security` pockets by default, with the `-updates` line commented out. Leave it like that (an origin list cannot be shortened from another file, only extended). Check:
+
+```bash
+apt-config dump | grep -E '^APT::Periodic::|^Unattended-Upgrade::(Allowed-Origins|Origins-Pattern)::|Automatic-Reboot'
+# Unattended-Upgrade "1", Automatic-Reboot "false", no origin ending in -updates, -proposed or -backports
+sudo unattended-upgrade --dry-run --debug 2>&1 | grep -i 'allowed origins'
+```
+
+Docker Engine comes from `download.docker.com`, which is not an allowed origin: unattended-upgrades never upgrades it. Upgrade Docker by hand, in a maintenance window (it restarts every container).
+
+**When to reboot by hand.** Some updates (kernel, libc, systemd, openssl) only take effect after a reboot; apt then creates `/var/run/reboot-required` and lists the packages in `/var/run/reboot-required.pkgs`. `scripts/host-hardening-check.sh` (hourly, from `checks.sh`) alerts once a day while that file exists. Reboot within a week for a kernel security fix, sooner if the advisory is critical: in a low-traffic window, never during a deploy (`ls .deploy/lock` must fail), with a fresh backup (`cat /var/backups/shifty/last-success`), then `sudo reboot` and the checks of the reboot test in "Host: memory budget, swap and boot" below.
+
+**5. fail2ban for sshd.** With keys only nobody guesses a password; fail2ban cuts the scanners' noise in the logs and their load.
+
+```bash
+sudo apt install -y fail2ban python3-systemd
+sudo tee /etc/fail2ban/jail.d/shifty-sshd.local >/dev/null <<'EOF'
+[sshd]
+enabled  = true
+backend  = systemd
+maxretry = 5
+findtime = 10m
+bantime  = 1h
+EOF
+sudo systemctl enable fail2ban
+sudo systemctl restart fail2ban
+sudo fail2ban-client status sshd     # Status for the jail: sshd
+```
+
+A person banned by mistake (several failed keys from the same IP) waits an hour, or someone else unbans them: `sudo fail2ban-client set sshd unbanip <ip>`.
+
+**6. Timezone UTC and NTP.** The host stays on UTC: the application stores and computes in UTC and formats Argentine time itself (CLAUDE.md rule 24), the backup timer is pinned to UTC (`deploy/systemd/shifty-backup.timer`) and the scripts log in UTC. A wrong clock breaks tokens, the Mercado Pago webhook age window and the expirations; `scripts/checks.sh` alerts when `timedatectl` says the clock is not synchronized.
+
+```bash
+sudo timedatectl set-timezone Etc/UTC
+sudo apt install -y chrony            # replaces systemd-timesyncd
+sudo systemctl enable --now chrony
+timedatectl                           # Time zone: Etc/UTC (UTC, +0000); System clock synchronized: yes; NTP service: active
+chronyc tracking                      # Leap status: Normal
+```
+
+**7. Verify.** Once the repo is cloned at `/opt/shifty` (and from then on every hour, from `checks.sh`):
+
+```bash
+cd /opt/shifty
+sudo bash scripts/host-hardening-check.sh     # endurecimiento: todo en orden (exit 0)
+```
+
+It needs root (`sshd -T`, `ufw status` and `fail2ban-client` do). It checks the EFFECTIVE sshd config (`sshd -T`, so a drop-in that re-enables passwords is caught), that no `Match` block in `/etc/ssh/sshd_config` or the files it includes sets `PasswordAuthentication`, `KbdInteractiveAuthentication` or `PermitRootLogin` to anything but `no` (a `Match` that applies overrides the global value, and `sshd -T` cannot see one for another user, group or network), that ufw is active, denies incoming by default and opens nothing but `HARDENING_UFW_ALLOWED` (`22/tcp 80/tcp 443/tcp`), that unattended-upgrades is on with security origins only and no automatic reboot, that the fail2ban `sshd` jail is up, and whether a reboot is pending. Every finding alerts like the other host scripts.
+
+### Host: memory budget, swap and boot
+
+The production VPS is a Hostinger KVM 2: **2 vCPU, 8 GB RAM, 100 GB NVMe**. Every container has a memory limit (`deploy.resources.limits` in `docker-compose.yml` and `docker-compose.prod.yml`), and the limits must add up to less than the RAM, also during a deploy: `scripts/deploy.sh` starts the new backend replicas **next to** the old ones before it stops the old ones. `test_la_memoria_de_produccion_entra_en_el_vps` (`backend/tests/unit/test_compose_contract.py`) sums the limits from the compose files and `deploy.sh` and fails above 6.5 GiB steady or 7 GiB (8 GiB minus 1 GiB for the system) at the deploy peak.
+
+| Service | Before (16 GB host) | Now (8 GB host) | CPU limit |
+| --- | --- | --- | --- |
+| db (Postgres) | 4096M | 2560M | none (plan §8: CFS throttling adds p95 spikes) |
+| backend | 3 x 512M | 2 x 512M | none (same reason) |
+| celery_worker (2 children) | 768M | 768M | 1.5 -> 1.0 |
+| celery_worker_interactive (1 child) | 256M | 256M | 0.5 (new) |
+| celery_beat | 256M | 256M | 0.25 (new) |
+| rabbitmq (alarm at 280 MiB) | 384M | 384M | none |
+| redis_cache (`maxmemory 96mb`) | 192M | 192M | none |
+| redis_state (`maxmemory 48mb`) | 96M | 96M | none |
+| nginx | 256M | 256M | none |
+| frontend | 64M | 64M | none |
+| **Steady total** | **7904 MiB (7.7 GiB)** | **5856 MiB (5.7 GiB)** | |
+| **Deploy peak** (steady + the new backend replicas) | **9440 MiB (9.2 GiB)** | **6880 MiB (6.7 GiB)** | |
+| Left for the OS, Docker and page cache at the peak (of 8192 MiB) | none | 1312 MiB | |
+
+- **Two backend replicas**, one per vCPU. `DEPLOY_BACKEND_REPLICAS` in `scripts/deploy.sh` must equal `deploy.replicas` in `docker-compose.prod.yml` (`test_el_deploy_levanta_tantas_replicas_como_produccion`).
+- **Postgres** gets 2560M: `shared_buffers=640MB` (25 %), `effective_cache_size=1920MB` (75 %: the database's page cache is charged to its own cgroup, so it cannot use more than the limit), `work_mem=4MB`, `maintenance_work_mem=128MB`, `shm_size: 256m`.
+- **`max_connections=100`**, from the deploy peak: (2 old + 2 new backend replicas) x (`DB_POOL_SIZE` 5 + `DB_MAX_OVERFLOW` 5) = 40, plus the Celery children (2 general + 1 interactive) x 10 = 30, total 70. Beat runs no tasks and the prefork parents dispose their pool before forking, so they add nothing. On top of that: the migration (2), the backup (2), the weekly `pg_stat_statements` report and a console (3) and the 3 connections Postgres reserves for the superuser: 80 of 100. Raising the pool, the replicas or the Celery concurrency means redoing this sum (`test_los_pools_de_produccion_entran_en_max_connections`).
+- **CPU**: the API and the database have no CPU limit. Each Celery process does, and none gets more than half the host, so a runaway batch leaves at least one vCPU for the API and Postgres (`test_ningun_proceso_de_celery_deja_sin_cpu_a_la_api`).
+- **Staging does not fit** next to production on this host (section 6).
+
+Swap, once. It is a safety margin for a short spike, not memory to plan with: with `vm.swappiness=10` the kernel only swaps under real pressure, and `scripts/checks.sh` alerts when there is no swap or more than half of it is in use.
+
+```bash
+sudo fallocate -l 2G /swapfile
+sudo chmod 600 /swapfile
+sudo mkswap /swapfile
+sudo swapon /swapfile
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+echo 'vm.swappiness=10' | sudo tee /etc/sysctl.d/99-shifty-swap.conf
+sudo sysctl -p /etc/sysctl.d/99-shifty-swap.conf
+swapon --show            # /swapfile, 2G
+sysctl vm.swappiness     # vm.swappiness = 10
+```
+
+Docker at boot, once. Every service has `restart: always`, so the stack comes back by itself only if the Docker daemon starts with the host:
+
+```bash
+sudo systemctl enable docker containerd
+systemctl is-enabled docker containerd   # enabled, enabled
+```
+
+Reboot test, once before launch (and after any change to the host's boot setup), in a maintenance window: the site is down for the minute or two the reboot takes.
+
+```bash
+sudo reboot
+# back on the host, without running any `up`:
+cd /opt/shifty
+APP_VERSION=$(cat .deploy/current) docker compose ps    # every service running and healthy (backend, workers and beat may take 1-2 min)
+swapon --show                                           # the swapfile is active again
+curl -fsS https://<domain>/api/ops/health/ready         # 200
+systemctl list-timers shifty-backup.timer               # the backup timer is scheduled again
+```
+
+If a service is missing after the reboot, `docker compose ps -a` and `docker compose logs <service>` show why; do not paper over it with a manual `up`, because the next unattended reboot will have the same problem.
 
 certbot:
 
@@ -50,9 +263,58 @@ Before the first deploy with this script there is no `.deploy/current`; use the 
 
 The clone is assumed at `/opt/shifty` in the systemd unit and the cron files; edit those paths if it lives elsewhere. `SHIFTY_DIR` defaults to the clone the script belongs to, so do not set it in a shared `ops.env`.
 
+### Mail deliverability (SPF, DKIM, DMARC)
+
+Production sends OTP codes, booking confirmations and reminders over SMTP with STARTTLS on port 587 (`SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS` and `EMAILS_FROM_EMAIL` in the server `.env`; `docker-compose.prod.yml` refuses to start without them). Without SPF, DKIM and DMARC on the sending domain, Gmail and Outlook file that mail as spam or reject it, and a client who never sees the OTP cannot book. Do this once, before the first deploy; DNS changes can take hours to propagate.
+
+In the records below, `<domain>` is the domain of `EMAILS_FROM_EMAIL` and everything in `<...>` is a placeholder: take the real values from the chosen provider's console, never from this page.
+
+1. **Choose the provider.** Any SMTP relay with domain verification, DKIM signing and bounce handling works. Amazon SES is the cost reference (pay per message, no monthly minimum), not a decision. Below, "the chosen provider" is whatever is picked. `SMTP_USER`/`SMTP_PASS` are the provider's SMTP credentials (for SES, SMTP credentials generated in the console, not the IAM access keys).
+2. **Verify the sending domain** with the provider (verifying a single address is not enough: DKIM signs per domain). The provider asks for one or more DNS records to prove ownership; on SES the DKIM records below double as the verification.
+3. **Publish the DNS records** at the domain's DNS host:
+
+   | Record | Name | Value (pattern) |
+   | --- | --- | --- |
+   | SPF (TXT) | the envelope sender (Return-Path) domain: `<domain>`, or the custom MAIL FROM subdomain if the provider uses one (e.g. `<bounce-subdomain>.<domain>`) | `v=spf1 include:<provider-spf-domain> -all` |
+   | DKIM (CNAME or TXT, as the provider says) | `<selector>._domainkey.<domain>`, one per selector the provider gives | the CNAME target or the `v=DKIM1; k=rsa; p=<public-key>` value the provider gives |
+   | DMARC (TXT) | `_dmarc.<domain>` | `v=DMARC1; p=none; rua=mailto:<reports-mailbox>@<domain>` |
+
+   - A name has **at most one** SPF record. If `<domain>` already has one (for example for a mailbox provider), add the `include:` to it instead of creating a second record: two SPF records are a permanent error and SPF fails for both.
+   - DMARC passes when SPF or DKIM passes **for the domain in the From header**. A provider that uses its own domain as Return-Path passes SPF for that domain, not for `<domain>`; then DKIM is the one that aligns. Configure a custom MAIL FROM subdomain on the provider if SPF should align too.
+   - Start DMARC with `p=none` and read the aggregate reports that arrive at the `rua` mailbox for one or two weeks. When every legitimate source passes, move to `p=quarantine` (later `p=reject` if desired). Going straight to `quarantine` can send real mail to spam if a source was missed.
+4. **From address.** `EMAILS_FROM_EMAIL` must be an address on the verified domain (for example `no-reply@<domain>`); with any other address the provider refuses to send or DMARC fails. Changing it is a change to the server `.env`, applied by recreating the app services on the running version (`APP_VERSION=$(cat .deploy/current) docker compose up -d --no-deps --no-build backend celery_worker celery_worker_interactive celery_beat`).
+5. **Leave the sandbox.** Some providers start new accounts in a sandbox that only delivers to verified recipients and caps the daily volume (SES does). Request production access from the provider before the first deploy; the request asks for the kind of mail (transactional: codes, confirmations, reminders) and how bounces and complaints are handled.
+6. **Verify end to end.** With the release deployed, request an OTP from a store's public booking page with a phone that is not yet a client of that store and a Gmail address (`OTP_PROVIDER` must not be `console`: production refuses it). In Gmail, open the message, then "Mostrar original" ("Show original"): the header summary must read `SPF: PASS`, `DKIM: PASS` and `DMARC: PASS`, with the DKIM domain equal to `<domain>`. If one fails, fix the record before going live; tools such as `dig TXT _dmarc.<domain>` and `dig TXT <selector>._domainkey.<domain>` (or `CNAME`) show what is published.
+
+### First deploy on an empty host
+
+`make deploy` assumes a running stack (it never starts db, redis, rabbitmq or nginx, and it wants a fresh backup). On a host with nothing running, the order that worked on 2026-10-08 is below. `<sha>` is the full sha being deployed; until `.deploy/current` exists every compose command needs it.
+
+1. **Clone the private repository with a read-only deploy key**, as `deploy`: `ssh-keygen -t ed25519 -f ~/.ssh/shifty_repo -N ''`, add `~/.ssh/shifty_repo.pub` in GitHub under Settings → Deploy keys with "Allow write access" **off**, point `github.com` at that key in `~/.ssh/config` (`IdentityFile ~/.ssh/shifty_repo`, `IdentitiesOnly yes`) and `git clone git@github.com:EnriqueMartinez26/shifty.git /opt/shifty`. The key reads this one repository and nothing else.
+2. **First TLS certificate, standalone** (nginx is not running yet, so port 80 is free and there is no webroot): `sudo certbot certonly --standalone -d <domain>`, then copy it into `nginx/certs` with the hook: `sudo env APP_VERSION=<sha> RENEWED_LINEAGE=/etc/letsencrypt/live/<domain> bash scripts/cert-deploy-hook.sh` (its reload step fails while nginx is down; the copy is what matters here).
+3. **Infrastructure**: `APP_VERSION=<sha> docker compose up -d --no-build --wait db redis_cache redis_state rabbitmq`.
+4. **The edge, alone**: `APP_VERSION=<sha> docker compose up -d --no-build --no-deps nginx` (`--no-deps`: nginx depends on backend and frontend, which the deploy starts; nginx resolves `backend` at request time, so it starts without them).
+5. **Switch renewals to the webroot**, now that nginx serves `/.well-known/acme-challenge/`: `sudo certbot reconfigure --cert-name <domain> --webroot -w /opt/shifty/nginx/acme --deploy-hook /opt/shifty/scripts/cert-deploy-hook.sh` (it runs a dry-run renewal; `certbot renew --dry-run` confirms).
+6. **First backup**, so the preflight finds `last-success`: `sudo env APP_VERSION=<sha> bash scripts/backup.sh`.
+7. **Deploy**: `make deploy APP_VERSION=<sha>`. There is no previous version, so a failed gate cannot roll back.
+8. **Edge record**: `scripts/deploy.sh edge` (`make deploy-edge`), so `.deploy/edge-conf.sha256` exists and later edge runs recreate nginx only when something changed.
+
 ## 2. Images (CI)
 
-`.github/workflows/build-images.yml` runs on every push to `main` (and by hand). It builds `backend`, `frontend` and `nginx` and pushes `ghcr.io/enriquemartinez26/shifty-<service>:<git sha>` plus `:latest`. The backend image serves the API, the workers and beat. The VPS never builds: every `up` and `run` in `scripts/deploy.sh` carries `--no-build` (and every `up` `--remove-orphans`, so a renamed service does not leave its old container behind), and after the pull the script checks with `docker image inspect` that every `image:tag` of `docker compose config --images` is present. The `retention` job deletes untagged versions and keeps the 5 newest per package; it never fails the build.
+`.github/workflows/build-images.yml` runs when the `Quality` workflow (`quality.yml`) **finishes green on a push to `main`** (`workflow_run`), and by hand (`workflow_dispatch`). It checks out and tags the sha that Quality tested (`github.event.workflow_run.head_sha`; in a `workflow_run`, `github.sha` is the newest commit of `main`, which may be another one). A red Quality, a Quality of a pull request (even one from a fork whose branch is called `main`) or a cancelled run publishes nothing. It builds `backend`, `frontend` and `nginx` and pushes `ghcr.io/enriquemartinez26/shifty-<service>:<git sha>` plus `:latest`.
+
+`workflow_run` gotchas: the run uses the workflow file of the default branch with the base repository's `GITHUB_TOKEN` (the job's `permissions`, `packages: write` included) and its `vars`, the same as the old `push` trigger; it only exists once merged to `main`, so a pull request cannot exercise it (after merging a change to this workflow, check in Actions that `Build images` started after `Quality` and tagged Quality's sha). The manual run skips the Quality gate (it builds whatever branch it is pointed at), which is why `scripts/deploy.sh` asks GitHub again before deploying (section 3). The backend image serves the API, the workers and beat. The VPS never builds: every `up` in `scripts/deploy.sh` carries `--no-build` and `--remove-orphans` (so a renamed service does not leave its old container behind), and the migration `run` cannot build because the production view has no `build` section, and after the pull the script checks with `docker image inspect` that every `image:tag` of `docker compose config --images` is present. The `retention` job deletes untagged versions and keeps the 5 newest per package; it never fails the build.
+
+**Front build variables (GitHub repository variables).** The frontend bundle is static, so these are read at build time, not when the container starts: changing one means a new build (a merge to `main` once Quality passes, or a manual run of `build-images.yml`) and a deploy of that sha. Set them in GitHub under Settings → Secrets and variables → Actions → **Variables** (not Secrets: they end up in the public bundle anyway). `build-images.yml` passes them to `frontend/Dockerfile` as build args. The real values live only in those GitHub variables, never in code, docs, `*.example` files, commits or PRs: the repository is private today, but its visibility has changed before.
+
+| Variable | Format | Used by | Empty or invalid |
+|---|---|---|---|
+| `VITE_SENTRY_DSN` | Sentry DSN of the frontend project | browser error reporting and `/sentry-tunnel` | Sentry off, tunnel answers 404 |
+| `VITE_SUPPORT_WHATSAPP` | digits only, with country code, e.g. `549351XXXXXXX` (normalized by `shared/utils/whatsAppPhone.ts`) | "Renovar por WhatsApp" in the subscription banner; WhatsApp line of "Responsables y contacto" on `/legal/terminos` and `/legal/privacidad` | no WhatsApp link: the banner shows "Escribinos para renovar" (a `mailto:` if the email is set) and the legal line is omitted |
+| `VITE_CONTACT_EMAIL` | one email address, e.g. `contacto@example.com` | email line (`mailto:`) of "Responsables y contacto"; the terms' "consultas" paragraph | line omitted; the terms keep the generic contact sentence |
+| `VITE_LEGAL_RESPONSABLES` | free text, one or more full names (up to 300 characters) | "Responsables" line (Ley 25.326 art. 6) | line omitted |
+
+If all three contact variables are empty, the legal pages show no "Responsables y contacto" block at all; a value that still looks like a template placeholder (`[[...]]`, `pendiente`, `change_me`) counts as empty. Domicilio and CUIT are not shown yet on purpose. A local `docker compose build frontend` reads the same names from the root `.env` (see `.env.example`). If the Vercel preview should show them too, set the same names in the Vercel project environment.
 
 `docker-compose.prod.yml` references `ghcr.io/enriquemartinez26/shifty-<service>:${APP_VERSION}` for backend (API, workers and beat) and frontend. The production edge runs the base image `nginx:1.30.5-alpine` with `nginx/nginx.prod.conf` bind-mounted, so its image does not change per release; the `shifty-nginx` image CI publishes is not what production runs.
 
@@ -61,23 +323,24 @@ The clone is assumed at `/opt/shifty` in the systemd unit and the cron files; ed
 1. **Lock** `.deploy/lock` (a second deploy stops; the guard does not restart containers while it exists).
 2. **Preflight**, before touching anything:
    - `COMPOSE_FILE` (from the environment or the clone's `.env`) includes `docker-compose.prod.yml`. The script `cd`s into the clone first, so it can be called from anywhere.
-   - `BACKUP_DIR` exists (created with mode 0700 if missing: the `pg_backups` volume is a bind and does not create it).
+   - `BACKUP_DIR` exists (created with mode 0750 if missing: the `pg_backups` volume is a bind and does not create it; if the `deploy` user cannot create it, the error suggests `install -d -o root -g deploy -m 0750`).
    - Compose >= 2.24 and `docker compose config -q` passes.
    - Every service in `DEPLOY_SERVICES` exists (default: `backend celery_worker celery_worker_interactive celery_beat frontend`; nginx is not in the list).
    - The `db` service is running (the deploy uses `--no-deps` and never starts or recreates db, redis or rabbitmq).
    - Disk under 80 %.
    - `/var/backups/shifty/last-success` is younger than 24 h (`DEPLOY_SKIP_BACKUP_CHECK=1` only on staging).
+   - `Quality` passed on a push to `main` for `APP_VERSION`: the script asks GitHub's API (`/repos/EnriqueMartinez26/shifty/actions/workflows/quality.yml/runs?head_sha=<APP_VERSION>&branch=main&event=push&status=success`). The repository is **private**, so the API answers 404 without a token: set `DEPLOY_GITHUB_TOKEN` in `/etc/shifty/ops.env`, a fine-grained personal access token with access to this repository only and only the "Actions: read" permission, which is all that [listing workflow runs](https://docs.github.com/en/rest/actions/workflow-runs#list-workflow-runs-for-a-repository) needs on a private repository. **Enrique (the owner) has to create it**: the repository belongs to a personal account (`EnriqueMartinez26`), and a collaborator cannot issue a fine-grained token for a repository they do not own (GitHub → Settings → Developer settings → Personal access tokens → Fine-grained tokens; resource owner `EnriqueMartinez26`, "Only select repositories" → `shifty`, Repository permissions → Actions: Read-only). It is sent as `Authorization: Bearer` through curl's stdin (`curl -K -`), never on the command line (visible in `ps`), in the log or in the environment of docker, compose or any other child (`scripts/lib/common.sh` un-exports it right after loading `ops.env`), and a token with characters outside `[A-Za-z0-9_]` stops the preflight without printing it. **The token expires**: from that day every deploy stops at the preflight ("no pude preguntarle a GitHub ... vencido o sin \"Actions: read\"") until it is rotated; the rollback does not ask GitHub and keeps working. To rotate: before the expiry date the owner regenerates it (or creates an identical one), then on the VPS `sudoedit /etc/shifty/ops.env` replaces `DEPLOY_GITHUB_TOKEN` (keep root:deploy 0640), and `APP_VERSION=<a main sha> scripts/deploy.sh preflight`, run as `deploy`, confirms it. Without the token the query is anonymous, which only works while the repository is public (60 requests per hour per IP). `APP_VERSION` must be the full 40-character sha. If GitHub does not answer, the deploy stops (fail closed): retry, or, after checking the run in Actions by hand, `DEPLOY_SKIP_QUALITY_CHECK=1`, which deploys with an alert (meant for staging with a branch image).
 3. Save the running version to `.deploy/previous` (from `.deploy/current`, or the tag of the running backend image on the first run).
 4. `docker compose pull` of the app services, then `docker image inspect` of every expected `image:tag`. A failed pull or a missing image stops the deploy here, before migrating.
-5. **Migrate before recreating**, with the old code still serving: `docker compose run --rm --no-deps --no-build -T backend alembic upgrade head`. If it fails, nothing was recreated.
-6. **Backend, gradually**: `up -d --no-deps --no-build --remove-orphans --no-recreate --wait --scale backend=<old + 3> backend` starts 3 new replicas next to the old ones and waits until they are healthy. nginx resolves `backend` by itself (`server backend:8000 resolve`, `resolver 127.0.0.11 valid=5s`), so after `DEPLOY_DNS_SETTLE` (6 s) the old replicas are stopped (`docker stop -t 35`, graceful) and removed. If the new replicas do not become healthy within 180 s they are removed and the old ones keep serving: the deploy fails without a rollback because nothing else changed. Verified with Compose v5.5: `--no-recreate --scale` creates the missing replicas with the new configuration and leaves the existing ones alone. Requires the backend service without `container_name` (F0-04, `docker-compose.yml`). `DEPLOY_ROLLING=0` falls back to a plain `up -d --no-deps backend`, with about 5-10 s of 502 while the replicas are recreated.
+5. **Migrate before recreating**, with the old code still serving: `docker compose run --rm --no-deps -T backend alembic upgrade head`. If it fails, nothing was recreated. `run` takes no `--no-build` in any Compose version (only `up` and `create` do; Compose 5.5.1 rejects it as an unknown flag) and `run --pull never` needs Compose 2.33, above the 2.24 minimum. It still cannot build or pull: the production view has no `build` section (`build: !reset null`) and the previous step checked that the image is local.
+6. **Backend, gradually**: `up -d --no-deps --no-build --remove-orphans --no-recreate --wait --scale backend=<old + 2> backend` starts 2 new replicas (`DEPLOY_BACKEND_REPLICAS`, equal to `deploy.replicas` in `docker-compose.prod.yml`) next to the old ones and waits until they are healthy. nginx resolves `backend` by itself (`server backend:8000 resolve`, `resolver 127.0.0.11 valid=5s`), so after `DEPLOY_DNS_SETTLE` (6 s) the old replicas are stopped (`docker stop -t 35`, graceful) and removed. If the new replicas do not become healthy within 180 s they are removed and the old ones keep serving: the deploy fails without a rollback because nothing else changed. Verified with Compose v5.5: `--no-recreate --scale` creates the missing replicas with the new configuration and leaves the existing ones alone. Requires the backend service without `container_name` (F0-04, `docker-compose.yml`). `DEPLOY_ROLLING=0` falls back to a plain `up -d --no-deps backend`, with about 5-10 s of 502 while the replicas are recreated.
 7. The rest of the app: `up -d --no-deps --no-build --remove-orphans celery_worker celery_worker_interactive celery_beat frontend`. Compose only recreates what changed. The frontend container is recreated when its image changes (every release): the SPA answers 502 for a moment while it restarts. Accepted: the API keeps serving and the browser retries.
 8. `nginx -t && nginx -s reload`. On a normal deploy the edge is only **reloaded**, never recreated or restarted; it re-resolves `backend` by itself.
 9. Write `.deploy/current`.
 10. **Gate** (60 s: 12 checks, 5 s apart):
     - `https://$DOMAIN/api/ops/health/ready` and `https://$DOMAIN/` answer 2xx; one failed check in total is tolerated.
     - No container of the project is `unhealthy`.
-    - `rabbitmq-diagnostics alarms` is empty (with a memory or disk alarm RabbitMQ blocks publishers: OTP and jobs stall while `/ready` still answers).
+    - `rabbitmq-diagnostics -q alarms --formatter json` reports no alarm: with the pinned RabbitMQ 3.13.7 that is exactly `{"alarms":[],"node":"rabbit@...","result":"ok"}` (keys only `alarms`, `node` and `result`, each once, `alarms` empty). With alarms 3.13.7 prints another object (`local`, `global`, `message`) and still exits 0. Anything else, empty output, `[]` or unparseable output included, fails the gate; upgrading the RabbitMQ image means checking `alarms_command.ex` of the new tag and adjusting `rabbitmq_sin_alarmas` (a test pins the tag) (with a memory or disk alarm RabbitMQ blocks publishers: OTP and jobs stall while `/ready` still answers).
     - 5xx rate in the last 2 minutes of the nginx access log (`"s":"5..."`) under 0.5 %, counted only when there are at least 3 errors (one stray 502 on low traffic does not trigger a rollback).
 11. Gate failed: **automatic rollback** (`DEPLOY_AUTO_ROLLBACK=1`), then exit 1. If the rollback's own gate also fails, the script alerts and exits 2: a person has to look.
 
@@ -85,7 +348,7 @@ Every step logs to stderr with a UTC timestamp. Failures send an alert through `
 
 ## 4. Rollback (`scripts/deploy.sh rollback`)
 
-`APP_VERSION=$(cat .deploy/previous)`, then steps 4 and 6-10 **without migrating**. It does not rewrite `.deploy/previous`, so running it twice does not bounce between versions. Preflight skips the disk and backup checks: it is the emergency path.
+`APP_VERSION=$(cat .deploy/previous)`, then steps 4 and 6-10 **without migrating**. It does not rewrite `.deploy/previous`, so running it twice does not bounce between versions. Preflight skips the disk, backup and Quality checks: it is the emergency path, and it must work with GitHub down.
 
 If the pull fails (GHCR down, token expired), the rollback continues with the local images, but only if every previous `image:tag` is still on the host. If one is missing it alerts and exits 2 without touching anything: there is nothing to roll back to, and a person decides.
 
@@ -155,15 +418,20 @@ SELECT count(*) FROM store_media WHERE kind NOT IN ('logo', 'cover', 'service');
 
 Run them as the migration role (or any role that bypasses RLS): as `shifty_app` without a tenant context, RLS hides every row and the counts are a false 0.
 
-## 6. Staging: a second compose project on the same VPS
+## 6. Staging: NOT on the production VPS
 
-Until launch (plan §7, decision 29) staging is another clone, for example `/opt/shifty-staging`, with its own `.env`:
+The production VPS has 8 GB (section 1): production's limits already take about 5.7 GiB steady and 6.7 GiB during a deploy, so a second full stack does not fit next to it. Running staging there would push the host into swap and the OOM killer, and the victim could be production's database. **Staging runs on another host** (a second, separate VPS, possibly a smaller or temporary one) **or locally** on a developer machine with the production view (`COMPOSE_FILE=docker-compose.yml:docker-compose.prod.yml`). Never on the production host, not even "just for a test".
+
+The plan (plan §7, decision 29) described staging as a second compose project on the production VPS; that assumed a 16 GB host and no longer applies. Everything below still holds for a staging host of its own: there it is the only project, so it can keep the default ports and does not need the extra port override.
+
+Staging is a clone, for example `/opt/shifty-staging`, with its own `.env`:
 
 - `COMPOSE_PROJECT_NAME=shifty-staging`: containers, networks and volumes (the database included) are separate from production. Container names are `${COMPOSE_PROJECT_NAME:-shifty}_<service>` in the compose files, so the two projects do not collide (a fixed `container_name` would stop the second project from starting). The guard watches only its own project (`COMPOSE_PROJECT_NAME`).
 - Its own secrets, `DOMAIN` and `BACKUP_DIR=/var/backups/shifty-staging` with `BACKUP_ALLOW_LOCAL_ONLY=1`, in its own ops file; point its scripts at it with `SHIFTY_OPS_ENV=/etc/shifty/ops-staging.env`.
-- Production nginx publishes 80 and 443, so staging nginx needs other host ports (for example `127.0.0.1:8443:443`) through an extra override listed in its `COMPOSE_FILE`. That override does not exist yet.
-- Deploy it with the same script: `APP_VERSION=<sha> DEPLOY_SKIP_BACKUP_CHECK=1 bash scripts/deploy.sh deploy` from its clone.
-- It shares 16 GB with production: bring it up for a test and take it down afterwards (`docker compose down`, the volumes stay).
+- Only if staging ever shares a host with another project that publishes 80 and 443 does its nginx need other host ports (for example `127.0.0.1:8443:443`) through an extra override listed in its `COMPOSE_FILE`. That override does not exist; on a host of its own it is not needed.
+- `docker-compose.prod.yml` fixes `ENV: production`, so without changes staging boots as production and needs the production-only requirements of section 1: Sentry, and Mercado Pago OAuth and webhook credentials from a non-`TEST-` app. A staging without real MP credentials needs `ENV: staging` in that same extra override (staging keeps the secret and MP API base checks, not the production ones). Its `.env` still has to define the MP and Sentry variables with some non-empty value: compose interpolates the `:?` of `docker-compose.prod.yml` before it applies any override.
+- Deploy it with the same script: `APP_VERSION=<sha> DEPLOY_SKIP_BACKUP_CHECK=1 bash scripts/deploy.sh deploy` from its clone. An image built by hand from a branch (`workflow_dispatch`) has no green Quality on `main`; add `DEPLOY_SKIP_QUALITY_CHECK=1` for it (the deploy alerts that it skipped the check).
+- The staging host needs the same 8 GB as production to run the production limits unchanged; on a smaller host, lower them in a staging-only override, never in `docker-compose.prod.yml`. Bring it up for a test and take it down afterwards (`docker compose down`, the volumes stay).
 
 The monthly backup drill can restore into staging (`docs/BACKUP_RESTORE_RUNBOOK.md`).
 
@@ -184,7 +452,7 @@ The edge also caches, and only what the backend marks cacheable (plan F1-29): `/
 | What | When | Script | Alerts when |
 | --- | --- | --- | --- |
 | Restart `unhealthy` containers | every minute (cron) | `scripts/guard.sh` | every restart. Never restarts `db` or `rabbitmq` (alert only), one-off containers (`compose run`) or anything while `db` or `redis_state` is unhealthy (the rest fails because of them). Caps: 3 restarts per container and 6 in total per hour |
-| NTP, TLS certificate, disk, per-container memory, `docker stats` to `/var/log/shifty/stats.log` | hourly (cron) | `scripts/checks.sh` | NTP not synchronized, certificate < 20 days, disk > 80 % (critical > 90 %), container > 90 % of its memory limit |
+| NTP, TLS certificate, disk, per-container memory, host memory and swap, `redis_state` memory, host hardening, `docker stats` to `/var/log/shifty/stats.log` | hourly (cron) | `scripts/checks.sh` (runs `scripts/host-hardening-check.sh`) | NTP not synchronized, certificate < 20 days, disk > 80 % (critical > 90 %), container > 90 % of its memory limit, host `MemAvailable` under 10 % of RAM, no swap, or swap more than 50 % used; `redis_state` over 80 % of its `maxmemory` (`REDIS_STATE_MEM_MAX_PERCENT`), unreadable, or without `maxmemory`; any hardening step undone (section 1) or a reboot pending |
 | Backup freshness | hourly (cron) | `scripts/backup-check.sh` | last successful backup > 26 h (critical > 48 h) |
 | Latency and 5xx per route | every 5 min (cron) | `scripts/latency-check.sh` + `backend/scripts/latency_report.py` | a route with >= 20 requests over p95 500 ms or 5xx 0.1 %, or global 5xx over 0.1 % with >= 200 requests in the window |
 | Top 20 queries of `pg_stat_statements` | Mondays 06:23 host time (cron; cron.d uses the host timezone) | `backend/scripts/pg_top_queries.py` inside the backend container | never: it is a report, read `/var/log/shifty/pg-top.log` |
@@ -195,7 +463,7 @@ Repeated alerts are silenced for a while (30 minutes to 6 hours depending on the
 
 **Weekly query report (plan F5-03).** `deploy/cron/shifty-pg-top` runs `docker compose exec -T backend python scripts/pg_top_queries.py` every Monday and appends to `/var/log/shifty/pg-top.log`: the 20 statements with the most total time and the 20 with the highest mean time, with calls, rows and their share of the total. It connects as the owner role (`BACKUP_DATABASE_URL` or `MIGRATION_DATABASE_URL`, never `DATABASE_URL`: under `shifty_app` the view hides other roles' query text) and prints the URL with the credentials masked; the query text is normalized by Postgres (`$1` instead of values), so it carries no customer data. Totals accumulate since the last reset, so compare week against week; to measure a single week run it by hand with `--reset` (it clears the stats after printing). By hand: `APP_VERSION=$(cat .deploy/current) docker compose exec -T backend python scripts/pg_top_queries.py --limit 20`.
 
-**Sentry (plan F5-02).** With `SENTRY_DSN` set, traces are sampled per route (`backend/core/observability.py`): never `/ops/health/*` or `/ops/slo`, always `/payments/*` and the Mercado Pago webhook, 2 % of public GETs, 20 % of writes, 10 % of other panel reads; the release is `APP_VERSION`. Sentry Crons watches ONE beat task (owner decision 2026-09-25: stay on the free plan, which includes one cron monitor): `expire-unpaid-appointment-holds-every-minute`, because if it stops, appointments with an unpaid deposit are never released and the schedule stays taken. `exclude_beat_tasks` in the `CeleryIntegration` excludes every other beat entry with one regex (`SENTRY_CRONS_EXCLUDED_BEAT_TASKS` in `core/observability.py`), so a new beat task is born without a monitor and never exceeds the quota. The other seven crontab tasks and the outbox (every 20 s; Sentry skips intervals under 60 s anyway) are covered by `/ops/slo` (`oldest_pending_outbox_seconds`, `oldest_pending_email_send_seconds`, pending and failed webhooks) and by the worker heartbeat healthcheck. Monitoring more tasks means a paid cron quota: change the regex and this paragraph together. **One-time cleanup:** in any Sentry project (environment) that ran F5-02 before this change, the other seven crontab tasks already created cron monitors (`process-payment-webhook-inbox-every-minute`, `reconcile-pending-payments-every-2-minutes`, `process-appointment-reminders-every-15-minutes`, `process-waitlist-offers-every-minute`, `purge-expired-auth-sessions-daily`, `purge-expired-data-daily`, `process-subscription-lifecycle-daily`). They no longer get check-ins, so Sentry marks them missed and keeps counting them against the quota: delete them by hand in Sentry (Crons, each monitor, Delete) after deploying this change. Keep only `expire-unpaid-appointment-holds-every-minute`.
+**Sentry (plan F5-02).** With `SENTRY_DSN` set, traces are sampled per route (`backend/core/observability.py`): never `/ops/health/*` or `/ops/slo`, always `/payments/*` and the Mercado Pago webhook, 2 % of public GETs, 20 % of writes, 10 % of other panel reads; the release is `APP_VERSION`. Sentry Crons watches ONE beat task (owner decision 2026-09-25: stay on the free plan, which includes one cron monitor): `expire-unpaid-appointment-holds-every-minute`, because if it stops, appointments with an unpaid deposit are never released and the schedule stays taken. A run that keeps going but falls behind (Mercado Pago slow, many held charges) is a different signal: `oldest_overdue_hold_seconds` in `/ops/slo` (threshold `SLO_MAX_OLDEST_OVERDUE_HOLD_SECONDS`, 600 s), and the task itself reports an `OverdueHoldsLagging` event to Sentry over that threshold, at most once per 30 minutes per worker process. Charges the task parked because Mercado Pago reports them approved but they fail integrity are left out of that metric (each alerted once) and counted in `integrity_held_holds`, with no count threshold: a non-zero value is a paid appointment stuck in `pending_payment` that needs a person. Once a parked charge becomes eligible for its hourly recheck, `oldest_due_held_recheck_seconds` counts only the delay after that recheck was due. The separate threshold `SLO_MAX_OLDEST_DUE_HELD_RECHECK_SECONDS` defaults to 900 s (allowed 60-3600 s); `/ops/slo` emits `held_recheck_lag_high`, and the job reports `HeldRecheckLagging` to Sentry at most once per 30 minutes per worker process. Re-parking after a recheck resets that timer; this alert does not count the hour during which the charge is intentionally parked. `exclude_beat_tasks` in the `CeleryIntegration` excludes every other beat entry with one regex (`SENTRY_CRONS_EXCLUDED_BEAT_TASKS` in `core/observability.py`), so a new beat task is born without a monitor and never exceeds the quota. The other seven crontab tasks and the outbox (every 20 s; Sentry skips intervals under 60 s anyway) are covered by `/ops/slo` (`oldest_pending_outbox_seconds`, `oldest_pending_email_send_seconds`, pending and failed webhooks) and by the worker heartbeat healthcheck. Monitoring more tasks means a paid cron quota: change the regex and this paragraph together. **One-time cleanup:** in any Sentry project (environment) that ran F5-02 before this change, the other seven crontab tasks already created cron monitors (`process-payment-webhook-inbox-every-minute`, `reconcile-pending-payments-every-2-minutes`, `process-appointment-reminders-every-15-minutes`, `process-waitlist-offers-every-minute`, `purge-expired-auth-sessions-daily`, `purge-expired-data-daily`, `process-subscription-lifecycle-daily`). They no longer get check-ins, so Sentry marks them missed and keeps counting them against the quota: delete them by hand in Sentry (Crons, each monitor, Delete) after deploying this change. Keep only `expire-unpaid-appointment-holds-every-minute`.
 
 Logs: the scripts write to `/var/log/shifty/*.log` (14 days, `deploy/logrotate/shifty`). The nginx error log still prints the full request line, query string included (it can carry `client_phone`), on 429 and upstream errors: keep it only in the container's json-file log with the size cap of the compose logging settings (plan F0-22: json-file 20 MB x 5) and do not copy it anywhere else. `latency-check.sh` reads the access log into a temporary file and deletes it.
 
@@ -223,6 +491,9 @@ It deletes in batches of `RETENTION_BATCH_SIZE` (5000) with a commit per batch. 
 - **"hay otro deploy en curso"**: another deploy is running, or one was killed. If none is running, `rmdir .deploy/lock`.
 - **"COMPOSE_FILE ... no incluye docker-compose.prod.yml"**: the server `.env` lacks `COMPOSE_FILE=docker-compose.yml:docker-compose.prod.yml`.
 - **"faltan imagenes locales"**: the sha was not published (check the `Build images` run for that commit) or `docker login ghcr.io` expired.
+- **"Quality no paso en main para <sha>"**: that commit's `Quality` run on `main` failed or is still running, the sha is short (it must be the full 40 characters), or the image was built by hand from a branch. Deploy a sha whose Quality is green; there is no `Build images` run without one.
+- **"no pude preguntarle a GitHub"**: api.github.com did not answer; without `DEPLOY_GITHUB_TOKEN` the private repository answers 404 (set the token, section 3); with it, the token expired or lacks "Actions: read" on this repository; on a public repository without a token, the unauthenticated rate limit (60 per hour per IP) ran out. Retry later; if it is urgent, check the commit's Quality run in Actions by hand and deploy with `DEPLOY_SKIP_QUALITY_CHECK=1` (it alerts).
+- **"redis_state: usa el N % de su maxmemory"**: `redis_state` holds rate limits, idempotency keys, OTP codes, lockouts, OAuth state and Celery results with `noeviction`; at 100 % every write fails and auth, OTP and the public booking answer 503. Find what grew: `APP_VERSION=$(cat .deploy/current) docker compose exec redis_state redis-cli --bigkeys` and `... redis-cli INFO keyspace` (database 1 is the Celery result backend). Never switch it to an evicting policy or flush it to "fix" it: an eviction silently drops protections (CLAUDE.md, "Dos Redis con papeles distintos"). Raising `--maxmemory` in `docker-compose.yml` means raising its 96M container limit too and redoing the memory budget of section 1.
 - **Manual compose commands** need the version (the prod compose file refuses to interpolate without it): `APP_VERSION=$(cat .deploy/current) docker compose ps`.
 - **First deploy with this script**: `.deploy/previous` comes from the tag of the running backend image. If that is `latest` or a local build, there is nothing to roll back to; say so in the release notes.
 - **The gate failed but the release is fine** (for example the domain's DNS or certificate): fix the cause and deploy the same sha again; migrations are idempotent at head.

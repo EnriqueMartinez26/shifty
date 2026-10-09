@@ -1,0 +1,19 @@
+# Code owners for the critical paths.
+#
+# With "Require review from Code Owners" enabled on `main`, a PR that touches
+# any of these paths needs an approval from one of the listed owners other
+# than its author. Everything else merges on the 15 required checks alone
+# (Required approvals: 0). Money, login, the global admin key, the schema,
+# the production configuration, the deploy and the AI rules are the places
+# where a plausible-but-wrong change does the most damage and CI is not
+# enough (see PRs #104 and #108).
+
+/backend/modules/payments/    @mateoscns @EnriqueMartinez26
+/backend/modules/auth/        @mateoscns @EnriqueMartinez26
+/backend/modules/superadmin/  @mateoscns @EnriqueMartinez26
+/backend/alembic/             @mateoscns @EnriqueMartinez26
+/backend/core/                @mateoscns @EnriqueMartinez26
+/docker-compose*.yml          @mateoscns @EnriqueMartinez26
+/scripts/deploy.sh            @mateoscns @EnriqueMartinez26
+/.github/                     @mateoscns @EnriqueMartinez26
+/CLAUDE.md                    @mateoscns @EnriqueMartinez26

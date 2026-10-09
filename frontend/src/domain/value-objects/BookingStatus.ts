@@ -20,8 +20,8 @@ export type BookingStatusValue = (typeof BOOKING_STATUSES)[number]
  * - test_el_conjunto_de_estados_terminales_es_el_documentado (backend) compara
  *   el grafo contra una constante Python propia; si el backend cambia sus
  *   terminales, su CI falla y el mensaje pide actualizar esta lista.
- * - BookingStatus.test.ts (columna "cobrable") congela esta lista del lado
- *   del front; si alguien la edita, falla ese test.
+ * - BookingStatus.test.ts (columnas "conocido" y "cobrable") congela esta
+ *   lista del lado del front; si alguien la edita, falla ese test.
  * Cambiar un lado exige cambiar el otro a mano.
  */
 const TERMINAL_STATUSES: readonly BookingStatusValue[] = [
@@ -42,11 +42,26 @@ export const isBookingStatus = (value: string): value is BookingStatusValue =>
 const isTerminalStatus = (value: string): boolean =>
   (TERMINAL_STATUSES as readonly string[]).includes(value)
 
-/** Se le puede cobrar: un estado conocido que todavia no termino. */
-export const isCollectibleStatus = (value: string): boolean =>
-  isBookingStatus(value) && !isTerminalStatus(value)
+/**
+ * Terminales que igual se cobran: se atendio (o el cliente falto) y la plata
+ * entra despues. Replica `RELEASED_APPOINTMENT_STATUSES` del backend
+ * (`modules/payments/service.py`) por complemento: soltados, y por eso sin
+ * cobro, quedan solo `cancelled` y `expired` (regla 3).
+ */
+const PAYABLE_TERMINAL_STATUSES: readonly BookingStatusValue[] = ['completed', 'absent']
 
-export type BookingAction = 'confirm' | 'release' | 'complete' | 'absent'
+/**
+ * Se le puede cobrar: un estado conocido que no se solto.
+ *
+ * 2026-10-08, QA en el celular: excluia todos los terminales, asi que un turno
+ * "Completado" desaparecia de Cobros y el flujo natural (llega sin turno, se
+ * atiende, se completa y despues se cobra) quedaba sin salida.
+ */
+export const isCollectibleStatus = (value: string): boolean =>
+  isBookingStatus(value) &&
+  (!isTerminalStatus(value) || (PAYABLE_TERMINAL_STATUSES as readonly string[]).includes(value))
+
+export type BookingAction = 'confirm' | 'release' | 'cancel' | 'complete' | 'absent' | 'reschedule'
 
 interface BookingActionContext {
   /** El turno ya empezo o termino: solo entonces se puede completar o marcar ausente. */
@@ -55,21 +70,41 @@ interface BookingActionContext {
   canRelease: boolean
   /** Puede confirmar, completar o marcar ausente. */
   canManage: boolean
+  /**
+   * Puede cancelar o reprogramar ESTE turno (D-20260929-03): administracion y
+   * recepcion, cualquiera; el profesional, solo los de su agenda.
+   */
+  canCancelOrReschedule: boolean
 }
+
+const isPendingStatus = (status: string): boolean =>
+  status === 'pending' || status === 'pending_payment'
 
 /**
  * Transiciones que la agenda ofrece para un turno, segun el grafo del backend:
- * pendiente -> confirmar o liberar; pendiente de pago -> solo liberar (se
- * confirma con el pago); confirmado y ya empezado -> completar o ausente. Un
- * estado terminal o desconocido no ofrece nada.
+ * - pendiente -> confirmar; pendiente o pendiente de pago -> "Liberar" para
+ *   quien puede liberar y, si no, "Cancelar" (D-20260929-06);
+ * - confirmado que no empezo -> cancelar; ya empezado -> completar o ausente
+ *   (uno que empezo no se cancela, D-20260929-05);
+ * - pendiente o confirmado -> reprogramar (un pendiente de pago no se mueve:
+ *   409 DEPOSIT_PENDING_RESCHEDULE_DENIED).
+ * Un estado terminal o desconocido no ofrece nada.
  */
 export const bookingActionsFor = (
   status: string,
-  { hasStarted, canRelease, canManage }: BookingActionContext
+  { hasStarted, canRelease, canManage, canCancelOrReschedule }: BookingActionContext
 ): BookingAction[] => {
   const actions: BookingAction[] = []
+  const canCancelNow = canCancelOrReschedule && !hasStarted
   if (status === 'pending' && canManage) actions.push('confirm')
-  if ((status === 'pending' || status === 'pending_payment') && canRelease) actions.push('release')
+  if (isPendingStatus(status)) {
+    if (canRelease) actions.push('release')
+    else if (canCancelNow) actions.push('cancel')
+  }
+  if (status === 'confirmed' && canCancelNow) actions.push('cancel')
   if (status === 'confirmed' && hasStarted && canManage) actions.push('complete', 'absent')
+  if ((status === 'pending' || status === 'confirmed') && canCancelOrReschedule) {
+    actions.push('reschedule')
+  }
   return actions
 }

@@ -23,6 +23,12 @@ class LedgerMovementResponse(BaseModel):
     appointment_id: str | None = None
     notes: str | None = None
     created_at: datetime
+    # Aditivo (decision de Mateo, 2026-10-03: el panel revierte movimientos).
+    # ``reverses_id``: el movimiento que esta reversa anula; null si no es una.
+    reverses_id: str | None = None
+    # ``reversed``: otro movimiento de esta tienda ya lo anulo. Con uno de los
+    # dos, ``POST .../reverse`` responde 422.
+    reversed: bool = False
 
 
 class CustomerLedgerResponse(BaseModel):

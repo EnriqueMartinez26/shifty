@@ -2,12 +2,13 @@ import React from 'react'
 
 import { Bell, CheckCheck } from 'lucide-react'
 
-import { colors2000s } from '../../../theme/colors'
+import { colors2000s, orangeCtaGradient } from '../../../theme/colors'
 import {
   useMarkAllNotificationsRead,
   useMarkNotificationRead,
   useNotifications
 } from '../../hooks/useNotifications'
+import { notifyError } from '../../lib/notify'
 
 const formatRelative = (isoDate: string): string => {
   const created = new Date(isoDate).getTime()
@@ -26,6 +27,21 @@ const NotificationsBell: React.FC = () => {
   const markRead = useMarkNotificationRead()
   const markAllRead = useMarkAllNotificationsRead()
 
+  // Sin catch, un rechazo quedaba en nada: la campana seguia igual (FF-17).
+  const markAllAsRead = () => {
+    void markAllRead
+      .mutateAsync()
+      .catch((error: unknown) => notifyError(error, 'No se pudieron marcar las notificaciones.'))
+  }
+
+  const markAsRead = (publicId: string) => {
+    void markRead
+      .mutateAsync(publicId)
+      .catch((error: unknown) =>
+        notifyError(error, 'No se pudo marcar la notificación como leída.')
+      )
+  }
+
   const items = data?.items ?? []
   const unreadCount = data?.unread_count ?? 0
 
@@ -43,7 +59,11 @@ const NotificationsBell: React.FC = () => {
   }, [isOpen])
 
   return (
-    <div className="relative" ref={containerRef}>
+    // En el telefono la raiz NO posiciona: el panel se ancla al encabezado
+    // (AdminLayout lo marca `relative`) y ocupa su ancho. Anclado al borde
+    // derecho de la campana, que en 390 px queda a la izquierda, abria en
+    // left=-262px (QA movil 2026-10-08). Desde md la campana esta a la derecha.
+    <div className="md:relative" ref={containerRef}>
       <button
         type="button"
         onClick={() => setIsOpen((open) => !open)}
@@ -62,7 +82,7 @@ const NotificationsBell: React.FC = () => {
           <span
             className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-black flex items-center justify-center"
             style={{
-              background: `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`,
+              background: orangeCtaGradient,
               color: colors2000s.text.onOrange,
               boxShadow: colors2000s.shadows.outerOrange
             }}
@@ -74,7 +94,9 @@ const NotificationsBell: React.FC = () => {
 
       {isOpen && (
         <div
-          className="absolute right-0 mt-2 w-80 rounded-lg overflow-hidden z-50"
+          role="region"
+          aria-label="Panel de notificaciones"
+          className="absolute inset-x-0 top-full mt-2 md:inset-x-auto md:right-0 md:w-80 rounded-lg overflow-hidden z-50"
           style={{
             background: 'white',
             border: `1px solid ${colors2000s.border.default}`,
@@ -94,7 +116,7 @@ const NotificationsBell: React.FC = () => {
             {unreadCount > 0 && (
               <button
                 type="button"
-                onClick={() => void markAllRead.mutateAsync()}
+                onClick={markAllAsRead}
                 disabled={markAllRead.isPending}
                 className="text-[11px] font-bold inline-flex items-center gap-1 cursor-pointer"
                 style={{ color: colors2000s.text.secondary }}
@@ -109,7 +131,7 @@ const NotificationsBell: React.FC = () => {
             {items.length === 0 && (
               <p
                 className="px-4 py-6 text-xs text-center"
-                style={{ color: colors2000s.text.disabled }}
+                style={{ color: colors2000s.text.secondary }}
               >
                 No tenés novedades por ahora.
               </p>
@@ -119,7 +141,7 @@ const NotificationsBell: React.FC = () => {
                 key={item.public_id}
                 type="button"
                 onClick={() => {
-                  if (!item.read_at) void markRead.mutateAsync(item.public_id)
+                  if (!item.read_at) markAsRead(item.public_id)
                 }}
                 className="w-full text-left px-4 py-3 transition-all cursor-pointer"
                 style={{
@@ -138,7 +160,7 @@ const NotificationsBell: React.FC = () => {
                     {item.body}
                   </p>
                 )}
-                <span className="text-[10px]" style={{ color: colors2000s.text.disabled }}>
+                <span className="text-[10px]" style={{ color: colors2000s.text.secondary }}>
                   {formatRelative(item.created_at)}
                 </span>
               </button>

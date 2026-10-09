@@ -4,6 +4,7 @@ import enum
 from typing import Any, TypeAlias
 
 from sqlalchemy import (
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
@@ -38,7 +39,7 @@ class PaymentStatus(str, enum.Enum):
 
 # Estados en los que la plata efectivamente entro. Unica fuente: la leen
 # ``Payment.is_accredited`` y las consultas que filtran en SQL (la guarda de
-# reprogramacion del cliente, ``PublicRepository.accredited_appointment_ids``).
+# reprogramacion del cliente, ``payments.repository.paid_appointment_of``).
 ACCREDITED_PAYMENT_STATUSES: frozenset[str] = frozenset(
     {PaymentStatus.APPROVED.value, PaymentStatus.MANUAL_CONFIRMED.value}
 )
@@ -46,16 +47,27 @@ ACCREDITED_PAYMENT_STATUSES: frozenset[str] = frozenset(
 # Cobro VIVO: el cobro del turno sigue abierto y su link se puede pagar (o
 # el panel lo puede volver a generar sin tocar el turno). Decision de Mateo
 # (2026-09-25, D1): un turno con cobro vivo no lo cancela ni lo reprograma el
-# cliente, y cancelarlo desde el panel vence el cobro en la misma transaccion.
-# Unica fuente: la leen ``Payment.is_live_charge`` y las consultas en SQL
-# (``payments.repository.live_charge_of``). ``rejected`` SI es vivo: tras un
-# rechazo Mercado Pago deja reintentar sobre la misma preferencia (revision de
-# perf/f4-pay, 2026-09-25); el panel lo vence por ``rejected -> expired``, que
-# ya esta en el grafo. ``expired`` no es vivo (lo vencio Shifty y el outbox
+# cliente (salvo una sena por WhatsApp, ``client_cancel_denial``), y
+# cancelarlo desde el panel vence el cobro en la misma transaccion. Unica
+# fuente: la leen ``Payment.is_live_charge`` y las consultas en SQL
+# (``payments.repository.live_charge_provider_of``). ``rejected`` SI es vivo:
+# tras un rechazo Mercado Pago deja reintentar sobre la misma preferencia
+# (revision de perf/f4-pay, 2026-09-25); el panel lo vence por
+# ``rejected -> expired``, que ya esta en el grafo. ``expired`` no es vivo (lo vencio Shifty y el outbox
 # vence el link en MP), ni los acreditados ni ``refunded``.
 LIVE_CHARGE_PAYMENT_STATUSES: frozenset[str] = frozenset(
     {PaymentStatus.PENDING.value, PaymentStatus.REJECTED.value}
 )
+
+
+# Proveedor de un cobro (``Payment.provider``). ``mercadopago`` es el default
+# de la columna: el cobro tiene (o va a tener) un link de MP y el job de
+# retenciones y la conciliacion le preguntan a MP por el. ``manual`` es la
+# sena que se paga por WhatsApp (decision de Mateo, 2026-10-03): sin link ni
+# consulta a MP, la confirma a mano el personal y, si nadie la confirma, vence
+# directo por el grafo (``payments.deposit_channels``).
+PAYMENT_PROVIDER_MERCADOPAGO = "mercadopago"
+PAYMENT_PROVIDER_MANUAL = "manual"
 
 
 # Unica fuente de verdad del grafo de la region de facturacion.
@@ -151,7 +163,9 @@ class Payment(BaseEntity):
     appointment_id: Mapped[str] = mapped_column(
         ForeignKey("appointments.id"), index=True
     )
-    provider: Mapped[str] = mapped_column(String(50), default="mercadopago")
+    provider: Mapped[str] = mapped_column(
+        String(50), default=PAYMENT_PROVIDER_MERCADOPAGO
+    )
     amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))
     original_amount: Mapped[Decimal | None] = mapped_column(
         Numeric(12, 2), nullable=True
@@ -181,6 +195,19 @@ class Payment(BaseEntity):
     # la cola (NULLS FIRST) para que los que siguen ``pending`` en MP no
     # ocupen siempre el frente (revision de 3b977a9..6c84d46, #4).
     reconciled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # Ultima vez que el job de retenciones vencidas dejo este cobro retenido
+    # porque MP lo da por APROBADO y no pasa la integridad
+    # (``jobs._rescatar_o_retener``), mas un desfase aleatorio de hasta 10
+    # minutos que separa a los estacionados juntos. Mientras sea reciente
+    # (``jobs.EXPIRE_HELD_RECHECK_INTERVAL``), ``_expired_holds_query`` no lo
+    # toma: preguntarle a MP cada minuto por un cobro que espera a una persona
+    # gastaba el presupuesto de la fase A y llenaba las paginas de la corrida
+    # (seguimiento W2 de la PR #104). Lo sella solo ese job; lo borra
+    # ``reopen_for_panel_link``, porque un link nuevo invalida el veredicto de
+    # integridad del viejo.
+    integrity_held_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
     external_payment_id: Mapped[str | None] = mapped_column(
@@ -253,12 +280,17 @@ class Payment(BaseEntity):
 
         Devuelve False (sin tocar nada) si el cobro no esta ``expired`` o si
         no tiene un link real que cobrar.
+
+        Borra ``integrity_held_at`` (seguimiento W2 de la PR #104): el
+        veredicto de integridad era del pago del link viejo, y el sello dejaria
+        al job de vencimiento salteando el cobro reabierto hasta una hora.
         """
         if self.status != PaymentStatus.EXPIRED.value:
             return False
         if is_placeholder_preference_id(self.preference_id):
             return False
         self._status = PaymentStatus.PENDING.value
+        self.integrity_held_at = None
         return True
 
     def apply_status(
@@ -282,6 +314,85 @@ class Payment(BaseEntity):
         }:
             self.paid_at = self.paid_at or datetime.now(timezone.utc)
         return True
+
+
+class BalancePaymentMethod(str, enum.Enum):
+    """Medio con que el cliente pago el resto (opcional, D-20261008-01)."""
+
+    CASH = "efectivo"
+    TRANSFER = "transferencia"
+    MERCADOPAGO = "mercadopago"
+    OTHER = "otro"
+
+
+BALANCE_PAYMENT_METHODS: tuple[str, ...] = tuple(m.value for m in BalancePaymentMethod)
+
+
+class AppointmentBalancePayment(BaseEntity):
+    """El resto de un turno pagado aparte de su cobro (D-20261008-01).
+
+    Saldo restante por turno, opcion A: un turno tiene a lo sumo un cobro
+    (``uq_payments_store_appointment``) y ese cobro acreditado puede ser menor
+    que el precio congelado (una sena de $960 sobre $3.200). El resto ($2.240)
+    se paga en el local y el personal lo registra aca: UN resto vivo por turno
+    (``uq_appointment_balance_payments_live``), por un importe mayor a cero
+    (CHECK) que no supera el saldo (lo valida el service bajo el lock del
+    turno). Es plata fuera de Mercado Pago: no tiene estados ni link.
+
+    La devolucion de un resto se hace fuera del sistema y el admin lo marca
+    revertido (``reverted_at``/``reverted_by``, los dos o ninguno por CHECK):
+    la fila no se borra, queda como auditoria, y un resto revertido deja de
+    contar como ingreso y como saldo pagado. Sin notas libres a proposito: un
+    texto libre seria un dato personal mas que la anonimizacion no cubre.
+    """
+
+    __tablename__ = "appointment_balance_payments"
+    __table_args__ = (
+        CheckConstraint("amount > 0", name="ck_appointment_balance_payments_amount"),
+        CheckConstraint(
+            "method IS NULL OR method IN ("
+            + ", ".join(f"'{m}'" for m in BALANCE_PAYMENT_METHODS)
+            + ")",
+            name="ck_appointment_balance_payments_method",
+        ),
+        CheckConstraint(
+            "(reverted_at IS NULL) = (reverted_by IS NULL)",
+            name="ck_appointment_balance_payments_reverted",
+        ),
+        # Un resto VIVO por turno: la ultima defensa si dos registros pasan
+        # la validacion a la vez (el lock del turno ya los serializa).
+        Index(
+            "uq_appointment_balance_payments_live",
+            "appointment_id",
+            unique=True,
+            postgresql_where=text("reverted_at IS NULL"),
+            sqlite_where=text("reverted_at IS NULL"),
+        ),
+        Index(
+            "ix_appointment_balance_payments_store_created", "store_id", "created_at"
+        ),
+    )
+
+    store_id: Mapped[str] = mapped_column(ForeignKey("stores.id"))
+    appointment_id: Mapped[str] = mapped_column(ForeignKey("appointments.id"))
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))
+    method: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    recorded_by: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    reverted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    reverted_by: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id"), nullable=True
+    )
+
+    @property
+    def is_live(self) -> bool:
+        return self.reverted_at is None
+
+    def revert(self, *, actor_id: str) -> None:
+        """Lo marca revertido: la devolucion se hizo fuera del sistema."""
+        self.reverted_at = datetime.now(timezone.utc)
+        self.reverted_by = actor_id
 
 
 class PaymentLinkHistory(BaseEntity):
@@ -411,6 +522,8 @@ __all__ = [
     "EVENT_PREFERENCE_EXPIRE",
     "PaymentLinkHistory",
     "LIVE_CHARGE_PAYMENT_STATUSES",
+    "PAYMENT_PROVIDER_MANUAL",
+    "PAYMENT_PROVIDER_MERCADOPAGO",
     "WEBHOOK_INBOX_MAX_ATTEMPTS",
     "can_apply_payment_status",
     "is_placeholder_preference_id",

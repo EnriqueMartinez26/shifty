@@ -6,6 +6,7 @@ import { StaffMapper } from '../../application/mappers/StaffMapper'
 import { Staff, type StaffWriteInput } from '../../domain/entities/Staff'
 import { QueryOptions } from '../../domain/repositories/IRepository'
 import type { IStaffRepository } from '../../domain/repositories/IStaffRepository'
+import { NotFoundError } from '../../shared/errors/NotFoundError'
 
 export class HttpStaffRepository
   extends BaseRepository<Staff, Staff, StaffWriteInput>
@@ -28,10 +29,8 @@ export class HttpStaffRepository
       const { data } = await this.client.get<StaffResponseDTO>(`/staff/${id}`)
       return StaffMapper.toDomain(data)
     } catch (error: unknown) {
-      const maybeError = error as { response?: { status?: number } }
-      if (maybeError.response?.status === 404) {
-        return null
-      }
+      // El cliente HTTP ya normalizo el 404 (FF-35): no trae `response`.
+      if (error instanceof NotFoundError) return null
       throw error
     }
   }

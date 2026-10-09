@@ -1,6 +1,13 @@
-from typing import Literal, Annotated
+from typing import Literal, Annotated, Self
 
-from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    EmailStr,
+    Field,
+    field_validator,
+    model_validator,
+)
 from datetime import time
 from core.validation import PUBLIC_ID_PATTERN, reject_control_chars
 from modules.services.schemas import ServiceResponse
@@ -11,10 +18,24 @@ PublicId = Annotated[str, Field(min_length=1, max_length=64, pattern=PUBLIC_ID_P
 MAX_SERVICE_IDS = 100
 
 
+def _reject_time_with_offset(value: time) -> time:
+    # 2026-10-08 (revision de #130): Pydantic acepta "09:00:00Z" como un
+    # ``time`` con tzinfo. Una franja es hora local de pared (regla 24: la
+    # zona es la de la tienda), y mezclar horas con y sin offset hacia que
+    # ``sorted``/``<`` levantaran TypeError: un 500 alcanzable (regla 20).
+    if value.tzinfo is not None:
+        raise ValueError("la hora no lleva zona horaria")
+    return value
+
+
+# Hora de una franja: hora local, sin offset (422 si trae uno).
+LocalTime = Annotated[time, AfterValidator(_reject_time_with_offset)]
+
+
 class ScheduleBase(BaseModel):
     day_of_week: int = Field(..., ge=0, le=6)
-    start_time: time
-    end_time: time
+    start_time: LocalTime
+    end_time: LocalTime
 
     @model_validator(mode="after")
     def validate_time_order(self) -> "ScheduleBase":
@@ -27,6 +48,28 @@ class ScheduleCreate(ScheduleBase):
     pass
 
 
+# Tope de franjas de la semana que acepta PUT /staff/{id}/schedules: seis por
+# dia. Un horario partido real usa dos o tres; el tope existe para que el
+# cuerpo no sea una lista sin limite (regla 9 aplicada al largo).
+MAX_SCHEDULES_PER_WEEK = 42
+
+
+class ScheduleWeekReplace(BaseModel):
+    """La semana ENTERA del profesional; reemplaza todas sus franjas.
+
+    ``schedules`` es obligatorio (sin default): un cuerpo vacio por error no
+    borra la semana. La lista vacia es explicita y vuelve al horario del local
+    (D-20260929-01). Las superposiciones del mismo dia se validan en el
+    service con su propio ``error_code`` (``SCHEDULE_OVERLAP``).
+    """
+
+    schedules: list[ScheduleCreate] = Field(..., max_length=MAX_SCHEDULES_PER_WEEK)
+
+
+# Columnas NOT NULL de schedules que el PATCH puede tocar.
+_SCHEDULE_NOT_NULL_FIELDS = ("day_of_week", "start_time", "end_time")
+
+
 class ScheduleUpdate(BaseModel):
     """Edicion parcial de una franja horaria.
 
@@ -34,8 +77,19 @@ class ScheduleUpdate(BaseModel):
     """
 
     day_of_week: int | None = Field(None, ge=0, le=6)
-    start_time: time | None = None
-    end_time: time | None = None
+    start_time: LocalTime | None = None
+    end_time: LocalTime | None = None
+
+    @model_validator(mode="after")
+    def reject_null_in_required_columns(self) -> Self:
+        # M2: el PATCH aplica solo los campos enviados (exclude_unset), asi
+        # que un null explicito llegaba al repositorio: None >= time daba 500
+        # y day_of_week null violaba el NOT NULL. Las tres columnas son NOT
+        # NULL: 422 aca, igual que ServiceUpdate (B6-04).
+        for field in _SCHEDULE_NOT_NULL_FIELDS:
+            if field in self.model_fields_set and getattr(self, field) is None:
+                raise ValueError(f"{field} no puede ser null")
+        return self
 
 
 class ScheduleResponse(ScheduleBase):
@@ -45,8 +99,16 @@ class ScheduleResponse(ScheduleBase):
         from_attributes = True
 
 
+# Largo de staff.display_name (String(100); la migracion d5ec116d06a3 la bajo de
+# 255). 2026-10-01: el schema seguia en 255 y un nombre de 101 a 255 caracteres
+# pasaba Pydantic y reventaba en Postgres con un 500 (regla 20). Lo fija
+# tests/integration/test_staff_limites_de_columna.py y el guardia
+# tests/architecture/test_limites_de_schema_vs_columna.py.
+DISPLAY_NAME_MAX_LENGTH = 100
+
+
 class StaffBase(BaseModel):
-    display_name: str = Field(..., min_length=2, max_length=255)
+    display_name: str = Field(..., min_length=2, max_length=DISPLAY_NAME_MAX_LENGTH)
 
 
 class StaffCreate(StaffBase):
@@ -86,11 +148,46 @@ class StaffCreate(StaffBase):
         return self
 
 
+class StaffSelfCreate(BaseModel):
+    """``POST /staff/me``: la cuenta que llama se agrega como profesional.
+
+    Sin nombre, apellido ni email: salen de su cuenta (la ficha usa su mismo
+    id, como todo el personal). ``display_name`` es opcional: sin el, figura
+    con el nombre de la cuenta.
+    """
+
+    display_name: str | None = Field(
+        None, min_length=2, max_length=DISPLAY_NAME_MAX_LENGTH
+    )
+    service_ids: list[PublicId] = Field(
+        default_factory=list, max_length=MAX_SERVICE_IDS
+    )
+
+    @field_validator("display_name")
+    @classmethod
+    def reject_control_chars_in_name(cls, value: str | None) -> str | None:
+        # Regla 19: el nombre visible sale al portal publico.
+        return reject_control_chars(value)
+
+
+# Campos de StaffUpdate donde un null explicito no es un cambio posible.
+_STAFF_NOT_NULL_FIELDS = (
+    "first_name",
+    "last_name",
+    "display_name",
+    "email",
+    "is_active",
+    "service_ids",
+)
+
+
 class StaffUpdate(BaseModel):
     first_name: str | None = Field(None, min_length=1, max_length=100)
     last_name: str | None = Field(None, min_length=1, max_length=100)
     email: EmailStr | None = None
-    display_name: str | None = Field(None, min_length=2, max_length=255)
+    display_name: str | None = Field(
+        None, min_length=2, max_length=DISPLAY_NAME_MAX_LENGTH
+    )
     service_ids: list[PublicId] | None = Field(None, max_length=100)
     is_active: bool | None = None
 
@@ -98,6 +195,17 @@ class StaffUpdate(BaseModel):
     @classmethod
     def reject_control_chars_in_names(cls, value: str | None) -> str | None:
         return reject_control_chars(value)
+
+    @model_validator(mode="after")
+    def reject_null_in_required_fields(self) -> Self:
+        # Q1: PUT y PATCH comparten handler y update_profile trata None como
+        # "no cambiar", asi que un null explicito respondia 200 sin cambiar
+        # nada. Ahora es 422 en los dos verbos (D-20260930-03); un campo
+        # ausente sigue siendo "no cambiar". Mismo patron que ScheduleUpdate.
+        for field in _STAFF_NOT_NULL_FIELDS:
+            if field in self.model_fields_set and getattr(self, field) is None:
+                raise ValueError(f"{field} no puede ser null")
+        return self
 
 
 class StaffResponse(StaffBase):

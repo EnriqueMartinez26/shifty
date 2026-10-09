@@ -17,7 +17,12 @@ from modules.appointments.model import Appointment, AppointmentStatus
 from modules.appointments.repository import active_block_overlap
 from modules.audit.repository import AuditRepository
 from modules.ledger.model import CustomerLedger
-from modules.payments.model import Payment, PaymentStatus
+from modules.payments.model import (
+    AppointmentBalancePayment,
+    Payment,
+    PaymentStatus,
+)
+from modules.payments.repository import live_balance_payment_join
 from modules.reports.schemas import (
     AuditLogItem,
     ReportClientStats,
@@ -143,6 +148,17 @@ def _local_month_key(
             (Appointment.starts_at < bounds[i + 1], month_starts[i].strftime("%Y-%m"))
             for i in range(len(month_starts) - 1)
         )
+    )
+
+
+def _income() -> ColumnElement[Decimal]:
+    """Ingreso de UN turno: cobro acreditado + resto vivo (D-20261008-01).
+
+    Sobre una consulta armada con ``ReportService._with_income``: las dos
+    columnas son NULL cuando el LEFT JOIN no encuentra fila.
+    """
+    return func.coalesce(Payment.amount, 0) + func.coalesce(
+        AppointmentBalancePayment.amount, 0
     )
 
 
@@ -598,6 +614,22 @@ class ReportService:
             result.all(),
         )
 
+    def _with_income(self, query: Select[Any]) -> Select[Any]:
+        """Une el cobro acreditado y el resto vivo de cada turno del rango.
+
+        Saldo restante por turno (D-20261008-01): el ingreso de un turno es su
+        cobro acreditado MAS el resto pagado aparte (una sena de $960 y el
+        resto de $2.240 son $3.200). Los dos son LEFT JOIN de a lo sumo una
+        fila por turno (``uq_payments_store_appointment`` y
+        ``uq_appointment_balance_payments_live``): no se multiplican turnos y
+        los ``COUNT`` y el ``SUM`` siguen hablando de turnos. ``_income`` suma
+        las dos columnas.
+        """
+        return query.outerjoin(Payment, self._accredited_payment_join()).outerjoin(
+            AppointmentBalancePayment,
+            live_balance_payment_join(Appointment.id, self.store_id),
+        )
+
     def _accredited_payment_join(self) -> ColumnElement[bool]:
         """Condicion de join a ``payments``: el pago acreditado de ese turno.
 
@@ -644,28 +676,31 @@ class ReportService:
         Sin joins a ``services`` ni ``staff``: no leen sus columnas
         (``join_entities=False``).
         """
-        cobrado = func.coalesce(func.sum(Payment.amount), 0)
+        cobrado = func.coalesce(func.sum(_income()), 0)
         contadores = [
             func.count(Appointment.id).filter(Appointment.status.in_(estados))
             for estados in _COUNTER_STATUSES.values()
         ]
         result = await self.db.execute(
-            self._select_in_range(
-                func.count(Appointment.id),
-                *contadores,
-                cobrado,
-                func.count(Payment.id),
-                func.coalesce(
-                    func.sum(Payment.amount).filter(
-                        Appointment.status.in_(_NOT_SERVED_STATUSES)
+            self._with_income(
+                self._select_in_range(
+                    func.count(Appointment.id),
+                    *contadores,
+                    cobrado,
+                    # Turnos cobrados: los que tienen cobro acreditado o resto.
+                    func.count(func.coalesce(Payment.id, AppointmentBalancePayment.id)),
+                    func.coalesce(
+                        func.sum(_income()).filter(
+                            Appointment.status.in_(_NOT_SERVED_STATUSES)
+                        ),
+                        0,
                     ),
-                    0,
-                ),
-                start_dt=start_dt,
-                end_dt=end_dt,
-                staff_id=staff_id,
-                join_entities=False,
-            ).outerjoin(Payment, self._accredited_payment_join())
+                    start_dt=start_dt,
+                    end_dt=end_dt,
+                    staff_id=staff_id,
+                    join_entities=False,
+                )
+            )
         )
         total, *por_contador, plata, cobrados, retenido = result.one()
         counts = {"total": int(total or 0)}
@@ -695,27 +730,27 @@ class ReportService:
             return func.count(Appointment.id).filter(estado == valor.value)
 
         result = await self.db.execute(
-            self._select_in_range(
-                Appointment.staff_id,
-                func.count(Appointment.id),
-                contar(AppointmentStatus.COMPLETED),
-                contar(AppointmentStatus.CONFIRMED),
-                contar(AppointmentStatus.ABSENT),
-                contar(AppointmentStatus.CANCELLED),
-                func.coalesce(
-                    func.sum(Appointment.duration_minutes).filter(
-                        estado.not_in(_NOT_USING_TIME)
+            self._with_income(
+                self._select_in_range(
+                    Appointment.staff_id,
+                    func.count(Appointment.id),
+                    contar(AppointmentStatus.COMPLETED),
+                    contar(AppointmentStatus.CONFIRMED),
+                    contar(AppointmentStatus.ABSENT),
+                    contar(AppointmentStatus.CANCELLED),
+                    func.coalesce(
+                        func.sum(Appointment.duration_minutes).filter(
+                            estado.not_in(_NOT_USING_TIME)
+                        ),
+                        0,
                     ),
-                    0,
-                ),
-                func.coalesce(func.sum(Payment.amount), 0),
-                start_dt=start_dt,
-                end_dt=end_dt,
-                staff_id=staff_id,
-                join_entities=False,
-            )
-            .outerjoin(Payment, self._accredited_payment_join())
-            .group_by(Appointment.staff_id)
+                    func.coalesce(func.sum(_income()), 0),
+                    start_dt=start_dt,
+                    end_dt=end_dt,
+                    staff_id=staff_id,
+                    join_entities=False,
+                )
+            ).group_by(Appointment.staff_id)
         )
         return {
             fila_staff: _StaffTotals(
@@ -753,19 +788,20 @@ class ReportService:
         completados = func.sum(
             case((Appointment.status == AppointmentStatus.COMPLETED.value, 1), else_=0)
         )
-        ingreso = func.coalesce(func.sum(Payment.amount), 0)
+        ingreso = func.coalesce(func.sum(_income()), 0)
         result = await self.db.execute(
-            self._select_in_range(
-                Service.public_id,
-                Service.name,
-                turnos,
-                completados,
-                ingreso,
-                start_dt=start_dt,
-                end_dt=end_dt,
-                staff_id=staff_id,
+            self._with_income(
+                self._select_in_range(
+                    Service.public_id,
+                    Service.name,
+                    turnos,
+                    completados,
+                    ingreso,
+                    start_dt=start_dt,
+                    end_dt=end_dt,
+                    staff_id=staff_id,
+                )
             )
-            .outerjoin(Payment, self._accredited_payment_join())
             .where(Appointment.status.not_in(_NOT_SERVED_STATUSES))
             .group_by(Service.id, Service.public_id, Service.name)
             # Mismo desempate que el orden anterior en Python (estable sobre
@@ -796,22 +832,23 @@ class ReportService:
         completados = func.sum(
             case((Appointment.status == AppointmentStatus.COMPLETED.value, 1), else_=0)
         )
-        ingreso = func.coalesce(func.sum(Payment.amount), 0)
+        ingreso = func.coalesce(func.sum(_income()), 0)
         result = await self.db.execute(
-            self._select_in_range(
-                Appointment.client_id,
-                User.first_name,
-                User.last_name,
-                User.email,
-                func.max(Appointment.client_name),
-                turnos,
-                completados,
-                ingreso,
-                start_dt=start_dt,
-                end_dt=end_dt,
-                staff_id=staff_id,
+            self._with_income(
+                self._select_in_range(
+                    Appointment.client_id,
+                    User.first_name,
+                    User.last_name,
+                    User.email,
+                    func.max(Appointment.client_name),
+                    turnos,
+                    completados,
+                    ingreso,
+                    start_dt=start_dt,
+                    end_dt=end_dt,
+                    staff_id=staff_id,
+                )
             )
-            .outerjoin(Payment, self._accredited_payment_join())
             .where(Appointment.status.not_in(_NOT_SERVED_STATUSES))
             .group_by(
                 Appointment.client_id, User.first_name, User.last_name, User.email

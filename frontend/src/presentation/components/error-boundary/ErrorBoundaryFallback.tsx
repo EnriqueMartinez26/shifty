@@ -1,11 +1,11 @@
-﻿type ErrorBoundaryFallbackProps = {
+type ErrorBoundaryFallbackProps = {
   title?: string
   description?: string
 }
 
 export const ErrorBoundaryFallback = ({
-  title = 'Something went wrong',
-  description = 'Please refresh the page or try again in a few minutes.'
+  title = 'Algo salió mal',
+  description = 'Actualizá la página o probá de nuevo en unos minutos.'
 }: ErrorBoundaryFallbackProps) => (
   <main
     className="min-h-screen flex items-center justify-center bg-slate-50 px-4 text-slate-900"
@@ -20,7 +20,7 @@ export const ErrorBoundaryFallback = ({
         className="mt-5 rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
         onClick={() => window.location.reload()}
       >
-        Refresh page
+        Actualizar página
       </button>
     </section>
   </main>

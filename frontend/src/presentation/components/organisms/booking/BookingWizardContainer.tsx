@@ -2,17 +2,17 @@ import React, { useEffect, useMemo, useState } from 'react'
 
 import { Check } from 'lucide-react'
 
-import { getErrorMessage } from '@shared/errors/getErrorMessage'
+import { getErrorCode, getErrorMessage, getRetryAfterSeconds } from '@shared/errors/getErrorMessage'
+import { bookingIdempotencyKey, forgetBookingIdempotency } from '@shared/utils/bookingIdempotency'
 import { isOtpStillValid, phoneDigits, rememberOtpVerification } from '@shared/utils/otpSession'
 
 import { BookingStepConfirmation } from './BookingStepConfirmation'
 import { BookingStepDateTime } from './BookingStepDateTime'
 import { BookingStepService } from './BookingStepService'
-import { EMPTY_PRESELECT, initialStepFor, type BookingPreselect } from './deepLink'
-import { resolveBackJump, resolveStepJump } from './stepFlow'
-import type { BookingOtpState, BookingWizardState } from './types'
-import { createUuid } from '../../../../shared/utils/uuid'
-import { colors2000s } from '../../../../theme/colors'
+import { EMPTY_PRESELECT, type BookingPreselect } from './deepLink'
+import { clampStep, resolveBackJump, resolveStepJump } from './stepFlow'
+import type { BookingOtpState, BookingStepChange, BookingWizardState } from './types'
+import { colors2000s, orangeCtaGradient } from '../../../../theme/colors'
 import {
   type PublicStore,
   useCreatePublicBooking,
@@ -20,17 +20,26 @@ import {
   useRequestPublicOtp,
   useVerifyPublicOtp
 } from '../../../hooks/usePublic'
+import { useResendCooldown } from '../../../hooks/useResendCooldown'
 import { createBookingSurfaceStyle } from '../../../lib/surfaceStyles'
 
 interface BookingWizardContainerProps {
   store: PublicStore
   /** Servicio y profesional ya validados contra las listas publicas (deep-link). */
   preselect?: BookingPreselect
+  /**
+   * Paso pedido, controlado desde afuera (la URL, F4-15). El wizard lo
+   * degrada si falta lo elegido antes y pide corregirlo con `replace`.
+   */
+  step: number
+  onStepChange: (change: BookingStepChange) => void
 }
 
 export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
   store,
-  preselect = EMPTY_PRESELECT
+  preselect = EMPTY_PRESELECT,
+  step,
+  onStepChange
 }) => {
   const requiresOtp = Boolean(store.feature_flags?.otp_booking)
   const initialCustomFields = useMemo(
@@ -40,20 +49,18 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
   // Siempre 3 pasos, incluidas las tiendas con OTP: el paso de validacion se
   // muestra como sub-fase dentro de "Datos y Confirmacion" en vez de ocupar
   // un paso propio.
-  const steps = useMemo(() => ['Servicio', 'Horario y Profesional', 'Datos y Confirmacion'], [])
+  const steps = useMemo(() => ['Servicio', 'Horario y Profesional', 'Datos y Confirmación'], [])
 
-  // Deep-link (?service=&staff=&date=): con servicio valido se arranca en el
-  // horario, que ya muestra al profesional pedido como filtro.
-  const [currentStep, setCurrentStep] = useState(() => initialStepFor(preselect))
   const [otpState, setOtpState] = useState<BookingOtpState>({
     code: '',
     channel: 'email',
     email: '',
     verified: false,
     verifiedPhone: '',
-    debugCode: '',
     expiresAt: '',
-    error: ''
+    error: '',
+    rateLimited: false,
+    debugCode: ''
   })
   const [bookingState, setBookingState] = useState<BookingWizardState>({
     serviceId: preselect.serviceId,
@@ -69,8 +76,7 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
       notes: '',
       customFields: initialCustomFields
     },
-    promotionCode: '',
-    idempotencyKey: createUuid()
+    promotionCode: ''
   })
 
   useEffect(() => {
@@ -88,11 +94,24 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
   const createBooking = useCreatePublicBooking()
   const requestOtp = useRequestPublicOtp()
   const verifyOtp = useVerifyPublicOtp()
+  // La espera es del telefono pedido: cambiarlo la libera (F4-11).
+  const resendCooldown = useResendCooldown(phoneDigits(bookingState.client.phone))
   const { data: services } = usePublicServices(store.public_id)
+
+  // El paso pedido solo se muestra si lo anterior esta elegido: tras recargar
+  // con ?step=2 el estado arranca vacio (F4-15).
+  const currentStep = clampStep(step, bookingState)
+
+  // La URL pide un paso que no se puede mostrar: se corrige sin dejar una
+  // entrada en el historial a la que "atras" volveria. Sincroniza la URL.
+  useEffect(() => {
+    if (currentStep !== step) onStepChange({ to: currentStep, from: step, mode: 'replace' })
+  }, [currentStep, step, onStepChange])
 
   // Un solo servicio no es una eleccion: se elige solo y el wizard arranca
   // en el horario. Sincroniza con la lista publica (dato externo): cuando
-  // llega, si el paso visible es el del servicio y hay uno solo, salta.
+  // llega, si el paso visible es el del servicio y hay uno solo, salta. Con
+  // `replace`, "atras" del navegador no rebota al paso salteado.
   useEffect(() => {
     const jump = resolveStepJump(currentStep, { services })
     if (jump.step === currentStep) return
@@ -101,15 +120,23 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
         prev.serviceId === jump.serviceId ? prev : { ...prev, serviceId: jump.serviceId ?? null }
       )
     }
-    setCurrentStep(jump.step)
-  }, [currentStep, services])
+    onStepChange({ to: jump.step, from: currentStep, mode: 'replace' })
+  }, [currentStep, services, onStepChange])
 
   const updateState = (updates: Partial<typeof bookingState>) => {
     setBookingState((prev) => ({ ...prev, ...updates }))
   }
 
-  const nextStep = () => setCurrentStep((prev) => Math.min(prev + 1, steps.length - 1))
-  const prevStep = () => setCurrentStep((prev) => resolveBackJump(prev, { services }))
+  const nextStep = () =>
+    onStepChange({
+      to: Math.min(currentStep + 1, steps.length - 1),
+      from: currentStep,
+      mode: 'push'
+    })
+  const prevStep = () => {
+    const to = resolveBackJump(currentStep, { services })
+    if (to !== currentStep) onStepChange({ to, from: currentStep, mode: 'back' })
+  }
 
   const handleClientChange = (client: BookingWizardState['client']) => {
     const emailAnterior = bookingState.client.email
@@ -140,7 +167,7 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
   const handleRequestOtp = async () => {
     const email = otpState.email.trim()
     if (!email) {
-      setOtpState((prev) => ({ ...prev, error: 'Ingresa el email donde queres recibir el codigo' }))
+      setOtpState((prev) => ({ ...prev, error: 'Ingresá el email donde querés recibir el código' }))
       return
     }
     try {
@@ -150,17 +177,27 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
         channel: otpState.channel,
         email
       })
+      // J7 (2026-09-30): debug_code se guarda tal cual vino y se muestra con
+      // el aviso de que puede ser un senuelo (AUD2-SYNC-01); sin el, vacio.
       setOtpState((prev) => ({
         ...prev,
-        debugCode: response.debug_code || '',
         expiresAt: response.expires_at,
-        error: ''
+        error: '',
+        debugCode: response.debug_code || ''
       }))
+      resendCooldown.start()
     } catch (error: unknown) {
+      // OTP_RATE_LIMITED: se agotaron los codigos del telefono y la ventana
+      // del backend es deslizante; no se ofrece pedir otro hasta recargar.
+      // Otro 429/503 con Retry-After arranca esa espera (F4-11, 2026-09-30).
+      const rateLimited = getErrorCode(error) === 'OTP_RATE_LIMITED'
       setOtpState((prev) => ({
         ...prev,
-        error: getErrorMessage(error, 'No se pudo enviar el codigo')
+        rateLimited: prev.rateLimited || rateLimited,
+        error: getErrorMessage(error, 'No se pudo enviar el código')
       }))
+      const retryAfter = rateLimited ? undefined : getRetryAfterSeconds(error)
+      if (retryAfter !== undefined) resendCooldown.start(retryAfter)
     }
   }
 
@@ -181,7 +218,7 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
     } catch (error: unknown) {
       setOtpState((prev) => ({
         ...prev,
-        error: getErrorMessage(error, 'Codigo invalido')
+        error: getErrorMessage(error, 'Código inválido')
       }))
     }
   }
@@ -204,7 +241,7 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
                   background: isCompleted
                     ? `linear-gradient(180deg, ${colors2000s.status.success.light} 0%, ${colors2000s.status.success.dark} 100%)`
                     : isActive
-                      ? `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`
+                      ? orangeCtaGradient
                       : `linear-gradient(180deg, ${colors2000s.bg.disabled} 0%, ${colors2000s.bg.disabledBottom} 100%)`,
                   boxShadow: isCompleted
                     ? `${colors2000s.shadows.insetLight}, 0 2px 4px rgba(16,185,129,0.3)`
@@ -246,7 +283,9 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
 
   return (
     <div
-      className="max-w-2xl mx-auto rounded-lg p-8 relative overflow-hidden animate-in fade-in zoom-in-95 duration-700"
+      // Menos relleno en el telefono: con p-8 + p-6 la tarjeta del servicio
+      // quedaba de 227 px en 390 y cortaba los nombres (QA movil 2026-10-08).
+      className="max-w-2xl mx-auto rounded-lg p-4 sm:p-8 relative overflow-hidden duration-700"
       style={{
         background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
         border: `1px solid ${colors2000s.border.default}`,
@@ -265,7 +304,7 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
       {renderStepIndicator()}
 
       <div
-        className="min-h-[400px] p-6 rounded-lg relative"
+        className="min-h-[400px] p-3 sm:p-6 rounded-lg relative"
         style={{
           background: 'rgba(255, 255, 255, 0.4)',
           border: '1px solid rgba(255, 255, 255, 0.5)',
@@ -320,6 +359,7 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
             requiresOtp={requiresOtp}
             otpState={otpState}
             isRequestingOtp={requestOtp.isPending}
+            otpResendSeconds={resendCooldown.secondsLeft}
             isVerifyingOtp={verifyOtp.isPending}
             onRequestOtp={() => {
               void handleRequestOtp()
@@ -327,13 +367,19 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
             onVerifyOtp={() => {
               void handleVerifyOtp()
             }}
-            onOtpEmailChange={(email) => setOtpState((prev) => ({ ...prev, email, error: '' }))}
-            onOtpCodeChange={(code) => setOtpState((prev) => ({ ...prev, code, error: '' }))}
+            // Con el pedido bloqueado, el aviso se queda: sin el, el boton
+            // deshabilitado no explica por que.
+            onOtpEmailChange={(email) =>
+              setOtpState((prev) => ({ ...prev, email, error: prev.rateLimited ? prev.error : '' }))
+            }
+            onOtpCodeChange={(code) =>
+              setOtpState((prev) => ({ ...prev, code, error: prev.rateLimited ? prev.error : '' }))
+            }
             onBack={prevStep}
             onClientChange={handleClientChange}
             onPromotionCodeChange={(promotionCode) => updateState({ promotionCode })}
-            onConfirm={async (paymentMethod, acceptsTerms) =>
-              await createBooking.mutateAsync({
+            onConfirm={async (paymentMethod, acceptsTerms) => {
+              const pedido = {
                 store_public_id: store.public_id,
                 service_id: selectedServiceId,
                 staff_id:
@@ -348,10 +394,20 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
                 custom_fields: bookingState.client.customFields,
                 promotion_code: bookingState.promotionCode || undefined,
                 payment_method: paymentMethod,
-                accepts_terms: acceptsTerms,
-                idempotency_key: bookingState.idempotencyKey
+                accepts_terms: acceptsTerms
+              }
+              // La huella es el pedido entero (servicio, profesional, horario,
+              // cliente, promo y forma de pago): la clave se reusa al recargar
+              // solo si se manda exactamente lo mismo (F4-04). Se guarda solo
+              // su SHA-256, sin datos del cliente.
+              const idempotencyKey = await bookingIdempotencyKey(store.slug, JSON.stringify(pedido))
+              const confirmation = await createBooking.mutateAsync({
+                ...pedido,
+                idempotency_key: idempotencyKey
               })
-            }
+              forgetBookingIdempotency(store.slug)
+              return confirmation
+            }}
           />
         )}
       </div>

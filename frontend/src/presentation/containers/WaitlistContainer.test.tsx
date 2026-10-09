@@ -1,5 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 
+import { InternalServerError } from '@shared/errors'
+
 import { WaitlistContainer } from './WaitlistContainer'
 
 const mockWaitlist = jest.fn()
@@ -14,6 +16,11 @@ jest.mock('../hooks/useWaitlist', () => ({
 
 jest.mock('../hooks/useStores', () => ({
   useStoreSettings: () => ({ data: { name: 'Peluqueria Sol', slug: 'sol' } })
+}))
+
+let mockWriteAccess = { readOnly: false, reason: 'Tienda suspendida' }
+jest.mock('../hooks/useStoreWriteAccess', () => ({
+  useStoreWriteAccess: () => mockWriteAccess
 }))
 
 // El rol que expone useAuth() ya viene canonicalizado por AuthContext
@@ -50,6 +57,36 @@ describe('WaitlistContainer', () => {
     mockRemove.mockReset()
     mockBook.mockReset()
     mockUser.role = 'store_admin'
+    mockWriteAccess = { readOnly: false, reason: 'Tienda suspendida' }
+  })
+
+  // 2026-10-01: con la tienda suspendida cada accion fallaba con 402 en vez de
+  // verse deshabilitada (FF-15). DELETE /waitlist/{id} y POST
+  // /waitlist/{id}/book no estan en SUSPENSION_ALLOWED_WRITES.
+  it('con la tienda suspendida reservar y quitar quedan deshabilitados con el motivo', () => {
+    mockWriteAccess = { readOnly: true, reason: 'Tienda suspendida' }
+    mockWaitlist.mockReturnValue({ data: [entrada], isLoading: false })
+
+    render(<WaitlistContainer />)
+
+    for (const name of [/Reservar/, /Quitar/]) {
+      const button = screen.getByRole('button', { name })
+      expect(button).toBeDisabled()
+      expect(button).toHaveAttribute('title', 'Tienda suspendida')
+    }
+    fireEvent.click(screen.getByRole('button', { name: /Quitar/ }))
+    expect(mockRemove).not.toHaveBeenCalled()
+    // El aviso por WhatsApp no escribe nada: sigue.
+    expect(screen.getByRole('link', { name: 'WhatsApp' })).toBeInTheDocument()
+  })
+
+  it('sin suspension reservar y quitar siguen habilitados', () => {
+    mockWaitlist.mockReturnValue({ data: [entrada], isLoading: false })
+
+    render(<WaitlistContainer />)
+
+    expect(screen.getByRole('button', { name: /Reservar/ })).not.toBeDisabled()
+    expect(screen.getByRole('button', { name: /Quitar/ })).not.toBeDisabled()
   })
 
   it('muestra la entrada con el cupo ofrecido y el link de WhatsApp con deep-link', () => {
@@ -83,6 +120,30 @@ describe('WaitlistContainer', () => {
     })
   })
 
+  // 2026-10-02, QA en navegador: "11 5555 0303" armaba wa.me/1155550303, un
+  // numero de Estados Unidos. Un telefono local va con 549 adelante.
+  it('un telefono local argentino arma el link con 549 adelante', () => {
+    mockWaitlist.mockReturnValue({
+      data: [{ ...entrada, client_phone: '11 5555 0303' }],
+      isLoading: false
+    })
+
+    render(<WaitlistContainer />)
+
+    const href = screen.getByRole('link', { name: 'WhatsApp' }).getAttribute('href') ?? ''
+    expect(href.startsWith('https://wa.me/5491155550303?text=')).toBe(true)
+  })
+
+  it('un telefono que no se puede leer no arma un link roto', () => {
+    mockWaitlist.mockReturnValue({ data: [{ ...entrada, client_phone: '123' }], isLoading: false })
+
+    render(<WaitlistContainer />)
+
+    expect(screen.getByText(/· 123/)).toBeInTheDocument()
+    // Ni link ni ancla muerta: el texto "WhatsApp" no aparece.
+    expect(screen.queryByText('WhatsApp')).not.toBeInTheDocument()
+  })
+
   it('el personal sin rol de administrador no ve reservar ni quitar', () => {
     mockUser.role = 'professional'
     mockWaitlist.mockReturnValue({ data: [{ ...entrada, client_phone: null }], isLoading: false })
@@ -92,6 +153,23 @@ describe('WaitlistContainer', () => {
     expect(screen.queryByRole('button', { name: /Reservar/ })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Quitar/ })).not.toBeInTheDocument()
     expect(screen.queryByRole('link', { name: 'WhatsApp' })).not.toBeInTheDocument()
+  })
+
+  it('si quitar una entrada falla, lo dice con el texto neutro (FF-17)', async () => {
+    // 2026-09-28: `void removeEntry.mutateAsync(...)` sin catch; el rechazo no
+    // se veia en ningun lado.
+    mockWaitlist.mockReturnValue({ data: [entrada], isLoading: false })
+    mockRemove.mockRejectedValue(
+      new InternalServerError('psycopg: deadlock detected', { statusCode: 500 })
+    )
+
+    render(<WaitlistContainer />)
+    fireEvent.click(screen.getByRole('button', { name: /Quitar/ }))
+
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      'No se pudo quitar de la lista de espera'
+    )
+    expect(mockRemove).toHaveBeenCalledWith('wl-1')
   })
 
   it('sin entradas explica de donde salen', () => {
@@ -114,5 +192,79 @@ describe('WaitlistContainer con la consulta en error', () => {
     expect(screen.queryByText('Nadie en lista de espera')).not.toBeInTheDocument()
     expect(screen.getByRole('alert')).toHaveTextContent('No pudimos cargar la lista de espera')
     expect(screen.getByText('Sin datos')).toBeInTheDocument()
+  })
+})
+
+// QA movil 2026-10-08 (QA'): decia "Le mandamos la confirmación" aunque el
+// cliente no tuviera email, y el formulario medía 396 px en 390.
+describe('WaitlistContainer - reservar desde la lista', () => {
+  beforeEach(() => {
+    // 15/09, antes del cupo ofrecido del 20/09.
+    jest.useFakeTimers({ now: new Date('2026-09-15T12:00:00.000Z') })
+    mockBook.mockResolvedValue({ public_id: 'appt-1' })
+  })
+
+  afterEach(() => {
+    jest.useRealTimers()
+  })
+
+  const reservar = async () => {
+    fireEvent.click(screen.getByRole('button', { name: /Reservar/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Confirmar' }))
+    return screen.findByRole('status')
+  }
+
+  it('con email avisa que le llega la confirmacion por mail', async () => {
+    mockWaitlist.mockReturnValue({ data: [entrada], isLoading: false })
+    render(<WaitlistContainer />)
+
+    expect(await reservar()).toHaveTextContent(
+      'Turno reservado para Lucia. Le va a llegar la confirmación por mail.'
+    )
+  })
+
+  it('sin email no promete un mail: manda a avisar por WhatsApp', async () => {
+    mockWaitlist.mockReturnValue({ data: [{ ...entrada, client_email: null }], isLoading: false })
+    render(<WaitlistContainer />)
+
+    const aviso = await reservar()
+    expect(aviso).toHaveTextContent(
+      'Turno reservado para Lucia. No dejó email: avisale por WhatsApp.'
+    )
+    expect(aviso.textContent).not.toMatch(/Le mandamos|confirmación por mail/)
+  })
+
+  it('con el email tecnico .noreply tampoco promete un mail', async () => {
+    mockWaitlist.mockReturnValue({
+      data: [{ ...entrada, client_email: '5491155550101@store1.noreply' }],
+      isLoading: false
+    })
+    render(<WaitlistContainer />)
+
+    expect(await reservar()).toHaveTextContent('No dejó email: avisale por WhatsApp.')
+  })
+
+  it('un turno en el pasado queda registrado sin aviso al cliente', async () => {
+    jest.setSystemTime(new Date('2026-09-25T12:00:00.000Z'))
+    mockWaitlist.mockReturnValue({ data: [entrada], isLoading: false })
+    render(<WaitlistContainer />)
+
+    const aviso = await reservar()
+    expect(aviso).toHaveTextContent('Turno registrado para Lucia.')
+    expect(aviso.textContent).not.toMatch(/mail|WhatsApp/)
+  })
+
+  it('el formulario entra en un telefono: dos columnas y el boton abajo', () => {
+    mockWaitlist.mockReturnValue({ data: [entrada], isLoading: false })
+    render(<WaitlistContainer />)
+    fireEvent.click(screen.getByRole('button', { name: /Reservar/ }))
+
+    const form = screen.getByRole('button', { name: 'Confirmar' }).parentElement
+    if (!form) throw new Error('sin formulario')
+    expect(form.classList.contains('grid-cols-[1fr_auto_auto]')).toBe(false)
+    expect(form.classList.contains('grid-cols-2')).toBe(true)
+    expect(screen.getByRole('button', { name: 'Confirmar' }).classList.contains('col-span-2')).toBe(
+      true
+    )
   })
 })

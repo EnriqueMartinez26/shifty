@@ -1,13 +1,21 @@
 import {
+  ApplicationError,
   ConflictError,
   ForbiddenError,
   InternalServerError,
   NetworkError,
   NotFoundError,
+  PaymentRequiredError,
+  RateLimitError,
+  RequestCanceledError,
+  RequestTimeoutError,
+  ServiceUnavailableError,
   UnauthorizedError,
-  ValidationError,
-  type ApplicationError
+  ValidationError
 } from '@shared/errors'
+
+const REQUEST_TIMEOUT_MESSAGE = 'La consulta tardó demasiado. Probá de nuevo.'
+const REQUEST_CANCELED_MESSAGE = 'La consulta se canceló.'
 
 interface ApiSuccess<T> {
   success: true
@@ -28,6 +36,7 @@ type NormalizedApiErrorContext = {
   errorCode?: string
   detail?: unknown
   statusCode?: number
+  retryAfter?: number
   originalError?: unknown
 }
 
@@ -35,6 +44,7 @@ type ApiErrorLike = {
   response?: {
     status?: number
     data?: unknown
+    headers?: unknown
   }
   code?: string
   message?: unknown
@@ -105,6 +115,28 @@ const readResponsePayload = (error: ApiErrorLike): ApiErrorResponse | undefined 
   return payload
 }
 
+const toSeconds = (value: unknown): number | undefined => {
+  const seconds = typeof value === 'string' && /^\d+$/.test(value.trim()) ? Number(value) : value
+  return typeof seconds === 'number' && Number.isInteger(seconds) && seconds >= 0
+    ? seconds
+    : undefined
+}
+
+/**
+ * Segundos de espera que pide el servidor: el header `Retry-After` (solo la
+ * forma en segundos, que es la que manda el backend) o, si no vino, el
+ * `detail.retry_after` de RateLimitException.
+ */
+const readRetryAfter = (
+  error: ApiErrorLike,
+  response: ApiErrorResponse | undefined
+): number | undefined => {
+  const headers = error.response?.headers
+  const header = isPlainObject(headers) ? headers['retry-after'] : undefined
+  const detail = isPlainObject(response?.detail) ? response.detail.retry_after : undefined
+  return toSeconds(header) ?? toSeconds(detail)
+}
+
 const buildContext = (
   response: ApiErrorResponse | undefined,
   error: ApiErrorLike,
@@ -113,6 +145,7 @@ const buildContext = (
   errorCode: response?.error_code,
   detail: response?.detail,
   statusCode,
+  retryAfter: readRetryAfter(error, response),
   originalError: {
     code: error.code,
     message: error.message,
@@ -146,28 +179,50 @@ const createMappedError = (
     return new ValidationError(message, context)
   }
 
+  if (statusCode === 402) {
+    return new PaymentRequiredError(message, context)
+  }
+
+  if (statusCode === 429) {
+    return new RateLimitError(message, context)
+  }
+
+  if (statusCode === 502 || statusCode === 503) {
+    return new ServiceUnavailableError(message, context)
+  }
+
   return new InternalServerError(message, context)
 }
 
 export const normalizeApiError = (error: unknown): ApplicationError => {
-  if (error instanceof NetworkError || error instanceof UnauthorizedError) {
-    return error
-  }
-
-  if (error instanceof ConflictError || error instanceof ForbiddenError) {
-    return error
-  }
-
-  if (error instanceof NotFoundError || error instanceof ValidationError) {
-    return error
-  }
-
-  if (error instanceof InternalServerError) {
+  // Ya normalizado (cualquier subclase, tambien las de 402/429/503): sin
+  // `response`, volver a pasarlo lo convertia en un NetworkError falso.
+  if (error instanceof ApplicationError) {
     return error
   }
 
   const maybeError = error as ApiErrorLike | undefined
   const statusCode = maybeError?.response?.status ?? 0
+
+  // Una lectura que vencio su timeout de 15 s (D-20260930-02). El cliente pide
+  // clarifyTimeoutError, asi que ECONNABORTED queda para "Request aborted".
+  if (!maybeError?.response && maybeError?.code === 'ETIMEDOUT') {
+    return new RequestTimeoutError(REQUEST_TIMEOUT_MESSAGE, {
+      errorCode: 'REQUEST_TIMEOUT',
+      statusCode: 0,
+      originalError: { code: maybeError.code, message: maybeError.message, statusCode: 0 }
+    })
+  }
+
+  // La cancelo quien la pidio (el `signal` de react-query al reemplazar una
+  // busqueda): axios la rechaza con ERR_CANCELED. No es falta de red.
+  if (!maybeError?.response && maybeError?.code === 'ERR_CANCELED') {
+    return new RequestCanceledError(REQUEST_CANCELED_MESSAGE, {
+      errorCode: 'REQUEST_CANCELED',
+      statusCode: 0,
+      originalError: { code: maybeError.code, message: maybeError.message, statusCode: 0 }
+    })
+  }
 
   if (!maybeError?.response) {
     return new NetworkError('No se pudo conectar con el servidor.', {

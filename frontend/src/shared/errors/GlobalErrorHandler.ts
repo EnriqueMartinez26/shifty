@@ -1,6 +1,7 @@
 import { ApplicationError } from './ApplicationError'
 import { ErrorHandler } from './ErrorHandler'
 import { InternalServerError } from './InternalServerError'
+import { isRequestCanceledError } from './RequestCanceledError'
 
 /**
  * Orquestador principal encargado de evaluar cualquier excepción, buscar
@@ -20,6 +21,9 @@ export class GlobalErrorHandler {
    * Procesa de forma asíncrona un error capturado.
    */
   public async handle(error: unknown): Promise<void> {
+    // Una consulta cancelada a proposito no es un error: ni aviso ni registro.
+    if (isRequestCanceledError(error)) return
+
     // Buscar la primera estrategia que sea capaz de gestionar el error
     const suitableHandler = this.handlers.find((handler) => handler.canHandle(error))
 

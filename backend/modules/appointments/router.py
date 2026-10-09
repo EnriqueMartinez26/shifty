@@ -6,7 +6,8 @@ y serializar la respuesta. Sin lógica de negocio.
 """
 
 from datetime import datetime
-from typing import Annotated, AsyncGenerator, List, Optional, cast
+from decimal import Decimal
+from typing import Annotated, AsyncGenerator, List, Optional, TypedDict, cast
 
 from fastapi import Depends, Path, Query, status
 from redis.asyncio import Redis
@@ -34,12 +35,13 @@ from core.roles import (
 from core.validation import PUBLIC_ID_PATTERN, GridDay, LocalDay
 from modules.appointments.availability import AvailabilityService
 from modules.appointments.model import Appointment, AppointmentStatus
-from modules.appointments.repository import AppointmentSearchRow
+from modules.appointments.repository import AppointmentSearchRow, SearchCharge
 from modules.appointments.schemas import (
     AppointmentCreate,
     AppointmentFilterParams,
     AppointmentListItem,
     AppointmentNotesStaffUpdate,
+    AppointmentRemainderPayment,
     AppointmentReschedule,
     AppointmentResponse,
     AppointmentSearchResponse,
@@ -336,12 +338,13 @@ async def cancel_appointment(
     user: User = Depends(get_current_user),
     svc: AppointmentService = Depends(get_appointment_service),
 ) -> AppointmentResponse:
-    """Cancela un turno de la tienda. Lo usan el staff y el admin.
+    """Cancela un turno de la tienda desde el panel.
 
     El rol cliente no inicia sesión: cancela por
-    ``/public/client/appointments/{id}/cancel``. No verifica titularidad:
-    cualquier usuario autenticado de la tienda puede cancelar cualquier turno
-    de esa tienda.
+    ``/public/client/appointments/{id}/cancel``. Verifica rol y titularidad
+    (D-20260929-03): admin y recepcion cancelan cualquier turno de la tienda;
+    el profesional, solo los de su agenda (403 si no). Un turno que ya empezo
+    no se cancela: 409 ``APPOINTMENT_ALREADY_STARTED`` (D-20260929-05).
     """
     appointment = await svc.cancel(public_id=public_id, actor=user)
     return _to_appointment_response(appointment)
@@ -424,6 +427,8 @@ async def reschedule_appointment(
     - Cancela el original de forma atómica (con timestamp cancelled_at).
     - Crea uno nuevo con los mismos servicio/staff/cliente.
     - Ambas operaciones quedan registradas en audit_logs.
+    - Rol, duenio del turno y jornada del profesional los valida el servicio
+      (D-20260929-03/04); ``allow_outside_schedule`` es solo del admin.
     """
     cache_key = _panel_cache_key(
         "panel-reschedule", user.store_id, data.idempotency_key
@@ -438,6 +443,7 @@ async def reschedule_appointment(
             new_starts_at=data.new_starts_at,
             idempotency_key=data.idempotency_key,
             actor=user,
+            allow_outside_schedule=data.allow_outside_schedule,
         )
     except Exception:
         await idempotency_release(cache_key, redis)
@@ -547,7 +553,11 @@ async def search_appointments(
     )
     # El telefono del cliente solo lo ve un administrador (dato personal).
     show_phone = has_any_role(user, STORE_MANAGERS)
-    results = [_to_search_result(row, show_phone=show_phone) for row in rows]
+    show_charge = _can_operate_charges(user)
+    results = [
+        _to_search_result(row, show_phone=show_phone, show_charge=show_charge)
+        for row in rows
+    ]
 
     return AppointmentSearchResponse(
         total=total,
@@ -576,10 +586,17 @@ def _search_key(after: Optional[str], page: int) -> Optional[tuple[datetime, str
         raise ValidationException("Cursor de paginacion invalido") from None
 
 
+def _can_operate_charges(user: User) -> bool:
+    """Ve el cobro de cada turno quien opera cobros (2026-10-08): mismo
+    criterio que ``payments.router._require_payment_manager``. La recepcion
+    busca turnos pero no opera cobros, asi que no ve importes."""
+    return user.role in (UserRole.ADMIN, UserRole.STAFF) or user.is_global_admin
+
+
 def _to_search_result(
-    row: AppointmentSearchRow, *, show_phone: bool
+    row: AppointmentSearchRow, *, show_phone: bool, show_charge: bool
 ) -> AppointmentSearchResult:
-    appointment, service, staff_id, staff_name, client = row
+    appointment, service, staff_id, staff_name, client, cobro = row
     return AppointmentSearchResult(
         public_id=appointment.public_id,
         starts_at=appointment.starts_at,
@@ -597,4 +614,43 @@ def _to_search_result(
         client_name=client.full_name or client.email,
         client_id=client.public_id,
         client_phone=client.phone if show_phone else None,
+        **(_search_charge_fields(appointment, cobro) if show_charge else _SIN_COBRO),
+    )
+
+
+class _SearchChargeFields(TypedDict):
+    price_amount: Decimal | None
+    payment_status: str | None
+    payment_amount: Decimal | None
+    remaining_amount: Decimal | None
+    remainder_payment: AppointmentRemainderPayment | None
+
+
+# La recepcion busca turnos pero no opera cobros: no ve importes (2026-10-08).
+_SIN_COBRO = _SearchChargeFields(
+    price_amount=None,
+    payment_status=None,
+    payment_amount=None,
+    remaining_amount=None,
+    remainder_payment=None,
+)
+
+
+def _search_charge_fields(
+    appointment: Appointment, cobro: SearchCharge
+) -> _SearchChargeFields:
+    """Precio, cobro, saldo y resto del turno para quien opera cobros."""
+    resto = None
+    if cobro.remainder_amount is not None and cobro.remainder_created_at is not None:
+        resto = AppointmentRemainderPayment(
+            amount=cobro.remainder_amount,
+            method=cobro.remainder_method,
+            created_at=cobro.remainder_created_at,
+        )
+    return _SearchChargeFields(
+        price_amount=appointment.price_amount,
+        payment_status=cobro.payment_status,
+        payment_amount=cobro.payment_amount,
+        remaining_amount=cobro.remaining_amount,
+        remainder_payment=resto,
     )

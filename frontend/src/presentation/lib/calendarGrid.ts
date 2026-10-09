@@ -46,7 +46,7 @@ const FALLBACK_OPEN_RANGE: TimeRange = { startMinutes: 8 * 60, endMinutes: 20 * 
 
 const MINUTES_IN_DAY = 24 * 60
 
-interface TimeRange {
+export interface TimeRange {
   startMinutes: number
   endMinutes: number
 }
@@ -78,7 +78,7 @@ export interface ClosedBand extends BandBase {
 
 type GridBand = OpenBand | ClosedBand
 
-interface DayGrid {
+export interface DayGrid {
   bands: GridBand[]
   totalHeightPx: number
 }
@@ -93,13 +93,17 @@ const pad = (value: number): string => String(value).padStart(2, '0')
 const minutesToLabel = (minutes: number): string =>
   `${pad(Math.floor(minutes / 60) % 24)}:${pad(minutes % 60)}`
 
-/** `HH:mm` -> minutos desde medianoche. `null` si no se puede leer. */
+/**
+ * `HH:mm` o `HH:mm:ss` -> minutos desde medianoche (los segundos se ignoran).
+ * `null` si no se puede leer. El horario del local llega como `HH:MM`; las
+ * franjas del profesional, como `HH:MM:SS` (un `time` de Pydantic).
+ */
 export const parseHhMm = (value: string): number | null => {
-  const match = /^(\d{1,2}):(\d{2})$/.exec(value.trim())
+  const match = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(value.trim())
   if (!match) return null
   const hours = Number(match[1])
   const minutes = Number(match[2])
-  if (hours > 23 || minutes > 59) return null
+  if (hours > 23 || minutes > 59 || Number(match[3] ?? 0) > 59) return null
   return hours * 60 + minutes
 }
 

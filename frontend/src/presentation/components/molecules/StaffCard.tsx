@@ -1,18 +1,37 @@
 import React from 'react'
 
-import { Mail, Edit3, Trash2, Check, X, LayoutGrid } from 'lucide-react'
+import { Mail, Edit3, Trash2, Check, X, LayoutGrid, Clock } from 'lucide-react'
 
 import { Staff } from '@domain/entities/Staff'
 
-import { colors2000s, buttonStyles2000s } from '../../../theme/colors'
+import { colors2000s, buttonStyles2000s, orangeCtaGradient } from '../../../theme/colors'
+import { summarizeSchedules } from '../../lib/staffWeekDraft'
 
 interface StaffCardProps {
   staff: Staff
   onEdit: (staff: Staff) => void
   onDelete: (id: string) => void
+  /** Abre el editor de la semana de trabajo (`PUT /staff/{id}/schedules`). */
+  onEditSchedule: (staff: Staff) => void
+  /** Tienda suspendida: editar (horarios y servicios incluidos) y eliminar responden 402 (FF-15). */
+  readOnlyReason?: string | null
+  /** id -> nombre de los servicios de la tienda; sin el, el chip dice "Servicio". */
+  serviceNames?: ReadonlyMap<string, string>
+  /** La ficha es de la cuenta que inicia sesion: quitarse no es dar de baja. */
+  isSelf?: boolean
 }
 
-export const StaffCard: React.FC<StaffCardProps> = ({ staff, onEdit, onDelete }) => {
+export const StaffCard: React.FC<StaffCardProps> = ({
+  staff,
+  onEdit,
+  onDelete,
+  onEditSchedule,
+  readOnlyReason = null,
+  serviceNames,
+  isSelf = false
+}) => {
+  const blocked = readOnlyReason !== null
+  const title = readOnlyReason ?? undefined
   const getInitials = (first: string, last: string) => {
     const f = first ? first[0] : ''
     const l = last ? last[0] : ''
@@ -30,7 +49,7 @@ export const StaffCard: React.FC<StaffCardProps> = ({ staff, onEdit, onDelete })
   const accentBorderColor = isResource ? colors2000s.status.info.dark : colors2000s.orange.light
   const avatarGradient = isResource
     ? `linear-gradient(180deg, ${colors2000s.status.info.light} 0%, ${colors2000s.status.info.dark} 100%)`
-    : `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`
+    : orangeCtaGradient
 
   return (
     <div
@@ -51,7 +70,7 @@ export const StaffCard: React.FC<StaffCardProps> = ({ staff, onEdit, onDelete })
           style={{
             background: 'white',
             boxShadow: colors2000s.shadows.insetDark,
-            color: staff.isActive ? colors2000s.status.success.text : colors2000s.text.disabled
+            color: staff.isActive ? colors2000s.status.success.text : colors2000s.text.secondary
           }}
         >
           {staff.isActive ? (
@@ -84,9 +103,9 @@ export const StaffCard: React.FC<StaffCardProps> = ({ staff, onEdit, onDelete })
             </h3>
             <p
               className="text-[10px] font-black uppercase tracking-widest mt-1 truncate"
-              style={{ color: colors2000s.text.disabled }}
+              style={{ color: colors2000s.text.secondary }}
             >
-              {isResource ? 'Recurso' : staff.fullName}
+              {isResource ? 'Recurso' : isSelf ? `${staff.fullName} (vos)` : staff.fullName}
             </p>
           </div>
         </div>
@@ -113,7 +132,7 @@ export const StaffCard: React.FC<StaffCardProps> = ({ staff, onEdit, onDelete })
         <div className="flex items-center gap-2 pt-3">
           <span
             className="text-[9px] font-black uppercase tracking-widest"
-            style={{ color: colors2000s.text.disabled }}
+            style={{ color: colors2000s.text.secondary }}
           >
             Servicios:
           </span>
@@ -121,12 +140,12 @@ export const StaffCard: React.FC<StaffCardProps> = ({ staff, onEdit, onDelete })
             {(staff.serviceIds || []).length === 0 ? (
               <span
                 className="text-[9px] font-bold italic"
-                style={{ color: colors2000s.text.disabled }}
+                style={{ color: colors2000s.text.secondary }}
               >
                 Sin servicios
               </span>
             ) : (
-              (staff.serviceIds || []).slice(0, 3).map((id, index) => (
+              (staff.serviceIds || []).slice(0, 3).map((id) => (
                 <span
                   key={id}
                   className="px-2 py-0.5 rounded-md text-[8px] font-black uppercase tracking-widest"
@@ -136,7 +155,7 @@ export const StaffCard: React.FC<StaffCardProps> = ({ staff, onEdit, onDelete })
                     color: colors2000s.orange.accent
                   }}
                 >
-                  S-{index + 1}
+                  {serviceNames?.get(id) ?? 'Servicio'}
                 </span>
               ))
             )}
@@ -154,21 +173,43 @@ export const StaffCard: React.FC<StaffCardProps> = ({ staff, onEdit, onDelete })
           </div>
         </div>
 
+        {/* Semana de trabajo: la propia o el horario de la tienda */}
+        <div
+          className="flex items-center gap-2 text-xs font-bold"
+          style={{ color: colors2000s.text.secondary }}
+        >
+          <Clock size={14} color={colors2000s.text.disabled} />
+          <span className="truncate">{summarizeSchedules(staff.schedules)}</span>
+        </div>
+
         {/* Outlined Action Buttons in Footer */}
         <div className="grid grid-cols-2 gap-3 pt-4">
+          {/* Ver la semana es una lectura: con la tienda suspendida el editor
+              abre en solo lectura en vez de quedar deshabilitado. */}
+          <button
+            onClick={() => onEditSchedule(staff)}
+            className="col-span-2 min-h-[44px] flex items-center justify-center gap-2 py-2.5 px-3 font-black text-[10px] uppercase tracking-widest transition-all active:scale-95 disabled:opacity-50"
+            style={buttonStyles2000s.default}
+          >
+            <Clock size={14} /> Horarios
+          </button>
           <button
             onClick={() => onEdit(staff)}
-            className="flex items-center justify-center gap-2 py-2.5 px-3 font-black text-[10px] uppercase tracking-widest transition-all active:scale-95"
+            disabled={blocked}
+            title={title}
+            className="min-h-[44px] flex items-center justify-center gap-2 py-2.5 px-3 font-black text-[10px] uppercase tracking-widest transition-all active:scale-95 disabled:opacity-50"
             style={buttonStyles2000s.default}
           >
             <Edit3 size={14} /> Editar
           </button>
           <button
             onClick={() => onDelete(staff.id)}
-            className="flex items-center justify-center gap-2 py-2.5 px-3 font-black text-[10px] uppercase tracking-widest transition-all active:scale-95"
+            disabled={blocked}
+            title={title}
+            className="min-h-[44px] flex items-center justify-center gap-2 py-2.5 px-3 font-black text-[10px] uppercase tracking-widest transition-all active:scale-95 disabled:opacity-50"
             style={{ ...buttonStyles2000s.default, color: colors2000s.status.danger.light }}
           >
-            <Trash2 size={14} /> Eliminar
+            <Trash2 size={14} /> {isSelf ? 'Quitarme' : 'Eliminar'}
           </button>
         </div>
       </div>

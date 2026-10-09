@@ -16,8 +16,8 @@ Este archivo fija las dos mitades del contrato ANTES de reorganizar nada:
    borrarla, moverla mal o cambiarle el alcance la deja en rojo.
 
 Es la guarda de la regla 17 (config de produccion falla cerrada) escrita como
-lista: mientras las 36 filas pasen, las 19 condiciones de las dos tablas de
-datos y los 14 `if` sueltos (17 filas) siguen vivos.
+lista: mientras las 51 filas pasen, las 30 condiciones de las tres tablas de
+datos y los 18 `if` sueltos (21 filas) siguen vivos.
 """
 
 from __future__ import annotations
@@ -51,12 +51,21 @@ BASE: dict[str, Any] = {
     "RATE_LIMIT_ENABLED": True,
     "RATE_LIMIT_FAIL_CLOSED": True,
     "COOKIE_SECURE": True,
-    "OTP_PROVIDER": "twilio",
+    # Email es el unico proveedor de OTP implementado (2026-10-02).
+    "OTP_PROVIDER": "email",
     "OTP_DEBUG_EXPOSE_CODE": False,
     "EXPOSE_API_DOCS": False,
     # El entorno de tests lo pone en "true" para los tests de /ops; produccion
     # lo exige apagado (AUD2-B7-12), igual que EXPOSE_API_DOCS.
     "OPS_ENABLE_PUBLIC_HEALTH": False,
+    # `_OBLIGATORIOS_DE_PRODUCCION` (2026-10-02): valores con forma real.
+    "MERCADOPAGO_WEBHOOK_SECRET": "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6",
+    "MERCADOPAGO_OAUTH_CLIENT_ID": "1234567890123456",
+    "MERCADOPAGO_OAUTH_CLIENT_SECRET": "Zx9Yw8Vu7Ts6Rq5Po4Nm3Lk2Jh1Gf0Ed",
+    "MERCADOPAGO_OAUTH_REDIRECT_URI": (
+        "https://api.shifty.ar/api/payments/mercadopago/oauth/callback"
+    ),
+    "SENTRY_DSN": "https://0123456789abcdef@o123456.ingest.sentry.io/1234567",
 }
 
 # (ENV en el que el chequeo debe dispararse, override que lo rompe, mensaje).
@@ -174,6 +183,54 @@ INVENTARIO: list[tuple[str, dict[str, Any], str]] = [
         {"OPS_ENABLE_PUBLIC_HEALTH": True},
         "OPS_ENABLE_PUBLIC_HEALTH debe ser false en produccion",
     ),
+    # 2026-10-02 (auditoria de origin/main): 4 `if` sueltos mas.
+    (
+        "production",
+        {"PUBLIC_API_URL": "http://api.shifty.ar"},
+        "PUBLIC_API_URL debe usar https:// en produccion",
+    ),
+    (
+        "production",
+        {"CORS_ORIGINS": "https://app.shifty.ar,http://panel.shifty.ar"},
+        "CORS_ORIGINS solo admite origenes https:// en produccion",
+    ),
+    (
+        "production",
+        {"OTP_PROVIDER": "twilio"},
+        "OTP_PROVIDER debe ser email en produccion (unico proveedor implementado)",
+    ),
+    (
+        "production",
+        {"MERCADOPAGO_OAUTH_CLIENT_SECRET": "TEST-1234567890-abcdef"},
+        "MERCADOPAGO_OAUTH_CLIENT_SECRET es una credencial de prueba (TEST-) "
+        "y no sirve en produccion",
+    ),
+    # --- Integraciones: solo produccion (_OBLIGATORIOS_DE_PRODUCCION, 5 filas) ---
+    (
+        "production",
+        {"MERCADOPAGO_WEBHOOK_SECRET": None},
+        "MERCADOPAGO_WEBHOOK_SECRET es obligatorio en produccion",
+    ),
+    (
+        "production",
+        {"MERCADOPAGO_OAUTH_CLIENT_ID": ""},
+        "MERCADOPAGO_OAUTH_CLIENT_ID es obligatorio en produccion",
+    ),
+    (
+        "production",
+        {"MERCADOPAGO_OAUTH_CLIENT_SECRET": "replace_with_client_secret"},
+        "MERCADOPAGO_OAUTH_CLIENT_SECRET es obligatorio en produccion",
+    ),
+    (
+        "production",
+        {"MERCADOPAGO_OAUTH_REDIRECT_URI": None},
+        "MERCADOPAGO_OAUTH_REDIRECT_URI es obligatorio en produccion",
+    ),
+    (
+        "production",
+        {"SENTRY_DSN": None},
+        "SENTRY_DSN es obligatorio en produccion",
+    ),
     # --- Limites operativos: cualquier entorno, desarrollo incluido ---
     # (13 filas de _MINIMOS_OPERATIVOS + 2 `if` sueltos, 15 filas)
     (
@@ -269,6 +326,18 @@ INVENTARIO: list[tuple[str, dict[str, Any], str]] = [
         {"RETENTION_OTP_EXPIRED_DAYS": 0},
         "RETENTION_OTP_EXPIRED_DAYS debe ser >= 1",
     ),
+    # Tope de mails del OTP por buzon (2026-10-03): en 0 el OTP por email se
+    # apaga en silencio.
+    (
+        "development",
+        {"OTP_MAX_MAILS_PER_DESTINATION_PER_HOUR": 0},
+        "OTP_MAX_MAILS_PER_DESTINATION_PER_HOUR debe ser >= 1",
+    ),
+    (
+        "development",
+        {"OTP_MAX_MAILS_PER_DESTINATION_PER_DAY": 0},
+        "OTP_MAX_MAILS_PER_DESTINATION_PER_DAY debe ser >= 1",
+    ),
     (
         "development",
         {"RETENTION_NOTIFICATIONS_READ_DAYS": 0},
@@ -287,10 +356,10 @@ INVENTARIO: list[tuple[str, dict[str, Any], str]] = [
 ]
 
 # Filas de los chequeos sueltos: los `if` escritos uno por uno, fuera de las
-# dos tablas de datos de `config.py`. Son 14 `if` que ocupan 17 filas, porque
+# tablas de datos de `config.py`. Son 18 `if` que ocupan 21 filas, porque
 # SECRET_KEY tiene tres ramas en un mismo `or` (3 filas para 1 `if`) y
 # CORS_ORIGINS/localhost dos.
-N_SUELTOS = 17
+N_SUELTOS = 21
 
 # El total NO se escribe a mano suelto: se ata a las tablas de `config.py`
 # (`test_el_inventario_cubre_las_dos_tablas`). Agregar una fila a
@@ -299,7 +368,7 @@ N_SUELTOS = 17
 # nuevos no llegaron aca y el inventario, que solo detectaba borrados, no dijo
 # nada. Bajar este numero es borrar una proteccion; subirlo sin agregar la
 # fila correspondiente, olvidarse de probarla.
-FILAS_ESPERADAS = 42
+FILAS_ESPERADAS = 53
 MAX_LINEAS_DEL_VALIDADOR = 30
 
 
@@ -333,22 +402,30 @@ def test_el_inventario_cubre_las_dos_tablas() -> None:
     desaparecia de `config.py`) pero no uno AGREGADO. AUD2-B7-06 sumo cuatro
     minimos operativos y el inventario siguio en verde sin ellos (2026-09-20).
     """
-    from core.config import _BOOLEANOS_DE_PRODUCCION, _MINIMOS_OPERATIVOS
+    from core.config import (
+        _BOOLEANOS_DE_PRODUCCION,
+        _MINIMOS_OPERATIVOS,
+        _OBLIGATORIOS_DE_PRODUCCION,
+    )
 
     campos_inventariados = {
         campo for _env, override, _msg in INVENTARIO for campo in override
     }
+    tablas = (
+        *_MINIMOS_OPERATIVOS,
+        *_BOOLEANOS_DE_PRODUCCION,
+        *_OBLIGATORIOS_DE_PRODUCCION,
+    )
     sin_inventariar = [
-        campo
-        for campo, *_ in (*_MINIMOS_OPERATIVOS, *_BOOLEANOS_DE_PRODUCCION)
-        if campo not in campos_inventariados
+        campo for campo, *_ in tablas if campo not in campos_inventariados
     ]
     assert sin_inventariar == [], sin_inventariar
 
-    total = len(_MINIMOS_OPERATIVOS) + len(_BOOLEANOS_DE_PRODUCCION) + N_SUELTOS
+    total = len(tablas) + N_SUELTOS
     assert total == FILAS_ESPERADAS, (
         f"{len(_MINIMOS_OPERATIVOS)} minimos + "
-        f"{len(_BOOLEANOS_DE_PRODUCCION)} booleanos + {N_SUELTOS} sueltos "
+        f"{len(_BOOLEANOS_DE_PRODUCCION)} booleanos + "
+        f"{len(_OBLIGATORIOS_DE_PRODUCCION)} obligatorios + {N_SUELTOS} sueltos "
         f"!= {FILAS_ESPERADAS} filas inventariadas"
     )
 

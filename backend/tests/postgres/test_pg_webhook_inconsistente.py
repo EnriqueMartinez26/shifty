@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 import modules.notifications.tasks as tasks
 from core.database import _apply_tenant_context, set_tenant_context
 from modules.payments.model import Payment
+from modules.payments.processing import PAGO_NO_VERIFICADO
 from tests.integration.test_feature_flags_finance_and_public_privacy import (
     webhook_signature_headers,
 )
@@ -37,15 +38,46 @@ from tests.postgres.conftest import auth_headers, register_and_login
 pytestmark = pytest.mark.postgres
 
 
-async def _fila_del_inbox(owner_engine: AsyncEngine) -> list[tuple[Any, ...]]:
+async def _fila_del_inbox(
+    owner_engine: AsyncEngine, evento: str = "evt-b204-pg"
+) -> list[tuple[Any, ...]]:
     async with owner_engine.connect() as conn:
         filas = await conn.execute(
             text(
                 "select attempts, error, processed_at from webhook_inbox "
-                "where event_id = 'mercadopago:evt-b204-pg'"
-            )
+                "where event_id = :event_id"
+            ),
+            {"event_id": f"mercadopago:{evento}"},
         )
         return [tuple(f) for f in filas.all()]
+
+
+async def _tienda_con_cobro_pendiente(
+    client: AsyncClient,
+    app_sessions: async_sessionmaker[AsyncSession],
+    slug: str,
+) -> tuple[str, str]:
+    """(tienda, turno) con un cobro de MP pendiente."""
+    store, token = await register_and_login(
+        client, app_sessions, slug=slug, email=f"{slug}@demo.com"
+    )
+    # Activar cobros exige la politica de sena publicada (stores/router.py,
+    # DEPOSIT_POLICY_REQUIRED); la tienda de prueba nace con una, como en
+    # tests/integration.
+    politica = await client.patch(
+        "/stores/me",
+        headers=auth_headers(token),
+        json={
+            "deposit_policy": "La sena se descuenta del total y se devuelve con 24hs de aviso."
+        },
+    )
+    assert politica.status_code == 200, politica.text
+    await _enable_payments(client, token)
+    await _configure_gateway(client, token)
+    turno = await _book_with_mercadopago(
+        client, token, store, slug_suffix=slug, hour=10
+    )
+    return store, turno
 
 
 async def _estado_del_pago(owner_engine: AsyncEngine, appointment_id: str) -> str:
@@ -59,14 +91,17 @@ async def _estado_del_pago(owner_engine: AsyncEngine, appointment_id: str) -> st
         return cast(str, estado)
 
 
-async def _entregar(client: AsyncClient, store: str, *, secret: str) -> Any:
+async def _entregar(
+    client: AsyncClient, store: str, *, secret: str, evento: str = "evt-b204-pg"
+) -> Any:
+    pago = f"mp-{evento}"
     return await client.post(
         f"/payments/webhooks/mercadopago?store_id={store}",
-        json={"id": "evt-b204-pg", "type": "payment", "data": {"id": "mp-b204-pg"}},
+        json={"id": evento, "type": "payment", "data": {"id": pago}},
         headers=webhook_signature_headers(
             secret=secret,
-            data_id="mp-b204-pg",
-            request_id="req-b204-pg",
+            data_id=pago,
+            request_id=f"req-{evento}",
             ts="1710000000",
         ),
     )
@@ -111,7 +146,7 @@ async def test_el_evento_inconsistente_queda_commiteado_en_el_inbox_sin_aplicar(
             ).scalar_one()
             remoto = {
                 **_approved_remote_payment(payment),
-                "id": "mp-b204-pg",
+                "id": "mp-evt-b204-pg",
                 "transaction_amount": float(payment.amount) / 2,
             }
         finally:
@@ -140,3 +175,31 @@ async def test_el_evento_inconsistente_queda_commiteado_en_el_inbox_sin_aplicar(
     filas = await _fila_del_inbox(owner_engine)
     assert len(filas) == 1 and filas[0][0] == 2 and filas[0][2] is None, filas
     assert await _estado_del_pago(owner_engine, appointment_id) == "pending"
+
+
+@pytest.mark.asyncio
+async def test_si_mp_devuelve_el_pago_vacio_el_evento_queda_para_reintentar(
+    client: AsyncClient,
+    app_sessions: async_sessionmaker[AsyncSession],
+    owner_engine: AsyncEngine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Revision 4R de la PR #104 (R3 S2): MP responde ``{}`` a la consulta del
+    pago. El cuerpo no se aplica y la fila queda commiteada para el
+    reintento (regla 7), vista desde otra conexion."""
+    monkeypatch.setattr(tasks, "_send_email", Buzon())
+    _stub_mercadopago(monkeypatch, remote_payment=None)
+    store, turno = await _tienda_con_cobro_pendiente(
+        client, app_sessions, "mp-vacio-pg"
+    )
+
+    respuesta = await _entregar(
+        client, store, secret="secret-demo", evento="evt-mp-vacio-pg"
+    )
+
+    assert respuesta.status_code == 200, respuesta.text
+    cuerpo = respuesta.json()
+    assert cuerpo.get("data", cuerpo) == {"received": True, "applied": False}
+    filas = await _fila_del_inbox(owner_engine, "evt-mp-vacio-pg")
+    assert filas == [(1, PAGO_NO_VERIFICADO, None)], filas
+    assert await _estado_del_pago(owner_engine, turno) == "pending"

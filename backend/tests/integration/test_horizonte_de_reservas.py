@@ -275,6 +275,9 @@ async def test_reprogramar_desde_el_panel_a_un_horario_que_ya_paso(
         json={
             "new_starts_at": hace_tres_horas.isoformat(),
             "idempotency_key": "horiz-panel-pasado-rs-1",
+            # D-20260929-04: la hora a la que corre el test no se controla y
+            # fuera de la jornada solo mueve el admin, explicito.
+            "allow_outside_schedule": True,
         },
     )
     assert movido.status_code == 200, movido.text

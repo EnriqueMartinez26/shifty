@@ -32,6 +32,20 @@ from tests.integration.test_feature_flags_finance_and_public_privacy import (
 )
 
 
+async def _tienda(client: AsyncClient, slug: str) -> str:
+    """Tienda con WhatsApp: desde 2026-10-03 una sena obligatoria necesita un
+    canal de cobro (``payments.deposit_channels``, decision de Mateo) y aca se
+    prueba solo la terna."""
+    _, token = await register_and_login(client, slug=slug, email=f"{slug}@example.com")
+    canal = await client.patch(
+        "/stores/me",
+        headers=auth_headers(token),
+        json={"whatsapp_number": "11 5555 0303"},
+    )
+    assert canal.status_code == 200, canal.text
+    return token
+
+
 def _payload(mode: str, tipo: str, monto: float | None) -> dict[str, Any]:
     return {
         "name": "Corte",
@@ -81,9 +95,7 @@ async def test_alta_valida_la_terna_de_sena(
     monto: float | None,
     esperado: int,
 ) -> None:
-    _, token = await register_and_login(
-        client, slug="b6-02-alta", email="b6-02-alta@example.com"
-    )
+    token = await _tienda(client, "b6-02-alta")
     res = await client.post(
         "/services/", headers=auth_headers(token), json=_payload(mode, tipo, monto)
     )
@@ -145,9 +157,7 @@ async def test_patch_valida_contra_los_valores_actuales(
     patch: dict[str, Any],
     esperado: int,
 ) -> None:
-    _, token = await register_and_login(
-        client, slug="b6-02-patch", email="b6-02-patch@example.com"
-    )
+    token = await _tienda(client, "b6-02-patch")
     public_id = await _crear(client, token, *inicial)
     antes = await _sena(client, token, public_id)
 

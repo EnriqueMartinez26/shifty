@@ -6,6 +6,16 @@ export const ROLE_RECEPTIONIST = 'receptionist'
 // de los de arriba, asi que el cliente nunca necesito su constante y nadie la
 // importaba (2026-09-21).
 
+// Conjuntos con nombre para las guardas de ruta (F12-06): el nombre dice quien
+// entra, no como esta escrito el array.
+export const ROLES_ADMIN_SUPER = [ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN] as const
+export const ROLES_ADMIN_SUPER_PRO = [
+  ROLE_STORE_ADMIN,
+  ROLE_SUPER_ADMIN,
+  ROLE_PROFESSIONAL
+] as const
+export const ROLES_SUPER = [ROLE_SUPER_ADMIN] as const
+
 const LEGACY_ROLE_ADMIN = 'admin'
 const LEGACY_ROLE_STAFF = 'staff'
 
@@ -19,7 +29,7 @@ export const canonicalRole = (role: string | null | undefined, isGlobalAdmin?: b
 
 export const hasAnyRole = (
   role: string | null | undefined,
-  allowedRoles: string[],
+  allowedRoles: readonly string[],
   isGlobalAdmin?: boolean
 ): boolean => {
   const currentRole = canonicalRole(role, isGlobalAdmin)

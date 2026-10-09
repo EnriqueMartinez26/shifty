@@ -32,6 +32,7 @@ from modules.billing.model import (
 )
 from modules.ledger.model import CustomerLedger
 from modules.payments.model import (
+    AppointmentBalancePayment,
     OutboxMessage,
     Payment,
     PaymentGatewayConfig,
@@ -171,7 +172,7 @@ STORE_SCENARIOS = [
                         "days_from_now": 2,
                         "start_hour": 13,
                         "duration_hours": 2,
-                        "reason": "training",
+                        "reason": "Capacitación",
                     },
                 ],
             },
@@ -194,7 +195,7 @@ STORE_SCENARIOS = [
                         "days_from_now": 4,
                         "start_hour": 15,
                         "duration_hours": 3,
-                        "reason": "personal",
+                        "reason": "Motivo personal",
                     },
                 ],
             },
@@ -310,7 +311,7 @@ STORE_SCENARIOS = [
                         "days_from_now": 3,
                         "start_hour": 10,
                         "duration_hours": 4,
-                        "reason": "vacation",
+                        "reason": "Vacaciones",
                     },
                 ],
             },
@@ -403,6 +404,13 @@ async def cleanup_seed(session: AsyncSession) -> None:
         )
 
     if appointment_ids:
+        # El resto pagado aparte (D-20261008-01) cuelga del turno y del usuario
+        # que lo registro: va antes que turnos y usuarios.
+        await session.execute(
+            delete(AppointmentBalancePayment).where(
+                AppointmentBalancePayment.appointment_id.in_(appointment_ids)
+            )
+        )
         await session.execute(
             delete(Payment).where(Payment.appointment_id.in_(appointment_ids))
         )

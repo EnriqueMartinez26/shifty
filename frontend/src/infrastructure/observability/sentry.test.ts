@@ -1,3 +1,5 @@
+import { NetworkError, RequestCanceledError } from '@shared/errors'
+
 const mockInit = jest.fn()
 
 jest.mock('@sentry/react', () => ({
@@ -127,6 +129,23 @@ describe('initSentry: sin secretos de la URL ni datos de usuario (F3)', () => {
     expect(cleaned.request.url).toBe('https://app.example/reset-password')
     expect(cleaned.request.query_string).toBeUndefined()
     expect(cleaned.user).toBeUndefined()
+  })
+
+  it('una consulta cancelada a proposito no se manda; cualquier otro error si', async () => {
+    // 2026-10-02: una consulta cancelada por react-query se reportaba como
+    // error de red a Sentry; si termina sin atrapar, no es un error.
+    const { beforeSend } = await init()
+    const canceled = new RequestCanceledError('x', { errorCode: 'REQUEST_CANCELED' })
+
+    expect(beforeSend({}, { originalException: canceled })).toBeNull()
+    expect(
+      beforeSend(
+        {},
+        { originalException: Object.assign(new Error('x'), { originalError: canceled }) }
+      )
+    ).toBeNull()
+    expect(beforeSend({}, { originalException: new NetworkError('x') })).toEqual({})
+    expect(beforeSend({}, undefined)).toEqual({})
   })
 
   it('los breadcrumbs de navegacion y fetch pierden la query', async () => {
