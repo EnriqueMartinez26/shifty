@@ -11,8 +11,12 @@ ni «Mis turnos».
 
 La política de privacidad incluye una descripción propuesta de GA4. Su revisión
 por el responsable queda pendiente antes de habilitar el servicio para clientes.
-El cambio no configura la propiedad de Google, no verifica una cuenta real y no
-despliega imágenes.
+El 2026-10-08 se verificó en la propiedad real el flujo `Shifty` para
+`https://shifty-ar.tech` y el ID `G-KDKJ9FX8VZ`: Medición mejorada, Google
+signals y recogida de datos proporcionados por usuarios están apagados; no hay
+vinculaciones con Google Ads. Analytics informó que no había recibido datos
+durante las últimas 48 horas. Esto no prueba el comportamiento del sitio,
+porque el cambio sigue sin desplegarse. No se desplegaron imágenes.
 
 ## Consentimiento y datos
 
@@ -37,9 +41,9 @@ anónima.
 Los eventos ocurridos antes de aceptar o antes de que cargue el tag se descartan.
 La carga de Google es best-effort: un bloqueo, una falla de red o CSP no debe
 impedir reservar. La opción `send_page_view: false` evita la vista inicial
-automática del código; antes de habilitar el build, el responsable debe revisar
-la propiedad y desactivar Medición mejorada y destinos publicitarios para evitar
-recolección adicional fuera del alcance documentado.
+automática del código. La propiedad real se revisó el 2026-10-08 y los controles
+listados arriba estaban apagados o sin vinculaciones. Hay que volver a
+confirmarlos antes de activar el servicio para clientes.
 
 ## Build y CSP
 
@@ -55,8 +59,9 @@ y deja intacta la política cuando está vacío. No agrega comodines ni
 
 1. Revisar y aprobar el texto de privacidad y las condiciones aplicables al uso
    de Google Analytics.
-2. Confirmar en la propiedad real que Medición mejorada y destinos publicitarios
-   no amplían los eventos ni los datos recogidos.
+2. Antes de activar, volver a confirmar que Medición mejorada, Google signals,
+   recogida de datos proporcionados por usuarios y las vinculaciones con Google
+   Ads siguen apagados o vacías.
 3. En un entorno de prueba con el ID real, comprobar en DevTools que sin elegir
    no hay solicitudes a Google; rechazar tampoco las genera; aceptar carga un
    único script; retirar el consentimiento bloquea futuros eventos.
