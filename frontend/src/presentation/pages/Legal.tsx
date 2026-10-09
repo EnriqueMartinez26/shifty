@@ -116,6 +116,13 @@ const PRIVACY_SECTIONS: LegalSection[] = [
     ]
   },
   {
+    title: 'Analítica opcional',
+    paragraphs: [
+      'Cuando está habilitado, Google Analytics mide el uso del portal público de reservas solo si aceptás la analítica. Usa cookies e identificadores del navegador y Google recibe datos técnicos de conexión. La integración no envía los datos que completás al reservar ni identificadores de turnos, tiendas, servicios o profesionales.',
+      'Podés rechazarla y reservar igual. Podés retirar tu consentimiento desde Preferencias de analítica en el portal de reservas; esto detiene futuras mediciones y elimina las cookies de esta integración en el navegador, sin borrar los datos ya enviados a Google.'
+    ]
+  },
+  {
     title: '5. Conservación y seguridad',
     paragraphs: [
       'Conservamos los datos mientras la cuenta esté activa y por los plazos legales aplicables. Aplicamos cifrado de credenciales sensibles, control de acceso por tienda y registro de auditoría.'
