@@ -10,7 +10,8 @@
   },
   "allowScripts": {
     "unrs-resolver@1.12.2": false,
-    "fsevents@2.3.3": false
+    "fsevents@2.3.3": false,
+    "@parcel/watcher": false
   },
   "scripts": {
     "dev": "vite --configLoader runner",
