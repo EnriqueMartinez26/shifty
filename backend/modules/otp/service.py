@@ -10,7 +10,7 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
 
 import structlog
-from sqlalchemy import select, update
+from sqlalchemy import Select, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 
@@ -247,7 +247,16 @@ def _notice_body(store_name: str) -> str:
 # servicio decide destino y contenido; quien llama decide el transporte, y
 # nunca manda en linea. Puede ser async (``enqueue_otp_email``, F1-03: encola
 # con tope de tiempo sin bloquear el loop) o sync (dobles de los tests).
-DispatchScheduler = Callable[[str, str, str], Awaitable[None] | None]
+# Devuelve True SOLO si el mail quedo en manos del transporte (la cola lo
+# acepto): de eso depende que el codigo nuevo reemplace al vivo.
+DispatchScheduler = Callable[[str, str, str], Awaitable[bool] | bool]
+
+
+async def _handed_off(pending: Awaitable[bool] | bool) -> bool:
+    """``True`` literal y nada mas: un ``None`` o un valor raro de un
+    transporte no cuenta como entregado, asi que no pisa el codigo vivo."""
+    result = await pending if inspect.isawaitable(pending) else pending
+    return result is True
 
 
 async def _schedule_otp_mail(
@@ -257,9 +266,10 @@ async def _schedule_otp_mail(
     notice_to: str | None,
     code: str,
     store_name: str,
-) -> None:
+) -> bool:
     """El codigo al buzon que decidio ``_resolve_destination``; el aviso sin
     codigo (AUD2-B4-05) al email tipeado cuando el codigo fue a otro lado.
+    Devuelve si el mail del CODIGO quedo encolado; el aviso no decide nada.
 
     Los dos usan el mismo asunto y estan acotados por
     ``OTP_MAX_REQUESTS_PER_HOUR`` (por telefono) y por el tope de su buzon
@@ -268,7 +278,9 @@ async def _schedule_otp_mail(
     Revision de F1-03 (2026-09-24): los despachos se INICIAN en orden fijo
     (codigo y despues aviso) y se esperan juntos. En serie, con el broker
     colgado, el camino de dos mails costaba el doble del tope de encolado que
-    el de uno, y el tiempo volvia a decir si el telefono es cliente.
+    el de uno, y el tiempo volvia a decir si el telefono es cliente. Por eso
+    el aviso sale aunque el codigo no se encole: esperar al codigo para
+    decidir el aviso volveria a sumar los dos topes.
     """
     asunto = _otp_subject(store_name)
     envios: list[tuple[str, str]] = []
@@ -276,13 +288,66 @@ async def _schedule_otp_mail(
         envios.append((destination, _code_body(code, store_name)))
     if notice_to:
         envios.append((notice_to, _notice_body(store_name)))
-    pendientes = [
-        pending
-        for pending in (schedule_dispatch(to, asunto, body) for to, body in envios)
-        if inspect.isawaitable(pending)
-    ]
-    if pendientes:
-        await asyncio.gather(*pendientes)
+    entregados = await asyncio.gather(
+        *(_handed_off(schedule_dispatch(to, asunto, body)) for to, body in envios)
+    )
+    return bool(destination) and entregados[0]
+
+
+async def _hand_off_code_mail(
+    schedule_dispatch: DispatchScheduler,
+    *,
+    destination: str | None,
+    notice_to: str | None,
+    code: str,
+    store_name: str,
+) -> bool:
+    """Tope por buzon y encolado; ``True`` si el mail del codigo quedo en la
+    cola y el codigo nuevo puede reemplazar al vivo.
+
+    El tope va ANTES de guardar: sin Redis en produccion es 503 y no
+    invalida el codigo vivo de nadie. Con el codigo topeado no sale nada, ni
+    el aviso: diria que se envio un codigo que nadie puede recibir. El aviso
+    topeado no cambia la decision del codigo. El encolado es fuera del
+    proceso de la API y no dice a que buzon fue: eso delataria si el
+    telefono es cliente.
+    """
+    code_to, notice_to = await _recipients_within_cap(destination, notice_to)
+    if code_to is None:
+        return False
+    return await _schedule_otp_mail(
+        schedule_dispatch,
+        destination=code_to,
+        notice_to=notice_to,
+        code=code,
+        store_name=store_name,
+    )
+
+
+def _check_channel(channel: str, email: str | None) -> None:
+    if channel not in {"email", "whatsapp", "sms"}:
+        raise ValidationException("Canal invalido")
+    # Hasta 2026-09-10 NINGUN canal despachaba el codigo (solo se exponia en
+    # la respuesta en desarrollo). Email es el unico con envio real;
+    # whatsapp/sms quedan como canales de desarrollo con el codigo visible.
+    if channel != "email" and settings.OTP_PROVIDER != "console":
+        raise ValidationException(
+            "Ese canal no esta disponible; pedi el codigo por email"
+        )
+    if channel == "email" and not email:
+        raise ValidationException("Falta el email para enviar el codigo")
+
+
+def _otp_response(expires_at: datetime) -> dict[str, object]:
+    """El sobre del pedido, se haya guardado el codigo o no (sin
+    ``debug_code``, que produccion no lleva).
+
+    ``expires_at`` es el que calculo el request en Python, nunca el releido
+    de la base: SQLite lo devuelve sin zona y el texto de la respuesta
+    cambiaba entre "guardado" y "no guardado" (``+00:00`` de mas), un oraculo
+    de entrega (``test_un_fallo_de_envio_responde_byte_a_byte_igual...``).
+    """
+    return {"ok": True, "expires_at": expires_at.isoformat()}
 
 
 def _debug_code(code: str, *, decoy: bool) -> str:
@@ -308,6 +373,24 @@ def _debug_code(code: str, *, decoy: bool) -> str:
         return code
     senuelo = (int(code) + 1 + secrets.randbelow(999_999)) % 1_000_000
     return f"{senuelo:06d}"
+
+
+def _live_codes_query(
+    store_id: str, normalized_phone: str, now: datetime
+) -> Select[tuple[OtpVerification]]:
+    """Codigos vivos (sin consumir ni vencer) del telefono, el mas nuevo
+    primero. Es tambien el orden de los locks: quien toma varias de estas
+    filas las toma en este orden y dos transacciones no se cruzan."""
+    return (
+        select(OtpVerification)
+        .where(
+            OtpVerification.store_id == store_id,
+            OtpVerification.phone == normalized_phone,
+            OtpVerification.consumed_at.is_(None),
+            OtpVerification.expires_at > now,
+        )
+        .order_by(OtpVerification.created_at.desc(), OtpVerification.id.desc())
+    )
 
 
 class OtpService:
@@ -402,18 +485,56 @@ class OtpService:
         code: str,
         *,
         email: str | None,
-    ) -> OtpVerification:
-        """Invalida los codigos vivos de ese telefono y guarda el nuevo, con el
-        buzon al que se despacho (``otp_verifications.email``)."""
+        expires_at: datetime,
+    ) -> None:
+        """Invalida los codigos vivos de ese telefono enviados al MISMO buzon y
+        guarda el nuevo, con el buzon al que se despacho
+        (``otp_verifications.email``).
+
+        2026-10-05 (revision de #126): invalidaba TODOS los vivos del
+        telefono. Sin ficha de cliente el codigo va al email tipeado, asi que
+        pedir uno para el telefono ajeno con la casilla propia (el mail sale
+        de verdad) mataba el codigo que la victima tenia en la suya. Los de
+        otras casillas siguen hasta vencer; ``verify_code`` los compara a
+        todos y cada intento cuenta contra todos. Con ficha todo codigo va al
+        email guardado: ahi "mismo buzon" son todos, como antes.
+
+        Residuo anterior, sin cambios: cinco verificaciones anonimas erradas
+        agotan el codigo de la victima (``OTP_MAX_ATTEMPTS``) y diez agotan el
+        presupuesto de verificacion del telefono, compartido
+        (``OTP_MAX_VERIFY_ATTEMPTS_PER_HOUR``). Ninguna necesita una casilla.
+
+        Las filas se toman con ``FOR UPDATE`` en el orden de
+        ``_lock_live_codes`` antes de invalidarlas: un ``UPDATE`` las tomaria
+        en el orden fisico y podria cruzarse con una verificacion.
+        """
         self._forget_verification()
         now = datetime.now(timezone.utc)
+        same_destination = (
+            OtpVerification.email.is_(None)
+            if email is None
+            else OtpVerification.email == email
+        )
+        replaced = (
+            await self.db.scalars(
+                _live_codes_query(store_id, normalized_phone, now)
+                .where(same_destination)
+                .with_only_columns(OtpVerification.id)
+                .with_for_update()
+            )
+        ).all()
+        # El UPDATE corre siempre, aunque no haya nada que invalidar: saltarlo
+        # cambiaba las sentencias del pedido segun hubiera o no un codigo vivo
+        # para ese buzon, un oraculo de tiempo sobre la casilla de la ficha
+        # (``test_los_tres_caminos_hacen_el_mismo_trabajo_sincronico``).
+        # La verificacion no tiene esa paridad: su trabajo crece con los N
+        # codigos vivos (locks, comparaciones, UPDATE de intentos), una senal
+        # de tiempo debil. Cada sondeo cuesta un intento contra cada codigo y
+        # una unidad del presupuesto de verificacion, asi que se frena sola;
+        # la diferencia la fija ``test_verificar_con_uno_o_dos_codigos_vivos``.
         await self.db.execute(
             update(OtpVerification)
-            .where(
-                OtpVerification.store_id == store_id,
-                OtpVerification.phone == normalized_phone,
-                OtpVerification.consumed_at.is_(None),
-            )
+            .where(OtpVerification.id.in_(replaced))
             .values(consumed_at=now)
         )
         otp = OtpVerification(
@@ -424,14 +545,12 @@ class OtpService:
             # invierte con una tabla de 10^6 entradas ante cualquier lectura
             # de la tabla (backup, replica).
             code_hash=hash_otp_code(store_id, normalized_phone, code),
-            expires_at=now + timedelta(minutes=settings.OTP_CODE_EXPIRE_MINUTES),
+            expires_at=expires_at,
             email=email,
             provider_message_id="email" if channel == "email" else "console-dispatch",
         )
         self.db.add(otp)
         await self.db.commit()
-        await self.db.refresh(otp)
-        return otp
 
     async def request_code(
         self,
@@ -443,23 +562,14 @@ class OtpService:
         store_name: str = "",
         schedule_dispatch: DispatchScheduler,
     ) -> dict[str, object]:
-        """Genera y guarda el codigo; el mail lo entrega ``schedule_dispatch``
-        fuera del proceso de la API (B4-01 lo saco del camino sincronico;
-        AUD2-B4-06 lo saco tambien del request). La respuesta no espera al
-        SMTP y su tiempo no depende del destino. El parametro es obligatorio
-        a proposito, para que ningun llamador vuelva a mandar en linea."""
+        """Genera el codigo, encola su mail y recien entonces lo guarda; el
+        mail lo entrega ``schedule_dispatch`` fuera del proceso de la API
+        (B4-01 lo saco del camino sincronico; AUD2-B4-06 lo saco tambien del
+        request). La respuesta no espera al SMTP y su tiempo no depende del
+        destino. El parametro es obligatorio a proposito, para que ningun
+        llamador vuelva a mandar en linea."""
         normalized_phone = normalize_phone(phone)
-        if channel not in {"email", "whatsapp", "sms"}:
-            raise ValidationException("Canal invalido")
-        # Hasta 2026-09-10 NINGUN canal despachaba el codigo (solo se exponia
-        # en la respuesta en desarrollo). Email es el unico con envio real;
-        # whatsapp/sms quedan como canales de desarrollo con el codigo visible.
-        if channel != "email" and settings.OTP_PROVIDER != "console":
-            raise ValidationException(
-                "Ese canal no esta disponible; pedi el codigo por email"
-            )
-        if channel == "email" and not email:
-            raise ValidationException("Falta el email para enviar el codigo")
+        _check_channel(channel, email)
 
         await _consume_budget(
             "req", store_id, normalized_phone, settings.OTP_MAX_REQUESTS_PER_HOUR
@@ -472,50 +582,41 @@ class OtpService:
         destination, notice_to = await self._resolve_destination(
             store_id, normalized_phone, typed
         )
-        # Tope por buzon ANTES de guardar: sin Redis en produccion es 503 y
-        # no invalida el codigo vivo de nadie. Solo el canal email manda.
-        code_to, notice_to = (
-            await _recipients_within_cap(destination, notice_to)
-            if channel == "email"
-            else (None, None)
-        )
-
-        # Sin entrega del codigo no se guarda ni se invalida el anterior.
-        # En produccion la respuesta conserva su forma, sin revelar si el
-        # telefono tiene una ficha con otro email. En desarrollo no se expone
-        # un debug_code inexistente. El aviso tampoco debe afirmar que se
-        # envio un codigo que nadie puede recibir.
-        if channel == "email" and code_to is None:
-            response: dict[str, object] = {
-                "ok": True,
-                "expires_at": (
-                    datetime.now(timezone.utc)
-                    + timedelta(minutes=settings.OTP_CODE_EXPIRE_MINUTES)
-                ).isoformat(),
-            }
-            return response
-
         # secrets, no random: un OTP con PRNG predecible se puede adivinar.
         code = f"{secrets.randbelow(1_000_000):06d}"
-        otp = await self._store_code(
-            store_id, normalized_phone, channel, code, email=destination
+        expires_at = datetime.now(timezone.utc) + timedelta(
+            minutes=settings.OTP_CODE_EXPIRE_MINUTES
         )
 
-        if channel == "email":
-            # Despues del commit (el codigo ya esta guardado cuando se encola
-            # el mail) y fuera del proceso de la API: la respuesta es la
-            # misma, y tarda lo mismo, haya envio o no, para no revelar si el
-            # telefono es cliente ni convertir el SMTP en un oraculo. Tampoco
-            # dice a que buzon fue: eso delataria si el telefono es cliente.
-            await _schedule_otp_mail(
-                schedule_dispatch,
-                destination=code_to,
-                notice_to=notice_to,
-                code=code,
-                store_name=store_name,
-            )
+        # 2026-10-05: guardar el codigo invalida el vivo de ese mismo buzon
+        # (``_store_code``), asi que se guarda SOLO si su mail quedo
+        # encolado. Antes se guardaba primero y un encolado fallido (broker
+        # caido o lento) o el tope del buzon dejaban al titular sin codigo
+        # valido: pedir codigos para un telefono ajeno
+        # trababa su verificacion sin mandarle nada. Si el guardado falla
+        # despues de encolar, sale un mail con un codigo que no existe y el
+        # vivo sigue valido: es el orden que falla del lado seguro.
+        if channel == "email" and not await _hand_off_code_mail(
+            schedule_dispatch,
+            destination=destination,
+            notice_to=notice_to,
+            code=code,
+            store_name=store_name,
+        ):
+            # Misma forma que con entrega: no dice si hubo tope, si el broker
+            # cayo ni si el telefono tiene ficha. En desarrollo no se expone
+            # un debug_code que no existe.
+            return _otp_response(expires_at)
 
-        response = {"ok": True, "expires_at": otp.expires_at.isoformat()}
+        await self._store_code(
+            store_id,
+            normalized_phone,
+            channel,
+            code,
+            email=destination,
+            expires_at=expires_at,
+        )
+        response = _otp_response(expires_at)
         if settings.OTP_DEBUG_EXPOSE_CODE:
             # Senuelo SIEMPRE que el codigo fue a un buzon distinto del que
             # tipeo quien pide, haya tipeado algo o no: la regla es sobre el
@@ -524,6 +625,29 @@ class OtpService:
             decoy = channel == "email" and destination != typed
             response["debug_code"] = _debug_code(code, decoy=decoy)
         return response
+
+    async def _lock_live_codes(
+        self, store_id: str, normalized_phone: str, now: datetime
+    ) -> list[OtpVerification]:
+        """Los codigos vivos del telefono contra los que se compara un
+        intento, lockeados (``FOR UPDATE``; no-op en SQLite).
+
+        Sin el lock, dos verificaciones concurrentes leen el mismo
+        ``attempts`` y las dos escriben N+1, y se pasaba OTP_MAX_ATTEMPTS.
+
+        Desde 2026-10-05 puede haber un codigo vivo por buzon de destino
+        (``_store_code``). El tope de cuantos se comparan es
+        ``OTP_MAX_REQUESTS_PER_HOUR``, los mas nuevos: con el presupuesto por
+        telefono de ``request_code`` nunca hay mas vivos que eso (vencen a
+        los OTP_CODE_EXPIRE_MINUTES), y el ``LIMIT`` lo sostiene aunque
+        Redis no lo cuente (desarrollo, tests).
+        """
+        result = await self.db.scalars(
+            _live_codes_query(store_id, normalized_phone, now)
+            .limit(settings.OTP_MAX_REQUESTS_PER_HOUR)
+            .with_for_update()
+        )
+        return list(result.all())
 
     async def verify_code(
         self, *, store_id: str, phone: str, code: str
@@ -539,31 +663,28 @@ class OtpService:
         )
 
         now = datetime.now(timezone.utc)
-        result = await self.db.execute(
-            select(OtpVerification)
-            .where(
-                OtpVerification.store_id == store_id,
-                OtpVerification.phone == normalized_phone,
-            )
-            .order_by(OtpVerification.created_at.desc())
-            .limit(1)
-            # Lock de fila: sin esto, dos verify concurrentes leen el mismo
-            # attempts y ambos incrementan a N+1 (read-modify-write), dejando
-            # exceder OTP_MAX_ATTEMPTS. No-op en SQLite (tests).
-            .with_for_update()
-        )
-        otp = result.scalar_one_or_none()
-        if not otp or otp.is_consumed or otp.is_expired:
+        live = await self._lock_live_codes(store_id, normalized_phone, now)
+        if not live:
             raise _OTP_INVALID()
-        if otp.attempts >= settings.OTP_MAX_ATTEMPTS:
+        usable = [c for c in live if c.attempts < settings.OTP_MAX_ATTEMPTS]
+        if not usable:
             raise OTPRateLimitedException()
 
-        otp.attempts += 1
         expected = hash_otp_code(store_id, normalized_phone, code)
-        if not hmac.compare_digest(otp.code_hash, expected):
+        # Se compara con todos sin cortar en el primero que coincide, y el
+        # intento cuenta contra TODOS los comparados (2026-10-05): ningun
+        # codigo ve mas de OTP_MAX_ATTEMPTS intentos en su vida, igual que
+        # cuando habia uno solo vivo por telefono.
+        matches = [c for c in usable if hmac.compare_digest(c.code_hash, expected)]
+        for candidate in usable:
+            candidate.attempts += 1
+        if not matches:
             await self.db.commit()
             raise _OTP_INVALID()
 
+        # Solo se consume el que coincidio: verificar el codigo de una casilla
+        # no mata el que otra persona tiene en la suya.
+        otp = matches[0]
         otp.consumed_at = now
         # Marca que alguien demostro posesion del EMAIL `otp.email`, NO del
         # telefono: el codigo viaja a una direccion, y el telefono solo es la

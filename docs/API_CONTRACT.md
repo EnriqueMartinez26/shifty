@@ -3,7 +3,7 @@
 Generado automaticamente desde `app.openapi()` del backend (FastAPI); no editar a mano. Regenerar con `backend/scripts/gen_api_contract.py` (el comando esta en su docstring).
 
 - OpenAPI: 3.1.0
-- Paths: 116 — Operaciones: 145
+- Paths: 119 — Operaciones: 149
 
 ## /
 
@@ -830,6 +830,42 @@ Responses:
 - `200` Successful Response — `application/json`: `ApiSuccess_PaymentResponse_`
 - `422` Validation Error — `application/json`: `HTTPValidationError`
 
+### POST /payments/{appointment_id}/remaining-payment
+
+- Summary: Registro del resto de un turno pagado aparte de su cobro
+- operationId: `record_remaining_payment_payments__appointment_id__remaining_payment_post`
+
+Parameters:
+
+| in | name | required | type | constraints |
+|---|---|---|---|---|
+| path | `appointment_id` | yes | string | minLength=1, maxLength=64, pattern="^[A-Za-z0-9_-]{1,64}$" |
+
+Request body (required):
+
+- `application/json`: `RemainingPaymentRequest`
+
+Responses:
+
+- `201` Successful Response — `application/json`: `ApiSuccess_RemainingPaymentResponse_`
+- `422` Validation Error — `application/json`: `HTTPValidationError`
+
+### POST /payments/{appointment_id}/remaining-payment/revert
+
+- Summary: Revierte el resto registrado de un turno
+- operationId: `revert_remaining_payment_payments__appointment_id__remaining_payment_revert_post`
+
+Parameters:
+
+| in | name | required | type | constraints |
+|---|---|---|---|---|
+| path | `appointment_id` | yes | string | minLength=1, maxLength=64, pattern="^[A-Za-z0-9_-]{1,64}$" |
+
+Responses:
+
+- `200` Successful Response — `application/json`: `ApiSuccess_RemainingPaymentResponse_`
+- `422` Validation Error — `application/json`: `HTTPValidationError`
+
 ### POST /payments/{payment_id}/refund
 
 - Summary: Registro de reembolso hecho fuera de Shifty
@@ -1501,6 +1537,20 @@ Responses:
 - `201` Successful Response — `application/json`: `ApiSuccess_StaffResponse_`
 - `422` Validation Error — `application/json`: `HTTPValidationError`
 
+### POST /staff/me
+
+- Summary: Add Myself As Staff
+- operationId: `add_myself_as_staff_staff_me_post`
+
+Request body (required):
+
+- `application/json`: `StaffSelfCreate`
+
+Responses:
+
+- `201` Successful Response — `application/json`: `ApiSuccess_StaffResponse_`
+- `422` Validation Error — `application/json`: `HTTPValidationError`
+
 ### GET /staff/{public_id}
 
 - Summary: Get Staff
@@ -1591,6 +1641,26 @@ Request body (required):
 Responses:
 
 - `200` Successful Response — `application/json`: `ApiSuccess_ScheduleResponse_`
+- `422` Validation Error — `application/json`: `HTTPValidationError`
+
+### PUT /staff/{public_id}/schedules
+
+- Summary: Replace Staff Schedules
+- operationId: `replace_staff_schedules_staff__public_id__schedules_put`
+
+Parameters:
+
+| in | name | required | type | constraints |
+|---|---|---|---|---|
+| path | `public_id` | yes | string | minLength=1, maxLength=64, pattern="^[A-Za-z0-9_-]{1,64}$" |
+
+Request body (required):
+
+- `application/json`: `ScheduleWeekReplace`
+
+Responses:
+
+- `200` Successful Response — `application/json`: `ApiSuccess_list_ScheduleResponse__`
 - `422` Validation Error — `application/json`: `HTTPValidationError`
 
 ### PATCH /staff/{public_id}/schedules/{schedule_id}
@@ -2581,6 +2651,14 @@ Responses:
 | `data` | array<PublicStaffResponse> | yes |  |
 | `meta` | object \| null | no |  |
 
+### ApiSuccess_list_ScheduleResponse__
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `success` | boolean | no | default=true |
+| `data` | array<ScheduleResponse> | yes |  |
+| `meta` | object \| null | no |  |
+
 ### ApiSuccess_list_ServiceResponse__
 
 | field | type | required | constraints |
@@ -2779,6 +2857,14 @@ Responses:
 |---|---|---|---|
 | `success` | boolean | no | default=true |
 | `data` | ReconciliationSummaryResponse | yes |  |
+| `meta` | object \| null | no |  |
+
+### ApiSuccess_RemainingPaymentResponse_
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `success` | boolean | no | default=true |
+| `data` | RemainingPaymentResponse | yes |  |
 | `meta` | object \| null | no |  |
 
 ### ApiSuccess_ReportSummaryResponse_
@@ -3052,6 +3138,14 @@ Responses:
 |---|---|---|---|
 | `notes_staff` | string | yes | maxLength=1000 |
 
+### AppointmentRemainderPayment
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `amount` | string | yes | pattern="^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$" |
+| `method` | string \| null | no |  |
+| `created_at` | string | yes | format="date-time" |
+
 ### AppointmentReschedule
 
 | field | type | required | constraints |
@@ -3106,6 +3200,11 @@ Responses:
 | `client_name` | string | yes |  |
 | `client_id` | string | yes |  |
 | `client_phone` | string \| null | no |  |
+| `price_amount` | string \| null | no | pattern="^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$" |
+| `payment_status` | string \| null | no |  |
+| `payment_amount` | string \| null | no | pattern="^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$" |
+| `remaining_amount` | string \| null | no | pattern="^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$" |
+| `remainder_payment` | AppointmentRemainderPayment \| null | no |  |
 
 ### AppointmentStatus
 
@@ -3136,6 +3235,10 @@ Type: `enum("pending", "pending_payment", "confirmed", "cancelled", "completed",
 | `payload_before` | object \| array<any> \| string \| integer \| number \| boolean \| null | yes |  |
 | `payload_after` | object \| array<any> \| string \| integer \| number \| boolean \| null | yes |  |
 | `context` | string \| null | yes |  |
+
+### BalancePaymentMethod
+
+Type: `enum("efectivo", "transferencia", "mercadopago", "otro")`
 
 ### BlockPreviewRequest
 
@@ -3238,6 +3341,7 @@ Type: `enum("pending", "pending_payment", "confirmed", "cancelled", "completed",
 | `client` | ExportedClient | yes |  |
 | `appointments` | array<ExportedAppointment> | yes |  |
 | `payments` | array<ExportedPayment> | yes |  |
+| `balance_payments` | array<ExportedBalancePayment> | no | default=[] |
 | `ledger` | array<ExportedLedgerMovement> | yes |  |
 | `waitlist` | array<ExportedWaitlistEntry> | yes |  |
 | `marketing_opted_out_at` | string \| null | no | format="date-time" |
@@ -3373,6 +3477,17 @@ Type: `enum("pending", "pending_payment", "confirmed", "cancelled", "completed",
 | `privacy_version` | string \| null | no |  |
 | `cancelled_at` | string \| null | no | format="date-time" |
 | `completed_at` | string \| null | no | format="date-time" |
+
+### ExportedBalancePayment
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `public_id` | string | yes |  |
+| `appointment_id` | string | yes |  |
+| `amount` | string | yes | pattern="^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$" |
+| `method` | string \| null | no |  |
+| `created_at` | string \| null | no | format="date-time" |
+| `reverted_at` | string \| null | no | format="date-time" |
 
 ### ExportedClient
 
@@ -3649,6 +3764,7 @@ Type: `enum("pending", "pending_payment", "confirmed", "cancelled", "completed",
 | `currency` | string | yes |  |
 | `status` | string | yes |  |
 | `paid_at` | string \| null | no | format="date-time" |
+| `live_remainder_amount` | string \| null | no | pattern="^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$" |
 
 ### PlanCreate
 
@@ -3928,6 +4044,8 @@ Type: `enum("pending", "pending_payment", "confirmed", "cancelled", "completed",
 | `refunded_payments` | integer | yes |  |
 | `total_pending_amount` | string | yes | pattern="^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$" |
 | `total_approved_amount` | string | yes | pattern="^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$" |
+| `remainder_payments` | integer | no | default=0 |
+| `total_remainder_amount` | string | no | pattern="^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$", default="0" |
 | `pending_webhooks` | integer | yes |  |
 | `failed_webhooks` | integer | yes |  |
 | `pending_outbox` | integer | yes |  |
@@ -3952,6 +4070,26 @@ Type: `enum("pending", "pending_payment", "confirmed", "cancelled", "completed",
 | `amount` | number \| string \| null | no | minimum=0.0, maximum=10000000.0, pattern="^(?!^[-+.]*$)[+-]?0*(?:\\d{0,10}\|(?=[\\d.]{1,13}0*$)\\d{0,10}\\.\\d{0,2}0*$)" |
 | `reason` | string \| null | no | maxLength=500 |
 | `manual` | boolean | no | default=false |
+
+### RemainingPaymentRequest
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `amount` | number \| string \| null | no | maximum=10000000.0, exclusiveMinimum=0.0, pattern="^(?!^[-+.]*$)[+-]?0*(?:\\d{0,10}\|(?=[\\d.]{1,13}0*$)\\d{0,10}\\.\\d{0,2}0*$)" |
+| `method` | BalancePaymentMethod \| null | no |  |
+| `idempotency_key` | string | yes | minLength=10, maxLength=128 |
+
+### RemainingPaymentResponse
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `public_id` | string | yes |  |
+| `appointment_id` | string | yes |  |
+| `amount` | string | yes | pattern="^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$" |
+| `method` | BalancePaymentMethod \| null | no |  |
+| `created_at` | string | yes | format="date-time" |
+| `reverted_at` | string \| null | no | format="date-time" |
+| `remaining_amount` | string | yes | pattern="^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$" |
 
 ### ReportAppointmentItem
 
@@ -4109,6 +4247,12 @@ Type: `enum("pending", "pending_payment", "confirmed", "cancelled", "completed",
 | `start_time` | string \| null | no | format="time" |
 | `end_time` | string \| null | no | format="time" |
 
+### ScheduleWeekReplace
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `schedules` | array<ScheduleCreate> | yes | maxItems=42 |
+
 ### ServiceCreate
 
 | field | type | required | constraints |
@@ -4201,6 +4345,13 @@ Type: `enum("pending", "pending_payment", "confirmed", "cancelled", "completed",
 | `service_ids` | array<string> | no |  |
 | `services` | array<ServiceResponse> | no |  |
 | `schedules` | array<ScheduleResponse> | no |  |
+
+### StaffSelfCreate
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `display_name` | string \| null | no | minLength=2, maxLength=100 |
+| `service_ids` | array<string> | no | maxItems=100 |
 
 ### StaffUpdate
 
@@ -4686,4 +4837,4 @@ Type: `enum("admin", "staff", "receptionist", "client")`
 | `terms_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 | `privacy_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 
-Generado desde app.openapi() el 2026-10-03, commit d76e673b
+Generado desde app.openapi() el 2026-10-08, commit 248c97ee

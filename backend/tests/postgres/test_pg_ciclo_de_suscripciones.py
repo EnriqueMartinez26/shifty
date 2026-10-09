@@ -8,9 +8,9 @@ corrida sosteniendo filas, un OFFSET se correria justo esa cantidad y dejaria
 huecos que nadie vuelve a mirar, que es exactamente el defecto que este id
 viene a cerrar.
 
-Dos corridas a la vez sobre el mismo conjunto: entre las dos cada fila se
-inspecciona UNA vez (regla 8), ninguna vencida se queda sin pasar a
-``past_due`` y ninguna "por vencer" recibe el aviso dos veces.
+Una corrida global activa tiene el advisory lock transaccional. Una segunda
+que se solapa se omite con cero inspecciones; la primera recorre el conjunto
+completo y ninguna "por vencer" recibe el aviso dos veces.
 
 2026-09-23, AUD2-POST-01: el indice parcial ``uq_store_subscriptions_active_store``
 admite UNA suscripcion activa por tienda, asi que la siembra crea una tienda
@@ -19,17 +19,21 @@ por suscripcion (el job es cross-tenant y no mira el ``store_id``).
 
 from __future__ import annotations
 
-import asyncio
 from datetime import datetime, timedelta, timezone
 
 import pytest
 import ulid
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from core.database import _apply_tenant_context, set_tenant_context
 from modules.billing.model import Plan, StoreSubscription
-from modules.billing.service import DailyRun, advance_subscriptions
+from modules.billing.service import (
+    SUBSCRIPTION_LIFECYCLE_LOCK_KEY,
+    SUBSCRIPTION_LIFECYCLE_LOCK_NAMESPACE,
+    DailyRun,
+    advance_subscriptions,
+)
 from modules.billing.subscription_rules import SUBSCRIPTION_PAST_DUE
 from modules.stores.model import Store
 
@@ -138,15 +142,32 @@ async def test_dos_corridas_solapadas_recorren_todo_sin_repetir(
 ) -> None:
     await _sembrar(app_sessions)
 
-    corridas = await asyncio.gather(_corrida(app_sessions), _corrida(app_sessions))
+    async with app_sessions() as session_a:
+        set_tenant_context(None, True)
+        try:
+            await _apply_tenant_context(session_a)
+            # Reproducir deterministicamente la corrida A ya dentro de su
+            # transaccion: B debe intentar el mismo lock y volver sin escanear.
+            await session_a.execute(
+                text("SELECT pg_advisory_xact_lock(:namespace, :lock_key)"),
+                {
+                    "namespace": SUBSCRIPTION_LIFECYCLE_LOCK_NAMESPACE,
+                    "lock_key": SUBSCRIPTION_LIFECYCLE_LOCK_KEY,
+                },
+            )
+            corrida_b = await _corrida(app_sessions)
+            assert corrida_b.counters() == DailyRun().counters(), corrida_b.counters()
 
-    # Entre las dos corridas, cada fila se miro UNA sola vez: el SKIP LOCKED
-    # reparte y el cursor no se saltea lo que la otra tomo.
-    inspeccionadas = [run.inspected for run in corridas]
-    assert sum(inspeccionadas) == CUANTAS, inspeccionadas
-    # ...y cada "por vencer" recibio UN aviso, no uno por corrida.
-    avisadas = [run.warned for run in corridas]
-    assert sum(avisadas) == POR_VENCER, avisadas
+            # A continúa con el lock retenido y procesa todas las filas.
+            corrida_a = await advance_subscriptions(session_a, limit=PAGINA)
+            await session_a.commit()
+        finally:
+            set_tenant_context(None, False)
+
+    assert corrida_a.inspected == CUANTAS, corrida_a.counters()
+    assert corrida_a.warned == POR_VENCER, corrida_a.counters()
+    assert len(corrida_a.warnings) == POR_VENCER, corrida_a.warnings
+    assert len({store_id for store_id, _, _ in corrida_a.warnings}) == POR_VENCER
 
     estados = await _estado_final(owner_engine)
     assert len(estados) == CUANTAS

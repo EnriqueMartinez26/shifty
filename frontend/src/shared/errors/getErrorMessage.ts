@@ -1,5 +1,5 @@
 import { ApplicationError } from './ApplicationError'
-import { ERROR_CODE_MESSAGES } from './errorCodes'
+import { ERROR_CODE_MESSAGES, VALIDATION_MESSAGES } from './errorCodes'
 import { NetworkError } from './NetworkError'
 
 type CodeCarrier = { context?: { errorCode?: unknown } }
@@ -140,12 +140,20 @@ const fieldMessageFor = (
   return undefined
 }
 
+/** Un 422 de negocio cuyo texto exacto tiene traduccion (VALIDATION_MESSAGES). */
+const validationMessageFor = (error: unknown, code: string | undefined): string | undefined => {
+  if (code !== 'VALIDATION_ERROR') return undefined
+  const serverText = asApplicationError(error)?.message.trim()
+  return serverText ? VALIDATION_MESSAGES.get(serverText) : undefined
+}
+
 /**
  * Texto para mostrarle al usuario, en este orden:
  * 1. `overrides[code]`: la pantalla sabe decirlo mejor.
  * 2. `fieldMessages[campo]`: en un 422, el texto de la pantalla para el
  *    primer campo rechazado que conoce.
- * 3. La tabla de codigos (errorCodes.ts).
+ * 3. La tabla de codigos (errorCodes.ts) y, para un VALIDATION_ERROR, la
+ *    de textos conocidos (VALIDATION_MESSAGES).
  * 4. El mensaje del servidor, solo si es un 4xx operacional y su codigo no
  *    esta en la lista negra (regla 20: nada crudo ni tecnico).
  * 5. `fallback`.
@@ -159,7 +167,11 @@ export const getErrorMessage = (
   const code = getErrorCode(error)
   if (code !== undefined) {
     const override = Object.hasOwn(overrides, code) ? overrides[code] : undefined
-    const known = override ?? fieldMessageFor(error, fieldMessages) ?? ERROR_CODE_MESSAGES.get(code)
+    const known =
+      override ??
+      fieldMessageFor(error, fieldMessages) ??
+      ERROR_CODE_MESSAGES.get(code) ??
+      validationMessageFor(error, code)
     if (known) return known
   }
   return serverMessageFor(error, code) ?? fallback

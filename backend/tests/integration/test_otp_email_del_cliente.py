@@ -399,8 +399,9 @@ class _Cola:
     def __init__(self) -> None:
         self.encolados: list[tuple[str, str, str]] = []
 
-    def __call__(self, to: str, subject: str, body: str) -> None:
+    def __call__(self, to: str, subject: str, body: str) -> bool:
         self.encolados.append((to, subject, body))
+        return True
 
     async def correr(self) -> None:
         for to, subject, body in self.encolados:

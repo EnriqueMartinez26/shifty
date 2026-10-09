@@ -218,7 +218,12 @@ Una instrucción en lenguaje natural no es una garantía.
      mueve el cliente (abajo). Tampoco se confirma con "Confirmar": `PATCH
      /appointments/{id}/confirm` sobre un `pending_payment` con cobro vivo es
      409 `DEPOSIT_PENDING_CONFIRM_DENIED` (ningún turno confirmado queda con
-     un cobro vivo; la seña se registra con `manual-confirm`);
+     un cobro vivo; la seña se registra con `manual-confirm`). Un turno con
+     un resto vivo (D-20261008-01) tampoco se reprograma: 409
+     `REMAINDER_RESCHEDULE_DENIED` bajo el lock del turno y antes de tocar
+     nada (`guards.reject_reschedule_with_remainder`); se revierte el resto o
+     se cancela, y para el cliente cuenta como pagado
+     (`payments/repository.py::paid_appointment_of`);
    - liberar (`release_pending`, solo admin);
    - cancelar por bloqueo (`AppointmentBlockService`: alta, cierre de la
      tienda y edición);
@@ -374,7 +379,14 @@ Una instrucción en lenguaje natural no es una garantía.
 11. **Dinero y cohortes se agregan en SQL** (`GROUP BY`, funciones de
     ventana), nunca cargando la lista a memoria. (2026-09-04: ledger y
     reportes sumaban en Python.) (`test_reportes_dinero_en_sql.py`,
-    `test_fiado_resumen_en_sql.py`)
+    `test_fiado_resumen_en_sql.py`) El ingreso de un turno es su cobro
+    acreditado MÁS su resto vivo pagado aparte (`appointment_balance_payments`,
+    a lo sumo uno por turno; D-20261008-01): toda suma de ingreso une los dos
+    (`payments/repository.py::live_balance_payment_join`) y el saldo sale de
+    `remaining_balance_of`, nunca del pedido
+    (`test_reportes_cuentan_el_saldo_restante.py`). Un resto vivo sobrevive a
+    la devolución de la seña y sigue contando como ingreso hasta que se
+    revierte.
 12. **Un `await db.execute` dentro de un `for` es N+1 hasta demostrar lo
     contrario**; se resuelve con `in_()` o join.
     `availability.get_available_slots` se auditó el 2026-09-16: carga
@@ -547,11 +559,36 @@ Una instrucción en lenguaje natural no es una garantía.
   mandan SMTP en línea se llaman `send_*`; una función `enqueue_*` tiene que
   encolar de verdad (`test_enqueue_encola_de_verdad.py`).
 - **OTP solo por email** (SMTP existente); `whatsapp`/`sms` existen solo con
-  `OTP_PROVIDER=console`. El envío se despacha después de la respuesta
-  (`BackgroundTasks`) y, si el teléfono ya es de un cliente de la tienda con
-  email entregable, el código va SOLO a ese email. Respuesta neutra ante
-  fallo de envío. El front respeta la ventana de 30 minutos.
-  (`test_otp_por_email.py`, `test_otp_email_del_cliente.py`)
+  `OTP_PROVIDER=console`. Si el teléfono ya es de un cliente de la tienda
+  con email entregable, el código va SOLO a ese email y al tipeado le llega
+  un aviso sin código con el mismo asunto (AUD2-B4-05). Sin
+  `BackgroundTasks`: decidido el destino, el request encola el mail en
+  Celery (`notifications/tasks.py::enqueue_otp_email`, por
+  `core/enqueue.py`, cola `interactive`; AUD2-B4-06) y lo manda el worker.
+  Cada mail consume la cuota de su buzón de destino real: 5 por hora y 10
+  por día (`OTP_MAX_MAILS_PER_DESTINATION_PER_HOUR`/`_PER_DAY`, #121), con
+  el buzón normalizado y hasheado en la clave y la política `otp`, que
+  falla cerrada en producción. Pasado el tope el mail no sale y no hay 429:
+  un 429 diría si el teléfono es cliente o si esa casilla ya recibió
+  códigos. El código nuevo se guarda, y con eso invalida el anterior, SOLO
+  si la cola aceptó su mail; con el tope o el broker caído el vivo sigue
+  valiendo (#126). Guardarlo invalida solo los vivos enviados al MISMO
+  buzón (#127, 2026-10-05): sin ficha el código va al email tipeado, y
+  pedir uno con la casilla propia mataba el de la víctima. La verificación
+  compara contra todos los vivos del teléfono (a lo sumo
+  `OTP_MAX_REQUESTS_PER_HOUR`, los más nuevos), consume solo el que
+  coincide y cada intento cuenta contra todos: ningún código ve más de
+  `OTP_MAX_ATTEMPTS` intentos. Sigue abierto, desde antes, el bloqueo por
+  verificaciones: cinco intentos anónimos errados agotan el código de la
+  víctima y diez, el presupuesto de verificación del teléfono
+  (`OTP_MAX_VERIFY_ATTEMPTS_PER_HOUR`), sin necesitar ninguna casilla. La
+  respuesta tiene la misma forma en todos los caminos. El front respeta la
+  ventana de 30 minutos.
+  (`test_otp_por_email.py`, `test_otp_email_del_cliente.py`,
+  `test_otp_por_la_cola.py`, `test_otp_tope_por_mail_destino.py`,
+  `test_otp_no_pisa_codigo_sin_mail.py`,
+  `test_otp_invalida_solo_mismo_destino.py`,
+  `test_pg_otp_mismo_destino.py`)
 - La reserva pública aplica `buffer_minutes` y congela `price_amount` como el
   panel.
 - **Un turno en el pasado lo agenda solo la tienda** (propuesta por Mateo,

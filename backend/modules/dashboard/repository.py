@@ -24,7 +24,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import InstrumentedAttribute
 
 from modules.appointments.model import Appointment, AppointmentStatus
-from modules.payments.model import Payment
+from modules.payments.model import AppointmentBalancePayment, Payment
+from modules.payments.repository import live_balance_payment_join
 from modules.reports.service import ACCREDITED_PAYMENT_STATUSES
 from modules.services.model import Service
 from modules.staff.model import Schedule, Staff
@@ -163,10 +164,14 @@ class DashboardRepository:
         """
         week = and_(*_starts_between(week_from, week_to))
         previous = and_(*_starts_between(previous_from, week_from))
+        # Cobro acreditado + resto vivo del turno (D-20261008-01).
+        ingreso = func.coalesce(Payment.amount, 0) + func.coalesce(
+            AppointmentBalancePayment.amount, 0
+        )
         result = await self.db.execute(
             select(
-                func.coalesce(func.sum(Payment.amount).filter(week), 0),
-                func.coalesce(func.sum(Payment.amount).filter(previous), 0),
+                func.coalesce(func.sum(ingreso).filter(week), 0),
+                func.coalesce(func.sum(ingreso).filter(previous), 0),
                 func.coalesce(
                     func.avg(Appointment.duration_minutes).filter(
                         and_(week, _not_cancelled())
@@ -182,6 +187,10 @@ class DashboardRepository:
                     Payment.status.in_(ACCREDITED_PAYMENT_STATUSES),
                     *_store_scope(self.store_id, Payment.store_id),
                 ),
+            )
+            .outerjoin(
+                AppointmentBalancePayment,
+                live_balance_payment_join(Appointment.id, self.store_id),
             )
             .where(
                 *_starts_between(previous_from, week_to),

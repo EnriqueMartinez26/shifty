@@ -128,8 +128,8 @@ async def _verificar_telefono(
         channel="email",
         email=contacto,
         store_name="Demo",
-        # El envio (post-respuesta desde B4-01) no importa aca.
-        schedule_dispatch=lambda *args: None,
+        # El envio no importa aca; la cola lo acepta y el codigo se guarda.
+        schedule_dispatch=lambda *args: True,
     )
     await servicio.verify_code(
         store_id=tienda.store_id,

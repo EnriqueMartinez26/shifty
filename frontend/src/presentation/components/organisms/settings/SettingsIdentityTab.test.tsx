@@ -112,4 +112,22 @@ describe('SettingsIdentityTab', () => {
     expect(input).toBeDisabled()
     expect(input?.closest('label')).toHaveAttribute('title', 'Tienda suspendida')
   })
+
+  // QA movil 2026-10-08: el prefijo decia /booking/ y los links reales son
+  // /b/; la pestana medía hasta 887 px de ancho en 390 y tapaba "Copiar".
+  it('el prefijo del slug es el de los links que se comparten', () => {
+    renderTab()
+    expect(screen.getByText('/b/')).toBeInTheDocument()
+    expect(screen.queryByText('/booking/')).not.toBeInTheDocument()
+  })
+
+  it('ninguna columna se estira con su contenido', () => {
+    const { container } = renderTab()
+    const columns = container.querySelectorAll(':scope > div > .grid > *')
+    expect(columns.length).toBeGreaterThan(0)
+    for (const column of columns) expect(column.classList.contains('min-w-0')).toBe(true)
+    expect(
+      screen.getByRole('textbox', { name: 'Slug de la URL' }).classList.contains('min-w-0')
+    ).toBe(true)
+  })
 })

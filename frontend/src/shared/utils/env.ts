@@ -11,6 +11,10 @@
 
 export const isProduction = (): boolean => import.meta.env.PROD
 
+/** Vacío o inválido: no se carga Google Analytics ni se muestra el aviso. */
+export const getGa4MeasurementId = (): string | undefined =>
+  import.meta.env.VITE_GA4_MEASUREMENT_ID as string | undefined
+
 /**
  * Contacto de Shifty, crudo, tal como llega del build (build args de
  * frontend/Dockerfile, que CI llena con variables del repo en GitHub). Los

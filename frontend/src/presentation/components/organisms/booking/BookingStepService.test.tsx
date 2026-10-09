@@ -37,4 +37,32 @@ describe('BookingStepService', () => {
     expect(img).toHaveAttribute('width', '56')
     expect(img).toHaveAttribute('height', '56')
   })
+
+  // QA movil 2026-10-08 (QA!): en 390 px el nombre salia cortado ("BARBA Y
+  // PERFILAD"), el precio recortado y el circulo de seleccion encima del titulo.
+  it('en una tarjeta angosta el nombre corta en lineas y nada se superpone', () => {
+    mockUsePublicServices.mockReturnValue({
+      isLoading: false,
+      data: [
+        {
+          public_id: 'svc-2',
+          name: 'Barba y perfilado',
+          description: null,
+          duration_minutes: 20,
+          price: 900,
+          color: null,
+          image_url: null
+        }
+      ]
+    })
+
+    render(<BookingStepService storePublicId="store-1" selectedId={null} onSelect={jest.fn()} />)
+
+    const name = screen.getByText('Barba y perfilado')
+    expect(name.classList.contains('break-words')).toBe(true)
+    const badges = name.nextElementSibling
+    expect(badges?.classList.contains('flex-wrap')).toBe(true)
+    const check = screen.getByRole('button').lastElementChild
+    expect(check?.classList.contains('flex-shrink-0')).toBe(true)
+  })
 })

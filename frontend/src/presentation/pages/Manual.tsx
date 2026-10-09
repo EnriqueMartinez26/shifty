@@ -41,7 +41,7 @@ const SECTIONS: ManualSection[] = [
       {
         title: '1. Completá los datos de tu negocio',
         body: 'En Configuración cargá el nombre, el logo y tu número de WhatsApp. Ese número es el que van a usar tus clientes para coordinar con vos.',
-        tip: 'El "slug" es la dirección de tu página pública. Si tu slug es mibarberia, tus clientes reservan en /booking/mibarberia.'
+        tip: 'El "slug" es la dirección de tu página pública. Si tu slug es mibarberia, tus clientes reservan en /b/mibarberia.'
       },
       {
         title: '2. Cargá tus servicios',
@@ -51,11 +51,11 @@ const SECTIONS: ManualSection[] = [
       {
         title: '3. Sumá a tu personal',
         body: 'En Personal agregá a cada persona que atiende y marcá qué servicios hace cada una.',
-        tip: 'Si trabajás solo, cargate a vos mismo como personal. El sistema necesita saber quién atiende cada turno.'
+        tip: 'Si vos también atendés, tocá "Agregarme como profesional": figurás con tu nombre y tu misma cuenta, sin inventar otro email. El sistema necesita saber quién atiende cada turno.'
       },
       {
         title: '4. Definí los horarios',
-        body: 'A cada persona cargale sus días y horas de trabajo. Fuera de ese horario, nadie va a poder reservar.',
+        body: 'En Personal tocá "Horarios" en cada persona y cargale sus días y horas de trabajo. Si no le cargás nada, atiende en el horario de tu negocio. Fuera de su horario, nadie va a poder reservar.',
         tip: 'Podés cargar dos franjas el mismo día (por ejemplo 9 a 13 y 16 a 20). Si te equivocaste, editá o borrá la franja: el sistema no te deja pisar una con otra.'
       }
     ]

@@ -11,6 +11,8 @@ COPY . .
 
 ARG VITE_API_URL=/api
 ENV VITE_API_URL=${VITE_API_URL}
+ARG VITE_GA4_MEASUREMENT_ID=
+ENV VITE_GA4_MEASUREMENT_ID=${VITE_GA4_MEASUREMENT_ID}
 ARG VITE_SENTRY_DSN=
 ARG VITE_SENTRY_ENVIRONMENT=production
 ARG VITE_SENTRY_TRACES_SAMPLE_RATE=0.1
@@ -33,6 +35,7 @@ ENV VITE_CONTACT_EMAIL=${VITE_CONTACT_EMAIL}
 ENV VITE_LEGAL_RESPONSABLES=${VITE_LEGAL_RESPONSABLES}
 
 RUN npm run build
+RUN node configure-analytics-csp.mjs security-headers.conf /app/security-headers.generated.conf
 
 # Mismo nginx que el borde (nginx/Dockerfile, docker-compose.prod.yml).
 FROM nginx:1.30.5-alpine
@@ -49,7 +52,7 @@ COPY sentry-tunnel.sh /tmp/sentry-tunnel.sh
 RUN VITE_SENTRY_DSN="${VITE_SENTRY_DSN}" sh /tmp/sentry-tunnel.sh && rm /tmp/sentry-tunnel.sh
 
 COPY nginx.conf /etc/nginx/conf.d/default.conf
-COPY security-headers.conf /etc/nginx/security-headers.conf
+COPY --from=build /app/security-headers.generated.conf /etc/nginx/security-headers.conf
 COPY --from=build /app/dist /usr/share/nginx/html
 
 EXPOSE 3000

@@ -2,9 +2,10 @@
 // apiClient real (que a su vez toca runtime-env.ts / import.meta, que
 // ts-jest no compila fuera de node_modules). Se mockea el módulo del
 // cliente HTTP para poder cargar la clase bajo test sin arrastrar esa cadena.
+const mockPost = jest.fn()
 jest.mock('../../infrastructure/http/client', () => ({
   __esModule: true,
-  default: {}
+  default: { post: (...args: unknown[]) => mockPost(...args) }
 }))
 
 import { NotFoundError } from '@shared/errors'
@@ -221,6 +222,43 @@ describe('StaffService', () => {
       await service.deleteStaff('staff-id')
 
       expect(mockRepository.delete).toHaveBeenCalledWith('staff-id')
+    })
+  })
+  // 2026-10-08, decision de Mateo: el dueno tambien atiende con su cuenta.
+  describe('addMyself', () => {
+    const ficha = {
+      public_id: 'usr-duenio',
+      kind: 'person',
+      first_name: 'Enrique',
+      last_name: 'Martinez',
+      email: 'duenio@example.com',
+      display_name: 'Enrique',
+      is_active: true,
+      service_ids: ['svc-1'],
+      schedules: []
+    }
+
+    beforeEach(() => mockPost.mockReset())
+
+    it('pide POST /staff/me con el nombre elegido y los servicios', async () => {
+      mockPost.mockResolvedValue({ data: ficha })
+
+      const staff = await service.addMyself({ displayName: ' Enrique ', serviceIds: ['svc-1'] })
+
+      expect(mockPost).toHaveBeenCalledWith('/staff/me', {
+        display_name: 'Enrique',
+        service_ids: ['svc-1']
+      })
+      expect(staff.id).toBe('usr-duenio')
+      expect(staff.email?.getValue()).toBe('duenio@example.com')
+    })
+
+    it('sin nombre elegido no lo manda: el backend usa el de la cuenta', async () => {
+      mockPost.mockResolvedValue({ data: ficha })
+
+      await service.addMyself({ displayName: '  ', serviceIds: [] })
+
+      expect(mockPost).toHaveBeenCalledWith('/staff/me', { service_ids: [] })
     })
   })
 })

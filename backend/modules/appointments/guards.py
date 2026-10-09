@@ -170,6 +170,28 @@ def reject_reschedule_with_pending_deposit(appointment: Appointment) -> None:
         )
 
 
+def reject_reschedule_with_remainder(remainder: object | None) -> None:
+    """Un turno con un resto vivo no se reprograma desde el panel: 409.
+
+    Revision de la PR #137 (W2, 2026-10-08; saldo restante por turno,
+    D-20261008-01). Reprogramar cancela el original y crea uno nuevo sin
+    cobro: el resto quedaba en el cancelado (contando como ingreso) y el turno
+    nuevo volvia a pedir el precio entero. Como
+    ``reject_reschedule_with_pending_deposit``, se llama con el turno ya
+    lockeado y antes de tocar nada: se revierte el resto o se cancela.
+    """
+    if remainder is not None:
+        raise AppException(
+            message=(
+                "Este turno tiene registrado el resto del pago. Para moverlo, "
+                "un administrador tiene que revertir el resto primero; si no, "
+                "cancelalo."
+            ),
+            http_status=HTTPStatus.CONFLICT,
+            error_code="REMAINDER_RESCHEDULE_DENIED",
+        )
+
+
 def reject_confirm_with_pending_deposit(
     appointment: Appointment, *, live_payment: bool
 ) -> None:

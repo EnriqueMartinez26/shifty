@@ -1,8 +1,8 @@
-import React from 'react'
+import React, { useState } from 'react'
 
 import { Clock, Loader2 } from 'lucide-react'
 
-import { colors2000s, orangeCtaGradient } from '../../../../theme/colors'
+import { buttonStyles2000s, colors2000s, orangeCtaGradient } from '../../../../theme/colors'
 import type { UnifiedCalendarEvent } from '../../../lib/calendarEvents'
 import { SLOT_HEIGHT_PX, type DayGrid, type TimeRange } from '../../../lib/calendarGrid'
 import { canvasStyle, panelStyle } from '../../../lib/calendarStyles'
@@ -33,6 +33,10 @@ interface AgendaDayViewProps {
  * Vista dia de la agenda (F11c-08): encabezado por profesional, columna de
  * horas con los huecos cerrados y una StaffColumn por profesional. Solo
  * pinta; lo que hace cada click lo decide `CalendarContainer`.
+ *
+ * En el telefono (debajo de `md`) se ve un profesional por vez, elegido con
+ * los botones de arriba: la grilla de 800 px con todos al lado no se podia
+ * recorrer en 343 px (QA movil 2026-10-08). Desde `md` se ven todos.
  */
 export const AgendaDayView: React.FC<AgendaDayViewProps> = ({
   staffMembers,
@@ -45,6 +49,65 @@ export const AgendaDayView: React.FC<AgendaDayViewProps> = ({
   onToggleGap,
   onEditBlock,
   renderControls
+}) => {
+  const [chosenStaffId, setChosenStaffId] = useState<string | null>(null)
+  // Un profesional elegido que ya no esta (otra tienda, baja) vuelve al
+  // primero: se deriva en el render.
+  const focusedStaffId =
+    staffMembers?.find((staff) => staff.id === chosenStaffId)?.id ?? staffMembers?.[0]?.id
+  const hiddenOnPhone = (staffId: string) => staffId !== focusedStaffId
+
+  return (
+    <div className="space-y-3">
+      {staffMembers && staffMembers.length > 1 && (
+        <div role="group" aria-label="Profesional" className="md:hidden flex flex-wrap gap-2">
+          {staffMembers.map((staff) => (
+            <button
+              key={staff.id}
+              type="button"
+              aria-pressed={staff.id === focusedStaffId}
+              onClick={() => setChosenStaffId(staff.id)}
+              className="min-h-10 px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest"
+              style={
+                staff.id === focusedStaffId ? buttonStyles2000s.selected : buttonStyles2000s.default
+              }
+            >
+              {staff.displayName}
+            </button>
+          ))}
+        </div>
+      )}
+      <AgendaDayGrid
+        staffMembers={staffMembers}
+        loading={loading}
+        dayGrid={dayGrid}
+        hoursOfDay={hoursOfDay}
+        blocks={blocks}
+        cards={cards}
+        canManageBlocks={canManageBlocks}
+        onToggleGap={onToggleGap}
+        onEditBlock={onEditBlock}
+        renderControls={renderControls}
+        hiddenOnPhone={hiddenOnPhone}
+      />
+    </div>
+  )
+}
+
+const AgendaDayGrid: React.FC<
+  AgendaDayViewProps & { hiddenOnPhone: (staffId: string) => boolean }
+> = ({
+  staffMembers,
+  loading,
+  dayGrid,
+  hoursOfDay,
+  blocks,
+  cards,
+  canManageBlocks,
+  onToggleGap,
+  onEditBlock,
+  renderControls,
+  hiddenOnPhone
 }) => (
   <div className="rounded-[8px] border overflow-hidden relative" style={canvasStyle}>
     {loading && (
@@ -57,7 +120,7 @@ export const AgendaDayView: React.FC<AgendaDayViewProps> = ({
     )}
 
     <div className="overflow-x-auto">
-      <div className="min-w-[800px]">
+      <div className="md:min-w-[800px]">
         <div className="flex border-b" style={{ borderColor: colors2000s.border.light }}>
           <div
             className="w-20 flex-shrink-0 flex items-center justify-center border-r"
@@ -69,7 +132,7 @@ export const AgendaDayView: React.FC<AgendaDayViewProps> = ({
             {staffMembers?.map((staff, idx) => (
               <div
                 key={staff.id}
-                className="flex-1 min-w-[150px] p-4 text-center border-r"
+                className={`${hiddenOnPhone(staff.id) ? 'hidden md:block' : ''} flex-1 min-w-[150px] p-4 text-center border-r`}
                 style={{ borderColor: colors2000s.border.light }}
               >
                 <div
@@ -160,6 +223,7 @@ export const AgendaDayView: React.FC<AgendaDayViewProps> = ({
                       }))}
                     canManageBlocks={canManageBlocks}
                     onEditBlock={onEditBlock}
+                    hiddenOnPhone={hiddenOnPhone(staff.id)}
                   />
                 )
               })}

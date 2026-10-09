@@ -317,19 +317,23 @@ send_otp_email: Any = celery_app.task(name="send_otp_email", max_retries=0)(
 )
 
 
-async def enqueue_otp_email(to: str, subject: str, body: str) -> None:
-    """Encola el mail del OTP. Nunca propaga.
+async def enqueue_otp_email(to: str, subject: str, body: str) -> bool:
+    """Encola el mail del OTP; True si la cola lo acepto. Nunca propaga.
 
     La respuesta del pedido de OTP es neutra por contrato (regla 20): no
     puede cambiar de forma ni de tiempo porque el broker este caido. Un
     fallo de encolado se trata como un fallo de envio: se loguea sin datos
-    personales y el cliente vuelve a pedir el codigo.
+    personales y el cliente vuelve a pedir el codigo. El ``bool`` es para el
+    servicio del OTP, que con False no guarda el codigo nuevo y deja vivo el
+    anterior (2026-10-05).
 
     F1-03 (2026-09-24): por ``core.enqueue.enqueue``. El ``.delay`` directo
     bloqueaba el event loop hasta 33 s con el broker inalcanzable.
     """
-    if not await enqueue(send_otp_email, to, subject, body):
+    encolado = await enqueue(send_otp_email, to, subject, body)
+    if not encolado:
         logger.warning("otp_email_enqueue_failed")
+    return encolado
 
 
 def is_deliverable_email(email: str | None) -> bool:
