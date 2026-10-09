@@ -41,7 +41,7 @@ jobs:
           fi
 
       - name: Checkout
-        uses: actions/checkout@v7.0.0
+        uses: actions/checkout@v7.0.1
 
       - name: Setup Python y uv
         uses: ./.github/actions/setup-python-uv
