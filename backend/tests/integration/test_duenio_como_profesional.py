@@ -452,3 +452,29 @@ async def test_el_superadmin_no_se_agrega_como_profesional(
     ).scalar_one()
     assert fichas == 0
     assert await _staff_publico(client, tienda) == {}
+
+
+# #130 + #133 (2026-10-08): el dueno que se agrego tiene su semana como
+# cualquier profesional; PUT /staff/{su id}/schedules no lo trata distinto.
+@pytest.mark.asyncio
+async def test_el_duenio_agregado_edita_su_propia_semana(client: AsyncClient) -> None:
+    tienda = await _tienda(client, "duenio-semana")
+    ficha = (
+        await _agregarme(client, tienda.token, service_ids=[tienda.service])
+    ).json()
+    franja = {"day_of_week": 1, "start_time": "10:00:00", "end_time": "14:00:00"}
+
+    res = await client.put(
+        f"/staff/{ficha['public_id']}/schedules",
+        headers=auth_headers(tienda.token),
+        json={"schedules": [franja]},
+    )
+
+    assert res.status_code == 200, res.text
+    leida = await client.get(
+        f"/staff/{ficha['public_id']}", headers=auth_headers(tienda.token)
+    )
+    assert [
+        {k: s[k] for k in ("day_of_week", "start_time", "end_time")}
+        for s in leida.json()["schedules"]
+    ] == [franja]

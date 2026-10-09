@@ -8,6 +8,7 @@ import { colors2000s, buttonStyles2000s } from '../../theme/colors'
 import { QueryErrorNotice } from '../components/molecules/QueryErrorNotice'
 import { StaffCard } from '../components/molecules/StaffCard'
 import { StaffFormModal } from '../components/organisms/StaffFormModal'
+import { StaffScheduleModal } from '../components/organisms/StaffScheduleModal'
 import { useAuth } from '../context/AuthContext'
 import { ROLES_ADMIN_SUPER, hasAnyRole } from '../context/roles'
 import { useConfirm } from '../hooks/useConfirm'
@@ -17,8 +18,10 @@ import {
   useCreateManagedStaff,
   useDeleteManagedStaff,
   useManagedStaff,
+  useReplaceStaffSchedules,
   useUpdateManagedStaff
 } from '../hooks/useManagedStaff'
+import { useStoreSettings } from '../hooks/useStores'
 import { useStoreWriteAccess } from '../hooks/useStoreWriteAccess'
 import { notifyError } from '../lib/notify'
 
@@ -26,6 +29,8 @@ export const StaffManagementContainer: React.FC = () => {
   const { confirm, confirmDialog } = useConfirm()
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [editingStaff, setEditingStaff] = useState<Staff | null>(null)
+  // Profesional cuya semana se esta editando (null = editor cerrado).
+  const [scheduleStaff, setScheduleStaff] = useState<Staff | null>(null)
   // "Agregarme como profesional": el modal en modo cuenta propia.
   const [addingSelf, setAddingSelf] = useState(false)
   const [searchTerm, setSearchTerm] = useState('')
@@ -37,6 +42,9 @@ export const StaffManagementContainer: React.FC = () => {
   const createMutation = useCreateManagedStaff()
   const updateMutation = useUpdateManagedStaff()
   const deleteMutation = useDeleteManagedStaff()
+  const replaceSchedules = useReplaceStaffSchedules()
+  // "Usa el horario de la tienda" muestra el horario comercial del local.
+  const { data: storeSettings } = useStoreSettings()
   const addMyselfMutation = useAddMyselfAsStaff()
   // Decision de Mateo (2026-10-08): el dueno tambien atiende, con su nombre y
   // su misma cuenta. Solo un admin se agrega (POST /staff/me) y solo a si mismo.
@@ -215,11 +223,27 @@ export const StaffManagementContainer: React.FC = () => {
               }}
               isSelf={staff.id === myId}
               onDelete={(id) => void handleDelete(id)}
+              onEditSchedule={setScheduleStaff}
               readOnlyReason={readOnlyReason}
               serviceNames={serviceNames}
             />
           ))}
         </div>
+      )}
+
+      {scheduleStaff && (
+        <StaffScheduleModal
+          // Una instancia por profesional: el borrador nace de sus franjas.
+          key={scheduleStaff.id}
+          staffName={scheduleStaff.displayName}
+          schedules={scheduleStaff.schedules}
+          storeBusinessHours={storeSettings?.business_hours}
+          readOnlyReason={readOnlyReason}
+          onClose={() => setScheduleStaff(null)}
+          onSave={async (schedules) => {
+            await replaceSchedules.mutateAsync({ staffId: scheduleStaff.id, schedules })
+          }}
+        />
       )}
 
       <StaffFormModal

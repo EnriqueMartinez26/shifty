@@ -28,6 +28,7 @@ from modules.staff.schemas import (
     ScheduleCreate,
     ScheduleUpdate,
     ScheduleResponse,
+    ScheduleWeekReplace,
     StaffCreate,
     StaffResponse,
     StaffSelfCreate,
@@ -159,6 +160,33 @@ async def add_staff_schedule(
     return to_schedule_response(schedule)
 
 
+@router.put("/{public_id}/schedules", response_model=list[ScheduleResponse])
+async def replace_staff_schedules(
+    public_id: PublicIdPath,
+    data: ScheduleWeekReplace,
+    admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+    availability_cache: Redis = Depends(get_availability_cache),
+) -> list[ScheduleResponse]:
+    """Reemplaza la semana entera del profesional (lista vacia = horario del local).
+
+    Es lo que usa el editor de horarios del panel: una sola transaccion, sin
+    estados intermedios a la vista del portal. Superposiciones del mismo dia:
+    422 ``SCHEDULE_OVERLAP`` con el dia en ``detail``, sin tocar lo guardado.
+    """
+    repo = StaffRepository(db)
+    staff = await repo.get_by_id(
+        public_id, admin.store_id, include_global_admins=admin.is_global_admin
+    )
+    if not staff:
+        raise StaffNotFoundException(identifier=public_id)
+
+    guardadas = await StaffService(db, availability_cache).replace_schedules(
+        staff, [franja.model_dump() for franja in data.schedules]
+    )
+    return [to_schedule_response(franja) for franja in guardadas]
+
+
 @router.patch("/{public_id}/schedules/{schedule_id}", response_model=ScheduleResponse)
 async def update_staff_schedule(
     public_id: PublicIdPath,
@@ -176,16 +204,14 @@ async def update_staff_schedule(
     if not staff:
         raise StaffNotFoundException(identifier=public_id)
 
-    schedule = await repo.get_schedule(staff, schedule_id)
-    if not schedule:
-        raise ResourceNotFoundException(resource="Horario", identifier=schedule_id)
-
     try:
         actualizado = await StaffService(db, availability_cache).update_schedule(
-            staff, schedule, data.model_dump(exclude_unset=True)
+            staff, schedule_id, data.model_dump(exclude_unset=True)
         )
     except ValueError as exc:
         raise ValidationException(str(exc))
+    if not actualizado:
+        raise ResourceNotFoundException(resource="Horario", identifier=schedule_id)
     return to_schedule_response(actualizado)
 
 
@@ -211,11 +237,11 @@ async def delete_staff_schedule(
     if not staff:
         raise StaffNotFoundException(identifier=public_id)
 
-    schedule = await repo.get_schedule(staff, schedule_id)
-    if not schedule:
+    eliminada = await StaffService(db, availability_cache).delete_schedule(
+        staff, schedule_id
+    )
+    if not eliminada:
         raise ResourceNotFoundException(resource="Horario", identifier=schedule_id)
-
-    await StaffService(db, availability_cache).delete_schedule(schedule)
 
 
 @router.patch("/{public_id}/services")

@@ -20,8 +20,8 @@ export type BookingStatusValue = (typeof BOOKING_STATUSES)[number]
  * - test_el_conjunto_de_estados_terminales_es_el_documentado (backend) compara
  *   el grafo contra una constante Python propia; si el backend cambia sus
  *   terminales, su CI falla y el mensaje pide actualizar esta lista.
- * - BookingStatus.test.ts (columna "cobrable") congela esta lista del lado
- *   del front; si alguien la edita, falla ese test.
+ * - BookingStatus.test.ts (columnas "conocido" y "cobrable") congela esta
+ *   lista del lado del front; si alguien la edita, falla ese test.
  * Cambiar un lado exige cambiar el otro a mano.
  */
 const TERMINAL_STATUSES: readonly BookingStatusValue[] = [
@@ -42,9 +42,24 @@ export const isBookingStatus = (value: string): value is BookingStatusValue =>
 const isTerminalStatus = (value: string): boolean =>
   (TERMINAL_STATUSES as readonly string[]).includes(value)
 
-/** Se le puede cobrar: un estado conocido que todavia no termino. */
+/**
+ * Terminales que igual se cobran: se atendio (o el cliente falto) y la plata
+ * entra despues. Replica `RELEASED_APPOINTMENT_STATUSES` del backend
+ * (`modules/payments/service.py`) por complemento: soltados, y por eso sin
+ * cobro, quedan solo `cancelled` y `expired` (regla 3).
+ */
+const PAYABLE_TERMINAL_STATUSES: readonly BookingStatusValue[] = ['completed', 'absent']
+
+/**
+ * Se le puede cobrar: un estado conocido que no se solto.
+ *
+ * 2026-10-08, QA en el celular: excluia todos los terminales, asi que un turno
+ * "Completado" desaparecia de Cobros y el flujo natural (llega sin turno, se
+ * atiende, se completa y despues se cobra) quedaba sin salida.
+ */
 export const isCollectibleStatus = (value: string): boolean =>
-  isBookingStatus(value) && !isTerminalStatus(value)
+  isBookingStatus(value) &&
+  (!isTerminalStatus(value) || (PAYABLE_TERMINAL_STATUSES as readonly string[]).includes(value))
 
 export type BookingAction = 'confirm' | 'release' | 'cancel' | 'complete' | 'absent' | 'reschedule'
 

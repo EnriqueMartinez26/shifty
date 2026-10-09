@@ -3,6 +3,8 @@ import React, { useState } from 'react'
 import { RefreshCcw, Settings2 } from 'lucide-react'
 import { useNavigate } from 'react-router'
 
+import { totalCollected } from '@domain/value-objects/AppointmentCharge'
+
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
 import { formatCurrency } from '@shared/utils/currency'
 
@@ -50,7 +52,9 @@ const PaymentsPage: React.FC = () => {
     { label: 'Confirmados manualmente', value: summary?.manual_confirmed_payments ?? 0 },
     {
       label: 'Total cobrado',
-      value: formatCurrency(Number(summary?.total_approved_amount ?? 0))
+      value: formatCurrency(
+        totalCollected(summary?.total_approved_amount, summary?.total_remainder_amount)
+      )
     }
   ]
 
@@ -62,7 +66,13 @@ const PaymentsPage: React.FC = () => {
         reason: refundForm.reason || undefined,
         manual: true
       })
-      setMessage(`Devolución registrada: ${response.public_id}`)
+      // La devolucion no revierte el resto del turno (D-20261008-01).
+      const resto = response.live_remainder_amount
+      setMessage(
+        resto
+          ? `Devolución registrada: ${response.public_id}. Hay un resto de ${formatCurrency(Number(resto))} registrado en ese turno; revertilo desde Cobros si también lo devolviste.`
+          : `Devolución registrada: ${response.public_id}`
+      )
     } catch (error: unknown) {
       setMessage(getErrorMessage(error, 'No se pudo registrar la devolución'))
     }

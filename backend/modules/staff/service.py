@@ -9,6 +9,7 @@ movieron tambien los de horarios y servicios. El repositorio solo hace
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
 import structlog
@@ -19,7 +20,7 @@ from core.availability_cache import (
     AvailabilityCacheClient,
     invalidate_store_availability,
 )
-from core.exceptions import AppException
+from core.exceptions import AppException, ScheduleOverlapException
 from modules.staff.model import Schedule, Staff
 from modules.staff.repository import StaffRepository
 from modules.users.model import User
@@ -28,6 +29,26 @@ logger = structlog.get_logger()
 
 STAFF_KIND_PERSON = "person"
 STAFF_KIND_RESOURCE = "resource"
+
+
+def first_overlapping_day(franjas: Sequence[dict[str, Any]]) -> int | None:
+    """Primer dia (0 = lunes) con dos franjas que se pisan, o ``None``.
+
+    Misma regla que ``StaffRepository._assert_no_overlap``: dos franjas se
+    pisan si ``inicio < fin_de_la_otra`` y ``fin > inicio_de_la_otra``; las
+    que solo se tocan en el borde (09-13 y 13-17) son validas.
+    """
+    por_dia: dict[int, list[tuple[Any, Any]]] = {}
+    for franja in franjas:
+        por_dia.setdefault(franja["day_of_week"], []).append(
+            (franja["start_time"], franja["end_time"])
+        )
+    for dia in sorted(por_dia):
+        ordenadas = sorted(por_dia[dia])
+        for (_, fin_anterior), (inicio, _) in zip(ordenadas, ordenadas[1:]):
+            if inicio < fin_anterior:
+                return dia
+    return None
 
 
 def _account_display_name(account: User) -> str:
@@ -146,6 +167,7 @@ class StaffService:
     async def add_schedule(
         self, staff: Staff, schedule_data: dict[str, Any], store_id: str
     ) -> Schedule:
+        await self.repo.lock_staff(staff)
         schedule = await self.repo.add_schedule(staff, schedule_data, store_id)
         await self.db.commit()
         await self.db.refresh(schedule)
@@ -153,20 +175,50 @@ class StaffService:
         return schedule
 
     async def update_schedule(
-        self, staff: Staff, schedule: Schedule, cambios: dict[str, Any]
-    ) -> Schedule:
-        store_id = schedule.store_id
+        self, staff: Staff, schedule_id: str, cambios: dict[str, Any]
+    ) -> Schedule | None:
+        await self.repo.lock_staff(staff)
+        schedule = await self.repo.get_schedule(staff, schedule_id)
+        if schedule is None:
+            return None
+        store_id = staff.store_id
         actualizado = await self.repo.update_schedule(staff, schedule, cambios)
         await self.db.commit()
         await self.db.refresh(actualizado)
         await self._invalidar_agenda(store_id)
         return actualizado
 
-    async def delete_schedule(self, schedule: Schedule) -> None:
-        store_id = schedule.store_id
+    async def replace_schedules(
+        self, staff: Staff, franjas: list[dict[str, Any]]
+    ) -> list[Schedule]:
+        """Reemplaza la semana entera del profesional en UNA transaccion.
+
+        Armar la semana con una llamada por franja dejaba estados intermedios
+        a la vista del portal: con la primera franja guardada el profesional
+        dejaba de atender todos los demas dias (D-20260929-01). Lista vacia =
+        vuelve al horario del local. Una superposicion rechaza el cuerpo
+        entero antes de tocar nada.
+        """
+        store_id = staff.store_id
+        await self.repo.lock_staff(staff)
+        superpuesto = first_overlapping_day(franjas)
+        if superpuesto is not None:
+            raise ScheduleOverlapException(day_of_week=superpuesto)
+        nuevas = await self.repo.replace_schedules(staff, franjas)
+        await self.db.commit()
+        await self._invalidar_agenda(store_id)
+        return sorted(nuevas, key=lambda f: (f.day_of_week, f.start_time))
+
+    async def delete_schedule(self, staff: Staff, schedule_id: str) -> bool:
+        await self.repo.lock_staff(staff)
+        schedule = await self.repo.get_schedule(staff, schedule_id)
+        if schedule is None:
+            return False
+        store_id = staff.store_id
         await self.repo.delete_schedule(schedule)
         await self.db.commit()
         await self._invalidar_agenda(store_id)
+        return True
 
     async def update_services(
         self, staff: Staff, service_public_ids: list[str]

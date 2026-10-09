@@ -13,13 +13,12 @@ cadena entera (401, refresh, reintento) no pasa de ese tope.
 
 Mercado Pago falso a nivel httpx (como ``test_mp_lento_presupuesto``): 401,
 refresh que responde bien y un reintento lento. El tope del test es de
-0,3 s y el reintento tarda 1 s de verdad.
+5 s y el reintento tarda 6 s de verdad.
 """
 
 from __future__ import annotations
 
 import asyncio
-import time
 from decimal import Decimal
 from typing import Any
 
@@ -43,12 +42,13 @@ from tests.integration.test_mp_lento_presupuesto import (
     _es_mercadopago,
 )
 
-TOPE_DE_PRUEBA = 0.3
-REINTENTO_LENTO = 1.0
+TOPE_DE_PRUEBA = 5.0
+REINTENTO_LENTO = 6.0
 
 
 def _mp_con_401_refresh_y_reintento_lento(
     monkeypatch: pytest.MonkeyPatch,
+    reintento_cancelado: asyncio.Event,
 ) -> list[str]:
     pedidos: list[str] = []
 
@@ -66,7 +66,11 @@ def _mp_con_401_refresh_y_reintento_lento(
             )
         if sum(1 for p in pedidos if "/v1/payments" in p) == 1:
             return httpx.Response(401, json={"message": "expired"}, request=pedido)
-        await asyncio.sleep(REINTENTO_LENTO)
+        try:
+            await asyncio.sleep(REINTENTO_LENTO)
+        except asyncio.CancelledError:
+            reintento_cancelado.set()
+            raise
         return httpx.Response(200, json={"results": []}, request=pedido)
 
     monkeypatch.setattr(httpx.AsyncClient, "request", request)
@@ -108,17 +112,16 @@ async def test_la_consulta_de_la_conciliacion_no_pasa_el_tope_con_refresh_y_rein
     ).scalar_one()
     # Desde aca, el cliente real de MP contra el httpx falso.
     monkeypatch.setattr(payments_service, "_mercadopago_api_request", real)
-    pedidos = _mp_con_401_refresh_y_reintento_lento(monkeypatch)
+    reintento_cancelado = asyncio.Event()
+    pedidos = _mp_con_401_refresh_y_reintento_lento(monkeypatch, reintento_cancelado)
     monkeypatch.setattr(jobs, "MP_QUERY_BUDGET_SECONDS", TOPE_DE_PRUEBA)
 
-    inicio = time.monotonic()
     resultado = await jobs.reconcile_one_payment(test_session, cobro_id)
-    transcurrido = time.monotonic() - inicio
 
     # 401, refresh y el reintento: la cadena entera paso por el tope.
     assert any(p.endswith("/oauth/token") for p in pedidos), pedidos
     assert sum(1 for p in pedidos if "/v1/payments" in p) == 2, pedidos
-    assert transcurrido < REINTENTO_LENTO, transcurrido
+    assert reintento_cancelado.is_set(), "budget did not cancel the slow retry"
     # El reintento cortado es una consulta fallida, no un cuelgue.
     assert resultado["failed"] == 1, resultado
 

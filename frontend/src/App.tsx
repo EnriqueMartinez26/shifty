@@ -6,6 +6,7 @@ import { BrowserRouter, Navigate, Outlet, Route, Routes, useLocation } from 'rea
 import { Sentry } from './infrastructure/observability/sentry'
 import { ErrorBoundaryFallback } from './presentation/components/error-boundary'
 import { LoadingScreen } from './presentation/components/molecules/LoadingScreen'
+import { AnalyticsConsent } from './presentation/components/organisms/AnalyticsConsent'
 import { AuthShell } from './presentation/components/organisms/AuthShell'
 import { AuthProvider, useAuth } from './presentation/context/AuthContext'
 import { getDefaultAppRoute, hasAnyRole } from './presentation/context/roles'
@@ -160,6 +161,7 @@ const renderRoute = (route: AppRoute): React.ReactNode => {
 function App() {
   return (
     <BrowserRouter>
+      <AnalyticsConsent />
       <Suspense fallback={<LoadingScreen />}>
         <Routes>
           <Route element={<AuthLayout />}>

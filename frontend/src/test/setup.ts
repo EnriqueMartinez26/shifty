@@ -11,6 +11,7 @@ import './jest-dom'
 jest.mock('@shared/utils/env', () => ({
   isProduction: () => false,
   isDevelopment: () => true,
+  getGa4MeasurementId: jest.fn(() => undefined),
   // Sin contacto configurado, como un build sin las variables: los tests que
   // lo necesitan lo fijan con jest.mocked(getContactEnv).
   getContactEnv: jest.fn(() => ({}))

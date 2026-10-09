@@ -435,6 +435,7 @@ services:
       dockerfile: Dockerfile
       args:
         VITE_API_URL: ${VITE_API_URL:-/api}
+        VITE_GA4_MEASUREMENT_ID: ${VITE_GA4_MEASUREMENT_ID:-}
         # Vacio = Sentry apagado y /sentry-tunnel en 404. Prenderlo es setear
         # la variable y reconstruir la imagen (ver frontend/sentry-tunnel.sh).
         VITE_SENTRY_DSN: ${VITE_SENTRY_DSN:-}
