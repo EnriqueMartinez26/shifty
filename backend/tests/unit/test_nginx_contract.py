@@ -852,10 +852,71 @@ def test_el_desafio_acme_se_sirve_en_claro_y_el_resto_redirige() -> None:
     assert not todas(server, "return")
     acme = location(server, "^~", "/.well-known/acme-challenge/")
     assert una(acme, "root").args == ("/var/www/acme",)
+    # Un solo salto: http://www.<dominio> va directo a https://<dominio>.
     assert una(location(server, "/"), "return").args == (
         "301",
-        "https://$host$request_uri",
+        "https://$apex_host$request_uri",
     )
+
+
+# --- www -> apex ----------------------------------------------------------------
+# 2026-10-10. `server_name _` servia la app tambien en www.shifty-ar.tech: con
+# cookies separadas de las del apex y mails que apuntan al apex. El certificado
+# ya cubre www (certbot lo renueva por el desafio HTTP-01 de arriba, que sigue
+# sirviendose en claro para los dos nombres: no depende del host).
+
+
+def _apex_host() -> Directiva:
+    (mapa,) = [
+        d for d in todas(leer(EDGE_PROD), "map") if d.args == ("$host", "$apex_host")
+    ]
+    return mapa
+
+
+def _resolver_apex(host: str) -> str:
+    """Evalua el `map $host $apex_host` como nginx (regex en orden, default)."""
+    default = "$host"
+    for entrada in _apex_host().bloque:
+        clave, valor = entrada.nombre, entrada.args[0]
+        if clave == "default":
+            default = valor
+            continue
+        assert clave.startswith("~"), clave
+        patron = clave.lstrip("~*").replace("(?<", "(?P<")
+        flags = re.IGNORECASE if clave.startswith("~*") else 0
+        calce = re.match(patron, host, flags)
+        if calce:
+            return re.sub(r"\$(\w+)", lambda m: calce.group(m.group(1)), valor)
+    return host if default == "$host" else default
+
+
+@pytest.mark.parametrize(
+    ("host", "apex"),
+    [
+        ("www.shifty-ar.tech", "shifty-ar.tech"),
+        ("WWW.shifty-ar.tech", "shifty-ar.tech"),
+        ("shifty-ar.tech", "shifty-ar.tech"),
+        ("wwwx.shifty-ar.tech", "wwwx.shifty-ar.tech"),
+        ("api.shifty-ar.tech", "api.shifty-ar.tech"),
+        ("www.", "www."),
+    ],
+)
+def test_el_host_canonico_es_el_apex(host: str, apex: str) -> None:
+    assert _resolver_apex(host) == apex
+
+
+def test_https_en_www_redirige_al_apex_con_ruta_y_query() -> None:
+    server = server_de_la_app(leer(EDGE_PROD))
+    # A nivel server: corre antes de elegir location, asi que cubre la SPA,
+    # /api y los assets por igual. `$request_uri` conserva ruta y query.
+    (condicion,) = todas(server, "if")
+    assert condicion.args == ("($host", "!=", "$apex_host)")
+    assert una(condicion.bloque, "return").args == (
+        "301",
+        "https://$apex_host$request_uri",
+    )
+    # Fuera del if no hay return a nivel server: el apex se sirve normal.
+    assert not todas(server, "return")
 
 
 def test_https_conserva_hsts() -> None:
