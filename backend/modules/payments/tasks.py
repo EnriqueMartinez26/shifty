@@ -105,7 +105,9 @@ def expire_unpaid_appointment_holds(self: Task, limit: int = 100) -> dict[str, i
         async with AsyncSessionFactory() as db:
             set_tenant_context(None, True)
             try:
-                await _apply_tenant_context(db)
+                # El job toma su advisory lock antes de abrir una transaccion
+                # de la app. Si esta corrida pierde, no deja una conexion
+                # ``idle in transaction`` mientras la ganadora habla con MP.
                 return await expire_unpaid_appointments(db, limit=limit)
             finally:
                 set_tenant_context(None, False)

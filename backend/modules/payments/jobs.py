@@ -2219,6 +2219,9 @@ async def expire_unpaid_appointments(
             # Otra corrida del beat sigue adentro (MP lento): esta no hace nada.
             logger.info("expire_unpaid_appointments_overlap_skipped")
             return {"expired": 0, "rescued": 0, "held": 0, "inspected": 0}
+        # Aplicar RLS solo despues de ganar el lock: la corrida perdedora no
+        # necesita una transaccion de la app y no la deja abierta durante MP.
+        await _apply_tenant_context(db)
         return await _expire_unpaid_appointments(db, limit=limit)
 
 

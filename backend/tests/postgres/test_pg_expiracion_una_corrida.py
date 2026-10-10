@@ -21,13 +21,13 @@ from httpx import AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from core.database import set_tenant_context
 import modules.notifications.tasks as tasks
 import modules.payments.service as payments_service
 from modules.payments.jobs import expire_unpaid_appointments
 from tests.integration.test_mails_al_cliente import Buzon
 from tests.postgres.test_pg_lotes_skip_locked import (
     CUANTOS,
-    _con_bypass,
     _reservas_con_sena_pendiente,
     _tienda_con_mercadopago,
 )
@@ -35,6 +35,18 @@ from tests.postgres.test_pg_lotes_skip_locked import (
 pytestmark = pytest.mark.postgres
 
 DEMORA_MP = 0.3
+
+
+async def _expirar_con_bypass_sin_transaccion_inicial(
+    sessions: async_sessionmaker[AsyncSession],
+) -> dict[str, int]:
+    """Configura bypass, pero deja que el job tome el lock antes de abrir DB."""
+    async with sessions() as db:
+        set_tenant_context(None, True)
+        try:
+            return await expire_unpaid_appointments(db)
+        finally:
+            set_tenant_context(None, False)
 
 
 @pytest.mark.asyncio
@@ -94,8 +106,8 @@ async def test_dos_corridas_de_expiracion_no_consultan_dos_veces_el_mismo_cobro(
     llamadas.clear()
 
     resultados = await asyncio.gather(
-        _con_bypass(app_sessions, expire_unpaid_appointments),
-        _con_bypass(app_sessions, expire_unpaid_appointments),
+        _expirar_con_bypass_sin_transaccion_inicial(app_sessions),
+        _expirar_con_bypass_sin_transaccion_inicial(app_sessions),
     )
 
     # Cada cobro se consulto UNA vez (antes: 2N busquedas) ...
@@ -181,7 +193,7 @@ async def test_un_401_oauth_durante_el_http_persiste_el_token_nuevo_con_rls(
         )
     usados.clear()
 
-    resultado = await _con_bypass(app_sessions, expire_unpaid_appointments)
+    resultado = await _expirar_con_bypass_sin_transaccion_inicial(app_sessions)
 
     # La corrida termino: todo el lote vencio.
     assert int(resultado["expired"]) == CUANTOS, resultado
