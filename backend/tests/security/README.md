@@ -43,7 +43,7 @@ cerrarlo:
 3. **Agrega la fila** a `TABLA`:
 
    ```python
-   R("POST", "/cosas/{public_id}/hacer", ADMINS, A.RECURSO, _mi_ruta, idor=IDOR_POR_ID),
+   R("POST", "/cosas/{public_id}/hacer", ADMINS, A.RECURSO, _mi_ruta, idor=IDOR_POR_ID)
    ```
 
    - `permitidos`: `TODOS`, `PERSONAL`, `ADMINS`, `OPERATIVOS`, `SOLO_SUPER`

@@ -7,6 +7,7 @@ from typing import Any, Callable
 
 from fastapi import APIRouter, Request
 from fastapi.datastructures import DefaultPlaceholder
+from fastapi.dependencies.utils import get_typed_return_annotation
 from fastapi.responses import Response
 from fastapi.routing import APIRoute
 
@@ -44,6 +45,20 @@ class CanonicalRoute(APIRoute):
         response_model: Any = None,
         **kwargs: Any,
     ) -> None:
+        # FastAPI 0.142 keeps included routes instead of constructing them
+        # again. Resolve its default here so inferred models receive the same
+        # canonical envelope as explicitly declared response models.
+        if isinstance(response_model, DefaultPlaceholder):
+            inferred = get_typed_return_annotation(endpoint)
+            if (
+                inferred is not None
+                and not (inspect.isclass(inferred) and issubclass(inferred, Response))
+                and not (
+                    inspect.isgeneratorfunction(endpoint)
+                    or inspect.isasyncgenfunction(endpoint)
+                )
+            ):
+                response_model = inferred
         wrapped_response_model = response_model
         if response_model is not None and not isinstance(
             response_model, DefaultPlaceholder
@@ -99,10 +114,9 @@ class CanonicalRoute(APIRoute):
                 wrapped_endpoint = sync_wrapper
 
         # Antes de super().__init__: ahi se llama a get_route_handler. Se mira
-        # la marca de la funcion y no si se envolvio ACA: ``include_router``
-        # vuelve a crear la ruta con el endpoint ya envuelto y el
-        # ``response_model`` ya en ``ApiSuccess``, y en esa segunda pasada no
-        # se envuelve nada.
+        # la marca de la funcion y no si se envolvio ACA: algunas versiones
+        # de FastAPI recrean la ruta al incluir el router y reciben el
+        # endpoint y el ``response_model`` ya envueltos.
         self._emits_canonical_body = bool(
             getattr(wrapped_endpoint, _WRAPPER_ATTR, False)
         )

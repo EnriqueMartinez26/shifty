@@ -31,7 +31,7 @@ from typing import Any, Union, get_args, get_origin
 
 from annotated_types import Ge, Gt, Le, Lt
 from fastapi.dependencies.models import Dependant
-from fastapi.routing import APIRoute
+from fastapi.routing import APIRoute, RouteContext, iter_route_contexts
 
 from main import app
 from modules.legal.unsubscribe import make_unsubscribe_token
@@ -1928,11 +1928,17 @@ DEFECTOS_IDOR: dict[tuple[str, str, str], str] = {}
 # -- introspeccion de la tabla de rutas de FastAPI ------------------------------
 
 
-def rutas_de_la_app() -> list[APIRoute]:
-    return [r for r in app.routes if isinstance(r, APIRoute)]
+def rutas_de_la_app() -> list[RouteContext]:
+    return [
+        context
+        for context in iter_route_contexts(app.routes)
+        if isinstance(context.original_route, APIRoute)
+    ]
 
 
-def claves_de(route: APIRoute) -> list[tuple[str, str]]:
+def claves_de(route: RouteContext) -> list[tuple[str, str]]:
+    assert route.path is not None
+    assert route.methods is not None
     return [(method, route.path) for method in sorted(route.methods)]
 
 
@@ -1947,16 +1953,16 @@ def _llamadas(dependant: Dependant) -> set[Callable[..., Any]]:
     return encontradas
 
 
-def depende_de(route: APIRoute, dependencia: Callable[..., Any]) -> bool:
+def depende_de(route: RouteContext, dependencia: Callable[..., Any]) -> bool:
     return dependencia in _llamadas(route.dependant)
 
 
-def requiere_token(route: APIRoute) -> bool:
+def requiere_token(route: RouteContext) -> bool:
     """La ruta exige sesion: sin token el rechazo correcto es 401, no 403."""
     return depende_de(route, get_current_user)
 
 
-def ruta_de_la_app(clave: tuple[str, str]) -> APIRoute:
+def ruta_de_la_app(clave: tuple[str, str]) -> RouteContext:
     for route in rutas_de_la_app():
         if clave in claves_de(route):
             return route
@@ -1972,7 +1978,7 @@ def _es_numerico(anotacion: Any) -> bool:
     return False
 
 
-def _parametros(route: APIRoute) -> list[Any]:
+def _parametros(route: RouteContext) -> list[Any]:
     campos = list(route.dependant.query_params) + list(route.dependant.path_params)
     pendientes = list(route.dependant.dependencies)
     while pendientes:
