@@ -13,19 +13,31 @@
 """
 
 import asyncio
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+import psycopg2
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
+from sqlalchemy.pool import NullPool
 
-from core.database import set_tenant_context
+from core.database import TenantSession, set_tenant_context
 import modules.notifications.tasks as tasks
+import modules.payments.jobs as payment_jobs
 import modules.payments.service as payments_service
+import modules.payments.tasks as payment_tasks
 from modules.payments.jobs import expire_unpaid_appointments
 from tests.integration.test_mails_al_cliente import Buzon
+from tests.postgres.conftest import APP_URL, OWNER_URL, _sync_dsn
 from tests.postgres.test_pg_lotes_skip_locked import (
     CUANTOS,
     _reservas_con_sena_pendiente,
@@ -124,6 +136,133 @@ async def test_dos_corridas_de_expiracion_no_consultan_dos_veces_el_mismo_cobro(
             )
         ).scalar_one()
     assert vencidos == CUANTOS
+
+
+def _ociosas_en_transaccion_de_la_app() -> int:
+    """Conexiones de ``shifty_app`` en ESTA base que estan idle in transaction.
+
+    psycopg2 y no el ``owner_engine``: se llama desde el hilo de la tarea de
+    Celery, con otro event loop.
+    """
+    assert OWNER_URL
+    conn = psycopg2.connect(_sync_dsn(OWNER_URL))
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "select count(*) from pg_stat_activity "
+                "where usename = 'shifty_app' "
+                "and datname = current_database() "
+                "and state = 'idle in transaction'"
+            )
+            fila = cur.fetchone()
+            assert fila is not None
+            return int(fila[0])
+    finally:
+        conn.close()
+
+
+def _tarea_del_beat() -> dict[str, int]:
+    """La tarea REAL del beat (``payments/tasks.py``), en su propio hilo y loop.
+
+    ``run_in_worker_loop`` no se anida dentro del loop del test: el test la
+    reemplaza por ``asyncio.run`` y corre la tarea con ``asyncio.to_thread``.
+    """
+    return dict(payment_tasks.expire_unpaid_appointment_holds(limit=100))
+
+
+@pytest.mark.asyncio
+async def test_la_corrida_que_pierde_el_lock_no_queda_idle_in_transaction(
+    client: AsyncClient,
+    app_sessions: async_sessionmaker[AsyncSession],
+    owner_engine: AsyncEngine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#142/#143, 2026-10-09: la tarea del beat abria la transaccion de la app
+    (``_apply_tenant_context``) ANTES de pedir el advisory lock. La corrida que
+    lo perdia quedaba ``idle in transaction`` mientras la ganadora esperaba a
+    Mercado Pago. La prueba de arriba no lo veia: llama al job sin pasar por
+    la tarea, que era donde se abria la transaccion.
+
+    Aca las dos corridas son la tarea de Celery real. La ganadora esta adentro
+    del HTTP lento a MP cuando arranca la perdedora; ``pg_stat_activity`` se
+    mira en el instante en que la perdedora sabe que perdio (todavia dentro de
+    su sesion): tiene que haber CERO conexiones de la app idle in transaction.
+    """
+    monkeypatch.setattr(tasks, "_send_email", Buzon())
+    assert APP_URL
+    # Engine propio de las tareas: cada una corre en su hilo con su loop, y
+    # con NullPool ninguna conexion queda atada a un loop ya cerrado.
+    engine_tareas = create_async_engine(APP_URL, poolclass=NullPool)
+    monkeypatch.setattr(
+        payment_tasks,
+        "AsyncSessionFactory",
+        async_sessionmaker(
+            class_=TenantSession,
+            bind=engine_tareas,
+            expire_on_commit=False,
+            autoflush=False,
+        ),
+    )
+    monkeypatch.setattr(payment_tasks, "run_in_worker_loop", asyncio.run)
+    durante_mp: list[int] = []
+    perdedora: list[dict[str, int]] = []
+    # Solo el HTTP del job: las preferencias de las reservas no cuentan.
+    expirando: list[bool] = []
+
+    exclusive_job_real = payment_jobs._exclusive_job
+
+    @asynccontextmanager
+    async def exclusive_job_espiado(db: AsyncSession, name: str) -> AsyncIterator[bool]:
+        async with exclusive_job_real(db, name) as tomado:
+            if not tomado:
+                # La perdedora, antes de salir de su sesion.
+                durante_mp.append(_ociosas_en_transaccion_de_la_app())
+            yield tomado
+
+    monkeypatch.setattr(payment_jobs, "_exclusive_job", exclusive_job_espiado)
+
+    async def mercadopago_lento(
+        access_token: str,
+        *,
+        method: str,
+        path: str,
+        json_body: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        if path.startswith("/checkout/preferences"):
+            return {
+                "id": "pref-143-pg",
+                "init_point": "https://www.mercadopago.com/checkout/v1/redirect?p=143",
+            }
+        if expirando and not perdedora:
+            # Primer HTTP de la ganadora: el beat dispara otra corrida
+            # mientras esta espera a MP.
+            perdedora.append(await asyncio.to_thread(_tarea_del_beat))
+        await asyncio.sleep(DEMORA_MP)
+        if path.startswith("/v1/payments/search"):
+            return {"results": []}
+        return {}
+
+    monkeypatch.setattr(payments_service, "_mercadopago_api_request", mercadopago_lento)
+    store, token = await _tienda_con_mercadopago(client, app_sessions, "s143-tarea")
+    await _reservas_con_sena_pendiente(client, token, store, "s143-tarea")
+    async with owner_engine.begin() as conn:
+        await conn.execute(
+            text("update appointments set expires_at = :vencido"),
+            {"vencido": datetime.now(timezone.utc) - timedelta(minutes=5)},
+        )
+
+    expirando.append(True)
+    try:
+        ganadora = await asyncio.to_thread(_tarea_del_beat)
+    finally:
+        await engine_tareas.dispose()
+
+    # Antes de #143: [1] (la sesion de la tarea perdedora, con su
+    # set_config abierto, idle in transaction mientras la ganadora estaba en MP).
+    assert durante_mp == [0], durante_mp
+    # La tarea perdedora no vencio nada; la ganadora, todo el lote.
+    assert perdedora == [{"expired": 0, "rescued": 0, "held": 0, "inspected": 0}]
+    assert int(ganadora["expired"]) == CUANTOS, ganadora
 
 
 @pytest.mark.asyncio
