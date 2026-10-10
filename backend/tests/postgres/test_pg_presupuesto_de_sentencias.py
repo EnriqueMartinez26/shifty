@@ -33,7 +33,7 @@ from decimal import Decimal
 from typing import Any
 
 import pytest
-from fastapi.routing import APIRoute
+from fastapi.routing import APIRoute, iter_route_contexts
 from httpx import AsyncClient
 from sqlalchemy import event, insert
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
@@ -366,12 +366,14 @@ async def _tienda_con_volumen(sessions: async_sessionmaker[AsyncSession]) -> Tie
 def test_toda_ruta_caliente_tiene_presupuesto() -> None:
     """Una ruta nueva del portal o del panel caliente no entra sin decidir."""
     medidas = {clave.split(" [")[0] for clave in PRESUPUESTOS}
-    rutas = {
-        f"{metodo} {ruta.path}"
-        for ruta in app.routes
-        if isinstance(ruta, APIRoute) and ruta.path.startswith(PREFIJOS_CALIENTES)
-        for metodo in ruta.methods
-    }
+    rutas: set[str] = set()
+    for ruta in iter_route_contexts(app.routes):
+        if not isinstance(ruta.original_route, APIRoute):
+            continue
+        assert ruta.path is not None
+        assert ruta.methods is not None
+        if ruta.path.startswith(PREFIJOS_CALIENTES):
+            rutas.update(f"{metodo} {ruta.path}" for metodo in ruta.methods)
 
     sin_fila = sorted(rutas - medidas - set(SIN_PRESUPUESTO))
     assert not sin_fila, (

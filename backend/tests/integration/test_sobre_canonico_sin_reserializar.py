@@ -116,6 +116,18 @@ def _app_minima() -> FastAPI:
         # El handler salta el envoltorio: el middleware la tiene que envolver.
         return JSONResponse({"x": 2})
 
+    @router.get("/inferida")
+    async def inferida() -> _Item:
+        return _Item(x=3)
+
+    @router.get("/sin-modelo", response_model=None)
+    async def sin_modelo() -> _Item:
+        return _Item(x=4)
+
+    @router.get("/respuesta")
+    async def respuesta() -> JSONResponse:
+        return JSONResponse({"x": 5})
+
     app = FastAPI()
     app.include_router(router)
     app.add_middleware(CanonicalJsonMiddleware)
@@ -133,3 +145,31 @@ async def test_un_jsonresponse_crudo_de_una_ruta_canonica_se_sigue_envolviendo()
 
     assert armada.json() == {"success": True, "data": {"x": 1}, "meta": None}
     assert cruda.json() == {"success": True, "data": {"x": 2}}
+
+
+@pytest.mark.asyncio
+async def test_modelo_inferido_conserva_el_contrato_y_respeta_excepciones() -> None:
+    app = _app_minima()
+    responses = app.openapi()["paths"]
+    inferred = responses["/inferida"]["get"]["responses"]["200"]["content"][
+        "application/json"
+    ]["schema"]
+    assert "ApiSuccess" in inferred["$ref"]
+    for path in ("/sin-modelo", "/respuesta"):
+        assert (
+            responses[path]["get"]["responses"]["200"]["content"]["application/json"][
+                "schema"
+            ]
+            == {}
+        )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        inferred_response = await client.get("/inferida")
+        without_model = await client.get("/sin-modelo")
+        raw_response = await client.get("/respuesta")
+
+    assert inferred_response.json() == {"success": True, "data": {"x": 3}, "meta": None}
+    assert without_model.json() == {"success": True, "data": {"x": 4}}
+    assert raw_response.json() == {"success": True, "data": {"x": 5}}
