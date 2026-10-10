@@ -231,7 +231,8 @@ export function SuperAdminHealthPanel({
           <button
             type="button"
             onClick={onCreateAdmin}
-            disabled={!selectedStore}
+            // La tienda interna solo aloja cuentas SuperAdmin (2026-10-10).
+            disabled={!selectedStore || selectedStore.is_internal}
             className="rounded-2xl px-4 py-3 text-[10px] font-black uppercase tracking-widest disabled:opacity-50"
             style={{ background: '#fff', border: `1px solid ${colors2000s.border.default}` }}
           >

@@ -29,6 +29,8 @@ import {
 
 interface TenantUsersSectionProps {
   selectedStore: SuperAdminStoreRow | null
+  /** Encabezado al que "Ver" lleva la vista y el foco (2026-10-10). */
+  headingRef: React.Ref<HTMLHeadingElement>
   overview: SuperAdminStoreOverview | undefined
   overviewQuery: QueryState<SuperAdminStoreOverview>
   openEditUserModal: (targetUser: SuperAdminUser) => void
@@ -38,6 +40,7 @@ interface TenantUsersSectionProps {
 
 export const TenantUsersSection: React.FC<TenantUsersSectionProps> = ({
   selectedStore,
+  headingRef,
   overview,
   overviewQuery,
   openEditUserModal,
@@ -54,11 +57,18 @@ export const TenantUsersSection: React.FC<TenantUsersSectionProps> = ({
           Admins y Usuarios
         </span>
         <h2
+          ref={headingRef}
+          tabIndex={-1}
           className="mt-2 text-xl font-black uppercase tracking-tight"
           style={{ color: colors2000s.text.primary }}
         >
           Detalle de la tienda
         </h2>
+        {selectedStore ? (
+          <p className="text-lg font-black" style={{ color: colors2000s.orange.accent }}>
+            {selectedStore.name}
+          </p>
+        ) : null}
       </div>
       {overviewQuery.isFetching ? (
         <Loader2 className="h-4 w-4 animate-spin" style={{ color: colors2000s.orange.accent }} />

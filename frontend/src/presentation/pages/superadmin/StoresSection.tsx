@@ -46,6 +46,8 @@ interface StoresSectionProps {
   setSubscriptionFilter: React.Dispatch<React.SetStateAction<SubscriptionFilter>>
   selectedStoreId: string | null
   setSelectedStoreId: React.Dispatch<React.SetStateAction<string | null>>
+  /** "Ver": elige la tienda y lleva la vista a su detalle (2026-10-10). */
+  onViewStore: (storePublicId: string) => void
   storesQuery: StoresQueryState
   openEditStoreFor: (store: SuperAdminStoreRow) => void
   toggleStoreActive: (store: SuperAdminStoreRow) => Promise<void>
@@ -60,6 +62,7 @@ export const StoresSection: React.FC<StoresSectionProps> = ({
   setSubscriptionFilter,
   selectedStoreId,
   setSelectedStoreId,
+  onViewStore,
   storesQuery,
   openEditStoreFor,
   toggleStoreActive
@@ -192,10 +195,16 @@ export const StoresSection: React.FC<StoresSectionProps> = ({
                   <tr
                     key={store.public_id}
                     onClick={() => setSelectedStoreId(store.public_id)}
+                    aria-current={isSelected ? 'true' : undefined}
                     className="cursor-pointer transition-colors"
-                    style={{
-                      background: isSelected ? '#fff7ed' : 'transparent'
-                    }}
+                    style={
+                      isSelected
+                        ? {
+                            background: '#fff7ed',
+                            boxShadow: `inset 4px 0 0 ${colors2000s.orange.accent}`
+                          }
+                        : { background: 'transparent' }
+                    }
                   >
                     <td className="px-4 py-4">
                       <div className="flex items-center gap-3">
@@ -216,6 +225,22 @@ export const StoresSection: React.FC<StoresSectionProps> = ({
                           >
                             {store.slug}
                           </p>
+                          {store.is_internal ? (
+                            <span
+                              className="mt-1 mr-1 inline-flex rounded-full px-2 py-0.5 text-[10px] font-black uppercase tracking-widest"
+                              style={scopeBadgeStyle('global')}
+                            >
+                              Interna
+                            </span>
+                          ) : null}
+                          {isSelected ? (
+                            <span
+                              className="mt-1 inline-flex rounded-full px-2 py-0.5 text-[10px] font-black uppercase tracking-widest"
+                              style={scopeBadgeStyle('tenant')}
+                            >
+                              Seleccionada
+                            </span>
+                          ) : null}
                         </div>
                       </div>
                     </td>
@@ -295,7 +320,7 @@ export const StoresSection: React.FC<StoresSectionProps> = ({
                           label="Ver"
                           onClick={(event) => {
                             event.stopPropagation()
-                            setSelectedStoreId(store.public_id)
+                            onViewStore(store.public_id)
                           }}
                         />
                         <MiniButton

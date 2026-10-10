@@ -8,6 +8,7 @@ import { SuperAdminFormModal } from '../../components/organisms/SuperAdminFormMo
 import { FieldLabel, TextInput, ToggleRow } from '../SuperAdminUi'
 import {
   formGridClass,
+  storeScopedTitle,
   type AdminFormState,
   type PendingState,
   type StoreFormState,
@@ -58,7 +59,11 @@ export const StoreModals: React.FC<StoreModalsProps> = ({
       isOpen={modal === 'create-store' || modal === 'edit-store'}
       onClose={closeModal}
       onSubmit={handleStoreSubmit}
-      title={modal === 'create-store' ? 'Crear tienda' : 'Editar tienda'}
+      title={
+        modal === 'create-store'
+          ? 'Crear tienda'
+          : storeScopedTitle('Editar tienda', null, selectedStore)
+      }
       subtitle="Definí la identidad de la tienda, sus reglas de operación y las notificaciones base."
       submitLabel={modal === 'create-store' ? 'Crear tienda' : 'Guardar tienda'}
       loading={createStoreMutation.isPending || updateStoreMutation.isPending}
@@ -186,7 +191,7 @@ export const StoreModals: React.FC<StoreModalsProps> = ({
       isOpen={modal === 'create-admin'}
       onClose={closeModal}
       onSubmit={handleAdminSubmit}
-      title="Crear admin"
+      title={storeScopedTitle('Crear admin', 'en', selectedStore)}
       subtitle={selectedStore ? `Nuevo admin para ${selectedStore.name}` : 'Nuevo admin de tienda'}
       submitLabel="Crear admin"
       loading={createAdminMutation.isPending}

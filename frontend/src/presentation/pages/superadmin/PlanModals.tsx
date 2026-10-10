@@ -7,6 +7,7 @@ import { formatCurrency } from '@shared/utils/currency'
 import {
   formGridClass,
   scopeBadgeStyle,
+  storeScopedTitle,
   type PendingState,
   type PlanFormState,
   type SubscriptionFormState,
@@ -176,7 +177,7 @@ export const PlanModals: React.FC<PlanModalsProps> = ({
       isOpen={modal === 'assign-plan'}
       onClose={closeModal}
       onSubmit={handleSubscriptionSubmit}
-      title="Asignar plan"
+      title={storeScopedTitle('Asignar plan', 'a', selectedStore)}
       subtitle={selectedStore ? `Suscripción de ${selectedStore.name}` : 'Suscripción por tienda'}
       submitLabel="Guardar suscripción"
       loading={assignSubscriptionMutation.isPending}

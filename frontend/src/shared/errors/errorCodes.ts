@@ -76,6 +76,12 @@ export const ERROR_CODE_MESSAGES: ReadonlyMap<string, string> = new Map([
   ['LAST_SUPERADMIN_REVOCATION_DENIED', 'No se puede revocar al último SuperAdmin activo.'],
   // core/roles.py::assert_client_not_global_admin. El panel no ofrece el boton.
   ['CLIENT_GLOBAL_ADMIN_DENIED', 'Una cuenta de cliente no puede ser SuperAdmin.'],
+  // superadmin/router.py::_reject_internal_store (2026-10-10). El panel apaga
+  // "Crear admin" en la tienda interna; esto cubre la carrera con el listado.
+  [
+    'INTERNAL_STORE_ADMIN_DENIED',
+    'La tienda interna solo aloja cuentas SuperAdmin. El admin se crea en la tienda del negocio.'
+  ],
   ['RATE_LIMITED', 'Hiciste demasiados intentos seguidos. Esperá un momento y volvé a intentar.'],
   // Lo arma el front: una lectura que vencio su timeout de 15 s (D-20260930-02).
   ['REQUEST_TIMEOUT', 'La consulta tardó demasiado. Probá de nuevo.'],
