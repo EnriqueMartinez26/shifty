@@ -66,6 +66,7 @@ Algunos textos describen mecanismos que el producto todavía no tiene. **No se p
 | Se hacen copias de seguridad diarias | Backup activo en el VPS (`docs/DEPLOY_RUNBOOK.md` §1) | Pendiente (producción). | DU-09 |
 | Aviso y consentimiento separado para datos de salud | Decisión sobre el rubro "Salud" y su implementación (L1 O-5) | Decisión pendiente. | DU-05, BE-12, FE-12 |
 | Proveedores con país y mecanismo de transferencia | Elección de proveedores y regiones, y contratos (L1 O-11) | Decisión pendiente. | DU-03, DU-04 |
+| La propiedad de Google Analytics tiene desactivadas la medición mejorada, Google signals, la recogida de datos proporcionados por usuarios y las vinculaciones con Google Ads | Configuración de la propiedad GA4 (`docs/ANALYTICS.md`) | Medición mejorada verificada el 2026-10-10; el resto, el 2026-10-08, a reconfirmar. | `docs/WEB_LAUNCH_CHECKLIST.md` |
 
 ## Notas para el abogado
 
@@ -90,6 +91,7 @@ Cada documento marca en el lugar exacto los puntos que necesitan dictamen, como 
 | NA-15 | Recargo de seña según el historial de asistencia: información y trato equitativo | PRIVACIDAD, TERMINOS_CLIENTES |
 | NA-16 | Normas provinciales (Córdoba, Ley 10.247) y mención de la autoridad de consumo | TERMINOS_CLIENTES |
 | NA-17 | Casilla de la política de la tienda: ¿"leí" o "leí y acepto"? | AVISOS |
+| NA-18 | Analítica con Google Analytics 4 en el portal de reservas: rol de Shifty y de Google, consentimiento, transferencia y plazo de conservación | PRIVACIDAD |
 
 ## Criterios de redacción
 
