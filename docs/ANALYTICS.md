@@ -11,12 +11,19 @@ ni «Mis turnos».
 
 La política de privacidad incluye una descripción propuesta de GA4. Su revisión
 por el responsable queda pendiente antes de habilitar el servicio para clientes.
-El 2026-10-08 se verificó en la propiedad real el flujo `Shifty` para
-`https://shifty-ar.tech` y el ID `G-KDKJ9FX8VZ`: Medición mejorada, Google
-signals y recogida de datos proporcionados por usuarios están apagados; no hay
-vinculaciones con Google Ads. Analytics informó que no había recibido datos
-durante las últimas 48 horas. Esto no prueba el comportamiento del sitio,
-porque el cambio sigue sin desplegarse. No se desplegaron imágenes.
+El 2026-10-10 se volvió a confirmar en la propiedad real el flujo `Shifty` para
+`https://shifty-ar.tech` y que el ID coincide con la variable de GitHub. La
+Medición mejorada está apagada. Google signals, la recogida de datos
+proporcionados por usuarios y las vinculaciones con Google Ads se verificaron
+apagados el 2026-10-08; deben reconfirmarse antes de habilitar clientes. Google
+Analytics informó que no había recibido datos durante las últimas 48 horas.
+
+La producción observada el 2026-10-10 todavía no prueba la integración: el
+bundle JavaScript servido no contiene los nombres de eventos propios y GA4 no
+recibió datos. Los cambios de marca y metadatos están propuestos en la PR de
+lanzamiento; aún no se publicaron en el dominio. El merge genera imágenes tras
+Quality, pero el despliegue al VPS y la prueba con consentimiento son pasos
+separados. La revisión del texto de privacidad sigue pendiente.
 
 ## Consentimiento y datos
 
