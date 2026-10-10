@@ -70,6 +70,29 @@ describe('LegalPage', () => {
     )
   })
 
+  // 2026-10-10: GA4 esta en produccion en el portal de reservas, con
+  // consentimiento. La politica tiene que decir que se usa, quien la provee,
+  // que sale solo tras aceptar y como se retira; nunca que no hay analitica.
+  it('the privacy policy discloses Google Analytics, its consent and how to withdraw it', () => {
+    renderAt(['/legal/privacidad'])
+
+    expect(
+      screen.getByRole('heading', { level: 2, name: /Analítica opcional en el portal de reservas/ })
+    ).toBeInTheDocument()
+    const main = screen.getByRole('main')
+    expect(main).toHaveTextContent(/Shifty usa Google Analytics 4, un servicio de Google/)
+    expect(main).toHaveTextContent(/únicamente si la persona elige "Aceptar analítica"/)
+    expect(main).toHaveTextContent(/no se carga ningún script de Google ni se le envía ningún dato/)
+    expect(main).toHaveTextContent(/no se carga en el panel de las tiendas, en "Mis turnos"/)
+    expect(main).toHaveTextContent(/sin el nombre de la tienda ni la página de origen/)
+    expect(main).toHaveTextContent(/indicación de no personalizar anuncios/)
+    expect(main).toHaveTextContent(/Google puede tratar estos datos fuera de Argentina/)
+    expect(main).toHaveTextContent(/desde el botón "Preferencias de analítica"/)
+    expect(main).toHaveTextContent(/Retirar el consentimiento detiene las mediciones siguientes/)
+    expect(main).toHaveTextContent(/no borra los datos que Google ya recibió/)
+    expect(main).not.toHaveTextContent(/no (usa|utiliza|usamos|utilizamos)[^.]*analítica/i)
+  })
+
   it('reads the document in a centered column with 16px body text', () => {
     renderAt(['/legal/terminos'])
 
