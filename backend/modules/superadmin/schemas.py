@@ -92,6 +92,9 @@ class StoreGlobalResponse(BaseModel):
     send_email_confirmation: bool
     send_email_reminders: bool
     is_active: bool
+    # Aditivo (2026-10-10): la tienda que solo aloja cuentas SuperAdmin. El
+    # panel apaga "Crear admin" sobre ella; la garantia es el 409 del alta.
+    is_internal: bool
     created_at: datetime
     updated_at: datetime
 

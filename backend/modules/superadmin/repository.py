@@ -169,6 +169,7 @@ def _store_row(store: Store, row: Row[Any]) -> dict[str, Any]:
         "send_email_confirmation": store.send_email_confirmation,
         "send_email_reminders": store.send_email_reminders,
         "is_active": store.is_active,
+        "is_internal": store.is_internal,
         "created_at": store.created_at,
         "updated_at": store.updated_at,
         "admins_count": int(row.admins_count or 0),
