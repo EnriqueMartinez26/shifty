@@ -10,7 +10,8 @@
   },
   "allowScripts": {
     "unrs-resolver@1.12.2": false,
-    "fsevents@2.3.3": false
+    "fsevents@2.3.3": false,
+    "@parcel/watcher": false
   },
   "scripts": {
     "dev": "vite --configLoader runner",
@@ -36,7 +37,7 @@
     "@playwright/test": "1.63.0",
     "@tailwindcss/vite": "4.3.3",
     "@testing-library/react": "^16.3.3",
-    "@types/jest": "^29.5.12",
+    "@types/jest": "^30.0.0",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@typescript-eslint/eslint-plugin": "^8.71.0",
@@ -47,7 +48,7 @@
     "eslint-plugin-import": "^2.32.0",
     "eslint-plugin-react": "^7.37.5",
     "eslint-plugin-react-hooks": "^7.1.1",
-    "jest": "^29.7.0",
+    "jest": "^30.5.2",
     "jest-environment-jsdom": "^30.5.2",
     "prettier": "^3.9.9",
     "tailwindcss": "4.3.3",
