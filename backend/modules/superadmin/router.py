@@ -3,8 +3,10 @@ from typing import Annotated, Literal
 from fastapi import Depends, Path, Query, Response, status
 from core.roles import assert_global_admin_keeps_login_role
 from core.router import CanonicalAPIRouter
+from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.availability_cache import invalidate_store_availability
 from core.database import get_db
 from core.exceptions import (
     AppException,
@@ -12,6 +14,7 @@ from core.exceptions import (
     StoreNotFoundException,
     UserNotFoundException,
 )
+from core.redis import get_availability_cache
 from core.validation import PUBLIC_ID_PATTERN
 from modules.audit.public_id import opaque_audit_log_id
 from modules.auth.dependencies import get_current_global_admin
@@ -335,16 +338,24 @@ async def set_global_admin(
     data: GlobalAdminUpdate,
     actor: User = Depends(get_current_global_admin),
     db: AsyncSession = Depends(get_db),
+    availability_cache: Redis = Depends(get_availability_cache),
 ) -> UserGlobalResponse:
     repo = SuperAdminRepository(db)
     user = await repo.users.get_user(user_public_id)
     if not user:
         raise UserNotFoundException(identifier=user_public_id)
     try:
-        updated = await repo.users.set_global_admin(user, data.is_global_admin, actor)
-        return _user_response(updated)
+        updated, agenda_tocada = await repo.users.set_global_admin(
+            user, data.is_global_admin, actor
+        )
     except ValueError as exc:
         raise AppException(message=str(exc), http_status=400)
+    # Ascender saca de la agenda la ficha de la cuenta: la disponibilidad
+    # cacheada de su tienda la seguia ofreciendo hasta el TTL. Despues del
+    # commit y tolerante a un Redis caido (core/availability_cache).
+    if agenda_tocada is not None:
+        await invalidate_store_availability(availability_cache, agenda_tocada)
+    return _user_response(updated)
 
 
 @router.get("/plans", response_model=list[PlanResponse])
