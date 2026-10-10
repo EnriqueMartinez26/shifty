@@ -18,6 +18,7 @@ from pathlib import Path
 
 from pydantic import EmailStr, TypeAdapter, ValidationError
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 if str(BACKEND_ROOT) not in sys.path:
@@ -80,6 +81,31 @@ def validate_superadmin_password(raw: str) -> str:
         raise RuntimeError(f"SUPERADMIN_PASSWORD invalida: {exc}") from exc
 
 
+async def get_or_create_internal_store(db: AsyncSession, slug: str, name: str) -> Store:
+    """La tienda que aloja a los SuperAdmin; si se crea, nace interna.
+
+    ``is_internal`` la saca del portal publico (mismo 404 que una tienda
+    inexistente, ``public_api/repository.py``). Una tienda que YA existe con
+    ese slug no se marca: si fuera una tienda real (``SUPERADMIN_STORE_SLUG``
+    mal puesto), marcarla la borraria del portal. La migracion
+    ``d1f3a5c7e9b2`` marca la del slug por defecto en una base que ya la
+    tenia.
+    """
+    result = await db.execute(select(Store).where(Store.slug == slug))
+    store = result.scalar_one_or_none()
+    if store is None:
+        store = Store(name=name, slug=slug, is_internal=True)
+        store.public_id = store.id
+        db.add(store)
+        await db.flush()
+    elif not store.is_internal:
+        print(
+            f"Aviso: la tienda '{slug}' ya existia y no es interna; "
+            "el portal publico la sigue mostrando."
+        )
+    return store
+
+
 async def bootstrap() -> None:
     email = validate_superadmin_email(_required_env("SUPERADMIN_EMAIL"))
     password = validate_superadmin_password(_required_env("SUPERADMIN_PASSWORD"))
@@ -117,13 +143,7 @@ async def bootstrap() -> None:
             print(f"SuperAdmin actualizado: {email}")
             return
 
-        store_result = await db.execute(select(Store).where(Store.slug == store_slug))
-        store = store_result.scalar_one_or_none()
-        if store is None:
-            store = Store(name=store_name, slug=store_slug)
-            store.public_id = store.id
-            db.add(store)
-            await db.flush()
+        store = await get_or_create_internal_store(db, store_slug, store_name)
 
         user = User(
             email=email,

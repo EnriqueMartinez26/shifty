@@ -15,6 +15,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, raiseload, selectinload
+from sqlalchemy.sql.elements import ColumnElement
 
 import ulid
 
@@ -44,6 +45,17 @@ from modules.users.model import User, UserRole
 _UNUSABLE_CLIENT_PASSWORD_HASH = hash_password(str(ulid.ULID()))
 
 
+def _visible_en_el_portal() -> tuple[ColumnElement[bool], ColumnElement[bool]]:
+    """Predicado de toda tienda que el portal publico resuelve.
+
+    Activa y no interna: la tienda que solo aloja las cuentas SuperAdmin
+    (``Store.is_internal``, la marca ``scripts/bootstrap_superadmin.py``) da el
+    mismo 404 que una inexistente en todo ``/public``. Igualdades sobre
+    columnas de la fila: bajo RLS son predicados leakproof (CLAUDE.md §3).
+    """
+    return Store.is_active == True, Store.is_internal == False
+
+
 @dataclass(frozen=True)
 class StoreRef:
     """Columnas de una tienda activa que leen los endpoints publicos de lectura."""
@@ -68,7 +80,7 @@ class PublicRepository:
 
     async def get_store_by_slug(self, slug: str) -> Store | None:
         result = await self.db.execute(
-            select(Store).where(Store.slug == slug, Store.is_active == True)
+            select(Store).where(Store.slug == slug, *_visible_en_el_portal())
         )
         return result.scalar_one_or_none()
 
@@ -82,7 +94,7 @@ class PublicRepository:
         row = (
             await self.db.execute(
                 select(Store.id, Store.public_id, Store.name).where(
-                    Store.slug == slug, Store.is_active == True
+                    Store.slug == slug, *_visible_en_el_portal()
                 )
             )
         ).one_or_none()
@@ -92,7 +104,7 @@ class PublicRepository:
 
     async def get_store_by_public_id(self, public_id: str) -> Store | None:
         result = await self.db.execute(
-            select(Store).where(Store.public_id == public_id, Store.is_active == True)
+            select(Store).where(Store.public_id == public_id, *_visible_en_el_portal())
         )
         return result.scalar_one_or_none()
 
@@ -110,7 +122,7 @@ class PublicRepository:
                     Store.min_booking_notice_hours,
                     Store.buffer_minutes,
                     Store.cancellation_hours,
-                ).where(Store.public_id == public_id, Store.is_active == True)
+                ).where(Store.public_id == public_id, *_visible_en_el_portal())
             )
         ).one_or_none()
         if row is None:
@@ -124,7 +136,7 @@ class PublicRepository:
 
     async def get_store_by_id(self, store_id: str) -> Store | None:
         result = await self.db.execute(
-            select(Store).where(Store.id == store_id, Store.is_active == True)
+            select(Store).where(Store.id == store_id, *_visible_en_el_portal())
         )
         return result.scalar_one_or_none()
 
@@ -158,7 +170,7 @@ class PublicRepository:
             .where(
                 Service.public_id == public_id,
                 Service.is_active == True,
-                Store.is_active == True,
+                *_visible_en_el_portal(),
             )
         )
         return result.scalar_one_or_none()
