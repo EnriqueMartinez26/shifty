@@ -97,6 +97,15 @@ class Store(BaseEntity):
     theme_config: Mapped[ThemeConfig] = mapped_column(JSON, default=dict)
     feature_flags: Mapped[FeatureFlags] = mapped_column(JSON, default=dict)
 
+    # Tienda que solo aloja las cuentas SuperAdmin (la crea o la marca
+    # scripts/bootstrap_superadmin.py). El portal publico no la resuelve: todo
+    # endpoint de /public responde el mismo 404 que una tienda inexistente
+    # (public_api/repository.py::_visible_en_el_portal). El panel del
+    # SuperAdmin la sigue listando.
+    is_internal: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false"), nullable=False
+    )
+
     __table_args__ = (
         CheckConstraint(
             "deposit_far_notice_days BETWEEN 0 AND 365",
