@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, TypedDict
 
-from sqlalchemy import case, delete, func, or_, select
+from sqlalchemy import case, delete, func, or_, select, update
 from sqlalchemy.engine import Row
 from sqlalchemy.sql import Subquery
 from sqlalchemy.sql.elements import ColumnElement
@@ -20,6 +20,7 @@ from modules.auth.service import (
 from modules.audit.model import AuditAction, AuditLog
 from modules.billing.model import CouponRedemption, Plan, SaaSCoupon, StoreSubscription
 from modules.billing.subscription_rules import apply_subscription_transition
+from modules.staff.model import Staff
 from modules.stores.model import Store, StoreMedia
 from modules.users.guards import (
     assert_deactivation_allowed,
@@ -556,7 +557,41 @@ class UserAdminRepository(_BaseAdminRepository):
             await self.db.rollback()
             raise
 
-    async def set_global_admin(self, user: User, enabled: bool, actor: User) -> User:
+    async def _sacar_de_la_agenda(self, user: User) -> str | None:
+        """Pasa a inactiva la ficha de profesional de ``user``, si tiene una.
+
+        La cuenta global no atiende en ninguna tienda (``add_self`` lo niega
+        con ``STAFF_SELF_GLOBAL_ADMIN_DENIED``). Sin esto, un admin que se
+        agrego como profesional (``POST /staff/me``) y despues fue ascendido
+        seguia reservable en el portal, mientras el panel de su tienda lo
+        escondia (``_visible_para_el_panel``, S-15) y ningun admin de la
+        tienda lo podia quitar. Todos los caminos publicos (staff,
+        disponibilidad, reserva, lista de espera) ya filtran
+        ``Staff.is_active``: una sola marca los cubre.
+
+        No se borra: la ficha conserva turnos, horarios y servicios. Sin
+        commit (lo hace ``set_global_admin``, en la misma transaccion que el
+        flag). Devuelve la tienda de la ficha para invalidar su agenda, o
+        ``None`` si no habia ficha activa.
+        """
+        fila = await self.db.execute(
+            update(Staff)
+            .where(Staff.id == user.id, Staff.is_active.is_(True))
+            .values(is_active=False)
+            .returning(Staff.store_id)
+        )
+        store_id = fila.scalar_one_or_none()
+        return str(store_id) if store_id is not None else None
+
+    async def set_global_admin(
+        self, user: User, enabled: bool, actor: User
+    ) -> tuple[User, str | None]:
+        """Pone o saca el flag global; devuelve la cuenta y la tienda cuya
+        agenda cambio (la de la ficha que salio de la agenda), o ``None``.
+
+        Revocar el flag NO reactiva la ficha: volver a atender es decision de
+        la cuenta (``POST /staff/me`` reactiva la misma ficha).
+        """
         # Regla 14, en el unico lugar donde vive (AUD2-B3-12): el conteo era
         # "leer y despues actuar" y aca tenia su cuarta copia. Revocar el flag
         # deja la plataforma sin SuperAdmin igual que desactivar la cuenta.
@@ -581,6 +616,13 @@ class UserAdminRepository(_BaseAdminRepository):
             # con la sesion sana.
             await self.db.rollback()
             raise
+        # Despues del flush de la cuenta, para que el 409 de PV-01 siga
+        # saliendo de ese try con la sesion sana; antes del commit, para que
+        # flag y ficha cambien en la misma transaccion.
+        agenda_tocada = await self._sacar_de_la_agenda(user) if enabled else None
+        after: dict[str, Any] = {"is_global_admin": enabled}
+        if agenda_tocada is not None:
+            after["staff_is_active"] = False
         self._audit(
             actor,
             "User",
@@ -588,11 +630,11 @@ class UserAdminRepository(_BaseAdminRepository):
             AuditAction.UPDATE.value,
             store_id=user.store_id,
             before=before,
-            after={"is_global_admin": enabled},
+            after=after,
         )
         await self.db.commit()
         await self.db.refresh(user)
-        return user
+        return user, agenda_tocada
 
 
 class PlanAdminRepository(_BaseAdminRepository):
