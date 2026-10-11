@@ -34,6 +34,17 @@ test('GA4 habilitado agrega solo destinos exactos y mantiene las guardas', () =>
   buildPolicy('G-ABC1234567', (result, output) => {
     assert.equal(result.status, 0, result.stderr)
     const policy = readFileSync(output, 'utf8')
+    const expected = readFileSync(source, 'utf8')
+      .replace("script-src 'self';", "script-src 'self' https://www.googletagmanager.com;")
+      .replace(
+        "connect-src 'self';",
+        "connect-src 'self' https://www.google-analytics.com https://region1.google-analytics.com;"
+      )
+      .replace(
+        "img-src 'self' data: blob:;",
+        "img-src 'self' data: blob: https://www.google-analytics.com https://region1.google-analytics.com;"
+      )
+    assert.equal(policy, expected)
     assert.match(policy, /script-src 'self' https:\/\/www\.googletagmanager\.com;/)
     assert.match(
       policy,
