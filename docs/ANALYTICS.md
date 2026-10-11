@@ -2,36 +2,49 @@
 
 ## Estado y alcance
 
-El código usa `VITE_GA4_MEASUREMENT_ID` como variable de build. El repositorio
-tiene configurado `G-KDKJ9FX8VZ` en esa variable; el ID es público y no es una
-credencial. No se incluye el valor en el código fuente. La analítica solo se
-activa en `/booking/:slug` y `/b/:slug`, y solo después de que la persona la
-acepte. No se carga en el panel, login, recuperación de clave, páginas legales
-ni «Mis turnos».
+El código usa `VITE_GA4_MEASUREMENT_ID` durante el build; no se documenta aquí su
+valor. La integración solo inicia la medición en `/booking/:slug` y `/b/:slug`,
+después de que la persona acepte analítica. El panel, login, recuperación de
+clave, páginas legales y «Mis turnos» no son rutas elegibles ni envían eventos;
+si se navega a ellas dentro de la SPA después de aceptar, el script que ya se
+descargó puede permanecer hasta recargar, con la medición bloqueada.
 
-La política de privacidad incluye una descripción propuesta de GA4. Su revisión
-por el responsable queda pendiente antes de habilitar el servicio para clientes.
-El 2026-10-10 se volvió a confirmar en la propiedad real el flujo `Shifty` para
-`https://shifty-ar.tech` y que el ID coincide con la variable de GitHub. La
-Medición mejorada está apagada. Google signals, la recogida de datos
-proporcionados por usuarios y las vinculaciones con Google Ads se verificaron
-apagados el 2026-10-08; deben reconfirmarse antes de habilitar clientes. Google
-Analytics informó que no había recibido datos durante las últimas 48 horas.
+**Estado observado el 2026-10-11:** en una sesión nueva de Production,
+`/b/ejemplo` no hizo solicitudes a Google antes de elegir. Tras la aceptación
+autorizada, el navegador hizo una petición explícita `booking_started` que
+respondió HTTP 204; por separado, GA4 mostró una recepción en Tiempo real. GA4
+también generó `first_visit` y `session_start`. No se eligió servicio ni se
+creó una reserva. El ID cargado por el bundle coincidió con el flujo web
+`Shifty` de `https://shifty-ar.tech`, pero no se confirmó qué fuente de
+configuración usa Vercel ni se probaron los demás eventos propios. Esta
+observación quedó registrada en la sesión controlada autorizada; el repo no
+incluye HAR, captura de Realtime ni export de configuración para reproducirla.
 
-La producción observada el 2026-10-10 todavía no prueba la integración: el
-bundle JavaScript servido no contiene los nombres de eventos propios y GA4 no
-recibió datos. Los cambios de marca y metadatos están propuestos en la PR de
-lanzamiento; aún no se publicaron en el dominio. El merge genera imágenes tras
-Quality, pero el despliegue al VPS y la prueba con consentimiento son pasos
-separados. La revisión del texto de privacidad sigue pendiente.
+En la propiedad revisada, Medición mejorada, Google Signals y la recopilación
+de datos proporcionados por usuarios están desactivados; la recopilación
+granular de ubicación/dispositivo está activada. La personalización publicitaria
+está permitida en 307/307 regiones configurables, aunque no hay vínculo con
+Google Ads ni etiquetas de sitio conectadas. La retención observada es de 2
+meses para eventos y 14 meses para datos de usuario; borrar ante nueva
+actividad está activado. Falta confirmar las demás vinculaciones y la fuente
+del ID en Vercel. Los valores de la propiedad son observaciones reportadas del
+11 de octubre, sin captura o export adjunto a este repositorio.
+
+El aviso corregido y este documento todavía no están desplegados. La política
+requiere completar los datos legales y de proveedores, aprobación factual de
+Mateo y revisión profesional antes de publicarse. Esta evidencia de una prueba
+acotada no constituye aprobación legal ni habilita el lanzamiento de GA4 a
+clientes.
 
 ## Consentimiento y datos
 
 Sin un ID válido, no aparece el aviso ni se carga el script. Antes de aceptar no
 se crea la cola de `gtag` ni se contacta a Google. Aceptar carga la biblioteca y
 permite la medición; rechazar o retirar el consentimiento bloquea nuevos envíos,
-descarta cargas pendientes y elimina las cookies `shifty_ga*` accesibles desde
-el navegador. La preferencia se guarda en `localStorage`; si el navegador lo
+descarta cargas pendientes y elimina las cookies de esta integración que sean
+accesibles desde el navegador. Si la biblioteca ya se descargó, puede permanecer
+en la página hasta recargarla, aunque la medición queda bloqueada. La preferencia
+se guarda en `localStorage`; si el navegador lo
 bloquea, se conserva solo en memoria durante esa visita. Otras pestañas reciben
 los cambios de consentimiento.
 
@@ -48,9 +61,10 @@ anónima.
 Los eventos ocurridos antes de aceptar o antes de que cargue el tag se descartan.
 La carga de Google es best-effort: un bloqueo, una falla de red o CSP no debe
 impedir reservar. La opción `send_page_view: false` evita la vista inicial
-automática del código. La propiedad real se revisó el 2026-10-08 y los controles
-listados arriba estaban apagados o sin vinculaciones. Hay que volver a
-confirmarlos antes de activar el servicio para clientes.
+automática del código. GA4 puede generar eventos técnicos propios como
+`first_visit` y `session_start`, observados el 2026-10-11, además de los seis
+eventos definidos por Shifty. La prueba de producción solo cubrió el envío y
+recepción de `booking_started`; no valida los demás eventos.
 
 ## Build y CSP
 
@@ -64,18 +78,21 @@ y deja intacta la política cuando está vacío. No agrega comodines ni
 
 ## Verificación previa a activar
 
-1. Revisar y aprobar el texto de privacidad y las condiciones aplicables al uso
-   de Google Analytics.
-2. Antes de activar, volver a confirmar que Medición mejorada, Google signals,
-   recogida de datos proporcionados por usuarios y las vinculaciones con Google
-   Ads siguen apagados o vacías.
-3. En un entorno de prueba con el ID real, comprobar en DevTools que sin elegir
-   no hay solicitudes a Google; rechazar tampoco las genera; aceptar carga un
-   único script; retirar el consentimiento bloquea futuros eventos.
-4. Inspeccionar eventos y solicitudes: solo los seis eventos documentados,
-   página fija, sin ruta de tienda, query, fragmento, referrer ni datos del
-   formulario. Probar además `/login`, panel y «Mis turnos» después de aceptar.
-5. Validar el build Docker y la CSP de la imagen que se pretenda publicar.
+1. **Pendiente:** completar y verificar identidad/contacto del responsable,
+   proveedores/regiones y mecanismo de transferencia; Mateo debe aprobar esos
+   hechos y un abogado matriculado debe revisar el texto antes de publicarlo.
+2. **Pendiente:** confirmar la fuente exacta de la variable que usa Vercel y
+   revisar con el responsable las vinculaciones restantes y el ajuste de
+   personalización publicitaria permitido en 307/307 regiones.
+3. **Parcialmente verificado en Production:** no hubo solicitud antes de
+   aceptar; después se observó HTTP 204 para `booking_started` y recepción
+   separada en Tiempo real. No hubo selección de servicio, reserva ni pago.
+4. **Pendiente si se requiere cobertura completa:** validar los otros cinco
+   eventos propios, retiro del consentimiento, cookies eliminables y ausencia
+   de tráfico en login, panel y «Mis turnos»; los checks de código no prueban
+   recepción de esos eventos en la propiedad.
+5. Validar el build Docker y la CSP de la imagen candidata; esto no sustituye
+   la aprobación del texto ni autoriza un despliegue.
 
 Pruebas locales focales desde `frontend/`:
 

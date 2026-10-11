@@ -67,7 +67,7 @@ const TERMS_SECTIONS: LegalSection[] = [
   {
     title: '6. Datos personales',
     paragraphs: [
-      'Respecto de los datos de sus clientes, la tienda actúa como responsable del tratamiento y Shifty como encargado, tratándolos únicamente conforme a sus instrucciones y para prestar el servicio.',
+      'Para los datos que se tratan al gestionar una reserva, la tienda actúa como responsable y Shifty como encargado según sus instrucciones. La analítica opcional de uso de la plataforma es una finalidad separada, detallada en la Política de Privacidad.',
       'El detalle de qué datos se tratan y con qué finalidad está descripto en la Política de Privacidad.'
     ]
   },
@@ -99,13 +99,13 @@ const PRIVACY_SECTIONS: LegalSection[] = [
     title: '2. Para qué los usamos',
     paragraphs: [
       'Para gestionar las reservas, enviar confirmaciones y recordatorios, permitir a la tienda administrar su agenda y, cuando corresponde, iniciar el cobro de una seña.',
-      'No vendemos datos personales ni los cedemos a terceros con fines publicitarios.'
+      'Los datos operativos de agenda no se usan en otra tienda. La analítica opcional de GA4 es una finalidad separada que mide el uso del portal después de que la persona acepta; su alcance publicitario y los demás destinos requieren confirmación antes de publicar este aviso.'
     ]
   },
   {
     title: '3. Roles',
     paragraphs: [
-      'La tienda es responsable del tratamiento de los datos de sus clientes. Shifty actúa como encargado y trata esos datos siguiendo sus instrucciones y para prestar el servicio contratado.'
+      'Para los datos necesarios para gestionar una reserva, la tienda es responsable y Shifty actúa como encargado según sus instrucciones. La analítica opcional de uso del portal es una finalidad separada definida por Shifty; el rol legal de Shifty y Google para esos eventos y su base jurídica requieren confirmación profesional.'
     ]
   },
   {
@@ -118,12 +118,11 @@ const PRIVACY_SECTIONS: LegalSection[] = [
   {
     title: '5. Analítica opcional en el portal de reservas',
     paragraphs: [
-      'Shifty usa Google Analytics 4, un servicio de Google, para medir cómo se usa el portal público de reservas. Funciona solo en la página de reserva de cada tienda: no se carga en el panel de las tiendas, en "Mis turnos" ni en las demás páginas. Se activa únicamente si la persona elige "Aceptar analítica"; antes de esa elección, o si la rechaza, no se carga ningún script de Google ni se le envía ningún dato.',
-      'Si se acepta, Google recibe datos técnicos y de uso: datos del dispositivo y del navegador, la dirección IP de la conexión, a partir de la cual puede estimar una ubicación aproximada, identificadores guardados en cookies del navegador y eventos genéricos del flujo de reserva, como el inicio de la reserva, la elección de un servicio o de un horario y si la reserva se completó o falló. La página se informa con una dirección fija, sin el nombre de la tienda ni la página de origen.',
-      'La integración no envía los datos que se completan al reservar (nombre, teléfono, correo, notas o respuestas) ni identificadores de turnos, tiendas, servicios o profesionales.',
-      'Las funciones publicitarias están desactivadas: Google signals y la personalización de anuncios no se habilitan, las mediciones se envían con la indicación de no personalizar anuncios y el almacenamiento con fines publicitarios queda denegado. Las cookies de esta integración, cuyo nombre empieza con "shifty_ga", vencen a los 30 días de su última actualización.',
-      'Google puede tratar estos datos fuera de Argentina, conforme a sus propias políticas.',
-      'La analítica es opcional: se puede rechazar y reservar igual. La elección se guarda en el navegador y se puede cambiar en cualquier momento desde el botón "Preferencias de analítica" del portal de reservas. Retirar el consentimiento detiene las mediciones siguientes y borra del navegador las cookies de esta integración; no borra los datos que Google ya recibió.'
+      'Google Analytics (GA4) se carga solo después de que aceptás la opción de analítica desde el portal de reserva. La recopilación se activa solo en esas páginas mientras la aceptación siga vigente; al salir del portal o retirar la aceptación, la medición se bloquea. Si el script ya se descargó, puede permanecer en la página hasta que la recargues. GA4 puede generar eventos técnicos como `first_visit` y `session_start` según la primera visita o la sesión; ambos se observaron en la prueba controlada del 11/10/2026.',
+      'La página informada es fija y no incluye el slug, query, fragmento ni la página de origen. La integración no agrega respuestas del formulario, códigos de verificación ni identificadores de turnos, tiendas, servicios o profesionales.',
+      'El código deniega `ad_storage`, `ad_user_data` y `ad_personalization`, desactiva Google Signals y las señales de personalización, y no envía el `page_view` inicial. En la propiedad revisada el 11/10/2026, Medición mejorada y Google Signals están desactivados, pero la personalización publicitaria se permite en 307/307 regiones; no hay vínculo con Google Ads. La entidad y región de tratamiento, los roles y la base jurídica requieren confirmación profesional antes de publicar.',
+      'La propiedad tiene retención configurada de 2 meses para eventos y 14 meses para datos de usuario. Las cookies de esta integración vencen a los 30 días configurados en el código. La región efectiva de procesamiento y otras vinculaciones de productos siguen sin confirmar.',
+      'Podés rechazar la analítica y reservar igual, o retirar la preferencia desde "Preferencias de analítica". Esto detiene nuevos envíos y elimina las cookies de esta integración que sean accesibles en este navegador; no borra datos que Google ya recibió. La elección se guarda en este navegador hasta que la cambies o borres los datos del sitio.'
     ]
   },
   {

@@ -70,9 +70,8 @@ describe('LegalPage', () => {
     )
   })
 
-  // 2026-10-10: GA4 esta en produccion en el portal de reservas, con
-  // consentimiento. La politica tiene que decir que se usa, quien la provee,
-  // que sale solo tras aceptar y como se retira; nunca que no hay analitica.
+  // 2026-10-11: el texto debe describir el uso real, el alcance del
+  // consentimiento y el bloqueo de medición al salir o retirar la aceptación.
   it('the privacy policy discloses Google Analytics, its consent and how to withdraw it', () => {
     renderAt(['/legal/privacidad'])
 
@@ -80,16 +79,17 @@ describe('LegalPage', () => {
       screen.getByRole('heading', { level: 2, name: /Analítica opcional en el portal de reservas/ })
     ).toBeInTheDocument()
     const main = screen.getByRole('main')
-    expect(main).toHaveTextContent(/Shifty usa Google Analytics 4, un servicio de Google/)
-    expect(main).toHaveTextContent(/únicamente si la persona elige "Aceptar analítica"/)
-    expect(main).toHaveTextContent(/no se carga ningún script de Google ni se le envía ningún dato/)
-    expect(main).toHaveTextContent(/no se carga en el panel de las tiendas, en "Mis turnos"/)
-    expect(main).toHaveTextContent(/sin el nombre de la tienda ni la página de origen/)
-    expect(main).toHaveTextContent(/indicación de no personalizar anuncios/)
-    expect(main).toHaveTextContent(/Google puede tratar estos datos fuera de Argentina/)
-    expect(main).toHaveTextContent(/desde el botón "Preferencias de analítica"/)
-    expect(main).toHaveTextContent(/Retirar el consentimiento detiene las mediciones siguientes/)
-    expect(main).toHaveTextContent(/no borra los datos que Google ya recibió/)
+    expect(main).toHaveTextContent(/Google Analytics \(GA4\) se carga solo después de que aceptás/)
+    expect(main).toHaveTextContent(/La recopilación se activa solo en esas páginas/)
+    expect(main).toHaveTextContent(/el script ya se descargó, puede permanecer en la página/)
+    expect(main).toHaveTextContent(/no incluye el slug, query, fragmento ni la página de origen/)
+    expect(main).toHaveTextContent(/El código deniega `ad_storage`/)
+    expect(main).toHaveTextContent(
+      /el rol legal de Shifty y Google.*requieren confirmación profesional/
+    )
+    expect(main).toHaveTextContent(/desde "Preferencias de analítica"/)
+    expect(main).toHaveTextContent(/elimina las cookies de esta integración que sean accesibles/)
+    expect(main).toHaveTextContent(/no borra datos que Google ya recibió/)
     expect(main).not.toHaveTextContent(/no (usa|utiliza|usamos|utilizamos)[^.]*analítica/i)
   })
 

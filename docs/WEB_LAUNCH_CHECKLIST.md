@@ -2,30 +2,35 @@
 
 ## Analítica GA4
 
-- [x] Medición ID configurado en GitHub como `VITE_GA4_MEASUREMENT_ID`:
-      `G-KDKJ9FX8VZ`.
+- [x] Variable `VITE_GA4_MEASUREMENT_ID` configurada en GitHub Actions; el
+      valor no se copia a la documentación.
 - [x] El consentimiento limita la integración a `/booking/:slug` y `/b/:slug`;
-      no se monta en el panel ni en «Mis turnos».
-- [x] Se preparó texto propuesto para la política sobre el proveedor, el
-      consentimiento, las cookies y los datos técnicos que recibe.
-- [ ] Revisión y aprobación del texto de privacidad por el responsable.
-- [x] Propiedad real verificada el 2026-10-10: flujo `Shifty`, dominio
-      `https://shifty-ar.tech`, ID `G-KDKJ9FX8VZ`, coincidente con la
-      variable de GitHub. Medición mejorada apagada (reconfirmada el
-      2026-10-10). Google signals, recogida de datos proporcionados por
-      usuarios y vinculaciones con Google Ads se verificaron apagados el
-      2026-10-08; reconfirmarlos antes de activar.
-- [ ] Reconfirmar esos controles antes de habilitar GA4 para clientes.
-- [ ] Ejecutar la prueba de red descrita en [ANALYTICS.md](ANALYTICS.md) con el
-      ID y dominio reales después de publicar el cambio.
-- [ ] Aprobar los checks de la PR y publicar la imagen; esto no autoriza el
-      despliegue a producción.
+      no inicia la medición en el panel ni en «Mis turnos».
+- [x] Se contrastó el borrador de privacidad con el comportamiento del código y
+      los ajustes observados de GA4; quedan pendientes datos legales/proveedores
+      y revisión profesional.
+- [ ] Mateo debe confirmar los datos factuales y la política de destinos,
+      incluida la personalización publicitaria permitida en 307/307 regiones.
+- [ ] Un abogado matriculado debe revisar y aprobar el texto antes de publicar.
+- [x] Prueba acotada en Production el 2026-10-11: sin solicitudes antes de
+      aceptar; después, petición explícita `booking_started` respondió HTTP
+      204 y, por separado, GA4 mostró una recepción en Tiempo real. GA4 también
+      registró `first_visit` y `session_start`. No se eligió servicio ni se
+      creó una reserva o pago.
+- [ ] Archivar la evidencia durable de la corrida y de los ajustes de propiedad
+      (captura o export sin credenciales ni datos de clientes); por ahora el
+      repositorio conserva solo el registro narrativo de la observación.
+- [ ] Confirmar la fuente exacta del ID usada por Vercel y las demás
+      vinculaciones de productos; no se probaron los otros cinco eventos.
+- [ ] Publicar el aviso corregido solo después de las aprobaciones anteriores
+      y desplegar mediante el proceso habitual.
 
-El ID de medición es público; el código lo consume desde una variable de build y
-no lo fija en el repositorio. GA4 informó que no recibió datos durante las
-últimas 48 horas. El deploy de producción observado fue `7bd151a7` el
-2026-10-10; no confirma la recepción de eventos ni contiene los assets de esta
-propuesta. No se hizo una prueba de red con consentimiento.
+El flujo web `Shifty` observado corresponde a `https://shifty-ar.tech` y el ID
+cargado por Production coincidió con el flujo. Medición mejorada, Google
+Signals y recopilación de datos proporcionados por usuarios están apagados;
+ubicación/dispositivo granular está activo. No hay vínculo con Google Ads ni
+etiquetas conectadas. La página legal corregida todavía no está en Production;
+la prueba realizada no valida otras rutas, eventos ni recorridos.
 
 ## Marca y previews
 
