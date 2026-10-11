@@ -1,7 +1,16 @@
 from __future__ import annotations
 
+import asyncio
+import gzip
 import json
+import socket
+import sys
+import threading
+import time
+from collections.abc import AsyncIterator
+from pathlib import Path
 
+import httpx
 import pytest
 from scripts import verify_perf_target as module
 
@@ -10,18 +19,69 @@ ALLOWED_ORIGIN = "https://staging.example.test"
 READY = json.dumps({"success": True, "data": {"environment": "staging"}}).encode()
 
 
-def test_builds_canonical_health_url_and_origin() -> None:
-    assert (
-        module.normalize_origin("https://STAGING.example.test:443/") == ALLOWED_ORIGIN
-    )
-    assert module.build_health_url(STAGING_URL, ALLOWED_ORIGIN) == (
-        f"{ALLOWED_ORIGIN}/api/ops/health/ready"
-    )
+class _MockTransport(httpx.AsyncBaseTransport):
+    def __init__(self, response: httpx.Response) -> None:
+        self.response = response
+        self.requests: list[httpx.Request] = []
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(request)
+        if isinstance(self.response.stream, httpx.AsyncByteStream):
+            stream = self.response.stream
+        else:
+            stream = _ByteBody(self.response.content)
+        return httpx.Response(
+            self.response.status_code, headers=self.response.headers, stream=stream
+        )
+
+    async def aclose(self) -> None:
+        return None
 
 
-def test_health_url_must_match_approved_origin() -> None:
+class _ByteBody(httpx.AsyncByteStream):
+    def __init__(self, content: bytes) -> None:
+        self.content = content
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield self.content
+
+    async def aclose(self) -> None:
+        return None
+
+
+class _SlowBody(httpx.AsyncByteStream):
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        for start in range(0, len(READY), 16):
+            yield READY[start : start + 16]
+            await asyncio.sleep(0.02)
+
+    async def aclose(self) -> None:
+        return None
+
+
+def test_validates_exact_https_origin_and_canonical_staging_readiness() -> None:
+    transport = _MockTransport(httpx.Response(200, content=READY))
+
+    api_base = module.verify_target(
+        {"STAGING_URL": STAGING_URL, "PERF_ALLOWED_ORIGIN": ALLOWED_ORIGIN},
+        transport=transport,
+    )
+
+    assert api_base == "https://staging.example.test/api"
+    assert len(transport.requests) == 1
+    request = transport.requests[0]
+    assert str(request.url) == f"{api_base}/ops/health/ready"
+    assert request.headers["accept"] == "application/json"
+    assert request.headers["accept-encoding"] == "identity"
+
+
+def test_origin_mismatch_fails_before_probe() -> None:
+    transport = _MockTransport(httpx.Response(200, content=READY))
     with pytest.raises(module.TargetCheckError, match="no coincide"):
-        module.build_health_url(STAGING_URL, "https://other.example.test")
+        module.verify_target_url(
+            STAGING_URL, "https://other.example.test", transport=transport
+        )
+    assert transport.requests == []
 
 
 @pytest.mark.parametrize(
@@ -46,36 +106,131 @@ def test_health_url_must_match_approved_origin() -> None:
         "https://staging.example.test/api?next=x",
     ],
 )
-def test_rejects_unsafe_staging_url(url: str) -> None:
+def test_rechaza_destinos_http_loopback_y_formas_inseguras(url: str) -> None:
+    transport = _MockTransport(httpx.Response(200, content=READY))
     with pytest.raises(module.TargetCheckError):
-        module.build_health_url(url, ALLOWED_ORIGIN)
+        module.verify_target_url(url, ALLOWED_ORIGIN, transport=transport)
+    assert transport.requests == []
 
 
 @pytest.mark.parametrize(
     "url",
-    ["https://１２７.０.０.１/api", "https://ｌｏｃａｌｈｏｓｔ/api"],
+    [
+        "https://１２７.０.０.１/api",
+        "https://ｌｏｃａｌｈｏｓｔ/api",
+    ],
     ids=["fullwidth-loopback-ip", "fullwidth-localhost"],
 )
-def test_rejects_dangerous_hosts_after_idna_normalization(url: str) -> None:
+def test_rechaza_hosts_peligrosos_tras_normalizar_idna(url: str) -> None:
+    transport = _MockTransport(httpx.Response(200, content=READY))
     with pytest.raises(module.TargetCheckError):
-        module.build_health_url(url, ALLOWED_ORIGIN)
-
-
-def test_accepts_only_canonical_staging_health_envelope() -> None:
-    module.validate_health_response(200, READY)
+        module.verify_target_url(url, ALLOWED_ORIGIN, transport=transport)
+    assert transport.requests == []
 
 
 @pytest.mark.parametrize(
-    ("status", "body"),
+    ("status", "headers", "body"),
     [
-        (503, READY),
-        (200, b'{"success":true,"data":{"environment":"production"}}'),
-        (200, b'{"success":false,"data":{"environment":"staging"}}'),
-        (200, b"not-json"),
-        (200, b"x" * (64 * 1024 + 1)),
+        (503, {}, READY),
+        (200, {}, b'{"success":true,"data":{"environment":"production"}}'),
+        (200, {}, b'{"success":false,"data":{"environment":"staging"}}'),
+        (200, {}, b"not-json"),
+        (302, {"Location": "https://other.example.test/"}, READY),
+        (200, {"Content-Encoding": "gzip"}, gzip.compress(READY)),
+        (200, {}, b"x" * (64 * 1024 + 1)),
     ],
-    ids=["status", "environment", "success", "json", "size"],
+    ids=("503", "prod", "false", "json", "302", "gzip", "size"),
 )
-def test_rejects_invalid_health_envelope(status: int, body: bytes) -> None:
+def test_probe_rechaza_redirect_compression_y_respuesta_grande(
+    status: int, headers: dict[str, str], body: bytes
+) -> None:
+    transport = _MockTransport(httpx.Response(status, headers=headers, content=body))
     with pytest.raises(module.TargetCheckError):
-        module.validate_health_response(status, body)
+        module.verify_target_url(STAGING_URL, ALLOWED_ORIGIN, transport=transport)
+    assert len(transport.requests) == 1
+
+
+def test_el_probe_tiene_un_plazo_total_de_lectura(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(module, "REQUEST_TIMEOUT_SECONDS", 0.05)
+    transport = _MockTransport(httpx.Response(200, stream=_SlowBody()))
+
+    with pytest.raises(module.TargetCheckError, match="consultar"):
+        module.verify_target_url(STAGING_URL, ALLOWED_ORIGIN, transport=transport)
+
+
+def test_dns_lento_no_abre_una_conexion_despues_del_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(module, "REQUEST_TIMEOUT_SECONDS", 1)
+    marker = tmp_path / "resolver-started"
+    accepted = threading.Event()
+    stopping = threading.Event()
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen()
+    listener.settimeout(0.05)
+    port = listener.getsockname()[1]
+
+    def observe_connection() -> None:
+        while not stopping.is_set():
+            try:
+                connection, _ = listener.accept()
+            except TimeoutError:
+                continue
+            except OSError:
+                return
+            accepted.set()
+            connection.close()
+            return
+
+    observer = threading.Thread(target=observe_connection, daemon=True)
+    worker: threading.Thread | None = None
+    try:
+        observer.start()
+        script = (
+            "import pathlib, socket, sys, time\n"
+            "from scripts import verify_perf_target as module\n"
+            "marker = pathlib.Path(sys.argv[1])\n"
+            "resolve = socket.getaddrinfo\n"
+            "def slow_resolve(host, service, *args, **kwargs):\n"
+            " marker.write_text('started', encoding='utf-8')\n"
+            " time.sleep(2)\n"
+            " return resolve('127.0.0.1', service, family=socket.AF_INET, "
+            "type=socket.SOCK_STREAM)\n"
+            "socket.getaddrinfo = slow_resolve\n"
+            "raise SystemExit(module._probe_worker_main())\n"
+        )
+        monkeypatch.setattr(
+            module,
+            "_probe_worker_command",
+            lambda: [sys.executable, "-c", script, str(marker)],
+        )
+        errors: list[Exception] = []
+
+        def probe() -> None:
+            try:
+                module.probe_health(f"http://localhost:{port}/")
+            except Exception as exc:
+                errors.append(exc)
+
+        worker = threading.Thread(target=probe, daemon=True)
+        worker.start()
+        deadline = time.monotonic() + 3
+        while not marker.exists() and worker.is_alive() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert marker.exists()
+        resolver_started_at = time.monotonic()
+        worker.join(timeout=2)
+        assert not worker.is_alive()
+        assert errors and isinstance(errors[0], module.TargetCheckError)
+        time.sleep(max(0, resolver_started_at + 2.2 - time.monotonic()))
+        assert not accepted.is_set()
+    finally:
+        stopping.set()
+        listener.close()
+        if observer.ident is not None:
+            observer.join(timeout=1)
+        if worker is not None and worker.ident is not None:
+            worker.join(timeout=2)

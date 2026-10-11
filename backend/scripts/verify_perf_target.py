@@ -2,12 +2,21 @@
 
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import json
+import os
 import re
+import subprocess
+import sys
+from collections.abc import Mapping
+from pathlib import Path
 from urllib.parse import urlsplit
 
+import httpx
+
 HEALTH_PATH = "/api/ops/health/ready"
+REQUEST_TIMEOUT_SECONDS = 5
 MAX_RESPONSE_BYTES = 64 * 1024
 _DNS_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z")
 _NUMERIC_HOST = re.compile(r"(?i)(?:0x[0-9a-f]+|[0-9]+)(?:\.(?:0x[0-9a-f]+|[0-9]+))*\Z")
@@ -163,3 +172,121 @@ def validate_health_response(status: int, body: bytes) -> None:
         or payload["data"].get("environment") != "staging"
     ):
         raise TargetCheckError("El endpoint no confirmó un entorno de staging.")
+
+
+async def _request_health(
+    url: str, transport: httpx.AsyncBaseTransport | None
+) -> tuple[int, bytes]:
+    async with asyncio.timeout(REQUEST_TIMEOUT_SECONDS):
+        async with httpx.AsyncClient(
+            follow_redirects=False,
+            timeout=REQUEST_TIMEOUT_SECONDS,
+            transport=transport,
+            trust_env=False,
+        ) as client:
+            async with client.stream(
+                "GET",
+                url,
+                headers={"Accept": "application/json", "Accept-Encoding": "identity"},
+            ) as response:
+                body = bytearray()
+                async for chunk in response.aiter_raw():
+                    if len(body) + len(chunk) > MAX_RESPONSE_BYTES:
+                        raise TargetCheckError(
+                            "La respuesta del endpoint de salud no es válida."
+                        )
+                    body.extend(chunk)
+                return response.status_code, bytes(body)
+
+
+def _probe_worker_command() -> list[str]:
+    return [sys.executable, str(Path(__file__).resolve()), "--probe-health-stdin"]
+
+
+def _run_probe_worker(url: str) -> None:
+    try:
+        result = subprocess.run(
+            _probe_worker_command(),
+            input=url,
+            text=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=REQUEST_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except OSError, subprocess.TimeoutExpired:
+        raise TargetCheckError("No se pudo consultar el endpoint de salud.") from None
+    if result.returncode != 0:
+        raise TargetCheckError("No se pudo consultar el endpoint de salud.")
+
+
+def probe_health(
+    url: str, *, transport: httpx.AsyncBaseTransport | None = None
+) -> None:
+    """GET readiness under a total deadline, with a capped body and no redirects."""
+    if transport is None:
+        _run_probe_worker(url)
+        return
+    try:
+        status, body = asyncio.run(_request_health(url, transport))
+    except TargetCheckError:
+        raise
+    except Exception:
+        raise TargetCheckError("No se pudo consultar el endpoint de salud.") from None
+    validate_health_response(status, body)
+
+
+def verify_target_url(
+    api_url: str,
+    allowed_origin: str,
+    *,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> str:
+    """Validate a remote staging URL and return the canonical API base."""
+    health_url = build_health_url(api_url, allowed_origin)
+    probe_health(health_url, transport=transport)
+    return f"{normalize_origin(allowed_origin)}/api"
+
+
+def verify_target(
+    environment: Mapping[str, str] | None = None,
+    *,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> str:
+    """Validate ``STAGING_URL`` against ``PERF_ALLOWED_ORIGIN`` and readiness."""
+    variables = os.environ if environment is None else environment
+    staging_url = variables.get("STAGING_URL", "")
+    allowed_origin = variables.get("PERF_ALLOWED_ORIGIN", "")
+    if not staging_url or not allowed_origin:
+        raise TargetCheckError("Faltan variables para validar el destino de staging.")
+    return verify_target_url(staging_url, allowed_origin, transport=transport)
+
+
+def main(
+    environment: Mapping[str, str] | None = None,
+    *,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> int:
+    try:
+        verify_target(environment, transport=transport)
+    except TargetCheckError as exc:
+        print(f"Destino de staging rechazado: {exc}", file=sys.stderr)
+        return 1
+    print("Destino de staging validado.")
+    return 0
+
+
+def _probe_worker_main() -> int:
+    try:
+        url = sys.stdin.read(4096)
+        status, body = asyncio.run(_request_health(url, None))
+        validate_health_response(status, body)
+    except Exception:
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    if sys.argv[1:] == ["--probe-health-stdin"]:
+        raise SystemExit(_probe_worker_main())
+    raise SystemExit(main())
