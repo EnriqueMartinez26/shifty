@@ -222,6 +222,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             {
                 "STAGING_URL": args.host,
                 "PERF_ALLOWED_ORIGIN": os.environ.get("PERF_ALLOWED_ORIGIN", ""),
+                "PERF_ALLOW_LOCAL_TARGET": os.environ.get(
+                    "PERF_ALLOW_LOCAL_TARGET", ""
+                ),
+                "GITHUB_ACTIONS": os.environ.get("GITHUB_ACTIONS", ""),
             }
         )
     except TargetCheckError as exc:

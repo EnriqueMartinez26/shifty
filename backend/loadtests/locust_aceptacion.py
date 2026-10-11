@@ -162,6 +162,8 @@ def _validar(environment: Environment, **_kwargs: Any) -> None:
             {
                 "STAGING_URL": environment.host or "",
                 "PERF_ALLOWED_ORIGIN": os.getenv("PERF_ALLOWED_ORIGIN", ""),
+                "PERF_ALLOW_LOCAL_TARGET": os.getenv("PERF_ALLOW_LOCAL_TARGET", ""),
+                "GITHUB_ACTIONS": os.getenv("GITHUB_ACTIONS", ""),
             }
         )
     except TargetCheckError as exc:

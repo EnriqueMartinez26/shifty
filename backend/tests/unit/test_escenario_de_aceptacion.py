@@ -189,6 +189,8 @@ def test_main_falla_antes_de_efectos_y_reusa_el_host_canonico(
         return obtener
 
     monkeypatch.setenv("PERF_ALLOWED_ORIGIN", origen_aprobado)
+    monkeypatch.setenv("PERF_ALLOW_LOCAL_TARGET", "true")
+    monkeypatch.setenv("GITHUB_ACTIONS", "false")
     monkeypatch.setattr(m, "verify_target", verificar)
     monkeypatch.setattr(m, "_obtener_http", transporte)
 
@@ -222,10 +224,14 @@ def test_main_falla_antes_de_efectos_y_reusa_el_host_canonico(
         {
             "STAGING_URL": "https://other.example.com/api",
             "PERF_ALLOWED_ORIGIN": origen_aprobado,
+            "PERF_ALLOW_LOCAL_TARGET": "true",
+            "GITHUB_ACTIONS": "false",
         },
         {
             "STAGING_URL": "https://staging.example.com/api/",
             "PERF_ALLOWED_ORIGIN": origen_aprobado,
+            "PERF_ALLOW_LOCAL_TARGET": "true",
+            "GITHUB_ACTIONS": "false",
         },
     ]
     assert rutas == [
@@ -282,6 +288,13 @@ except SystemExit as exc:
 else:
     raise AssertionError("Locust aceptó una readiness fallida")
 assert loaded == ["manifiesto-de-prueba.json"]
+try:
+    acceptance._validar(SimpleNamespace(host="http://localhost/api"))
+except SystemExit as exc:
+    assert "Destino de Locust rechazado" in str(exc)
+else:
+    raise AssertionError("Locust aceptó loopback en GitHub Actions")
+assert loaded == ["manifiesto-de-prueba.json"]
 """
     entorno = os.environ.copy()
     entorno.update(
@@ -291,6 +304,8 @@ assert loaded == ["manifiesto-de-prueba.json"]
             "SEED_OWNER_PASSWORD": "prueba",
             "SHIFTY_SUPERADMIN_EMAIL": "admin@example.com",
             "SHIFTY_SUPERADMIN_PASSWORD": "prueba",
+            "GITHUB_ACTIONS": "true",
+            "PERF_ALLOW_LOCAL_TARGET": "true",
         }
     )
 

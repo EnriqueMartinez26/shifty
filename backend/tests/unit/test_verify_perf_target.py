@@ -97,8 +97,38 @@ def test_validates_exact_https_origin_and_canonical_staging_readiness() -> None:
 def test_acepta_y_canoniza_solo_loopback_literal_local(url: str, expected: str) -> None:
     transport = _MockTransport(httpx.Response(200, content=READY))
 
-    assert module.verify_target({"STAGING_URL": url}, transport=transport) == expected
+    assert (
+        module.verify_target(
+            {"STAGING_URL": url, "PERF_ALLOW_LOCAL_TARGET": "true"},
+            transport=transport,
+        )
+        == expected
+    )
     assert transport.requests == []
+
+
+@pytest.mark.parametrize("url", ["http://localhost/api", "http://127.0.0.1/api"])
+def test_rechaza_loopback_sin_optin_local(url: str) -> None:
+    with pytest.raises(
+        module.TargetCheckError, match="requiere PERF_ALLOW_LOCAL_TARGET"
+    ):
+        module.verify_target({"STAGING_URL": url})
+
+
+@pytest.mark.parametrize("github_actions", ["true", "TRUE"])
+def test_rechaza_loopback_en_github_actions_aunque_haya_optin(
+    github_actions: str,
+) -> None:
+    with pytest.raises(
+        module.TargetCheckError, match="no está permitido en GitHub Actions"
+    ):
+        module.verify_target(
+            {
+                "STAGING_URL": "http://localhost/api",
+                "PERF_ALLOW_LOCAL_TARGET": "true",
+                "GITHUB_ACTIONS": github_actions,
+            }
+        )
 
 
 @pytest.mark.parametrize(

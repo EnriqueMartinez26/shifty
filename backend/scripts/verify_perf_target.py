@@ -162,10 +162,11 @@ def _format_local_origin(host: str, port: int | None) -> str:
 
 
 def canonical_target_url(api_url: str, allowed_origin: str | None = None) -> str:
-    """Validate and canonicalize a local or approved remote API target.
+    """Canonicalize a loopback URL or an approved remote API target.
 
-    Local HTTP is limited to literal loopback authorities for developer runs.
-    Remote targets must use HTTPS and match the configured origin exactly.
+    Local HTTP is limited to literal loopback authorities. The entrypoint
+    verifier applies the explicit developer-only opt-in before use. Remote
+    targets must use HTTPS and match the configured origin exactly.
     This helper is pure so synchronous callers such as Locust can use it
     without starting a network request or an asyncio/gevent interaction.
     """
@@ -329,13 +330,23 @@ def verify_target(
     *,
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> str:
-    """Validate the target; probe readiness only for approved remote staging."""
+    """Validate the target, requiring an opt-in for local developer runs."""
     variables = os.environ if environment is None else environment
     staging_url = variables.get("STAGING_URL", "")
     allowed_origin = variables.get("PERF_ALLOWED_ORIGIN", "")
     if not staging_url:
         raise TargetCheckError("Faltan variables para validar el destino de staging.")
     canonical_url = canonical_target_url(staging_url, allowed_origin)
+    if canonical_url.startswith("http://"):
+        if variables.get("GITHUB_ACTIONS", "").casefold() == "true":
+            raise TargetCheckError(
+                "El destino local no está permitido en GitHub Actions."
+            )
+        if variables.get("PERF_ALLOW_LOCAL_TARGET") != "true":
+            raise TargetCheckError(
+                "El destino local requiere PERF_ALLOW_LOCAL_TARGET=true."
+            )
+        return canonical_url
     if canonical_url.startswith("https://"):
         probe_health(
             build_health_url(canonical_url, allowed_origin), transport=transport
