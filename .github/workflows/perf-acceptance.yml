@@ -47,6 +47,7 @@ jobs:
         working-directory: backend
     env:
       NETWORK_OFFSET_MS: ${{ inputs.network_offset_ms || vars.PERF_NETWORK_OFFSET_MS || '0' }}
+      PERF_ALLOWED_ORIGIN: ${{ vars.PERF_ALLOWED_ORIGIN }}
     steps:
       - name: Verificar secretos de la prueba
         working-directory: .

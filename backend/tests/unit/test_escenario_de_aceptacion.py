@@ -4,14 +4,16 @@
 150 clientes + 45 duenos + 5 superadmin, la rampa de 5 minutos con 20 de
 meseta, el manifiesto que deja el seed y el conteo de codigos que usa
 ``scripts/perf_acceptance_check.py``. Se carga el modulo puro, nunca el
-locustfile: importar ``locust`` parchea el proceso con gevent.
+locustfile en pytest; se prueba en un subprocess aislado.
 """
 
 from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import random
+import subprocess
 import sys
 from datetime import date
 from pathlib import Path
@@ -147,6 +149,167 @@ def test_el_conteo_separa_rutas_conexiones_y_rafagas() -> None:
         "errores_de_conexion": 1,
         "rafagas": [{"201": 1, "409": 2, "0": 1}],
     }
+
+
+def test_main_falla_antes_de_efectos_y_reusa_el_host_canonico(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    m = _modulo()
+    salida = tmp_path / "manifiesto.json"
+    origen_aprobado = "https://staging.example.com"
+    api_base = f"{origen_aprobado}/api"
+    valores_verificados: list[dict[str, str]] = []
+    hosts_de_transporte: list[str] = []
+    rutas: list[str] = []
+
+    def verificar(environment: dict[str, str]) -> str:
+        valores_verificados.append(environment)
+        if environment["STAGING_URL"].startswith("https://other.example.com"):
+            raise m.TargetCheckError("origen rechazado")
+        return api_base
+
+    respuestas = {
+        "/public/stores/cap-001": {"public_id": "S1"},
+        "/public/services?store_public_id=S1": [{"public_id": "SV1"}],
+        "/public/staff?store_public_id=S1": [{"public_id": "ST1"}],
+    }
+
+    def transporte(host: str, pausa_s: float):
+        hosts_de_transporte.append(host)
+        assert host == api_base
+        assert pausa_s == pytest.approx(0.05)
+
+        def obtener(ruta: str) -> object:
+            rutas.append(ruta)
+            return respuestas.get(ruta)
+
+        return obtener
+
+    monkeypatch.setenv("PERF_ALLOWED_ORIGIN", origen_aprobado)
+    monkeypatch.setattr(m, "verify_target", verificar)
+    monkeypatch.setattr(m, "_obtener_http", transporte)
+
+    rechazada = m.main(
+        [
+            "--host",
+            "https://other.example.com/api",
+            "--out",
+            str(salida),
+            "--stores",
+            "1",
+        ]
+    )
+    assert rechazada == 1
+    assert not hosts_de_transporte and not salida.exists()
+    assert "Destino de staging rechazado" in capsys.readouterr().err
+
+    resultado = m.main(
+        [
+            "--host",
+            "https://staging.example.com/api/",
+            "--out",
+            str(salida),
+            "--stores",
+            "1",
+        ]
+    )
+
+    assert resultado == 0 and hosts_de_transporte == [api_base]
+    assert valores_verificados == [
+        {
+            "STAGING_URL": "https://other.example.com/api",
+            "PERF_ALLOWED_ORIGIN": origen_aprobado,
+        },
+        {
+            "STAGING_URL": "https://staging.example.com/api/",
+            "PERF_ALLOWED_ORIGIN": origen_aprobado,
+        },
+    ]
+    assert rutas == [
+        "/public/stores/cap-001",
+        "/public/services?store_public_id=S1",
+        "/public/staff?store_public_id=S1",
+    ]
+    assert json.loads(salida.read_text(encoding="utf-8")) == {
+        "stores": [
+            {
+                "slug": "cap-001",
+                "store_public_id": "S1",
+                "owner_email": "owner-001@capacidad.example.com",
+                "service_ids": ["SV1"],
+                "staff_ids": ["ST1"],
+            }
+        ]
+    }
+
+
+def test_locust_sondea_staging_antes_de_cargar_manifest_en_subprocess(
+    tmp_path: Path,
+) -> None:
+    marcador = tmp_path / "readiness-url.txt"
+    script = f"""\
+import importlib.util, sys
+from pathlib import Path
+from types import SimpleNamespace
+sys.path.insert(0, {str(BACKEND_ROOT)!r})
+import locust
+import scripts.verify_perf_target as verifier
+worker = "import pathlib,sys; pathlib.Path(sys.argv[1]).write_text(sys.stdin.read(),encoding='utf-8')"
+verifier._probe_worker_command = lambda: [sys.executable, "-c", worker, {str(marcador)!r}]
+spec = importlib.util.spec_from_file_location("locust_aceptacion", {str(LOCUSTFILE)!r})
+assert spec and spec.loader
+acceptance = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = acceptance
+spec.loader.exec_module(acceptance)
+expected = "https://staging.example.com/api/ops/health/ready"
+loaded = []
+def cargar(path):
+    assert Path({str(marcador)!r}).read_text(encoding="utf-8") == expected
+    loaded.append(str(path))
+    return []
+acceptance.cargar_manifiesto = cargar
+environment = SimpleNamespace(host="https://staging.example.com/api/")
+acceptance._validar(environment)
+assert environment.host.endswith("/api") and loaded == ["manifiesto-de-prueba.json"]
+verifier._probe_worker_command = lambda: [sys.executable, "-c", "import sys; sys.stdin.read(); sys.exit(1)"]
+try:
+    acceptance._validar(SimpleNamespace(host="https://staging.example.com/api/"))
+except SystemExit as exc:
+    assert "Destino de Locust rechazado" in str(exc)
+else:
+    raise AssertionError("Locust aceptó una readiness fallida")
+assert loaded == ["manifiesto-de-prueba.json"]
+"""
+    entorno = os.environ.copy()
+    entorno.update(
+        {
+            "PERF_ALLOWED_ORIGIN": "https://staging.example.com",
+            "SHIFTY_MANIFEST": "manifiesto-de-prueba.json",
+            "SEED_OWNER_PASSWORD": "prueba",
+            "SHIFTY_SUPERADMIN_EMAIL": "admin@example.com",
+            "SHIFTY_SUPERADMIN_PASSWORD": "prueba",
+        }
+    )
+
+    proceso = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            script,
+        ],
+        cwd=BACKEND_ROOT,
+        env=entorno,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert proceso.returncode == 0, (
+        f"stdout:\n{proceso.stdout}\nstderr:\n{proceso.stderr}"
+    )
 
 
 def test_se_desenvuelve_la_respuesta_canonica_de_la_api() -> None:

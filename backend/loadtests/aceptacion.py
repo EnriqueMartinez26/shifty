@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import random
 import sys
 import time
@@ -21,6 +22,16 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
+
+# ``python loadtests/aceptacion.py`` sets sys.path[0] to ``loadtests/``.
+# Add the backend root so the shared target verifier is importable from the
+# documented CLI as well as from pytest.
+if __package__ in (None, ""):
+    backend_root = str(Path(__file__).resolve().parents[1])
+    if backend_root not in sys.path:
+        sys.path.insert(0, backend_root)
+
+from scripts.verify_perf_target import TargetCheckError, verify_target  # noqa: E402
 
 # Mezcla de la prueba: 200 usuarios concurrentes.
 CLIENTES = 150
@@ -205,8 +216,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--pause", type=float, default=0.05, help="pausa entre requests (limites)"
     )
     args = parser.parse_args(argv)
+
+    try:
+        host = verify_target(
+            {
+                "STAGING_URL": args.host,
+                "PERF_ALLOWED_ORIGIN": os.environ.get("PERF_ALLOWED_ORIGIN", ""),
+            }
+        )
+    except TargetCheckError as exc:
+        print(f"Destino de staging rechazado: {exc}", file=sys.stderr)
+        return 1
+
     manifiesto = manifiesto_desde_api(
-        _obtener_http(args.host.rstrip("/"), args.pause),
+        _obtener_http(host, args.pause),
         tiendas=args.stores,
         dominio=args.domain,
     )

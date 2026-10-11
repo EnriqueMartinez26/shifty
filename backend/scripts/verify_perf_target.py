@@ -11,7 +11,7 @@ import subprocess
 import sys
 from collections.abc import Mapping
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import SplitResult, urlsplit
 
 import httpx
 
@@ -89,7 +89,9 @@ def _normalized_host(host: str) -> str:
     return ascii_host
 
 
-def _parse_https_url(value: str, *, allow_api_path: bool) -> tuple[str, int | None]:
+def _split_config_url(
+    value: str, *, error_message: str
+) -> tuple[SplitResult, int | None]:
     if (
         not value
         or value != value.strip()
@@ -104,18 +106,31 @@ def _parse_https_url(value: str, *, allow_api_path: bool) -> tuple[str, int | No
         parsed = urlsplit(value)
         port = parsed.port
     except ValueError:
-        raise TargetCheckError("La configuración del destino no es válida.") from None
+        raise TargetCheckError(error_message) from None
 
     if (
-        parsed.scheme.lower() != "https"
-        or not parsed.netloc
+        not parsed.netloc
         or parsed.hostname is None
         or "@" in parsed.netloc
         or parsed.username is not None
         or parsed.password is not None
         or parsed.netloc.endswith(":")
+        or port == 0
     ):
-        raise TargetCheckError("La configuración del destino no es válida.")
+        raise TargetCheckError(error_message)
+
+    return parsed, port
+
+
+def _parse_https_url(value: str, *, allow_api_path: bool) -> tuple[str, int | None]:
+    error_message = (
+        "La configuración del destino no es válida."
+        if allow_api_path
+        else "El origen aprobado no es válido."
+    )
+    parsed, port = _split_config_url(value, error_message=error_message)
+    if parsed.scheme.lower() != "https":
+        raise TargetCheckError(error_message)
 
     if allow_api_path:
         if parsed.path not in ("/api", "/api/"):
@@ -123,7 +138,68 @@ def _parse_https_url(value: str, *, allow_api_path: bool) -> tuple[str, int | No
     elif parsed.path not in ("", "/"):
         raise TargetCheckError("El origen aprobado no es válido.")
 
-    return _normalized_host(parsed.hostname), port
+    hostname = parsed.hostname
+    if hostname is None:
+        raise TargetCheckError(error_message)
+    return _normalized_host(hostname), port
+
+
+def _raw_authority_host(netloc: str) -> str:
+    """Return the host spelling as configured, preserving IPv6 brackets."""
+    if netloc.startswith("["):
+        closing = netloc.find("]")
+        if closing < 0:
+            return ""
+        return netloc[: closing + 1]
+    return netloc.split(":", 1)[0]
+
+
+def _format_local_origin(host: str, port: int | None) -> str:
+    authority = f"[{host}]" if ":" in host else host
+    if port is not None and port != 80:
+        authority = f"{authority}:{port}"
+    return f"http://{authority}"
+
+
+def canonical_target_url(api_url: str, allowed_origin: str | None = None) -> str:
+    """Validate and canonicalize a local or approved remote API target.
+
+    Local HTTP is limited to literal loopback authorities for developer runs.
+    Remote targets must use HTTPS and match the configured origin exactly.
+    This helper is pure so synchronous callers such as Locust can use it
+    without starting a network request or an asyncio/gevent interaction.
+    """
+    parsed, port = _split_config_url(
+        api_url, error_message="La configuración del destino no es válida."
+    )
+
+    if parsed.scheme.lower() == "http":
+        raw_host = _raw_authority_host(parsed.netloc)
+        local_hosts = {
+            "localhost": "localhost",
+            "127.0.0.1": "127.0.0.1",
+            "[::1]": "::1",
+        }
+        host = local_hosts.get(raw_host)
+        if host is None or parsed.path not in ("", "/", "/api", "/api/"):
+            raise TargetCheckError("La configuración del destino no es válida.")
+        if allowed_origin:
+            raise TargetCheckError(
+                "El destino local no debe configurar un origen aprobado."
+            )
+        base = _format_local_origin(host, port)
+        return f"{base}/api" if parsed.path in ("/api", "/api/") else base
+
+    if parsed.scheme.lower() != "https":
+        raise TargetCheckError("La configuración del destino no es válida.")
+    if not allowed_origin:
+        raise TargetCheckError("Faltan variables para validar el destino de staging.")
+
+    host, remote_port = _parse_https_url(api_url, allow_api_path=True)
+    approved = normalize_origin(allowed_origin)
+    if _format_origin(host, remote_port) != approved:
+        raise TargetCheckError("El destino no coincide con el origen aprobado.")
+    return f"{approved}/api"
 
 
 def _format_origin(host: str, port: int | None) -> str:
@@ -253,13 +329,18 @@ def verify_target(
     *,
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> str:
-    """Validate ``STAGING_URL`` against ``PERF_ALLOWED_ORIGIN`` and readiness."""
+    """Validate the target; probe readiness only for approved remote staging."""
     variables = os.environ if environment is None else environment
     staging_url = variables.get("STAGING_URL", "")
     allowed_origin = variables.get("PERF_ALLOWED_ORIGIN", "")
-    if not staging_url or not allowed_origin:
+    if not staging_url:
         raise TargetCheckError("Faltan variables para validar el destino de staging.")
-    return verify_target_url(staging_url, allowed_origin, transport=transport)
+    canonical_url = canonical_target_url(staging_url, allowed_origin)
+    if canonical_url.startswith("https://"):
+        probe_health(
+            build_health_url(canonical_url, allowed_origin), transport=transport
+        )
+    return canonical_url
 
 
 def main(
