@@ -56,6 +56,8 @@ Checked by hand after the run (the script does not see the host): no container r
 
 Never against production: the seed creates owner accounts with a known password, and the test writes. The seed fails closed in two layers, both checked before it connects:
 
+`/api/ops/health/ready` includes `"environment": "staging"` only when the running app has `ENV=STAGING`. Production omits this marker even when public component details are enabled. The marker identifies runtime configuration; it does not prove that the host or database is physically isolated from production.
+
 - **Target database.** `--expect-database` and `--expect-host` are mandatory and must match the database and host in the container's `DATABASE_URL`, and the database name must contain `staging`. A database without `staging` in its name is accepted only when named again with `--allow-database-name <name>`, and that is printed in the log. `ENV` alone is not enough: staging runs with `docker-compose.prod.yml`, which sets `ENV: production`, so the operator overrides it with `-e ENV=staging`, and the same command run from the production clone would seed production. The target check is what tells the two apart.
 - **`ENV`.** It must be `staging` or `development`; `production` is refused even when the database matches.
 
