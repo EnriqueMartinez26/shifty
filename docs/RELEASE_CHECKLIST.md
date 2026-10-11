@@ -30,7 +30,7 @@ Use this checklist for every production release. A release is ready only when ea
 - [ ] `https://<domain>/api/ops/health/ready` returns 200 from the production ingress path (it checks Postgres and Redis; `/api/ops/health/live` does not).
 - [ ] Error-rate, latency, worker-queue, webhook/outbox, and backup/drill alerts are active (`deploy/cron/shifty-latency`, `deploy/cron/shifty-guard`).
 - [ ] Dashboard links for API health, database, Redis, background jobs, payments, and Sentry are included in release notes.
-- [ ] The capacity acceptance test (`docs/PERF_ACCEPTANCE.md`) passed on staging with the release candidate: `scripts/perf_acceptance_check.py` printed `APROBADA` and its output, the runner used and the rate-limit setup are attached to the release notes. For the first launch it ran on the real VPS within the provider's 30-day guarantee window. Required for releases that touch availability, booking, the dashboard, reports, jobs or database configuration.
+- [ ] The capacity acceptance test (`docs/PERF_ACCEPTANCE.md`) passed against isolated staging with resources representative of the release candidate: `scripts/perf_acceptance_check.py` printed `APROBADA` and its output, the runner used and the rate-limit setup are attached to the release notes. For the first launch, run it within the provider's 30-day guarantee window. Never run this test against live production or on the production VPS. Required only for releases that touch availability, booking, the dashboard, reports, jobs or database configuration.
 
 ## 3. Database migrations
 

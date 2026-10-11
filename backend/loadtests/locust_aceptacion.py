@@ -54,6 +54,7 @@ import requests
 from locust import HttpUser, LoadTestShape, between, events, task
 from locust.clients import HttpSession
 from locust.env import Environment
+from locust.exception import StopUser
 from locust.runners import LocalRunner
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -72,8 +73,10 @@ from aceptacion import (  # noqa: E402
     TiendaSembrada,
     cargar_manifiesto,
     datos_de,
+    es_redireccion,
     fechas_de_consulta,
     forma_de_carga,
+    solicitar_sin_redirecciones,
     slot_libre,
 )
 
@@ -118,17 +121,25 @@ def _pedir(
     **kwargs: Any,
 ) -> Any:
     """Request que marca como exito los codigos de negocio esperados."""
-    with client.request(
-        metodo, url, name=name, catch_response=True, **kwargs
+    detener_usuario = False
+    with solicitar_sin_redirecciones(
+        client, metodo, url, name=name, catch_response=True, **kwargs
     ) as respuesta:
-        if respuesta.status_code in ok:
+        if es_redireccion(respuesta.status_code):
+            respuesta.failure(f"Redireccion HTTP {respuesta.status_code} rechazada")
+            detener_usuario = True
+        elif respuesta.status_code in ok:
             respuesta.success()
         else:
             respuesta.failure(f"HTTP {respuesta.status_code}")
-        return respuesta
+    if detener_usuario:
+        raise StopUser()
+    return respuesta
 
 
 def _json(respuesta: Any) -> Any:
+    if es_redireccion(getattr(respuesta, "status_code", None)):
+        return None
     try:
         return datos_de(respuesta.json())
     except ValueError:
@@ -475,7 +486,9 @@ def _una_rafaga(environment: Environment) -> None:
         servicio = _RNG.choice(tienda.service_ids)
         # Fecha lejana (15-40 dias): fuera de lo que reservan los clientes.
         dia = _hoy() + timedelta(days=_RNG.randint(15, 40))
-        respuesta = sondeo.get(
+        respuesta = solicitar_sin_redirecciones(
+            sondeo,
+            "GET",
             "/public/availability",
             name="/public/availability [rafaga]",
             params={
@@ -484,6 +497,9 @@ def _una_rafaga(environment: Environment) -> None:
                 "date": dia.isoformat(),
             },
         )
+        if es_redireccion(respuesta.status_code):
+            CONTEO.registrar_rafaga([])
+            return
         slots = _json(respuesta)
         slot = slot_libre(slots if isinstance(slots, list) else [], _RNG)
         if slot:
@@ -496,14 +512,20 @@ def _una_rafaga(environment: Environment) -> None:
         sesion = HttpSession(
             base_url=host, request_event=environment.events.request, user=None
         )
-        with sesion.post(
+        with solicitar_sin_redirecciones(
+            sesion,
+            "POST",
             "/public/appointments",
             name="/public/appointments [rafaga]",
             json=_reserva(tienda, servicio, slot),
             catch_response=True,
         ) as r:
-            if r.status_code in (201, 409):
+            if es_redireccion(r.status_code):
+                r.failure(f"Redireccion HTTP {r.status_code} rechazada")
+            elif r.status_code in (201, 409):
                 r.success()
+            else:
+                r.failure(f"HTTP {r.status_code}")
             return int(r.status_code or 0)
 
     hilos = [gevent.spawn(reservar, i) for i in range(RAFAGA_TAMANO)]
@@ -520,17 +542,33 @@ def _muestrear_slo(environment: Environment) -> None:
     while True:
         try:
             if not token:
-                login = sesion.post(
+                login = solicitar_sin_redirecciones(
+                    sesion,
+                    "POST",
                     f"{host}/auth/login",
                     timeout=10,
                     json={"email": SUPERADMIN_EMAIL, "password": SUPERADMIN_PASSWORD},
                 )
+                if es_redireccion(login.status_code):
+                    # No seguir ni reutilizar credenciales tras derivar el
+                    # login a otro origen.
+                    sesion.close()
+                    return
+                if login.status_code != 200:
+                    token = ""
+                    gevent.sleep(SLO_CADA_S)
+                    continue
                 token = str(datos_de(login.json()).get("access_token", ""))
-            respuesta = sesion.get(
+            respuesta = solicitar_sin_redirecciones(
+                sesion,
+                "GET",
                 f"{host}/ops/slo",
                 timeout=10,
                 headers={"Authorization": f"Bearer {token}"},
             )
+            if es_redireccion(respuesta.status_code):
+                sesion.close()
+                return
             if respuesta.status_code == 401:
                 token = ""
             elif respuesta.ok:

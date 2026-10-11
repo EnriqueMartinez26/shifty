@@ -6,15 +6,17 @@ name: Perf Acceptance
 # y scripts/perf_acceptance_check.py decide: p95 < 500 ms por ruta, 0 5xx,
 # 0 429, rafagas 1 x 201 + 409, outbox al dia. docs/PERF_ACCEPTANCE.md.
 #
-# Staging comparte el VPS con produccion (docs/DEPLOY_RUNBOOK.md §6): 200
-# usuarios de noche le pegan a los clientes reales. El nocturno queda APAGADO
-# hasta que el dueno fije la variable del repo PERF_NIGHTLY=true; a mano
-# (workflow_dispatch) corre siempre.
+# Staging debe estar aislado en otro host; nunca corre sobre el VPS de
+# produccion. Los ensayos locales se ejecutan por CLI, fuera de este workflow.
+# La prueba escribe en tiendas cap-* y el preflight valida origin y entorno
+# antes de leer datos o usar credenciales.
+# El nocturno queda APAGADO hasta que el dueno fije PERF_NIGHTLY=true; a mano
+# (workflow_dispatch) corre siempre, sujeto a las mismas guardas.
 #
 # Donde corre: un runner de GitHub esta en EE.UU. y suma 120-150 ms de ida y
 # vuelta a Argentina a cada request. Para juzgar el servidor y no la red,
-# usar un runner self-hosted cerca (variable PERF_RUNNER, p. ej. la etiqueta
-# de un runner en AR/BR) o compensar con PERF_NETWORK_OFFSET_MS (ms que se
+# usar un runner self-hosted cerca del staging (variable PERF_RUNNER, p. ej.
+# la etiqueta de un runner en AR/BR) o compensar con PERF_NETWORK_OFFSET_MS (ms que se
 # suman a los umbrales). Desde una sola IP el borde limita por cliente
 # (limit_req): staging necesita los limites de prueba del runbook.
 
@@ -52,6 +54,7 @@ jobs:
         working-directory: .
         env:
           STAGING_URL: ${{ secrets.STAGING_URL }}
+          PERF_ALLOWED_ORIGIN: ${{ vars.PERF_ALLOWED_ORIGIN }}
           SEED_OWNER_PASSWORD: ${{ secrets.SEED_OWNER_PASSWORD }}
           SHIFTY_SUPERADMIN_EMAIL: ${{ secrets.SHIFTY_SUPERADMIN_EMAIL }}
           SHIFTY_SUPERADMIN_PASSWORD: ${{ secrets.SHIFTY_SUPERADMIN_PASSWORD }}
@@ -65,6 +68,10 @@ jobs:
             echo "::error title=Prueba de aceptacion sin configurar::Faltan los secretos del repo:$faltan. STAGING_URL = URL de la API de STAGING con /api (nunca produccion); SEED_OWNER_PASSWORD = la clave con la que se corrio scripts/seed_capacidad.py; SHIFTY_SUPERADMIN_* = un superadmin de staging (muestrea /ops/slo). Ver docs/PERF_ACCEPTANCE.md."
             exit 1
           fi
+          if [ -z "$PERF_ALLOWED_ORIGIN" ]; then
+            echo "::error title=Prueba de aceptacion sin configurar::Falta la variable del repo PERF_ALLOWED_ORIGIN con el origin HTTPS exacto del staging."
+            exit 1
+          fi
 
       - name: Checkout
         uses: actions/checkout@v7.0.1
@@ -75,6 +82,12 @@ jobs:
       - name: Install dependencies
         # Locust ya esta en el grupo dev del lock: no es dependencia nueva.
         run: uv sync --frozen
+
+      - name: Validar destino de staging
+        env:
+          STAGING_URL: ${{ secrets.STAGING_URL }}
+          PERF_ALLOWED_ORIGIN: ${{ vars.PERF_ALLOWED_ORIGIN }}
+        run: uv run python scripts/verify_perf_target.py
 
       - name: Manifiesto de tiendas desde staging
         env:

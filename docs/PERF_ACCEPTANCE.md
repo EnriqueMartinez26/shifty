@@ -54,7 +54,7 @@ Checked by hand after the run (the script does not see the host): no container r
 
 ## 3. Staging setup (once per test)
 
-Never against production: the seed creates owner accounts with a known password, and the test writes. The seed fails closed in two layers, both checked before it connects:
+Never against production: the seed creates owner accounts with a known password, and the test writes. Staging must be local or on a separate host; it must never share the production VPS. CI also requires an exact HTTPS origin allowlist and a readiness response identifying the API as staging before it reads test data or uses credentials. The seed fails closed in two layers, both checked before it connects:
 
 - **Target database.** `--expect-database` and `--expect-host` are mandatory and must match the database and host in the container's `DATABASE_URL`, and the database name must contain `staging`. A database without `staging` in its name is accepted only when named again with `--allow-database-name <name>`, and that is printed in the log. `ENV` alone is not enough: staging runs with `docker-compose.prod.yml`, which sets `ENV: production`, so the operator overrides it with `-e ENV=staging`, and the same command run from the production clone would seed production. The target check is what tells the two apart.
 - **`ENV`.** It must be `staging` or `development`; `production` is refused even when the database matches.
@@ -91,7 +91,7 @@ So staging's own `.env` names its database with `staging` in it: `POSTGRES_DB=sh
 
 ### Against staging, by hand
 
-From a machine that is NOT the VPS, in `backend/`:
+From a machine that is NOT the production VPS, in `backend/`:
 
 ```bash
 python loadtests/aceptacion.py --host https://staging.example.com/api --out manifiesto.json
@@ -133,18 +133,19 @@ Rehearsal on 2026-09-24 (3 stores, 20 users, 90 s plateau, local uvicorn): 1336 
 
 ### From CI
 
-`.github/workflows/perf-acceptance.yml` runs on `workflow_dispatch` and, only when the repo variable `PERF_NIGHTLY` is `true`, every night at 03:30 ART. Staging shares the VPS with production, so the nightly stays off until the owner decides otherwise. It builds the manifest from staging's public API by slug, runs Locust, runs the check and uploads `perf-acceptance` (CSV, codes, SLO samples, manifest) as an artifact even when it fails.
+`.github/workflows/perf-acceptance.yml` runs on `workflow_dispatch` and, only when the repo variable `PERF_NIGHTLY` is `true`, every night at 03:30 ART. The workflow target must be isolated remote staging, never the production VPS; local rehearsals use the standalone commands above, not this workflow. Before reading the manifest or using credentials, CI compares the `STAGING_URL` origin with `PERF_ALLOWED_ORIGIN` and requires `/api/ops/health/ready` to return HTTP 200 with `data.environment: staging`. It then builds the manifest from staging's public API by slug, runs Locust, runs the check and uploads `perf-acceptance` (CSV, codes, SLO samples, manifest) as an artifact even when it fails.
 
 | Setting | Kind | What |
 | --- | --- | --- |
-| `STAGING_URL` | secret | staging API URL with `/api` |
+| `STAGING_URL` | secret | staging API URL with `/api`; HTTPS origin must exactly match `PERF_ALLOWED_ORIGIN` |
+| `PERF_ALLOWED_ORIGIN` | variable | exact HTTPS origin for isolated staging (scheme, hostname and optional port only; no API path; an optional final slash is normalized away) |
 | `SEED_OWNER_PASSWORD` | secret | the password the seed ran with |
 | `SHIFTY_SUPERADMIN_EMAIL`, `SHIFTY_SUPERADMIN_PASSWORD` | secrets | a staging superadmin (samples `/ops/slo`) |
 | `PERF_RUNNER` | variable | runner label; default `ubuntu-latest` |
 | `PERF_NETWORK_OFFSET_MS` | variable | ms added to the p95 thresholds |
 | `PERF_NIGHTLY` | variable | `true` to enable the nightly run |
 
-Runner location matters. A GitHub-hosted runner is in the US and adds 120-150 ms of round trip to Argentina on every request: with it, a 500 ms threshold is really judging 350 ms of server time. Either register a self-hosted runner close to the VPS (Argentina or Brazil) and set `PERF_RUNNER` to its label, or set `PERF_NETWORK_OFFSET_MS=150` (or pass `network_offset_ms` when dispatching) so the thresholds are raised by the network cost. Write down which one was used.
+Runner location matters. A GitHub-hosted runner is in the US and adds 120-150 ms of round trip to Argentina on every request: with it, a 500 ms threshold is really judging 350 ms of server time. Either register a self-hosted runner close to isolated staging (Argentina or Brazil) and set `PERF_RUNNER` to its label, or set `PERF_NETWORK_OFFSET_MS=150` (or pass `network_offset_ms` when dispatching) so the thresholds are raised by the network cost. A self-hosted runner must be dedicated to this workflow, with network egress restricted to isolated staging and required GitHub services. Write down which one was used.
 
 ## 5. Reading the results
 
@@ -156,6 +157,6 @@ Runner location matters. A GitHub-hosted runner is in the US and adds 120-150 ms
 
 ## 6. When to run it
 
-Run the full test on the real VPS **within the provider's 30-day guarantee window**: if the host cannot hold 200 users, that is the moment to change the plan or the provider at no cost. After launch, run it before any release that touches availability, booking, the dashboard, reports, jobs or the database configuration, and keep the verdict output with the release notes (`docs/RELEASE_CHECKLIST.md` §2).
+Run the full test against isolated staging with resources representative of the candidate host **within the provider's 30-day guarantee window**: if the candidate cannot hold 200 users, that is the moment to change the plan or provider at no cost. Never run this load against live production or on the production VPS. After launch, use a separate isolated capacity environment before releases that touch availability, booking, the dashboard, reports, jobs or database configuration, and keep the verdict with the release notes (`docs/RELEASE_CHECKLIST.md` §2).
 
 Per PR, the cheap guard is `tests/postgres/test_pg_presupuesto_de_sentencias.py` in the `backend-postgres` job: it pins how many SQL statements each hot endpoint sends. Lowering a ceiling after an optimization is a one-line change; raising one needs a reason in the PR.

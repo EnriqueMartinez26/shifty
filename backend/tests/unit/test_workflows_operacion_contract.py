@@ -12,9 +12,9 @@
   pone el workflow en rojo y si las herramientas no entran al repo como
   dependencia.
 - F5-04 (plan §9): `perf-acceptance.yml` corre la prueba de aceptacion con
-  Locust contra STAGING y la juzga `scripts/perf_acceptance_check.py`. Staging
-  comparte el host con produccion, asi que el nocturno esta apagado hasta que
-  el dueno lo prenda (`vars.PERF_NIGHTLY`).
+  Locust contra STAGING aislado y la juzga `scripts/perf_acceptance_check.py`.
+  El workflow valida origin y entorno antes de leer datos o usar credenciales;
+  el nocturno sigue opt-in (`vars.PERF_NIGHTLY`).
 """
 
 from __future__ import annotations
@@ -497,7 +497,7 @@ def test_perf_corre_de_noche_y_a_mano_nunca_en_pr() -> None:
 
 
 def test_el_nocturno_esta_apagado_hasta_que_el_dueno_lo_prenda() -> None:
-    """Staging vive en el host de produccion: 200 usuarios de noche le pegan."""
+    """El test de capacidad usa staging aislado, nunca el VPS de produccion."""
     condicion = _job_perf()["if"]
     assert "workflow_dispatch" in condicion
     assert "vars.PERF_NIGHTLY == 'true'" in condicion
@@ -515,7 +515,34 @@ def test_perf_verifica_los_secretos_antes_que_nada() -> None:
     primero = _pasos_perf()[0]
     for secreto in SECRETOS_PERF:
         assert primero["env"][secreto] == f"${{{{ secrets.{secreto} }}}}"
+    assert (
+        primero["env"]["PERF_ALLOWED_ORIGIN"] == "$" + "{{ vars.PERF_ALLOWED_ORIGIN }}"
+    )
     assert "::error" in primero["run"]
+    assert "PERF_ALLOWED_ORIGIN" in primero["run"]
+
+
+def test_perf_valida_el_destino_antes_de_leer_datos_o_usar_credenciales() -> None:
+    pasos = _pasos_perf()
+    indice_guard = next(
+        i
+        for i, paso in enumerate(pasos)
+        if "verify_perf_target.py" in str(paso.get("run", ""))
+    )
+    indice_manifest = next(
+        i
+        for i, paso in enumerate(pasos)
+        if "loadtests/aceptacion.py" in str(paso.get("run", ""))
+    )
+    indice_locust = next(
+        i
+        for i, paso in enumerate(pasos)
+        if "locust_aceptacion.py" in str(paso.get("run", ""))
+    )
+    assert indice_guard < indice_manifest < indice_locust
+    guard = pasos[indice_guard]
+    assert guard["env"]["STAGING_URL"] == "${{ secrets.STAGING_URL }}"
+    assert guard["env"]["PERF_ALLOWED_ORIGIN"] == "$" + "{{ vars.PERF_ALLOWED_ORIGIN }}"
 
 
 @pytest.mark.skipif(BASH is None, reason="hace falta bash")

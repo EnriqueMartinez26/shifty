@@ -43,6 +43,34 @@ TIENDAS_SEMBRADAS = 200
 DOMINIO_DUENOS = "capacidad.example.com"
 
 
+class _SinRedirecciones(urllib.request.HTTPRedirectHandler):
+    """El manifiesto falla ante cualquier redirect, aun si cambia de host."""
+
+    def redirect_request(
+        self,
+        req: Any,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Any,
+        newurl: str,
+    ) -> None:
+        return None
+
+
+def solicitar_sin_redirecciones(
+    cliente: Any, metodo: str, url: str, **kwargs: Any
+) -> Any:
+    """Usa clientes requests/Locust sin reenviar una solicitud a otro origen."""
+    kwargs["allow_redirects"] = False
+    return cliente.request(metodo, url, **kwargs)
+
+
+def es_redireccion(codigo: int | None) -> bool:
+    """Trata cualquier 3xx como rechazo, aunque la respuesta no tenga Location."""
+    return codigo is not None and 300 <= codigo < 400
+
+
 @dataclass(frozen=True)
 class TiendaSembrada:
     slug: str
@@ -179,10 +207,12 @@ def manifiesto_desde_api(
 
 
 def _obtener_http(host: str, pausa_s: float) -> Callable[[str], Any]:
+    opener = urllib.request.build_opener(_SinRedirecciones())
+
     def obtener(ruta: str) -> Any:
         time.sleep(pausa_s)
         try:
-            with urllib.request.urlopen(f"{host}{ruta}", timeout=15) as respuesta:
+            with opener.open(f"{host}{ruta}", timeout=15) as respuesta:
                 return json.loads(respuesta.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             if exc.code == 404:

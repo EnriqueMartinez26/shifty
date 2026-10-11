@@ -13,15 +13,43 @@ import importlib.util
 import json
 import random
 import sys
+import threading
+import urllib.error
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from datetime import date
 from pathlib import Path
 from types import ModuleType
 
 import pytest
+import requests
+from requests.adapters import BaseAdapter
 
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
 MODULO = BACKEND_ROOT / "loadtests" / "aceptacion.py"
 LOCUSTFILE = BACKEND_ROOT / "loadtests" / "locust_aceptacion.py"
+
+
+class _Adapter(BaseAdapter):
+    def __init__(self, status: int, location: str | None = None) -> None:
+        self.status = status
+        self.location = location
+        self.requests: list[requests.PreparedRequest] = []
+
+    def send(
+        self, request: requests.PreparedRequest, **_kwargs: object
+    ) -> requests.Response:
+        self.requests.append(request)
+        response = requests.Response()
+        response.status_code = self.status
+        response.url = request.url
+        response.request = request
+        response._content = b"{}"
+        if self.location:
+            response.headers["Location"] = self.location
+        return response
+
+    def close(self) -> None:
+        pass
 
 
 def _modulo() -> ModuleType:
@@ -68,6 +96,27 @@ def test_el_locustfile_usa_la_mezcla_y_no_importa_locust_en_el_modulo_puro() -> 
         assert variable in validar, variable
     assert "import locust" not in MODULO.read_text(encoding="utf-8")
     assert "from locust" not in MODULO.read_text(encoding="utf-8")
+
+
+def test_todos_los_clientes_locust_pasan_por_la_politica_sin_redirects() -> None:
+    texto = LOCUSTFILE.read_text(encoding="utf-8")
+
+    assert texto.count("solicitar_sin_redirecciones(") >= 4
+    assert "client.request(" not in texto
+    assert "sondeo.get(" not in texto
+    assert "sesion.post(" not in texto
+    assert "sesion.get(" not in texto
+    assert "raise StopUser()" in texto
+
+
+def test_cualquier_respuesta_3xx_se_clasifica_como_redirect_rechazable() -> None:
+    m = _modulo()
+
+    assert m.es_redireccion(307)
+    assert m.es_redireccion(308)
+    assert m.es_redireccion(399)
+    assert not m.es_redireccion(200)
+    assert not m.es_redireccion(None)
 
 
 def test_el_manifiesto_trae_tiendas_sin_contrasenas(tmp_path: Path) -> None:
@@ -165,6 +214,82 @@ def test_se_desenvuelve_la_respuesta_canonica_de_la_api() -> None:
     ]
     assert m.datos_de([1, 2]) == [1, 2], "una respuesta cruda pasa igual"
     assert m.datos_de({"access_token": "t"}) == {"access_token": "t"}
+
+
+@pytest.mark.parametrize("codigo", [307, 308])
+def test_cliente_no_reenvia_cuerpo_ni_credenciales_a_un_redirect_cross_origin(
+    codigo: int,
+) -> None:
+    m = _modulo()
+    staging = _Adapter(codigo, "https://production.example.test/api/login")
+    produccion = _Adapter(200)
+    with requests.Session() as sesion:
+        sesion.mount("https://staging.example.test/", staging)
+        sesion.mount("https://production.example.test/", produccion)
+
+        respuesta = m.solicitar_sin_redirecciones(
+            sesion,
+            "POST",
+            "https://staging.example.test/api/login",
+            headers={"Authorization": "Bearer staging-token"},
+            json={"password": "staging-password"},
+            allow_redirects=True,
+        )
+
+    assert respuesta.status_code == codigo
+    assert len(staging.requests) == 1
+    assert staging.requests[0].headers["Authorization"] == "Bearer staging-token"
+    assert "staging-password" in str(staging.requests[0].body)
+    assert produccion.requests == [], "el cuerpo y el token no salen a produccion"
+
+
+@pytest.mark.parametrize("codigo", [307, 308])
+def test_el_manifiesto_falla_sin_seguir_redirect_cross_origin(codigo: int) -> None:
+    class HandlerDestino(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            self.server.visitas += 1  # type: ignore[attr-defined]
+            self.send_response(200)
+            self.end_headers()
+
+        def log_message(self, *_args: object) -> None:
+            pass
+
+    destino = ThreadingHTTPServer(("127.0.0.1", 0), HandlerDestino)
+    destino.visitas = 0  # type: ignore[attr-defined]
+    ubicacion = f"http://127.0.0.1:{destino.server_port}/credenciales"
+
+    class HandlerStaging(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            self.server.visitas += 1  # type: ignore[attr-defined]
+            self.send_response(codigo)
+            self.send_header("Location", ubicacion)
+            self.end_headers()
+
+        def log_message(self, *_args: object) -> None:
+            pass
+
+    staging = ThreadingHTTPServer(("127.0.0.1", 0), HandlerStaging)
+    staging.visitas = 0  # type: ignore[attr-defined]
+    servidores = (staging, destino)
+    hilos = [threading.Thread(target=s.serve_forever, daemon=True) for s in servidores]
+    for hilo in hilos:
+        hilo.start()
+
+    try:
+        m = _modulo()
+        obtener = m._obtener_http(f"http://127.0.0.1:{staging.server_port}/api", 0)
+        with pytest.raises(urllib.error.HTTPError) as error:
+            obtener("/public/stores/cap-001")
+
+        assert error.value.code == codigo
+        assert staging.visitas == 1  # type: ignore[attr-defined]
+        assert destino.visitas == 0  # type: ignore[attr-defined]
+    finally:
+        for servidor in servidores:
+            servidor.shutdown()
+            servidor.server_close()
+        for hilo in hilos:
+            hilo.join(timeout=2)
 
 
 def test_el_manifiesto_se_arma_desde_la_api_publica_de_staging() -> None:

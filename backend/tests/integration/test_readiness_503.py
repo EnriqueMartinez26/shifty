@@ -37,6 +37,8 @@ from sqlalchemy.pool import NullPool
 
 import core.database
 import core.redis
+import modules.ops.router as ops_router
+from core.config import Environment, settings
 from core.redis import get_redis
 from main import app
 
@@ -113,6 +115,54 @@ async def test_readiness_da_200_con_base_y_redis_sanos(
     res, _ = await _ready(client)
     assert res.status_code == 200, res.text
     assert res.json()["status"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_readiness_identifica_staging_sin_habilitar_detalle_publico(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def siempre_listo() -> bool:
+        return True
+
+    monkeypatch.setattr(settings, "ENV", Environment.STAGING)
+    monkeypatch.setattr(settings, "OPS_ENABLE_PUBLIC_HEALTH", False)
+    monkeypatch.setattr(ops_router, "_database_ready", siempre_listo)
+    monkeypatch.setattr(ops_router, "_redis_ready", siempre_listo)
+
+    res, _ = await _ready(client)
+
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["environment"] == "staging"
+    assert "components" not in body
+
+    canonical_res = await client.get(
+        "/ops/health/ready", headers={"x-raw-response": "false"}
+    )
+    assert canonical_res.status_code == 200, canonical_res.text
+    assert canonical_res.json()["success"] is True
+    assert canonical_res.json()["data"]["environment"] == "staging"
+
+
+@pytest.mark.asyncio
+async def test_readiness_no_revela_produccion_aunque_se_habilite_el_flag_publico(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def siempre_listo() -> bool:
+        return True
+
+    monkeypatch.setattr(settings, "ENV", Environment.PRODUCTION)
+    monkeypatch.setattr(settings, "OPS_ENABLE_PUBLIC_HEALTH", True)
+    monkeypatch.setattr(ops_router, "_database_ready", siempre_listo)
+    monkeypatch.setattr(ops_router, "_redis_ready", siempre_listo)
+
+    res, _ = await _ready(client)
+
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["success"] is True
+    assert "environment" not in body["data"]
+    assert body["data"]["components"] == {"db": True, "redis": True}
 
 
 @pytest.mark.asyncio

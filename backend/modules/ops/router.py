@@ -14,7 +14,7 @@ from core.exceptions import PermissionDeniedException
 
 import core.database
 import core.redis
-from core.config import settings
+from core.config import Environment, settings
 from core.database import get_db
 from core.responses import error_response
 from core.roles import (
@@ -94,11 +94,13 @@ async def readiness() -> dict[str, object] | JSONResponse:
 
     status_value = "ok" if db_ok and redis_ok else "degraded"
 
-    # Con el flag apagado se devuelve SOLO el estado agregado: ni el detalle de
-    # componentes ni -antes- el nombre de clase de la excepcion (info util para
-    # un atacante anonimo que sondea la infra). El nombre de clase se elimino en
-    # ambos casos.
+    # Con el flag apagado se omite el detalle de componentes y nunca se expone
+    # el nombre de clase de una excepcion (info util para un atacante anonimo
+    # que sondea la infra). En staging se agrega el marcador explicito del
+    # entorno; nunca se revela el entorno de produccion.
     body: dict[str, object] = {"status": status_value, "time": now}
+    if settings.ENV == Environment.STAGING:
+        body["environment"] = "staging"
     if settings.OPS_ENABLE_PUBLIC_HEALTH:
         body["components"] = {"db": db_ok, "redis": redis_ok}
 
