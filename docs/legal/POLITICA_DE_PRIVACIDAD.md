@@ -17,6 +17,7 @@ Shifty es un software de turnos que usan comercios y profesionales (**las Tienda
 | De la cuenta de acceso del personal y de los administradores de las Tiendas (**Usuarios del panel**) | **Shifty** | Responsable. |
 | De las Tiendas como clientes de Shifty: contacto, plan y facturación | **Shifty** | Responsable. |
 | Del pago con Mercado Pago (medio de pago, datos del pagador) | **Mercado Pago**, según sus propias políticas | Shifty no es parte de ese tratamiento. |
+| De uso del portal de reservas, medidos con Google Analytics 4 solo si la persona lo acepta (ver 9.1) | [[COMPLETAR: responsable de la medición con Google Analytics, según NA-18]] | [[COMPLETAR: rol de Shifty y de Google en la medición, según NA-18]] |
 
 **Datos de Shifty:** [[COMPLETAR: razón social o nombre del titular de Shifty]], CUIT [[COMPLETAR: CUIT de Shifty]], domicilio en [[COMPLETAR: domicilio legal de Shifty]]. Correo para temas de datos personales: [[COMPLETAR: email de privacidad de Shifty]]. Inscripción en el Registro Nacional de Bases de Datos: [[COMPLETAR: número de inscripción AAIP]].
 
@@ -45,6 +46,7 @@ Shifty es un software de turnos que usan comercios y profesionales (**las Tienda
 | Seña | Nombre y correo, que se envían a Mercado Pago para crear el link de pago; estado, importe e identificadores del pago que devuelve Mercado Pago | Sí, para pagar online | No se puede pagar la seña online. |
 | Cancelación desde "Mis turnos" | Motivo | Facultativo | Ninguna consecuencia. |
 | Uso del portal | Dirección IP, navegador y páginas pedidas, en los registros técnicos del servidor | Sí (técnico) | — |
+| Uso del portal, solo si se acepta la analítica | Datos del dispositivo y del navegador, dirección IP, identificadores guardados en cookies y eventos genéricos del flujo de reserva, que recibe Google (ver 9.1) | Facultativo | Ninguna consecuencia: se puede reservar igual. |
 
 Shifty **no recibe los datos completos de la tarjeta** ni del medio de pago: los trata Mercado Pago.
 
@@ -62,8 +64,9 @@ Shifty **no recibe los datos completos de la tarjeta** ni del medio de pago: los
 | Calcular la seña: **puede variar según el historial de asistencia del Cliente en esa Tienda**, si la Tienda configuró un recargo para clientes nuevos o para clientes que faltaron | Relación contractual; se informa acá |
 | Invitar al Cliente a volver a reservar, en un correo posterior al turno, **solo si la Tienda activó ese envío** | [[COMPLETAR: consentimiento previo del Cliente / interés de la Tienda con baja en cada correo, según la decisión NA-8]] |
 | Detectar errores del sistema y abusos del portal | Seguridad del servicio |
+| Medir cómo se usa el flujo de reserva, con Google Analytics 4, **solo si la persona acepta la analítica** (ver 9.1) | Consentimiento de quien visita el portal, que se puede retirar en cualquier momento |
 
-Los datos de un Cliente **no se usan en otra Tienda**, no se venden y no se ceden para publicidad. Shifty no los usa para fines propios.
+Los datos de un Cliente **no se usan en otra Tienda**, no se venden y no se ceden para publicidad. Shifty no los usa para fines propios. La medición opcional del uso del portal (ver 9.1) no usa los datos de la reserva y solo se activa si la persona la acepta.
 
 > **Nota para el abogado (NA-8):** el correo "Gracias por tu visita, reservá tu próximo turno" es publicitario (L1 O-8, P-16). El backend de la rama de integración ya tiene la baja por Cliente y por Tienda, con un enlace firmado en el correo, y el envío saltea a quien se dio de baja (checklist BE-04). Faltan la página de confirmación del front y los encabezados `List-Unsubscribe`. Hay que decidir si alcanza con eso (retiro o bloqueo en cada comunicación, Ley 25.326 art. 27, inc. 3, verificado) o si además hace falta una casilla opcional y desmarcada al reservar, como recomienda L1 §4.7. L1 no verificó el inc. 1 del art. 27.
 
@@ -90,6 +93,7 @@ Los datos de un Cliente **no se usan en otra Tienda**, no se venden y no se cede
 | **[[COMPLETAR: proveedor SMTP]]** (envío de correo) | Correo y nombre del destinatario, y el contenido del aviso (servicio, fecha, hora, Tienda, código de validación) | Enviar los correos | [[COMPLETAR: país/región del proveedor SMTP]] |
 | **Sentry** (monitoreo de errores) | Informes de error sin los datos de la persona: se quitan el cuerpo de los pedidos, las cookies, los encabezados de autenticación, los parámetros de las direcciones y las variables del programa, y se enmascaran los teléfonos de las rutas. Desde el navegador, Sentry no recibe la IP del usuario. | Detectar y corregir fallas | [[COMPLETAR: región del proyecto de Sentry (EE. UU. o UE)]] |
 | **[[COMPLETAR: proveedor de backups]]** (copias de seguridad) | Copia completa de la base de datos | Recuperar el servicio ante una falla | [[COMPLETAR: región del proveedor de backups]] |
+| **Google** (Google Analytics 4), solo si la persona acepta la analítica en el portal de reservas | Datos del dispositivo y del navegador, dirección IP, identificadores guardados en cookies y eventos genéricos del flujo de reserva, con una dirección de página fija, sin el nombre de la Tienda y sin página de origen. No recibe los datos del formulario ni identificadores de turnos, Tiendas, servicios o profesionales (ver 9.1). | Medir el uso del portal de reservas | Puede tratarlos fuera de Argentina: [[COMPLETAR: países o regiones de tratamiento que declara Google]] |
 | Autoridades | Lo que exija una orden judicial o una norma | Cumplir la ley | Argentina |
 
 > **Nota para el abogado (NA-13):** ¿Mercado Pago es un responsable propio frente al pagador o un subencargado? ¿Qué obligaciones tiene Shifty como integrador, según las cláusulas 6.2, 6.7 y 10 de los términos para desarrolladores (L1 P-10)?
@@ -103,7 +107,7 @@ Los datos de un Cliente **no se usan en otra Tienda**, no se venden y no se cede
 
 ## 6. Transferencias internacionales
 
-Algunos proveedores tratan los datos fuera de Argentina: **Brasil** (servidor) y, según la región que se elija, **Estados Unidos** u otros países (monitoreo, correo, copias de seguridad). Ni Brasil ni Estados Unidos figuran en la lista de países con protección adecuada de la AAIP. Por eso cada transferencia se ampara en [[COMPLETAR: mecanismo elegido por proveedor: cláusulas contractuales modelo aprobadas por la AAIP / contrato propio notificado a la AAIP / elección de una región con protección adecuada]] (Ley 25.326, art. 12; Decreto 1558/2001, art. 12).
+Algunos proveedores tratan los datos fuera de Argentina: **Brasil** (servidor); según la región que se elija, **Estados Unidos** u otros países (monitoreo, correo, copias de seguridad), y, solo si la persona acepta la analítica del portal de reservas, los países donde Google trate los datos de medición. Ni Brasil ni Estados Unidos figuran en la lista de países con protección adecuada de la AAIP. Por eso cada transferencia se ampara en [[COMPLETAR: mecanismo elegido por proveedor: cláusulas contractuales modelo aprobadas por la AAIP / contrato propio notificado a la AAIP / elección de una región con protección adecuada]] (Ley 25.326, art. 12; Decreto 1558/2001, art. 12).
 
 > **Nota para el abogado (NA-5):** falta elegir el mecanismo para cada proveedor (L1 riesgo 1, O-11, P-4). Las opciones que verificó L1 son:
 > - las cláusulas modelo de la Disp. DNPDP 60-E/2016 o de la Res. AAIP 198/2023;
@@ -112,6 +116,8 @@ Algunos proveedores tratan los datos fuera de Argentina: **Brasil** (servidor) y
 > - el consentimiento expreso del titular.
 >
 > Es más barato elegir regiones adecuadas donde se pueda (UE para Sentry, los backups y el SMTP). No hay alternativa conocida para el servidor en Brasil. Esta sección no se publica sin ese mecanismo.
+>
+> Desde el 2026-10-10 la lista incluye a **Google** por la analítica del portal (NA-18): definir también su mecanismo.
 
 ## 7. Cuánto tiempo se guardan
 
@@ -128,6 +134,9 @@ Algunos proveedores tratan los datos fuera de Argentina: **Brasil** (servidor) y
 | Datos de facturación de las Tiendas | [[COMPLETAR: plazo que exigen las normas fiscales]] |
 | Registros técnicos del servidor (IP y rutas) | [[COMPLETAR: plazo]] |
 | Copias de seguridad | Se renuevan por rotación: un dato borrado desaparece de todas las copias dentro de los 28 días |
+| Elección sobre la analítica, en el navegador | Hasta que la persona la cambie o borre los datos del sitio. Si el navegador bloquea el almacenamiento, dura solo esa visita. |
+| Cookies de Google Analytics en el navegador | Vencen a los 30 días de su última actualización. Se borran al retirar el consentimiento. |
+| Datos de medición en Google Analytics | [[COMPLETAR: plazo de conservación configurado en la propiedad de Google Analytics]] |
 
 > **Nota para el abogado (NA-14):** los plazos de turnos, fichas, auditoría y facturación son decisión de Mateo y Enrique (L1 P-5). La ley pide destruir los datos cuando dejan de ser necesarios (Ley 25.326, art. 4, inc. 7).
 
@@ -157,17 +166,49 @@ Algunos proveedores tratan los datos fuera de Argentina: **Brasil** (servidor) y
 
 ## 9. Cookies y almacenamiento en el navegador
 
-Shifty **no usa cookies ni herramientas de analítica, publicidad o seguimiento**, ni carga scripts, fuentes o servicios de terceros en sus páginas.
+Shifty **no usa cookies ni herramientas de publicidad**. Usa una única herramienta de analítica, **Google Analytics 4**, solo en el portal de reservas y solo si la persona la acepta (ver 9.1). Fuera de esa medición opcional, no carga scripts, fuentes ni servicios de terceros en sus páginas.
 
 | Elemento | Quién lo recibe | Para qué | Duración |
 |---|---|---|---|
 | Cookie `refresh_token`: `HttpOnly`, `Secure`, `SameSite=Lax` | Solo los Usuarios del panel, al iniciar sesión | Mantener la sesión iniciada. Es estrictamente necesaria. | 30 días, o hasta cerrar sesión |
 | Almacenamiento local `shifty_user` | Solo los Usuarios del panel | Mostrar el nombre y el rol del usuario mientras se valida la sesión | Hasta cerrar sesión |
 | Almacenamiento de sesión `shifty:otp:{tienda}` | Clientes que validaron su teléfono | No pedir el código otra vez durante 30 minutos | Hasta cerrar la pestaña |
+| Almacenamiento local `shifty:analytics-consent:v1` | Quien elige aceptar o rechazar la analítica en el portal de reservas | Recordar esa elección | Hasta que la persona la cambie o borre los datos del sitio. Si el navegador bloquea el almacenamiento, solo durante esa visita. |
+| Cookies `shifty_ga` y `shifty_ga_<id>`, de Google Analytics | Solo quien acepta la analítica, y solo en el portal de reservas | Distinguir navegadores y sesiones para medir el uso del flujo de reserva | 30 días desde su última actualización, o hasta retirar el consentimiento |
 
-Los Clientes no reciben ninguna cookie de Shifty. Al pagar en Mercado Pago o al abrir WhatsApp, el navegador pasa a un sitio de un tercero, que aplica sus propias políticas.
+Si no aceptan la analítica, los Clientes no reciben ninguna cookie. Al pagar en Mercado Pago o al abrir WhatsApp, el navegador pasa a un sitio de un tercero, que aplica sus propias políticas.
 
-Si en el futuro se agregara una herramienta de analítica o de terceros, esta sección se actualizará y se pedirá consentimiento antes de activarla.
+Si se agregara otra herramienta de analítica o de terceros, esta sección se actualizará y se pedirá consentimiento antes de activarla.
+
+### 9.1. Analítica del portal de reservas (Google Analytics 4)
+
+**Qué es y dónde funciona.** Shifty usa Google Analytics 4, un servicio de Google, para medir cómo se usa el portal público de reservas. Funciona solo en la página de reserva de cada Tienda. No se carga en el panel, en el inicio de sesión, en "Mis turnos" ni en las páginas legales.
+
+**Cuándo se activa.** Únicamente después de que la persona elige "Aceptar analítica" en el aviso del portal. Antes de esa elección, o si la rechaza, no se carga ningún script de Google ni se le envía ningún dato. La analítica es facultativa: se puede reservar sin aceptarla.
+
+**Qué recibe Google si se acepta:**
+
+- datos técnicos de la conexión, del dispositivo y del navegador, incluida la dirección IP, a partir de la cual Google puede estimar una ubicación aproximada;
+- los identificadores que guardan las cookies de la tabla anterior;
+- eventos genéricos del flujo de reserva: inicio de la reserva, elección de un servicio, elección de un horario, falta de horarios disponibles, reserva completada y error al reservar.
+
+La página se informa siempre con la misma dirección y el mismo título, sin el nombre de la Tienda, sin parámetros de la dirección y sin la página de origen.
+
+**Qué no recibe.** Los datos que se completan al reservar (nombre, teléfono, correo, notas o respuestas) ni los identificadores de turnos, Tiendas, servicios o profesionales.
+
+**Publicidad.** La integración deja denegado el almacenamiento con fines publicitarios, no habilita Google signals ni la personalización de anuncios y envía las mediciones con la indicación de no personalizar anuncios. Además, la propiedad de Google Analytics de Shifty tiene desactivadas la medición mejorada, Google signals, la recogida de datos proporcionados por usuarios y las vinculaciones con Google Ads.
+
+> **Dependencia de producto:** la medición mejorada se verificó desactivada en la propiedad el 2026-10-10. Google signals, la recogida de datos proporcionados por usuarios y las vinculaciones con Google Ads se verificaron desactivadas el 2026-10-08 y `docs/ANALYTICS.md` pide reconfirmarlas. Hasta registrar esa reconfirmación, la última oración del párrafo anterior no se publica. Lo demás del párrafo lo fija el código (`frontend/src/infrastructure/analytics/bookingAnalytics.ts`).
+
+**Transferencia.** Google puede tratar estos datos fuera de Argentina (ver 6).
+
+**Cómo retirar el consentimiento.** Desde el botón "Preferencias de analítica" del portal de reservas, eligiendo "Rechazar analítica". Desde ese momento no se envían nuevas mediciones y se borran del navegador las cookies de esta integración. Retirar el consentimiento no borra los datos que Google ya recibió. Borrar los datos del sitio en el navegador también elimina la elección, y el portal vuelve a preguntar.
+
+> **Nota para el abogado (NA-18):** Google Analytics 4 está en producción desde el 2026-10-10, en el portal de reservas y con consentimiento previo. Revisar:
+> - el rol de Shifty y de las Tiendas frente a esta medición, que responde a un fin de Shifty y no a una instrucción de la Tienda (comparar con la sección 1 y con NA-1), y el de Google (encargado o responsable propio, según sus condiciones de tratamiento de datos);
+> - si el aviso actual del portal alcanza como consentimiento informado y si la IP, las cookies y los datos del dispositivo deben tratarse como datos personales a estos efectos;
+> - el mecanismo de la transferencia internacional a Google (NA-5);
+> - el plazo de conservación configurado en la propiedad (sección 7) y cómo se atienden los derechos del titular sobre los datos que ya recibió Google.
 
 ## 10. Datos sensibles y menores
 

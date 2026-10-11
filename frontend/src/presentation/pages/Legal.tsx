@@ -116,20 +116,24 @@ const PRIVACY_SECTIONS: LegalSection[] = [
     ]
   },
   {
-    title: 'Analítica opcional',
+    title: '5. Analítica opcional en el portal de reservas',
     paragraphs: [
-      'Cuando está habilitado, Google Analytics mide el uso del portal público de reservas solo si aceptás la analítica. Usa cookies e identificadores del navegador y Google recibe datos técnicos de conexión. La integración no envía los datos que completás al reservar ni identificadores de turnos, tiendas, servicios o profesionales.',
-      'Podés rechazarla y reservar igual. Podés retirar tu consentimiento desde Preferencias de analítica en el portal de reservas; esto detiene futuras mediciones y elimina las cookies de esta integración en el navegador, sin borrar los datos ya enviados a Google.'
+      'Shifty usa Google Analytics 4, un servicio de Google, para medir cómo se usa el portal público de reservas. Funciona solo en la página de reserva de cada tienda: no se carga en el panel de las tiendas, en "Mis turnos" ni en las demás páginas. Se activa únicamente si la persona elige "Aceptar analítica"; antes de esa elección, o si la rechaza, no se carga ningún script de Google ni se le envía ningún dato.',
+      'Si se acepta, Google recibe datos técnicos y de uso: datos del dispositivo y del navegador, la dirección IP de la conexión, a partir de la cual puede estimar una ubicación aproximada, identificadores guardados en cookies del navegador y eventos genéricos del flujo de reserva, como el inicio de la reserva, la elección de un servicio o de un horario y si la reserva se completó o falló. La página se informa con una dirección fija, sin el nombre de la tienda ni la página de origen.',
+      'La integración no envía los datos que se completan al reservar (nombre, teléfono, correo, notas o respuestas) ni identificadores de turnos, tiendas, servicios o profesionales.',
+      'Las funciones publicitarias están desactivadas: Google signals y la personalización de anuncios no se habilitan, las mediciones se envían con la indicación de no personalizar anuncios y el almacenamiento con fines publicitarios queda denegado. Las cookies de esta integración, cuyo nombre empieza con "shifty_ga", vencen a los 30 días de su última actualización.',
+      'Google puede tratar estos datos fuera de Argentina, conforme a sus propias políticas.',
+      'La analítica es opcional: se puede rechazar y reservar igual. La elección se guarda en el navegador y se puede cambiar en cualquier momento desde el botón "Preferencias de analítica" del portal de reservas. Retirar el consentimiento detiene las mediciones siguientes y borra del navegador las cookies de esta integración; no borra los datos que Google ya recibió.'
     ]
   },
   {
-    title: '5. Conservación y seguridad',
+    title: '6. Conservación y seguridad',
     paragraphs: [
       'Conservamos los datos mientras la cuenta esté activa y por los plazos legales aplicables. Aplicamos cifrado de credenciales sensibles, control de acceso por tienda y registro de auditoría.'
     ]
   },
   {
-    title: '6. Derechos',
+    title: '7. Derechos',
     paragraphs: [
       'El titular de los datos puede solicitar acceso, rectificación, actualización o supresión. El pedido puede canalizarse ante la tienda o ante Shifty, que lo derivará a quien corresponda.',
       'En Argentina, la Agencia de Acceso a la Información Pública es el órgano de control de la Ley 25.326 y atiende las denuncias por incumplimiento.'
