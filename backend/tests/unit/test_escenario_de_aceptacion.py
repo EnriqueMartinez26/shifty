@@ -15,6 +15,7 @@ import os
 import random
 import subprocess
 import sys
+from collections.abc import Callable
 from datetime import date
 from pathlib import Path
 from types import ModuleType
@@ -166,7 +167,7 @@ def test_main_falla_antes_de_efectos_y_reusa_el_host_canonico(
 
     def verificar(environment: dict[str, str]) -> str:
         valores_verificados.append(environment)
-        if environment["STAGING_URL"].startswith("https://other.example.com"):
+        if environment["STAGING_URL"] == "https://other.example.com/api":
             raise m.TargetCheckError("origen rechazado")
         return api_base
 
@@ -176,7 +177,7 @@ def test_main_falla_antes_de_efectos_y_reusa_el_host_canonico(
         "/public/staff?store_public_id=S1": [{"public_id": "ST1"}],
     }
 
-    def transporte(host: str, pausa_s: float):
+    def transporte(host: str, pausa_s: float) -> Callable[[str], object]:
         hosts_de_transporte.append(host)
         assert host == api_base
         assert pausa_s == pytest.approx(0.05)
