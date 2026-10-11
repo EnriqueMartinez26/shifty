@@ -309,12 +309,13 @@ In the records below, `<domain>` is the domain of `EMAILS_FROM_EMAIL` and everyt
 
 | Variable | Format | Used by | Empty or invalid |
 |---|---|---|---|
+| `VITE_GA4_MEASUREMENT_ID` | Public GA4 measurement ID matching `G-[A-Z0-9]{4,20}` | Consent-gated analytics on the public booking page; enables only the Google destinations needed in the generated frontend CSP | Empty disables the tag and keeps the baseline CSP; malformed IDs fail the frontend image build |
 | `VITE_SENTRY_DSN` | Sentry DSN of the frontend project | browser error reporting and `/sentry-tunnel` | Sentry off, tunnel answers 404 |
 | `VITE_SUPPORT_WHATSAPP` | digits only, with country code, e.g. `549351XXXXXXX` (normalized by `shared/utils/whatsAppPhone.ts`) | "Renovar por WhatsApp" in the subscription banner; WhatsApp line of "Responsables y contacto" on `/legal/terminos` and `/legal/privacidad` | no WhatsApp link: the banner shows "Escribinos para renovar" (a `mailto:` if the email is set) and the legal line is omitted |
 | `VITE_CONTACT_EMAIL` | one email address, e.g. `contacto@example.com` | email line (`mailto:`) of "Responsables y contacto"; the terms' "consultas" paragraph | line omitted; the terms keep the generic contact sentence |
 | `VITE_LEGAL_RESPONSABLES` | free text, one or more full names (up to 300 characters) | "Responsables" line (Ley 25.326 art. 6) | line omitted |
 
-If all three contact variables are empty, the legal pages show no "Responsables y contacto" block at all; a value that still looks like a template placeholder (`[[...]]`, `pendiente`, `change_me`) counts as empty. Domicilio and CUIT are not shown yet on purpose. A local `docker compose build frontend` reads the same names from the root `.env` (see `.env.example`). If the Vercel preview should show them too, set the same names in the Vercel project environment.
+If all three contact variables are empty, the legal pages show no "Responsables y contacto" block at all; a value that still looks like a template placeholder (`[[...]]`, `pendiente`, `change_me`) counts as empty. Domicilio and CUIT are not shown yet on purpose. A local `docker compose build frontend` reads the same names, including the optional GA4 ID, from the root `.env` (see `.env.example`). GA4 loads only on the public booking page after the visitor accepts analytics consent; an empty ID disables it. Do not put the ID in a secret or treat it as a credential. If the Vercel preview should show the contact details too, set those same contact names in the Vercel project environment.
 
 `docker-compose.prod.yml` references `ghcr.io/enriquemartinez26/shifty-<service>:${APP_VERSION}` for backend (API, workers and beat) and frontend. The production edge runs the base image `nginx:1.30.5-alpine` with `nginx/nginx.prod.conf` bind-mounted, so its image does not change per release; the `shifty-nginx` image CI publishes is not what production runs.
 
