@@ -66,9 +66,29 @@ def _store_response(store: Store) -> StoreGlobalResponse:
         send_email_confirmation=store.send_email_confirmation,
         send_email_reminders=store.send_email_reminders,
         is_active=store.is_active,
+        is_internal=store.is_internal,
         created_at=store.created_at,
         updated_at=store.updated_at,
     )
+
+
+def _reject_internal_store(store: Store) -> None:
+    """La tienda interna no recibe admins de negocio (2026-10-10).
+
+    Solo aloja las cuentas SuperAdmin (``Store.is_internal``, PR #146). En
+    produccion "Crear admin" dejo a un admin de negocio adentro porque el
+    panel no mostraba que tienda estaba elegida. 409 antes de escribir nada;
+    el panel apaga el boton, pero la garantia es esta.
+    """
+    if store.is_internal:
+        raise AppException(
+            message=(
+                "La tienda interna solo aloja cuentas SuperAdmin. "
+                "El admin se crea en la tienda del negocio."
+            ),
+            http_status=status.HTTP_409_CONFLICT,
+            error_code="INTERNAL_STORE_ADMIN_DENIED",
+        )
 
 
 def _user_response(user: User) -> UserGlobalResponse:
@@ -283,6 +303,7 @@ async def create_store_admin(
     store = await repo.stores.get_store(store_public_id)
     if not store:
         raise StoreNotFoundException(identifier=store_public_id)
+    _reject_internal_store(store)
     try:
         user = await repo.users.create_store_admin(store, data.model_dump(), actor)
         return _user_response(user)

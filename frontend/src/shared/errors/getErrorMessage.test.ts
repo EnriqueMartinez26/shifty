@@ -43,6 +43,12 @@ describe('getErrorMessage', () => {
       'STAFF_SELF_GLOBAL_ADMIN_DENIED',
       new ForbiddenError('x', { errorCode: 'STAFF_SELF_GLOBAL_ADMIN_DENIED', statusCode: 403 }),
       'La cuenta SuperAdmin no se agrega como profesional.'
+    ],
+    // 2026-10-10: el SuperAdmin no crea admins de negocio en la tienda interna.
+    [
+      'INTERNAL_STORE_ADMIN_DENIED',
+      conflict('INTERNAL_STORE_ADMIN_DENIED'),
+      'La tienda interna solo aloja cuentas SuperAdmin. El admin se crea en la tienda del negocio.'
     ]
   ])('traduce %s', (_code, error, texto) => {
     expect(getErrorMessage(error, FALLBACK)).toBe(texto)

@@ -205,6 +205,25 @@ export const roleLabel = (role: string, isGlobalAdmin: boolean) =>
 
 export const statusLabel = (active: boolean) => (active ? 'Activa' : 'Inactiva')
 
+/**
+ * Titulo de un modal que actua sobre la tienda elegida, con la tienda adentro
+ * ("Crear admin en «ejemplo»"): se ve antes de enviar. 2026-10-10: un admin se
+ * creo en la tienda interna porque nada mostraba cual estaba elegida.
+ */
+export const storeScopedTitle = (
+  action: string,
+  preposition: string | null,
+  store: { name: string } | null
+): string => {
+  if (!store) return action
+  const target = `«${store.name}»`
+  return preposition ? `${action} ${preposition} ${target}` : `${action} ${target}`
+}
+
+/** Por que "Crear admin" no se ofrece en la tienda interna (`is_internal`). */
+export const INTERNAL_STORE_NOTICE =
+  'Tienda interna: solo aloja cuentas SuperAdmin. Los admins de un negocio se crean en su propia tienda.'
+
 export const parseOptionalInt = (value: string) => {
   const trimmed = value.trim()
   return trimmed ? Number.parseInt(trimmed, 10) : null

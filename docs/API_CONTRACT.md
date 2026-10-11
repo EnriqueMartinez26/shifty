@@ -4446,6 +4446,7 @@ Type: `enum("efectivo", "transferencia", "mercadopago", "otro")`
 | `send_email_confirmation` | boolean | yes |  |
 | `send_email_reminders` | boolean | yes |  |
 | `is_active` | boolean | yes |  |
+| `is_internal` | boolean | yes |  |
 | `created_at` | string | yes | format="date-time" |
 | `updated_at` | string | yes | format="date-time" |
 
@@ -4592,6 +4593,7 @@ Type: `enum("efectivo", "transferencia", "mercadopago", "otro")`
 | `send_email_confirmation` | boolean | yes |  |
 | `send_email_reminders` | boolean | yes |  |
 | `is_active` | boolean | yes |  |
+| `is_internal` | boolean | yes |  |
 | `created_at` | string | yes | format="date-time" |
 | `updated_at` | string | yes | format="date-time" |
 | `admins_count` | integer | yes |  |
@@ -4837,4 +4839,4 @@ Type: `enum("admin", "staff", "receptionist", "client")`
 | `terms_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 | `privacy_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 
-Generado desde app.openapi() el 2026-10-08, commit 248c97ee
+Generado desde app.openapi() el 2026-10-10, commit a203ee54

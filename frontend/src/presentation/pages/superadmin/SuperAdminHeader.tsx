@@ -11,7 +11,14 @@ import type {
 
 import { colors2000s } from '../../../theme/colors'
 import { ActionButton } from '../SuperAdminUi'
-import { emptyStateStyle, innerCardStyle, panelStyle, scopeBadgeStyle, statusLabel } from './shared'
+import {
+  emptyStateStyle,
+  innerCardStyle,
+  INTERNAL_STORE_NOTICE,
+  panelStyle,
+  scopeBadgeStyle,
+  statusLabel
+} from './shared'
 
 /**
  * Seccion del panel SuperAdmin (descompuesto por dominio).
@@ -81,10 +88,12 @@ export const SuperAdminHeader: React.FC<SuperAdminHeaderProps> = ({
           onClick={openEditStoreModal}
           disabled={!selectedStore}
         />
+        {/* La tienda interna solo aloja cuentas SuperAdmin (2026-10-10); el
+            409 INTERNAL_STORE_ADMIN_DENIED del backend es la garantia. */}
         <ActionButton
           label="Crear admin"
           onClick={openCreateAdminModal}
-          disabled={!selectedStore}
+          disabled={!selectedStore || selectedStore.is_internal}
         />
         <ActionButton
           label="Asignar plan"
@@ -110,7 +119,13 @@ export const SuperAdminHeader: React.FC<SuperAdminHeaderProps> = ({
               >
                 Tienda activa
               </p>
-              <p className="text-lg font-black" style={{ color: colors2000s.text.primary }}>
+              {/* Grande y anunciada: cambiar de tienda sin verlo dejo un admin
+                  en la tienda equivocada (2026-10-10). */}
+              <p
+                aria-live="polite"
+                className="break-words text-2xl font-black leading-tight"
+                style={{ color: colors2000s.orange.accent }}
+              >
                 {selectedStore.name}
               </p>
             </div>
@@ -197,6 +212,15 @@ export const SuperAdminHeader: React.FC<SuperAdminHeaderProps> = ({
               confirmación y las valida el servidor.
             </p>
           </div>
+
+          {selectedStore.is_internal ? (
+            <p
+              className="rounded-2xl px-4 py-3 text-[11px] font-bold lg:col-span-2"
+              style={scopeBadgeStyle('global')}
+            >
+              {INTERNAL_STORE_NOTICE}
+            </p>
+          ) : null}
         </div>
       ) : (
         <div className="rounded-[1.5rem] p-8 text-center" style={emptyStateStyle}>

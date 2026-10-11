@@ -11,6 +11,8 @@ export interface SuperAdminStoreRow {
   send_email_confirmation: boolean
   send_email_reminders: boolean
   is_active: boolean
+  /** La tienda que solo aloja cuentas SuperAdmin: no recibe admins de negocio. */
+  is_internal: boolean
   created_at: string
   updated_at: string
   admins_count: number

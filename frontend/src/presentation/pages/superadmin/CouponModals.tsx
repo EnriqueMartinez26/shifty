@@ -8,6 +8,7 @@ import {
   formGridClass,
   innerCardStyle,
   scopeBadgeStyle,
+  storeScopedTitle,
   type CouponFormState,
   type PendingState,
   type RedeemFormState,
@@ -207,7 +208,7 @@ export const CouponModals: React.FC<CouponModalsProps> = ({
       isOpen={modal === 'redeem-coupon'}
       onClose={closeModal}
       onSubmit={handleRedeemSubmit}
-      title="Canjear cupón"
+      title={storeScopedTitle('Canjear cupón', 'en', selectedStore)}
       subtitle={selectedStore ? `Aplicar descuento a ${selectedStore.name}` : 'Canje sobre tienda'}
       submitLabel="Canjear cupón"
       loading={redeemCouponMutation.isPending}

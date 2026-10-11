@@ -55,6 +55,7 @@ import {
   createEmptyStoreForm,
   createEmptySubscriptionForm,
   createEmptyUserForm,
+  INTERNAL_STORE_NOTICE,
   isValidSlug,
   panelStyle,
   parseOptionalInt,
@@ -76,6 +77,7 @@ import { SuperAdminHeader } from './superadmin/SuperAdminHeader'
 import { TenantUsersSection } from './superadmin/TenantUsersSection'
 import { UserModals } from './superadmin/UserModals'
 import { useDocumentTitle } from '../hooks/useDocumentTitle'
+import { revealSection } from '../lib/revealOnMount'
 
 const SEARCH_DEBOUNCE_MS = 300
 
@@ -96,6 +98,8 @@ const SuperAdminPage: React.FC = () => {
   const [subscriptionFilter, setSubscriptionFilter] = useState<SubscriptionFilter>('all')
   // La tienda que el usuario eligio. La efectiva se deriva en el render.
   const [chosenStoreId, setChosenStoreId] = useState<string | null>(null)
+  // Encabezado del detalle de la tienda: "Ver" lleva ahi la vista y el foco.
+  const storeDetailHeadingRef = useRef<HTMLHeadingElement>(null)
   const [modal, setModal] = useState<SuperAdminModalKey>(null)
   const [feedback, setFeedback] = useState<FeedbackMessage | null>(null)
   const [modalError, setModalError] = useState<string | null>(null)
@@ -213,7 +217,19 @@ const SuperAdminPage: React.FC = () => {
     openEditStoreFor(selectedStore)
   }
 
+  // 2026-10-10, produccion: "Ver" elegia la tienda sin ninguna senal visible y
+  // el admin se creo en la que seguia elegida. Ahora la vista va al detalle de
+  // la tienda y el foco a su encabezado, en el mismo evento (sin efecto): el
+  // encabezado ya esta montado y solo cambia su contenido.
+  const viewStore = (storePublicId: string) => {
+    setChosenStoreId(storePublicId)
+    revealSection(storeDetailHeadingRef.current)
+  }
+
   const openCreateAdminModal = () => {
+    // La tienda interna solo aloja cuentas SuperAdmin: los botones estan
+    // apagados y el backend responde 409 INTERNAL_STORE_ADMIN_DENIED.
+    if (!selectedStore || selectedStore.is_internal) return
     setAdminForm(createEmptyAdminForm())
     openModal('create-admin')
   }
@@ -346,6 +362,13 @@ const SuperAdminPage: React.FC = () => {
   const handleAdminSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     if (!selectedStore) return
+    // Si el listado se recarga con el modal abierto, la tienda elegida puede
+    // pasar a ser otra (la primera); el titulo la nombra y aca se corta la
+    // interna sin ir al servidor.
+    if (selectedStore.is_internal) {
+      setModalError(INTERNAL_STORE_NOTICE)
+      return
+    }
     setModalError(null)
 
     const passwordError = validateNewPassword(adminForm.password)
@@ -724,6 +747,7 @@ const SuperAdminPage: React.FC = () => {
             setSubscriptionFilter={setSubscriptionFilter}
             selectedStoreId={selectedStoreId}
             setSelectedStoreId={setChosenStoreId}
+            onViewStore={viewStore}
             storesQuery={storesQuery}
             openEditStoreFor={openEditStoreFor}
             toggleStoreActive={toggleStoreActive}
@@ -765,6 +789,7 @@ const SuperAdminPage: React.FC = () => {
 
           <TenantUsersSection
             selectedStore={selectedStore}
+            headingRef={storeDetailHeadingRef}
             overview={overview}
             overviewQuery={overviewQuery}
             openEditUserModal={openEditUserModal}

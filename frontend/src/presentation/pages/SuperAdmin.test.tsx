@@ -8,6 +8,7 @@ import type {
   SuperAdminUser
 } from '@application/services/SuperAdminService'
 
+import { ConflictError } from '@shared/errors/ConflictError'
 import { ValidationError } from '@shared/errors/ValidationError'
 
 import SuperAdminPage from './SuperAdmin'
@@ -45,6 +46,7 @@ const mockStoreUno: SuperAdminStoreRow = {
   send_email_confirmation: true,
   send_email_reminders: true,
   is_active: true,
+  is_internal: false,
   created_at: '2026-01-10T12:00:00Z',
   updated_at: '2026-01-10T12:00:00Z',
   admins_count: 1,
@@ -114,6 +116,7 @@ const mockOverview: SuperAdminStoreOverview = {
     send_email_confirmation: true,
     send_email_reminders: true,
     is_active: true,
+    is_internal: false,
     created_at: '2026-01-10T12:00:00Z',
     updated_at: '2026-01-10T12:00:00Z'
   },
@@ -903,5 +906,155 @@ describe('SuperAdminPage', () => {
         }
       }
     )
+  })
+
+  // 2026-10-10, produccion: "Ver" sobre la tienda "ejemplo" la elegia pero no
+  // daba ninguna senal visible; el usuario creyo que habia fallado y "Crear
+  // admin" dio de alta al admin en la tienda interna, que seguia elegida.
+  describe('la tienda elegida se ve antes de actuar', () => {
+    const mockStoreEjemplo: SuperAdminStoreRow = {
+      ...mockStoreUno,
+      public_id: 'store-ejemplo',
+      name: 'ejemplo',
+      slug: 'ejemplo-bsas'
+    }
+    const mockStoreInterna: SuperAdminStoreRow = {
+      ...mockStoreUno,
+      public_id: 'store-interna',
+      name: 'Shifty Internal',
+      slug: 'shifty-internal',
+      is_internal: true
+    }
+
+    // jsdom no implementa scrollIntoView: se instala un espia y se deja el
+    // prototipo como estaba.
+    const scrollIntoView = jest.fn()
+    const originalScroll = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollIntoView')
+
+    beforeEach(() => {
+      scrollIntoView.mockReset()
+      Object.defineProperty(Element.prototype, 'scrollIntoView', {
+        configurable: true,
+        writable: true,
+        value: scrollIntoView
+      })
+    })
+
+    afterEach(() => {
+      if (originalScroll) {
+        Object.defineProperty(Element.prototype, 'scrollIntoView', originalScroll)
+      } else {
+        Reflect.deleteProperty(Element.prototype, 'scrollIntoView')
+      }
+    })
+
+    const rowOf = (storeName: string): HTMLElement => {
+      const name = sectionOf('Operación por tienda').getByText(storeName, { selector: 'p' })
+      const row = name.closest('tr')
+      if (!row) throw new Error(`No encontre la fila de "${storeName}"`)
+      return row
+    }
+
+    it('"Ver" elige la tienda, lleva la vista al detalle y le pasa el foco', () => {
+      mockStores = [mockStoreInterna, mockStoreEjemplo]
+      render(<SuperAdminPage />)
+
+      fireEvent.click(within(rowOf('ejemplo')).getByRole('button', { name: 'Ver' }))
+
+      const heading = screen.getByRole('heading', { name: 'Detalle de la tienda' })
+      expect(mockOverviewFor).toHaveBeenLastCalledWith('store-ejemplo')
+      expect(scrollIntoView).toHaveBeenCalledTimes(1)
+      expect(scrollIntoView.mock.contexts[0]).toBe(heading)
+      expect(heading).toHaveFocus()
+      expect(sectionOf('Detalle de la tienda').getByText('ejemplo')).toBeInTheDocument()
+    })
+
+    it('la fila elegida se marca como actual', () => {
+      mockStores = [mockStoreInterna, mockStoreEjemplo]
+      render(<SuperAdminPage />)
+
+      expect(rowOf('Shifty Internal')).toHaveAttribute('aria-current', 'true')
+      expect(rowOf('ejemplo')).not.toHaveAttribute('aria-current')
+
+      fireEvent.click(within(rowOf('ejemplo')).getByRole('button', { name: 'Ver' }))
+
+      expect(rowOf('ejemplo')).toHaveAttribute('aria-current', 'true')
+      expect(within(rowOf('ejemplo')).getByText('Seleccionada')).toBeInTheDocument()
+      expect(rowOf('Shifty Internal')).not.toHaveAttribute('aria-current')
+      expect(within(rowOf('Shifty Internal')).queryByText('Seleccionada')).toBeNull()
+    })
+
+    it.each([
+      ['Crear admin', 'Crear admin en «ejemplo»'],
+      ['Editar tienda', 'Editar tienda «ejemplo»'],
+      ['Asignar plan', 'Asignar plan a «ejemplo»'],
+      ['Canjear cupón', 'Canjear cupón en «ejemplo»']
+    ])('el modal "%s" nombra la tienda sobre la que actua', (button, title) => {
+      mockStores = [mockStoreUno, mockStoreEjemplo]
+      render(<SuperAdminPage />)
+      fireEvent.click(within(rowOf('ejemplo')).getByRole('button', { name: 'Ver' }))
+
+      fireEvent.click(first(screen.getAllByRole('button', { name: button })))
+
+      expect(screen.getByRole('heading', { name: title })).toBeInTheDocument()
+    })
+
+    it('"Crear admin" queda apagado en la tienda interna y explica por que', () => {
+      mockStores = [mockStoreInterna, mockStoreEjemplo]
+      render(<SuperAdminPage />)
+
+      expect(screen.getByRole('button', { name: 'Crear admin' })).toBeDisabled()
+      expect(
+        screen.getByText(
+          'Tienda interna: solo aloja cuentas SuperAdmin. Los admins de un negocio se crean en su propia tienda.'
+        )
+      ).toBeInTheDocument()
+
+      fireEvent.click(within(rowOf('ejemplo')).getByRole('button', { name: 'Ver' }))
+
+      expect(screen.getByRole('button', { name: 'Crear admin' })).not.toBeDisabled()
+      expect(screen.queryByText(/Tienda interna: solo aloja/)).toBeNull()
+    })
+
+    it('si con el modal abierto la elegida pasa a ser la interna, no envia', () => {
+      const { rerender } = render(<SuperAdminPage />)
+      fireEvent.click(screen.getByRole('button', { name: 'Crear admin' }))
+      fireEvent.change(passwordField(), { target: { value: 'abc12345' } })
+
+      // El listado se recarga sin la tienda elegida: la efectiva es la primera.
+      mockStores = [mockStoreInterna]
+      rerender(<SuperAdminPage />)
+
+      expect(
+        screen.getByRole('heading', { name: 'Crear admin en «Shifty Internal»' })
+      ).toBeInTheDocument()
+      fireEvent.submit(openModalForm())
+
+      expect(within(openModalForm()).getByRole('alert')).toHaveTextContent(
+        'Tienda interna: solo aloja cuentas SuperAdmin.'
+      )
+      expect(mockMutations.createAdmin).not.toHaveBeenCalled()
+    })
+
+    it('el rechazo del backend por tienda interna sale con su texto', async () => {
+      mockMutations.createAdmin.mockRejectedValueOnce(
+        new ConflictError('texto crudo del servidor', {
+          errorCode: 'INTERNAL_STORE_ADMIN_DENIED',
+          statusCode: 409
+        })
+      )
+      render(<SuperAdminPage />)
+
+      fireEvent.click(screen.getByRole('button', { name: 'Crear admin' }))
+      fireEvent.change(passwordField(), { target: { value: 'abc12345' } })
+      fireEvent.submit(openModalForm())
+
+      expect(
+        await screen.findByText(
+          'La tienda interna solo aloja cuentas SuperAdmin. El admin se crea en la tienda del negocio.'
+        )
+      ).toBeInTheDocument()
+      expect(screen.queryByText('texto crudo del servidor')).not.toBeInTheDocument()
+    })
   })
 })
