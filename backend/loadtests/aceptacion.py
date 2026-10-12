@@ -189,11 +189,26 @@ def manifiesto_desde_api(
     return {"stores": entradas}
 
 
+class _SinRedirecciones(urllib.request.HTTPRedirectHandler):
+    def redirect_request(
+        self,
+        req: Any,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Any,
+        newurl: str,
+    ) -> None:
+        return None
+
+
 def _obtener_http(host: str, pausa_s: float) -> Callable[[str], Any]:
+    abridor = urllib.request.build_opener(_SinRedirecciones())
+
     def obtener(ruta: str) -> Any:
         time.sleep(pausa_s)
         try:
-            with urllib.request.urlopen(f"{host}{ruta}", timeout=15) as respuesta:
+            with abridor.open(f"{host}{ruta}", timeout=15) as respuesta:
                 return json.loads(respuesta.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             if exc.code == 404:
