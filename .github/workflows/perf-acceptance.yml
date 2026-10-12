@@ -23,7 +23,7 @@ on:
   workflow_dispatch:
     inputs:
       network_offset_ms:
-        description: "Latencia de red del runner a sumar a los umbrales (ms)"
+        description: "Latencia medida que se suma al umbral (0-150 ms)"
         required: false
         default: ""
 
@@ -120,6 +120,11 @@ jobs:
           SHIFTY_SUPERADMIN_EMAIL: ${{ secrets.SHIFTY_SUPERADMIN_EMAIL }}
           SHIFTY_SUPERADMIN_PASSWORD: ${{ secrets.SHIFTY_SUPERADMIN_PASSWORD }}
           SHIFTY_MANIFEST: ${{ runner.temp }}/perf/manifiesto.json
+          SHIFTY_USUARIOS: "200"
+          SHIFTY_RAMPA_S: "300"
+          SHIFTY_MESETA_S: "1200"
+          SHIFTY_RAFAGA_CADA_S: "300"
+          SHIFTY_THINK_SCALE: "1"
         # Locust sale distinto de cero con cualquier falla de request; el
         # veredicto lo da el paso siguiente sobre el CSV, que igual falla si
         # Locust no dejo archivos.
@@ -127,12 +132,16 @@ jobs:
           set +e
           uv run locust -f loadtests/locust_aceptacion.py --headless \
             --host "$STAGING_URL" --csv "$RUNNER_TEMP/perf/aceptacion" --only-summary
-          echo "locust termino con codigo $?"
+          locust_exit_code=$?
+          set -e
+          printf 'LOCUST_EXIT_CODE=%s\n' "$locust_exit_code" >> "$GITHUB_ENV"
+          echo "locust termino con codigo $locust_exit_code"
 
       - name: Veredicto
         run: |
           uv run python scripts/perf_acceptance_check.py \
             --csv-prefix "$RUNNER_TEMP/perf/aceptacion" \
+            --locust-exit-code "$LOCUST_EXIT_CODE" \
             --network-offset-ms "$NETWORK_OFFSET_MS"
 
       - name: Subir resultados

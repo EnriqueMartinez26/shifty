@@ -39,12 +39,14 @@ Output next to the `--csv` prefix:
 
 | Criterion | Threshold |
 | --- | --- |
+| Complete run | Locust exit code 0; at least 40 SLO samples with distinct timestamps spanning ≥ 24 minutes; at least 4 recorded bursts. A shorter or interrupted run cannot pass, even if its partial latency data looks good |
 | p95 per route with ≥ 20 samples | < 500 ms (`--p95-ms`) |
 | p95 global (Aggregated row) | < 500 ms |
 | Login p95 (bcrypt, 12 rounds) | < 1 s (`--login-p95-ms`): a deliberate deviation from plan §9's "p95 < 500 ms per route", taken from plan-capacidad §5.2. Login is bound by bcrypt's CPU cost and happens once per session, not per page |
 | Excluded from p95 | `/reports/export` and the burst requests |
 | 5xx, 429, connection errors | 0 over the WHOLE run, ramp included (the status-code tally is not reset when the plateau starts, unlike the latency stats). A 409 outside the burst is legitimate: the slot was taken between availability and booking |
-| Each burst | exactly 1 × 201, the rest 409, at least one burst recorded |
+| Each burst | exactly 1 × 201, the rest 409; all 4 bursts from the 20-minute plateau must be recorded |
+| Measured network offset | 0–150 ms (`--network-offset-ms`), with the measurement recorded alongside the result |
 | Every SLO sample | `oldest_pending_outbox_seconds` and `oldest_pending_email_send_seconds` present and ≤ 120 s (a sample without them fails: a missing value is not a zero); `outbox_budget_drops` = 0 if the metric exists. A malformed line in `<prefix>_slo.jsonl` is an input error (exit 2) |
 | Memory (optional `--docker-stats` log) | every container < 70 % of its limit |
 
@@ -99,11 +101,17 @@ From a machine that is NOT the VPS, in `backend/`:
 python loadtests/aceptacion.py --host https://staging.example.com/api --out manifiesto.json
 export SHIFTY_MANIFEST=manifiesto.json SEED_OWNER_PASSWORD=... \
        SHIFTY_SUPERADMIN_EMAIL=... SHIFTY_SUPERADMIN_PASSWORD=...
+set +e
 uv run locust -f loadtests/locust_aceptacion.py --headless \
   --host https://staging.example.com/api --csv run/aceptacion --only-summary
+locust_exit_code=$?
+set -e
 uv run python scripts/perf_acceptance_check.py --csv-prefix run/aceptacion \
+  --locust-exit-code "$locust_exit_code" \
   --docker-stats stats.log
 ```
+
+If the shell uses `set -e`, temporarily disable it around Locust, capture its exit code, then restore it before running the checker. The checker requires a zero exit code as well as complete-duration evidence.
 
 `--host` carries the `/api` prefix. Use a single Locust process (no `--processes`): the burst and the SLO sampler run in the local runner.
 
@@ -131,9 +139,9 @@ GitHub Actions rejects loopback even if that flag is set.
    docker compose cp backend:/tmp/capacidad.json manifiesto.json
    ```
 3. Set `PERF_ALLOW_LOCAL_TARGET=true` for the local rehearsal, then point the manifest builder and Locust at `http://localhost/api` to go through nginx (the dev `nginx.conf` allows 200 r/s per IP, ten times production, so a single IP fits) or at the backend directly (`--host http://127.0.0.1:8000`) to leave the edge out. Clear the variable before running against staging.
-4. Shorten the run with `SHIFTY_USUARIOS=20 SHIFTY_RAMPA_S=20 SHIFTY_MESETA_S=90 SHIFTY_RAFAGA_CADA_S=40 SHIFTY_THINK_SCALE=0.3`. These overrides exist only for rehearsals; the acceptance is judged with the plan's values.
+4. Shorten the run with `SHIFTY_USUARIOS=20 SHIFTY_RAMPA_S=20 SHIFTY_MESETA_S=90 SHIFTY_RAFAGA_CADA_S=40 SHIFTY_THINK_SCALE=0.3`. These overrides exist only for rehearsals; the acceptance checker deliberately rejects a shortened run, and the acceptance is judged with the plan's values.
 
-Rehearsal on 2026-09-24 (3 stores, 20 users, 90 s plateau, local uvicorn): 1336 requests, 0 errors, two bursts of 1 × 201 + 9 × 409, 4 SLO samples, verdict `APROBADA`.
+Historical rehearsal on 2026-09-24 (3 stores, 20 users, 90 s plateau, local uvicorn): 1336 requests, 0 errors, two bursts of 1 × 201 + 9 × 409, 4 SLO samples. The checker then printed `APROBADA`; under the completeness gate added later, this run is explicitly not a capacity acceptance.
 
 ### From CI
 
@@ -141,7 +149,7 @@ Rehearsal on 2026-09-24 (3 stores, 20 users, 90 s plateau, local uvicorn): 1336 
 
 The workflow fails before checkout unless both infrastructure attestations are `true`. Set them only after the operator has captured evidence: `PERF_STAGING_ISOLATED=true` means the staging host, database, Redis, and broker are isolated from production; `PERF_RUNNER_EGRESS_RESTRICTED=true` means the dedicated runner uses default-deny egress and passed allow/deny checks from that host. The firewall may reach only the exact staging API origin plus the minimum GitHub Actions, artifact, and package endpoints required by the runner. It must deny production and all other application destinations. A unit test or successful target health check does not prove those network controls.
 
-After the guard passes, the workflow installs the locked dependencies, runs `scripts/verify_perf_target.py` to require the approved HTTPS origin and a healthy staging response, then builds the manifest, runs Locust, judges the CSV and uploads `perf-acceptance` even when a later step fails. The verifier and the probes independently reject redirects. The current staging setup shares the production VPS, and no dedicated runner or egress proof has been recorded, so both attestations must remain unset and no 200-user run should be dispatched yet.
+After the guard passes, the workflow installs the locked dependencies, runs `scripts/verify_perf_target.py` to require the approved HTTPS origin and a healthy staging response, then builds the manifest, runs Locust, passes its exit code and the CSV to the checker, and uploads `perf-acceptance` even when a later step fails. The checker requires a zero Locust exit code, at least four bursts, and at least 24 minutes of SLO coverage before it can print `APROBADA`. The verifier and the probes independently reject redirects. The current staging setup shares the production VPS, and no dedicated runner or egress proof has been recorded, so both attestations must remain unset and no 200-user run should be dispatched yet.
 
 | Setting | Scope | What |
 | --- | --- | --- |
@@ -151,10 +159,10 @@ After the guard passes, the workflow installs the locked dependencies, runs `scr
 | `SHIFTY_SUPERADMIN_EMAIL`, `SHIFTY_SUPERADMIN_PASSWORD` | Environment secrets | a staging superadmin (samples `/ops/slo`) |
 | `PERF_STAGING_ISOLATED` | Environment variable | set to `true` only with evidence of host and data isolation from production |
 | `PERF_RUNNER_EGRESS_RESTRICTED` | Environment variable | set to `true` only after allow/deny egress checks pass from the dedicated runner |
-| `PERF_NETWORK_OFFSET_MS` | Environment variable | ms added to p95 thresholds |
+| `PERF_NETWORK_OFFSET_MS` | Environment variable | measured ms added to p95 thresholds; the checker rejects values outside 0–150 ms |
 | `PERF_NIGHTLY` | Repository variable | `true` to enable the nightly run; keep unset/false until the isolated environment is accepted |
 
-Register a dedicated, preferably ephemeral runner near staging (Argentina or Brazil) at repository scope and apply the required labels. Do not reuse a production host, general-purpose runner, or runner that executes pull-request code. Configure the Environment to allow only `main` and require an independent reviewer before releasing its secrets. Keep firewall evidence with the acceptance artifact. `PERF_NETWORK_OFFSET_MS` can account for measured residual network latency; document the measurement and do not use it to hide server latency.
+Register a dedicated, preferably ephemeral runner near staging (Argentina or Brazil) at repository scope and apply the required labels. Do not reuse a production host, general-purpose runner, or runner that executes pull-request code. Configure the Environment to allow only `main` and require an independent reviewer before releasing its secrets. Keep firewall evidence with the acceptance artifact. `PERF_NETWORK_OFFSET_MS` can account for measured residual network latency up to 150 ms; record the measurement and do not use it to hide server latency.
 
 ## 5. Reading the results
 
@@ -162,7 +170,7 @@ Register a dedicated, preferably ephemeral runner near staging (Argentina or Bra
 - `FALLA 5xx: ...` or `429: ...`: open `<prefix>_codigos.json` for the route; 429 in a single-IP run usually means the limits of §3.2 were not raised.
 - `FALLA rafaga N: ...`: two 201s is a double booking (the GiST exclusion or the lock failed) and blocks the release; a 5xx inside the burst is a lock or deadlock handled as an error.
 - `FALLA SLO ...`: the outbox or the mail dispatch fell behind under load; check the Celery worker and `process_outbox_batch` logs for that window.
-- Locust's own failure count also includes business answers marked as failures; the check script is the verdict, not Locust's exit code.
+- The checker requires Locust's exit code to be zero in addition to the status-code and latency criteria. Expected 409 responses in the booking race remain valid outcomes; the scenario must not report them as Locust failures.
 
 ## 6. When to run it
 
