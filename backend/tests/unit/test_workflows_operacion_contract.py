@@ -12,9 +12,9 @@
   pone el workflow en rojo y si las herramientas no entran al repo como
   dependencia.
 - F5-04 (plan §9): `perf-acceptance.yml` corre la prueba de aceptacion con
-  Locust contra STAGING y la juzga `scripts/perf_acceptance_check.py`. Staging
-  comparte el host con produccion, asi que el nocturno esta apagado hasta que
-  el dueno lo prenda (`vars.PERF_NIGHTLY`).
+  Locust contra STAGING y la juzga `scripts/perf_acceptance_check.py`. Como
+  staging comparte el host con produccion, ahora exige aislamiento y egress
+  verificados antes de ejecutar el workflow.
 """
 
 from __future__ import annotations
@@ -496,13 +496,94 @@ def test_perf_corre_de_noche_y_a_mano_nunca_en_pr() -> None:
     assert "pull_request" not in disparadores and "push" not in disparadores
 
 
-def test_el_nocturno_esta_apagado_hasta_que_el_dueno_lo_prenda() -> None:
-    """Staging vive en el host de produccion: 200 usuarios de noche le pegan."""
+def test_perf_exige_runner_dedicado_environment_y_dispatch_desde_main() -> None:
+    """La carga usa un runner fijo y el Environment protegido de staging."""
     condicion = _job_perf()["if"]
     assert "workflow_dispatch" in condicion
+    assert "github.ref == 'refs/heads/main'" in condicion
     assert "vars.PERF_NIGHTLY == 'true'" in condicion
-    assert "vars.PERF_RUNNER" in _job_perf()["runs-on"]
+    assert _job_perf()["runs-on"] == [
+        "self-hosted",
+        "linux",
+        "x64",
+        "shifty-perf-staging",
+    ]
+    assert "ubuntu-latest" not in str(_job_perf()["runs-on"])
+    assert "PERF_RUNNER" not in str(_job_perf()["runs-on"])
+    assert _job_perf()["environment"] == {"name": "staging", "deployment": False}
     assert _yaml(PERF)["concurrency"]["cancel-in-progress"] is False
+
+
+def test_perf_exige_infra_verificada_antes_del_checkout() -> None:
+    pasos = _pasos_perf()
+    indice_guardia = next(
+        i
+        for i, paso in enumerate(pasos)
+        if paso.get("name") == "Verificar aislamiento y egress del staging"
+    )
+    indice_checkout = next(
+        i
+        for i, paso in enumerate(pasos)
+        if str(paso.get("uses", "")).startswith("actions/checkout@")
+    )
+    guardia = pasos[indice_guardia]
+
+    assert indice_guardia < indice_checkout
+    assert guardia["env"] == {
+        "PERF_ALLOWED_ORIGIN": "${{ vars.PERF_ALLOWED_ORIGIN }}",
+        "PERF_STAGING_ISOLATED": "${{ vars.PERF_STAGING_ISOLATED }}",
+        "PERF_RUNNER_EGRESS_RESTRICTED": "${{ vars.PERF_RUNNER_EGRESS_RESTRICTED }}",
+    }
+    assert guardia["run"].count("exit 1") == 3
+    assert "::error" in guardia["run"]
+
+
+@pytest.mark.skipif(BASH is None, reason="hace falta bash")
+def test_perf_falla_cerrado_si_falta_aislamiento_egress_u_origen() -> None:
+    assert BASH is not None
+    guardia = next(
+        p
+        for p in _pasos_perf()
+        if p.get("name") == "Verificar aislamiento y egress del staging"
+    )
+    casos = (
+        (
+            {
+                "PERF_STAGING_ISOLATED": "",
+                "PERF_RUNNER_EGRESS_RESTRICTED": "true",
+                "PERF_ALLOWED_ORIGIN": "https://staging.example.com",
+            },
+            "PERF_STAGING_ISOLATED",
+        ),
+        (
+            {
+                "PERF_STAGING_ISOLATED": "true",
+                "PERF_RUNNER_EGRESS_RESTRICTED": "",
+                "PERF_ALLOWED_ORIGIN": "https://staging.example.com",
+            },
+            "PERF_RUNNER_EGRESS_RESTRICTED",
+        ),
+        (
+            {
+                "PERF_STAGING_ISOLATED": "true",
+                "PERF_RUNNER_EGRESS_RESTRICTED": "true",
+                "PERF_ALLOWED_ORIGIN": "",
+            },
+            "PERF_ALLOWED_ORIGIN",
+        ),
+    )
+
+    for variables, esperado in casos:
+        resultado = subprocess.run(
+            [BASH, "-c", guardia["run"]],
+            env={**os.environ, **variables},
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        assert resultado.returncode == 1
+        assert esperado in resultado.stdout
 
 
 def test_perf_solo_lee_el_repo() -> None:
@@ -512,17 +593,28 @@ def test_perf_solo_lee_el_repo() -> None:
 
 
 def test_perf_verifica_los_secretos_antes_que_nada() -> None:
-    primero = _pasos_perf()[0]
+    paso = next(
+        p for p in _pasos_perf() if p.get("name") == "Verificar secretos de la prueba"
+    )
     for secreto in SECRETOS_PERF:
-        assert primero["env"][secreto] == f"${{{{ secrets.{secreto} }}}}"
-    assert "::error" in primero["run"]
+        assert paso["env"][secreto] == f"${{{{ secrets.{secreto} }}}}"
+    assert "::error" in paso["run"]
+    checkout = next(
+        i
+        for i, p in enumerate(_pasos_perf())
+        if str(p.get("uses", "")).startswith("actions/checkout@")
+    )
+    assert _pasos_perf().index(paso) < checkout
 
 
 @pytest.mark.skipif(BASH is None, reason="hace falta bash")
 def test_sin_secretos_perf_falla_diciendo_cuales_faltan() -> None:
     assert BASH is not None
+    paso = next(
+        p for p in _pasos_perf() if p.get("name") == "Verificar secretos de la prueba"
+    )
     resultado = subprocess.run(
-        [BASH, "-c", _pasos_perf()[0]["run"]],
+        [BASH, "-c", paso["run"]],
         env={**os.environ, **{s: "" for s in SECRETOS_PERF}, "STAGING_URL": "x"},
         capture_output=True,
         text=True,
@@ -531,7 +623,7 @@ def test_sin_secretos_perf_falla_diciendo_cuales_faltan() -> None:
     )
     assert resultado.returncode == 1
     assert (
-        "Faltan los secretos del repo: SEED_OWNER_PASSWORD "
+        "Faltan los secretos del Environment staging: SEED_OWNER_PASSWORD "
         "SHIFTY_SUPERADMIN_EMAIL SHIFTY_SUPERADMIN_PASSWORD." in resultado.stdout
     )
 
@@ -540,8 +632,17 @@ def test_perf_corre_locust_y_lo_juzga_el_script() -> None:
     pasos = _pasos_perf()
     textos = [str(p.get("run", "")) for p in pasos]
     assert "PERF_ALLOWED_ORIGIN" in _job_perf()["env"]
+    destino = next(
+        i
+        for i, p in enumerate(pasos)
+        if p.get("name") == "Verificar destino de staging y salud"
+    )
+    manifiesto = next(i for i, t in enumerate(textos) if "loadtests/aceptacion.py" in t)
     locust = next(i for i, t in enumerate(textos) if "locust_aceptacion.py" in t)
     veredicto = next(i for i, t in enumerate(textos) if "perf_acceptance_check.py" in t)
+    assert pasos[destino]["run"] == "uv run python scripts/verify_perf_target.py"
+    assert pasos[destino]["env"]["STAGING_URL"] == "${{ secrets.STAGING_URL }}"
+    assert destino < manifiesto < locust < veredicto
     assert locust < veredicto
     assert "--headless" in textos[locust] and "--csv" in textos[locust]
     assert "--csv-prefix" in textos[veredicto]
