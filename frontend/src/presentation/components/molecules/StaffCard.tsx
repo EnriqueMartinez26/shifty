@@ -48,15 +48,12 @@ export const StaffCard: React.FC<StaffCardProps> = ({
   // Azul para recursos (canchas, salas), naranja para personas.
   const accentBorderColor = isResource ? colors2000s.status.info.dark : colors2000s.orange.light
   const avatarGradient = isResource
-    ? `linear-gradient(180deg, ${colors2000s.status.info.light} 0%, ${colors2000s.status.info.dark} 100%)`
+    ? `linear-gradient(180deg, ${colors2000s.status.info.dark} 0%, ${colors2000s.status.info.accent} 100%)`
     : orangeCtaGradient
 
-  // Sin `scale` en la tarjeta (2026-10-14): tiene botones adentro y al apretar
-  // `active:scale` los corria; el mouseup caia afuera y se perdia el click.
-  // Ver StaffColumn. La marca al pasar es un contorno, que no mueve nada.
   return (
     <div
-      className="relative p-6 rounded-md transition-colors duration-200 hover:outline-2 hover:outline-orange-400 border-l-[6px]"
+      className="relative min-w-0 p-6 rounded-md transition-colors duration-200 hover:outline-2 hover:outline-orange-400 border-l-[6px]"
       style={{
         background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
         borderTop: `1px solid ${colors2000s.border.default}`,
@@ -89,10 +86,9 @@ export const StaffCard: React.FC<StaffCardProps> = ({
         {/* Header Section: Avatar initials + Titles */}
         <div className="flex items-center gap-4 pr-20">
           <div
-            className="w-12 h-12 rounded-full flex items-center justify-center font-black text-sm shadow-md flex-shrink-0"
+            className="w-12 h-12 rounded-full text-white flex items-center justify-center font-black text-sm shadow-md flex-shrink-0"
             style={{
               background: avatarGradient,
-              color: isResource ? colors2000s.text.onOrange : colors2000s.text.onOrangeSelection,
               boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`
             }}
           >
@@ -100,13 +96,13 @@ export const StaffCard: React.FC<StaffCardProps> = ({
           </div>
           <div className="min-w-0">
             <h3
-              className="font-black text-sm uppercase tracking-tight truncate leading-tight"
+              className="whitespace-normal break-words font-black text-sm uppercase tracking-tight leading-tight"
               style={{ color: colors2000s.text.primary }}
             >
               {staff.displayName}
             </h3>
             <p
-              className="text-[10px] font-black uppercase tracking-widest mt-1 truncate"
+              className="whitespace-normal break-words text-[10px] font-black uppercase tracking-widest mt-1"
               style={{ color: colors2000s.text.secondary }}
             >
               {isResource ? 'Recurso' : isSelf ? `${staff.fullName} (vos)` : staff.fullName}
@@ -122,25 +118,25 @@ export const StaffCard: React.FC<StaffCardProps> = ({
           {staff.email ? (
             <>
               <Mail size={14} color={colors2000s.text.disabled} />
-              <span className="truncate">{staff.email.getValue()}</span>
+              <span className="min-w-0 flex-1 break-words">{staff.email.getValue()}</span>
             </>
           ) : (
             <>
               <LayoutGrid size={14} color={colors2000s.text.disabled} />
-              <span className="truncate">Cancha, sala o box: sin usuario</span>
+              <span className="min-w-0 flex-1 break-words">Cancha, sala o box: sin usuario</span>
             </>
           )}
         </div>
 
         {/* Metadata Specialties Section */}
-        <div className="flex items-center gap-2 pt-3">
+        <div className="flex min-w-0 flex-wrap items-start gap-2 pt-3">
           <span
-            className="text-[9px] font-black uppercase tracking-widest"
+            className="shrink-0 text-[9px] font-black uppercase tracking-widest"
             style={{ color: colors2000s.text.secondary }}
           >
             Servicios:
           </span>
-          <div className="flex flex-wrap gap-1">
+          <div className="flex min-w-0 flex-1 flex-wrap gap-1">
             {(staff.serviceIds || []).length === 0 ? (
               <span
                 className="text-[9px] font-bold italic"
@@ -152,7 +148,7 @@ export const StaffCard: React.FC<StaffCardProps> = ({
               (staff.serviceIds || []).slice(0, 3).map((id) => (
                 <span
                   key={id}
-                  className="px-2 py-0.5 rounded-md text-[8px] font-black uppercase tracking-widest"
+                  className="max-w-full whitespace-normal break-words rounded-md px-2 py-0.5 text-[8px] font-black uppercase tracking-widest"
                   style={{
                     background: 'white',
                     boxShadow: colors2000s.shadows.insetDark,
@@ -183,7 +179,7 @@ export const StaffCard: React.FC<StaffCardProps> = ({
           style={{ color: colors2000s.text.secondary }}
         >
           <Clock size={14} color={colors2000s.text.disabled} />
-          <span className="truncate">{summarizeSchedules(staff.schedules)}</span>
+          <span className="min-w-0 break-words">{summarizeSchedules(staff.schedules)}</span>
         </div>
 
         {/* Outlined Action Buttons in Footer */}
@@ -211,7 +207,7 @@ export const StaffCard: React.FC<StaffCardProps> = ({
             disabled={blocked}
             title={title}
             className="min-h-[44px] flex items-center justify-center gap-2 py-2.5 px-3 font-black text-[10px] uppercase tracking-widest transition-all active:scale-95 disabled:opacity-50"
-            style={{ ...buttonStyles2000s.default, color: colors2000s.status.danger.light }}
+            style={{ ...buttonStyles2000s.default, color: colors2000s.status.danger.text }}
           >
             <Trash2 size={14} /> {isSelf ? 'Quitarme' : 'Eliminar'}
           </button>

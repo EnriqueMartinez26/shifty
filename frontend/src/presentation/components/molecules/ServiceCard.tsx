@@ -15,6 +15,7 @@ import {
 import { Service } from '@domain/entities/Service'
 
 import { colors2000s, buttonStyles2000s } from '../../../theme/colors'
+import { getContrastingForeground } from '../../lib/getContrastingForeground'
 
 interface ServiceCardProps {
   service: Service
@@ -41,16 +42,14 @@ export const ServiceCard: React.FC<ServiceCardProps> = ({
   withoutStaff = false
 }) => {
   const accentColor = service.color || colors2000s.orange.light
+  const accentForeground = getContrastingForeground(accentColor)
   const blocked = readOnlyReason !== null
   const title = readOnlyReason ?? undefined
 
-  // Sin `scale` en la tarjeta (2026-10-14): tiene botones adentro y al apretar
-  // `active:scale` los corria; el mouseup caia afuera y se perdia el click.
-  // Ver StaffColumn. La marca al pasar es un contorno, que no mueve nada.
   return (
     <div
       data-testid="service-card"
-      className={`relative p-6 rounded-md transition-colors duration-200 hover:outline-2 hover:outline-orange-400 border-l-[6px] flex flex-col justify-between h-full ${
+      className={`relative min-w-0 p-6 rounded-md transition-colors duration-200 hover:outline-2 hover:outline-orange-400 border-l-[6px] flex flex-col justify-between h-full ${
         isSelected ? 'ring-2 ring-offset-2 ring-orange-400' : ''
       } ${service.isActive ? '' : 'opacity-60'}`}
       style={{
@@ -85,9 +84,11 @@ export const ServiceCard: React.FC<ServiceCardProps> = ({
         {/* Header Section: Avatar initials + Titles */}
         <div className="flex items-center gap-4 pr-20">
           <div
-            className="w-12 h-12 rounded-md text-white flex items-center justify-center flex-shrink-0 shadow-md overflow-hidden"
+            data-testid="service-color-chip"
+            className="w-12 h-12 rounded-md flex items-center justify-center flex-shrink-0 shadow-md overflow-hidden"
             style={{
-              background: `linear-gradient(180deg, ${accentColor} 0%, ${accentColor}dd 100%)`,
+              background: accentColor,
+              color: accentForeground,
               boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`
             }}
           >
@@ -102,18 +103,18 @@ export const ServiceCard: React.FC<ServiceCardProps> = ({
                 className="w-full h-full object-cover"
               />
             ) : (
-              <Briefcase size={22} className="text-white" />
+              <Briefcase size={22} data-testid="service-color-icon" aria-hidden="true" />
             )}
           </div>
           <div className="min-w-0">
             <h3
-              className="font-black text-sm uppercase tracking-tight truncate leading-tight"
+              className="font-black text-sm uppercase tracking-tight whitespace-normal break-words leading-tight"
               style={{ color: colors2000s.text.primary }}
             >
               {service.name}
             </h3>
             <p
-              className="text-[10px] font-bold mt-1 truncate max-w-[200px] leading-tight"
+              className="text-[10px] font-bold mt-1 whitespace-normal break-words leading-tight"
               style={{ color: colors2000s.text.secondary }}
             >
               {service.description || 'Sin descripción'}
@@ -137,17 +138,17 @@ export const ServiceCard: React.FC<ServiceCardProps> = ({
         )}
 
         {/* Specs metadata rows */}
-        <div className="grid grid-cols-2 gap-4 pt-4">
+        <div className="grid grid-cols-2 gap-2 pt-4 sm:gap-4">
           {/* Duración */}
           <div
-            className="p-3 rounded-md flex items-center gap-3"
+            className="flex min-w-0 items-center gap-2 rounded-md p-3"
             style={{
               background: 'white',
               boxShadow: colors2000s.shadows.insetDark
             }}
           >
-            <Clock size={16} color={colors2000s.text.disabled} />
-            <div>
+            <Clock size={16} className="flex-shrink-0" color={colors2000s.text.disabled} />
+            <div className="min-w-0">
               <p
                 className="text-[8px] font-black uppercase tracking-widest leading-none mb-1"
                 style={{ color: colors2000s.text.secondary }}
@@ -155,7 +156,7 @@ export const ServiceCard: React.FC<ServiceCardProps> = ({
                 Duración
               </p>
               <p
-                className="text-xs font-black leading-none"
+                className="break-words text-xs font-black leading-tight"
                 style={{ color: colors2000s.text.primary }}
               >
                 {service.duration.format()}
@@ -165,21 +166,24 @@ export const ServiceCard: React.FC<ServiceCardProps> = ({
 
           {/* Precio */}
           <div
-            className="p-3 rounded-md flex items-center gap-3"
+            className="flex min-w-0 items-center gap-2 rounded-md p-3"
             style={{
               background: 'white',
               boxShadow: colors2000s.shadows.insetDark
             }}
           >
-            <DollarSign size={16} className="text-orange-500" />
-            <div>
+            <DollarSign size={16} className="flex-shrink-0 text-orange-500" />
+            <div className="min-w-0">
               <p
                 className="text-[8px] font-black uppercase tracking-widest leading-none mb-1"
                 style={{ color: colors2000s.text.secondary }}
               >
                 Precio
               </p>
-              <p className="text-xs font-black leading-none" style={{ color: accentColor }}>
+              <p
+                className="break-words text-xs font-black leading-tight"
+                style={{ color: colors2000s.text.primary }}
+              >
                 {service.price.format()}
               </p>
             </div>
@@ -193,7 +197,7 @@ export const ServiceCard: React.FC<ServiceCardProps> = ({
           onClick={() => onEdit(service)}
           disabled={blocked}
           title={title}
-          className="flex items-center justify-center gap-2 py-2.5 px-3 font-black text-[10px] uppercase tracking-widest transition-all active:scale-95 disabled:opacity-50"
+          className="flex min-h-11 items-center justify-center gap-2 py-2.5 px-3 font-black text-[10px] uppercase tracking-widest transition-all active:scale-95 disabled:opacity-50"
           style={buttonStyles2000s.default}
         >
           <Edit2 size={14} /> Editar
@@ -205,8 +209,8 @@ export const ServiceCard: React.FC<ServiceCardProps> = ({
             onClick={() => onDelete(service.id)}
             disabled={blocked}
             title={title}
-            className="flex items-center justify-center gap-2 py-2.5 px-3 font-black text-[10px] uppercase tracking-widest transition-all active:scale-95 disabled:opacity-50"
-            style={{ ...buttonStyles2000s.default, color: colors2000s.status.danger.light }}
+            className="flex min-h-11 items-center justify-center gap-2 py-2.5 px-3 font-black text-[10px] uppercase tracking-widest transition-all active:scale-95 disabled:opacity-50"
+            style={{ ...buttonStyles2000s.default, color: colors2000s.status.danger.text }}
           >
             <Trash2 size={14} /> Eliminar
           </button>
@@ -215,7 +219,7 @@ export const ServiceCard: React.FC<ServiceCardProps> = ({
             onClick={() => onReactivate(service.id)}
             disabled={blocked}
             title={title}
-            className="flex items-center justify-center gap-2 py-2.5 px-3 font-black text-[10px] uppercase tracking-widest transition-all active:scale-95 disabled:opacity-50"
+            className="flex min-h-11 items-center justify-center gap-2 py-2.5 px-3 font-black text-[10px] uppercase tracking-widest transition-all active:scale-95 disabled:opacity-50"
             style={{ ...buttonStyles2000s.default, color: colors2000s.status.success.text }}
           >
             <RotateCcw size={14} /> Reactivar
