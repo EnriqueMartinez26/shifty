@@ -18,14 +18,15 @@ export const colors2000s = {
     white: '#ffffff' // Tarjetas y superficies blancas
   },
 
-  // La selección y los CTA usan la rampa de marca. `accent` queda para texto
-  // pequeño sobre superficies claras.
+  // Marca: light/dark se reservan para logos y detalles decorativos. El CTA
+  // usa su rampa oscura independiente para sostener texto blanco AA. Los pares
+  // se miden en colors.contrast.test.ts.
   orange: {
     light: '#ff8c42', // Marca - top
     dark: '#e67e22', // Marca - bottom (theme-color)
-    heading: '#c75a00', // Titulos grandes: naranja de marca con 3:1 sobre el fondo mas oscuro
-    accent: '#9a4507', // Texto pequeno y links sobre superficies claras (AA)
-    cta: '#ff8c42' // Primary de Tailwind y extremo superior de la selección
+    heading: '#c75a00', // Alias legacy para títulos existentes
+    accent: '#9a4507', // Titulos, labels y links sobre claro; fondo del CTA - bottom
+    cta: '#b4530a' // Fondo del CTA y de lo seleccionado - top (texto blanco)
   },
 
   // Textos
@@ -33,8 +34,8 @@ export const colors2000s = {
     primary: '#404040', // Texto normal
     secondary: '#5c5c5c', // Labels, headers, ayudas y pies (AA sobre bg.secondary)
     disabled: '#b0b0b0', // SOLO controles deshabilitados (1.72:1): nunca contenido
-    onOrange: '#ffffff', // Texto sobre fondos de estado oscuros
-    onOrangeSelection: '#ffffff' // Texto e iconos sobre la selección naranja de marca
+    onOrange: '#ffffff', // Texto sobre naranja
+    onOrangeSelection: '#ffffff' // Alias legacy para estados seleccionados
   },
 
   // Bordes
@@ -98,8 +99,9 @@ export const colors2000s = {
   }
 } as const
 
-// Rampa de marca para selección y CTA; el texto blanco es una excepción de contraste aprobada.
-export const orangeCtaGradient = `linear-gradient(180deg, ${colors2000s.orange.cta} 0%, ${colors2000s.orange.dark} 100%)`
+// Fondo de todo texto blanco sobre naranja (CTA, chips y avatares
+// seleccionados): 5.02:1 arriba y 6.50:1 abajo.
+export const orangeCtaGradient = `linear-gradient(180deg, ${colors2000s.orange.cta} 0%, ${colors2000s.orange.accent} 100%)`
 
 // Estilos CSS reutilizables
 export const buttonStyles2000s = {
@@ -128,8 +130,8 @@ export const buttonStyles2000s = {
   },
   selected: {
     background: orangeCtaGradient,
-    border: `1px solid ${colors2000s.orange.dark}`,
-    color: colors2000s.text.onOrangeSelection,
+    border: `1px solid ${colors2000s.orange.accent}`,
+    color: colors2000s.text.onOrange,
     boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerOrange}`
   },
   disabled: {
