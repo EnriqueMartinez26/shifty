@@ -545,7 +545,28 @@ def test_perf_corre_locust_y_lo_juzga_el_script() -> None:
     assert locust < veredicto
     assert "--headless" in textos[locust] and "--csv" in textos[locust]
     assert "--csv-prefix" in textos[veredicto]
+    assert '--locust-exit-code "$LOCUST_EXIT_CODE"' in textos[veredicto]
     assert "--network-offset-ms" in textos[veredicto]
+    assert {
+        key: pasos[locust]["env"][key]
+        for key in (
+            "SHIFTY_USUARIOS",
+            "SHIFTY_RAMPA_S",
+            "SHIFTY_MESETA_S",
+            "SHIFTY_RAFAGA_CADA_S",
+            "SHIFTY_THINK_SCALE",
+        )
+    } == {
+        "SHIFTY_USUARIOS": "200",
+        "SHIFTY_RAMPA_S": "300",
+        "SHIFTY_MESETA_S": "1200",
+        "SHIFTY_RAFAGA_CADA_S": "300",
+        "SHIFTY_THINK_SCALE": "1",
+    }
+    assert textos[locust].index("locust_exit_code=$?") > textos[locust].index(
+        "uv run locust"
+    )
+    assert "LOCUST_EXIT_CODE=%s" in textos[locust]
     for paso in pasos:
         assert "continue-on-error" not in paso, paso.get("name")
         assert "|| true" not in str(paso.get("run", "")), paso.get("name")

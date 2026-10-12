@@ -20,11 +20,14 @@ Criterios (plan-capacidad §5.2, plan de correccion §9):
   generador lejano (un runner en EE.UU. agrega 120-150 ms).
 - 0 respuestas 5xx, 0 respuestas 429, 0 errores de conexion. Un 409 fuera de
   la rafaga es legitimo (el slot se tomo entre la disponibilidad y la reserva).
-- Cada rafaga: exactamente 1 x 201 y el resto 409, sin 5xx; al menos una.
+- Cada una de las cuatro rafagas: exactamente 1 x 201 y el resto 409, sin 5xx.
 - En cada muestra del SLO: atraso del outbox y de los mails presente y
-  <= 120 s y, si la metrica existe, 0 ``outbox_budget_drops``. Sin muestras,
-  o con una muestra sin esas metricas, no se aprueba.
+  <= 120 s y, si la metrica existe, 0 ``outbox_budget_drops``. La corrida
+  debe tener al menos 40 muestras SLO con timestamps distintos y 24 minutos
+  de cobertura, ademas de las cuatro rafagas del escenario completo.
 - Memoria de cada contenedor < 70 % de su limite (si hay log).
+- Locust debe terminar con codigo 0; el offset de red medido no puede superar
+  150 ms.
 
 Solo stdlib: corre en el runner de CI o en la maquina del generador.
 Sale 0 si aprueba, 1 si algun criterio falla y 2 si falta una entrada.
@@ -39,12 +42,17 @@ import re
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 P95_MS = 500
 LOGIN_P95_MS = 1000
 MIN_SAMPLES = 20
+MIN_SLO_SAMPLES = 40
+MIN_SLO_SPAN_SECONDS = 24 * 60
+MIN_BURSTS = 4
+MAX_NETWORK_OFFSET_MS = 150
 MAX_LAG_SECONDS = 120
 MAX_MEM_PERCENT = 70.0
 LOGIN_ROUTE = "POST /auth/login"
@@ -160,8 +168,11 @@ def evaluar_codigos(codigos: dict[str, Any]) -> list[str]:
         fallas.append(f"errores de conexion o timeouts: {conexion}")
 
     rafagas = codigos.get("rafagas") or []
-    if not rafagas:
-        fallas.append("rafaga: no se registro ninguna (la meseta dura menos de 5 min?)")
+    if len(rafagas) < MIN_BURSTS:
+        fallas.append(
+            f"rafagas: se esperaban al menos {MIN_BURSTS} durante la meseta; "
+            f"se registraron {len(rafagas)}"
+        )
     for numero, rafaga in enumerate(rafagas, start=1):
         cuenta = {str(k): int(v) for k, v in (rafaga or {}).items()}
         ganadoras = cuenta.get("201", 0)
@@ -171,6 +182,36 @@ def evaluar_codigos(codigos: dict[str, Any]) -> list[str]:
                 f"rafaga {numero}: se esperaba 1 x 201 y el resto 409, hubo {cuenta}"
             )
     return fallas
+
+
+def evaluar_cobertura_slo(muestras: list[dict[str, Any]]) -> list[str]:
+    if len(muestras) < MIN_SLO_SAMPLES:
+        return [
+            f"SLO: se esperaban al menos {MIN_SLO_SAMPLES} muestras; "
+            f"se registraron {len(muestras)}"
+        ]
+
+    instantes = []
+    for numero, muestra in enumerate(muestras, start=1):
+        valor = muestra.get("t")
+        try:
+            instante = datetime.fromisoformat(str(valor).replace("Z", "+00:00"))
+        except ValueError:
+            return [f"SLO: timestamp invalido en la muestra {numero}"]
+        if instante.tzinfo is None:
+            return [f"SLO: timestamp sin zona horaria en la muestra {numero}"]
+        instantes.append(instante)
+
+    if len(set(instantes)) < MIN_SLO_SAMPLES:
+        return [f"SLO: se requieren al menos {MIN_SLO_SAMPLES} timestamps distintos"]
+
+    span = (max(instantes) - min(instantes)).total_seconds()
+    if span < MIN_SLO_SPAN_SECONDS:
+        return [
+            f"SLO: la cobertura fue {int(span)} s; se requieren "
+            f"al menos {MIN_SLO_SPAN_SECONDS} s"
+        ]
+    return []
 
 
 def evaluar_slo(muestras: list[dict[str, Any]], *, max_lag_seconds: int) -> list[str]:
@@ -228,14 +269,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--network-offset-ms",
         type=int,
         default=0,
-        help="latencia de red del generador a sumar a los umbrales",
+        help=f"latencia medida del generador (0-{MAX_NETWORK_OFFSET_MS} ms)",
     )
+    parser.add_argument("--locust-exit-code", type=int, default=0)
     parser.add_argument("--max-lag-seconds", type=int, default=MAX_LAG_SECONDS)
     parser.add_argument("--max-mem-percent", type=float, default=MAX_MEM_PERCENT)
     args = parser.parse_args(argv)
 
     prefijo = Path(args.csv_prefix)
-    offset = max(0, args.network_offset_ms)
+    offset = args.network_offset_ms
+    if not 0 <= offset <= MAX_NETWORK_OFFSET_MS:
+        print(
+            f"ERROR de entrada: --network-offset-ms debe estar entre 0 y "
+            f"{MAX_NETWORK_OFFSET_MS}"
+        )
+        return 2
     try:
         rutas, total = _leer_stats(Path(f"{prefijo}_stats.csv"))
         codigos = _leer_json(Path(f"{prefijo}_codigos.json"))
@@ -249,6 +297,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         fallas += evaluar_codigos(codigos)
         fallas += evaluar_slo(muestras, max_lag_seconds=args.max_lag_seconds)
+        fallas += evaluar_cobertura_slo(muestras)
+        if args.locust_exit_code != 0:
+            fallas.append(f"Locust termino con codigo {args.locust_exit_code}")
         if args.docker_stats:
             fallas += evaluar_memoria(
                 Path(args.docker_stats), max_percent=args.max_mem_percent
