@@ -1,7 +1,7 @@
 @import 'tailwindcss';
 
 @theme {
-  --color-primary: #ff8c42;
+  --color-primary: #b4530a;
   --color-primary-foreground: #ffffff;
   --color-background: #e5e5e5;
   --color-background-end: #d9d9d9;
@@ -24,7 +24,8 @@
   --color-info-background: #eff6ff;
 
   /* Las utilidades orange-* heredadas siguen siendo acentos AA para texto.
-     La marca y las selecciones usan primary / brand-light / brand. */
+     Para marca decorativa, usar brand-light/brand; el CTA usa primary +
+     primary-foreground. */
   --color-orange-400: #9a4507;
   --color-orange-500: #9a4507;
   --color-orange-600: #9a4507;
