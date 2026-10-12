@@ -61,6 +61,7 @@ def _escribir(
     codigos: dict[str, Any] | None = None,
     slo: list[dict[str, Any]] | None = None,
     stats: str | None = None,
+    locust_exit_code: int = 0,
 ) -> list[str]:
     (tmp / "run_stats.csv").write_text(
         "\n".join([CABECERA, *filas]) + "\n", encoding="utf-8"
@@ -103,7 +104,12 @@ def _escribir(
     (tmp / "run_slo.jsonl").write_text(
         "".join(json.dumps(m) + "\n" for m in muestras), encoding="utf-8"
     )
-    argumentos = ["--csv-prefix", str(tmp / "run")]
+    argumentos = [
+        "--csv-prefix",
+        str(tmp / "run"),
+        "--locust-exit-code",
+        str(locust_exit_code),
+    ]
     if stats is not None:
         (tmp / "stats.log").write_text(stats, encoding="utf-8")
         argumentos += ["--docker-stats", str(tmp / "stats.log")]
@@ -180,10 +186,22 @@ def test_un_offset_de_red_fuera_del_limite_no_puede_aflojar_el_umbral(
 def test_locust_con_salida_no_cero_nunca_da_aceptada(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    argumentos = _escribir(tmp_path, FILAS_OK, locust_exit_code=1)
+
+    assert _modulo().main(argumentos) == 1
+    assert "Locust termino con codigo 1" in capsys.readouterr().out
+
+
+def test_sin_codigo_de_salida_de_locust_no_se_puede_evaluar(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     argumentos = _escribir(tmp_path, FILAS_OK)
 
-    assert _modulo().main([*argumentos, "--locust-exit-code", "1"]) == 1
-    assert "Locust termino con codigo 1" in capsys.readouterr().out
+    with pytest.raises(SystemExit) as salida:
+        _modulo().main(argumentos[:-2])
+
+    assert salida.value.code == 2
+    assert "--locust-exit-code" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize(
@@ -415,4 +433,14 @@ def test_la_memoria_de_cada_contenedor_queda_bajo_el_70(
 
 
 def test_sin_el_csv_de_locust_sale_con_error_de_entrada(tmp_path: Path) -> None:
-    assert _modulo().main(["--csv-prefix", str(tmp_path / "no-existe")]) == 2
+    assert (
+        _modulo().main(
+            [
+                "--csv-prefix",
+                str(tmp_path / "no-existe"),
+                "--locust-exit-code",
+                "0",
+            ]
+        )
+        == 2
+    )

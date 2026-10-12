@@ -271,7 +271,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=0,
         help=f"latencia medida del generador (0-{MAX_NETWORK_OFFSET_MS} ms)",
     )
-    parser.add_argument("--locust-exit-code", type=int, default=0)
+    parser.add_argument("--locust-exit-code", type=int, required=True)
     parser.add_argument("--max-lag-seconds", type=int, default=MAX_LAG_SECONDS)
     parser.add_argument("--max-mem-percent", type=float, default=MAX_MEM_PERCENT)
     args = parser.parse_args(argv)
