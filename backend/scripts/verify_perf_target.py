@@ -18,6 +18,7 @@ import httpx
 HEALTH_PATH = "/api/ops/health/ready"
 REQUEST_TIMEOUT_SECONDS = 5
 MAX_RESPONSE_BYTES = 64 * 1024
+PRODUCTION_HOSTS = frozenset({"shifty-ar.tech", "www.shifty-ar.tech"})
 _DNS_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z")
 _NUMERIC_HOST = re.compile(r"(?i)(?:0x[0-9a-f]+|[0-9]+)(?:\.(?:0x[0-9a-f]+|[0-9]+))*\Z")
 
@@ -83,6 +84,9 @@ def _normalized_host(host: str) -> str:
         if _prohibited_address(normalized_address):
             raise TargetCheckError("El origen aprobado no es válido.")
         return normalized_address.compressed.lower()
+
+    if ascii_host in PRODUCTION_HOSTS:
+        raise TargetCheckError("El dominio de producción no es un destino de staging.")
 
     if any(not _DNS_LABEL.fullmatch(label) for label in ascii_host.split(".")):
         raise TargetCheckError("El origen aprobado no es válido.")

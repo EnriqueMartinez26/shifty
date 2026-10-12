@@ -142,6 +142,7 @@ Rehearsal on 2026-09-24 (3 stores, 20 users, 90 s plateau, local uvicorn): 1336 
 | Setting | Kind | What |
 | --- | --- | --- |
 | `STAGING_URL` | secret | staging API URL with `/api` |
+| `PERF_ALLOWED_ORIGIN` | variable | exact HTTPS staging origin; the production apex and `www` host are rejected |
 | `SEED_OWNER_PASSWORD` | secret | the password the seed ran with |
 | `SHIFTY_SUPERADMIN_EMAIL`, `SHIFTY_SUPERADMIN_PASSWORD` | secrets | a staging superadmin (samples `/ops/slo`) |
 | `PERF_RUNNER` | variable | runner label; default `ubuntu-latest` |

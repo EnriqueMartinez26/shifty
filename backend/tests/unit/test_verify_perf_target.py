@@ -189,6 +189,37 @@ def test_origin_mismatch_fails_before_probe() -> None:
 
 
 @pytest.mark.parametrize(
+    "host",
+    [
+        "shifty-ar.tech",
+        "www.shifty-ar.tech",
+        "SHifty-AR.TECH",
+    ],
+)
+def test_rechaza_el_dominio_de_produccion_como_origen_aprobado(host: str) -> None:
+    with pytest.raises(module.TargetCheckError, match="producción"):
+        module.normalize_origin(f"https://{host}")
+
+
+@pytest.mark.parametrize("host", ["shifty-ar.tech", "www.shifty-ar.tech"])
+def test_rechaza_el_dominio_de_produccion_como_destino_sin_consultarlo(
+    host: str,
+) -> None:
+    transport = _MockTransport(httpx.Response(200, content=READY))
+    with pytest.raises(module.TargetCheckError, match="producción"):
+        module.verify_target_url(
+            f"https://{host}/api", ALLOWED_ORIGIN, transport=transport
+        )
+    assert transport.requests == []
+
+
+def test_no_bloquea_subdominios_que_pueden_ser_staging() -> None:
+    assert module.normalize_origin("https://staging.shifty-ar.tech") == (
+        "https://staging.shifty-ar.tech"
+    )
+
+
+@pytest.mark.parametrize(
     "url",
     [
         "http://staging.example.test/api",
