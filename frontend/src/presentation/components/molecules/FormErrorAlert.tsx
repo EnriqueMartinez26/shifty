@@ -2,6 +2,7 @@ import React from 'react'
 
 import { TriangleAlert } from 'lucide-react'
 
+import { colors2000s } from '../../../theme/colors'
 import { revealOnMount } from '../../lib/revealOnMount'
 
 interface FormErrorAlertProps {
@@ -25,11 +26,15 @@ export const FormErrorAlert: React.FC<FormErrorAlertProps> = ({ message, classNa
       ref={revealOnMount}
       role="alert"
       tabIndex={-1}
-      className={`rounded-2xl px-4 py-3 text-xs font-bold flex items-center gap-2 outline-none scroll-my-4 ${className}`}
-      style={{ background: '#fff1f2', border: '1px solid #fecdd3', color: '#be123c' }}
+      className={`rounded-2xl px-4 py-3 text-xs font-bold flex items-start gap-2 scroll-my-4 ${className}`}
+      style={{
+        background: colors2000s.status.danger.bg,
+        border: `1px solid ${colors2000s.status.danger.border}`,
+        color: colors2000s.status.danger.text
+      }}
     >
       <TriangleAlert size={14} className="flex-shrink-0" aria-hidden="true" />
-      <span>{message}</span>
+      <span className="min-w-0 break-words">{message}</span>
     </div>
   )
 }

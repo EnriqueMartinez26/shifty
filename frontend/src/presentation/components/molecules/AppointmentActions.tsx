@@ -44,47 +44,47 @@ const ACTION_VIEWS: Record<AppointmentAction, ActionView> = {
     label: 'Confirmar',
     title: 'Confirmar turno',
     icon: <Check className="w-3 h-3" />,
-    tone: 'text-emerald-700 border-emerald-200'
+    tone: 'text-success border-success-background'
   },
   release: {
     label: 'Liberar',
     title: 'Liberar turno pendiente',
     icon: <LockOpen className="w-3 h-3" />,
-    tone: 'text-red-700 border-red-200'
+    tone: 'text-danger border-danger-background'
   },
   cancel: {
     label: 'Cancelar',
     title: 'Cancelar turno',
     icon: <CircleX className="w-3 h-3" />,
-    tone: 'text-red-700 border-red-200'
+    tone: 'text-danger border-danger-background'
   },
   complete: {
     label: 'Completar',
     title: 'Marcar turno como completado',
     icon: <CheckCheck className="w-3 h-3" />,
-    tone: 'text-blue-700 border-blue-200'
+    tone: 'text-info border-info-background'
   },
   absent: {
     label: 'Ausente',
     title: 'El cliente no vino',
     icon: <UserX className="w-3 h-3" />,
-    tone: 'text-amber-700 border-amber-200'
+    tone: 'text-warning border-warning-background'
   },
   reschedule: {
     label: 'Reprogramar',
     title: 'Reprogramar turno',
     icon: <CalendarClock className="w-3 h-3" />,
-    tone: 'text-slate-700 border-slate-200'
+    tone: 'text-foreground border-surface-subtle'
   }
 }
 
 /**
- * Blanco tactil de 40x40 (QA movil 2026-10-08: median 30x22 compactos y 24 de
+ * Blanco tactil de 44x44 (QA movil 2026-10-08: median 30x22 compactos y 24 de
  * alto con texto). En pantallas grandes los compactos de la grilla del dia y
  * del mes vuelven a su tamano: ahi no hay dedo y no entran.
  */
-export const TAP_TARGET = 'min-h-10 min-w-10'
-export const COMPACT_ON_DESKTOP = 'md:min-h-0 md:min-w-0'
+export const TAP_TARGET = 'min-h-11 min-w-11'
+export const COMPACT_ON_DESKTOP = 'md:min-h-11 md:min-w-11'
 
 export const AppointmentActions: React.FC<AppointmentActionsProps> = ({
   status,

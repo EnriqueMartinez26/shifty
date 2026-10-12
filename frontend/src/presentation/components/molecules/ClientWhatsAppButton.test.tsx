@@ -53,8 +53,8 @@ describe('ClientWhatsAppButton', () => {
     expect(ilegible.container.innerHTML).toBe('')
   })
 
-  // QA movil 2026-10-08: el boton compacto media 30x22.
-  it.each([false, true])('es un blanco tactil de 40x40 (compacto: %s)', (compact) => {
+  // QA movil 2026-10-08: el boton compacto media 30x22; ahora cumple 44x44.
+  it.each([false, true])('es un blanco tactil de al menos 44x44 (compacto: %s)', (compact) => {
     render(
       <ClientWhatsAppButton
         phone="+5491155550031"
@@ -63,6 +63,6 @@ describe('ClientWhatsAppButton', () => {
         compact={compact}
       />
     )
-    expect(screen.getByRole('link')).toHaveClass('min-h-10', 'min-w-10')
+    expect(screen.getByRole('link')).toHaveClass('min-h-11', 'min-w-11')
   })
 })

@@ -10,7 +10,7 @@ import { getContactInfo, supportWhatsAppUrl } from '@shared/utils/contactInfo'
 import { colors2000s } from '../../../theme/colors'
 
 const ACTION_CLASS =
-  'rounded-xl px-4 py-2 text-[10px] font-black uppercase tracking-widest whitespace-nowrap'
+  'inline-flex min-h-11 items-center justify-center rounded-xl px-4 py-2 text-center text-[10px] font-black uppercase tracking-widest whitespace-normal sm:whitespace-nowrap'
 
 interface BannerContent {
   tone: 'warn' | 'blocked'
@@ -73,7 +73,7 @@ export const SubscriptionBanner: React.FC<SubscriptionBannerProps> = ({
   const actionStyle: React.CSSProperties = {
     background: 'white',
     border: `1px solid ${colors2000s.border.default}`,
-    color: bloqueado ? '#991b1b' : '#92400e'
+    color: bloqueado ? colors2000s.status.danger.text : colors2000s.status.warning.text
   }
   const texto = `Hola! Soy de ${storeName || 'mi negocio'} y quiero renovar mi plan de Shifty.`
   // El WhatsApp de soporte es configuracion del build (VITE_SUPPORT_WHATSAPP),
@@ -86,18 +86,18 @@ export const SubscriptionBanner: React.FC<SubscriptionBannerProps> = ({
       role="status"
       className="mb-6 rounded-2xl px-5 py-4 flex flex-wrap items-center gap-3 justify-between"
       style={{
-        background: bloqueado ? '#fef2f2' : '#fffbeb',
-        border: `1px solid ${bloqueado ? '#fecaca' : '#fde68a'}`,
-        color: bloqueado ? '#991b1b' : '#92400e'
+        background: bloqueado ? colors2000s.status.danger.bg : colors2000s.status.warning.bg,
+        border: `1px solid ${bloqueado ? colors2000s.status.danger.border : colors2000s.status.warning.border}`,
+        color: bloqueado ? colors2000s.status.danger.text : colors2000s.status.warning.text
       }}
     >
-      <div className="flex items-start gap-3 min-w-0">
+      <div className="flex min-w-0 items-start gap-3">
         {bloqueado ? (
           <Lock className="w-5 h-5 mt-0.5 flex-shrink-0" />
         ) : (
           <AlertTriangle className="w-5 h-5 mt-0.5 flex-shrink-0" />
         )}
-        <div className="min-w-0">
+        <div className="min-w-0 break-words">
           <p className="text-xs font-black uppercase tracking-widest">{content.title}</p>
           {content.detail && <p className="text-xs font-bold mt-1">{content.detail}</p>}
         </div>
@@ -117,7 +117,7 @@ export const SubscriptionBanner: React.FC<SubscriptionBannerProps> = ({
           Escribinos para renovar
         </a>
       ) : (
-        <p className="text-[10px] font-black uppercase tracking-widest whitespace-nowrap">
+        <p className="min-w-0 whitespace-normal break-words text-[10px] font-black uppercase tracking-widest">
           Escribinos para renovar
         </p>
       )}
