@@ -45,7 +45,7 @@ export const UserCard: React.FC<UserCardProps> = ({
   // Volumetric gradients and borders based on role
   const accentBorderColor = isAdmin ? colors2000s.status.info.dark : colors2000s.orange.light
   const avatarGradient = isAdmin
-    ? `linear-gradient(180deg, ${colors2000s.status.info.light} 0%, ${colors2000s.status.info.dark} 100%)`
+    ? `linear-gradient(180deg, ${colors2000s.status.info.dark} 0%, ${colors2000s.status.info.accent} 100%)`
     : orangeCtaGradient
 
   // Sin `scale` en la tarjeta (2026-10-14): tiene botones adentro y al apretar
@@ -97,13 +97,13 @@ export const UserCard: React.FC<UserCardProps> = ({
           </div>
           <div className="min-w-0">
             <h3
-              className="font-black text-sm uppercase tracking-tight truncate leading-tight"
+              className="whitespace-normal break-words font-black text-sm uppercase tracking-tight leading-tight"
               style={{ color: colors2000s.text.primary }}
             >
               {user.fullName}
             </h3>
             <p
-              className="text-[10px] font-black uppercase tracking-widest mt-1 truncate"
+              className="whitespace-normal break-words text-[10px] font-black uppercase tracking-widest mt-1"
               style={{ color: colors2000s.text.secondary }}
             >
               {email ?? 'Sin email'}
@@ -133,7 +133,7 @@ export const UserCard: React.FC<UserCardProps> = ({
             style={{ color: colors2000s.text.secondary }}
           >
             <Mail size={14} color={colors2000s.text.disabled} />
-            <span className="truncate">{email ?? 'Sin email'}</span>
+            <span className="min-w-0 flex-1 break-words">{email ?? 'Sin email'}</span>
           </div>
           {user.toPrimitives().phone && (
             <div
@@ -141,7 +141,7 @@ export const UserCard: React.FC<UserCardProps> = ({
               style={{ color: colors2000s.text.secondary }}
             >
               <Phone size={14} color={colors2000s.text.disabled} />
-              <span>{user.toPrimitives().phone}</span>
+              <span className="min-w-0 flex-1 break-words">{user.toPrimitives().phone}</span>
             </div>
           )}
         </div>
@@ -153,7 +153,7 @@ export const UserCard: React.FC<UserCardProps> = ({
           onClick={() => onEdit(user)}
           disabled={readOnlyReason !== null}
           title={readOnlyReason ?? undefined}
-          className="flex items-center justify-center gap-2 py-2.5 px-3 font-black text-[10px] uppercase tracking-widest transition-all active:scale-95 disabled:opacity-50"
+          className="min-h-11 flex items-center justify-center gap-2 py-2.5 px-3 font-black text-[10px] uppercase tracking-widest transition-all active:scale-95 disabled:opacity-50"
           style={buttonStyles2000s.default}
         >
           <Edit2 size={14} /> Editar
@@ -161,8 +161,8 @@ export const UserCard: React.FC<UserCardProps> = ({
         {canDelete && (
           <button
             onClick={() => onDelete(user.id)}
-            className="flex items-center justify-center gap-2 py-2.5 px-3 font-black text-[10px] uppercase tracking-widest transition-all active:scale-95"
-            style={{ ...buttonStyles2000s.default, color: colors2000s.status.danger.light }}
+            className="min-h-11 flex items-center justify-center gap-2 py-2.5 px-3 font-black text-[10px] uppercase tracking-widest transition-all active:scale-95"
+            style={{ ...buttonStyles2000s.default, color: colors2000s.status.danger.text }}
           >
             <Trash2 size={14} /> Eliminar
           </button>
