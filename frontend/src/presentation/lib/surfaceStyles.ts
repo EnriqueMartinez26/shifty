@@ -173,7 +173,8 @@ export const create2000sEmptyStateStyle = (): CSSProperties =>
 // `border` completo) - hacerlo cambiaria que propiedad CSS se emite.
 export const createBookingChoiceCardStyle = (isSelected: boolean): CSSProperties => ({
   background: isSelected ? SURFACE_BACKGROUNDS.orange : SURFACE_BACKGROUNDS.brand,
-  borderColor: isSelected ? colors2000s.orange.accent : colors2000s.border.default,
+  color: isSelected ? colors2000s.text.onOrangeSelection : colors2000s.text.primary,
+  borderColor: isSelected ? colors2000s.orange.dark : colors2000s.border.default,
   borderRadius: 6,
   boxShadow: isSelected ? SURFACE_SHADOWS.raisedOrange : SURFACE_SHADOWS.raisedSoft
 })
@@ -184,7 +185,7 @@ export const createBookingChoiceCardStyle = (isSelected: boolean): CSSProperties
 // propiedad CSS emite (`border` completo en vez de solo `borderColor`).
 export const createBookingBackButtonStyle = (): CSSProperties => ({
   background: SURFACE_BACKGROUNDS.orange,
-  borderColor: colors2000s.orange.accent,
+  borderColor: colors2000s.orange.dark,
   boxShadow: SURFACE_SHADOWS.raisedOrange,
-  color: colors2000s.text.onOrange
+  color: colors2000s.text.onOrangeSelection
 })

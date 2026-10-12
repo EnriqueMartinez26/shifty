@@ -83,7 +83,7 @@ const NotificationsBell: React.FC = () => {
             className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-black flex items-center justify-center"
             style={{
               background: orangeCtaGradient,
-              color: colors2000s.text.onOrange,
+              color: colors2000s.text.onOrangeSelection,
               boxShadow: colors2000s.shadows.outerOrange
             }}
           >

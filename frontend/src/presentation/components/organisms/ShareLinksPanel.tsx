@@ -88,10 +88,15 @@ export const ShareLinksPanel: React.FC<ShareLinksPanelProps> = ({ slug }) => {
             style={{ border: `1px solid ${colors2000s.border.light}` }}
           >
             <div className="min-w-0 flex-1">
-              <p className="text-[10px] font-black uppercase tracking-widest truncate">
+              <p className="text-[10px] font-black uppercase tracking-widest break-words">
                 {link.label}
               </p>
-              <p className="text-[10px] font-bold text-gray-500 truncate">{link.url}</p>
+              <p
+                className="text-[10px] font-bold break-all"
+                style={{ color: colors2000s.text.secondary }}
+              >
+                {link.url}
+              </p>
             </div>
             <button
               type="button"
@@ -100,7 +105,7 @@ export const ShareLinksPanel: React.FC<ShareLinksPanelProps> = ({ slug }) => {
               }}
               aria-label={`Copiar link de ${link.label}`}
               // shrink-0: un link largo empujaba el boton fuera de la tarjeta (QA movil 2026-10-08).
-              className="shrink-0 min-h-10 rounded-lg px-3 py-2 text-[9px] font-black uppercase tracking-widest inline-flex items-center gap-1"
+              className="shrink-0 min-h-11 rounded-lg px-3 py-2 text-[9px] font-black uppercase tracking-widest inline-flex items-center gap-1"
               style={{ border: `1px solid ${colors2000s.border.default}` }}
             >
               {copiado === link.url ? (

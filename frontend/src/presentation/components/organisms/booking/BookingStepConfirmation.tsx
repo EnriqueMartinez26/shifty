@@ -697,12 +697,13 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
             onClick={() => {
               void handleConfirm('manual')
             }}
-            className="w-full text-white font-black py-4 rounded-xl transition-all uppercase tracking-widest text-xs active:scale-95 border cursor-pointer select-none disabled:cursor-not-allowed"
+            className="w-full font-black py-4 rounded-xl transition-all uppercase tracking-widest text-xs active:scale-95 border cursor-pointer select-none disabled:cursor-not-allowed"
             style={
               canSubmit
                 ? {
                     background: orangeCtaGradient,
-                    borderColor: colors2000s.orange.accent,
+                    borderColor: colors2000s.orange.dark,
+                    color: colors2000s.text.onOrangeSelection,
                     boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerOrange}`
                   }
                 : buttonStyles2000s.disabled
@@ -728,12 +729,13 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
             onClick={() => {
               void handleConfirm('mercadopago')
             }}
-            className="w-full text-white font-black py-4 rounded-xl transition-all uppercase tracking-widest text-xs active:scale-95 border cursor-pointer select-none inline-flex items-center justify-center gap-2 disabled:cursor-not-allowed"
+            className="w-full font-black py-4 rounded-xl transition-all uppercase tracking-widest text-xs active:scale-95 border cursor-pointer select-none inline-flex items-center justify-center gap-2 disabled:cursor-not-allowed"
             style={
               canSubmit
                 ? {
                     background: orangeCtaGradient,
-                    borderColor: colors2000s.orange.accent,
+                    borderColor: colors2000s.orange.dark,
+                    color: colors2000s.text.onOrangeSelection,
                     boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerOrange}`
                   }
                 : buttonStyles2000s.disabled

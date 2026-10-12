@@ -136,12 +136,16 @@ const AgendaDayGrid: React.FC<
                 style={{ borderColor: colors2000s.border.light }}
               >
                 <div
-                  className="w-10 h-10 rounded-full text-white flex items-center justify-center mx-auto mb-2 font-black text-xs shadow-md"
+                  className="w-10 h-10 rounded-full flex items-center justify-center mx-auto mb-2 font-black text-xs shadow-md"
                   style={{
                     background:
                       idx % 2 === 0
                         ? 'linear-gradient(180deg, #3b82f6 0%, #2563eb 100%)'
                         : orangeCtaGradient,
+                    color:
+                      idx % 2 === 0
+                        ? colors2000s.text.onOrange
+                        : colors2000s.text.onOrangeSelection,
                     boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`
                   }}
                 >

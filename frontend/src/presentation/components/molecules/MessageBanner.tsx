@@ -2,6 +2,8 @@ import React from 'react'
 
 import { TriangleAlert } from 'lucide-react'
 
+import { colors2000s } from '../../../theme/colors'
+
 interface MessageBannerProps {
   /** Vacio no renderiza nada: las pantallas guardan '' cuando no hay aviso. */
   message: string
@@ -17,11 +19,16 @@ export const MessageBanner: React.FC<MessageBannerProps> = ({ message }) => {
 
   return (
     <div
-      className="p-4 rounded-2xl text-sm font-bold flex items-center gap-3"
-      style={{ background: '#fff7ed', border: '1px solid #fed7aa', color: '#c2410c' }}
+      role="status"
+      className="p-4 rounded-2xl text-sm font-bold flex items-start gap-3"
+      style={{
+        background: colors2000s.status.warning.bg,
+        border: `1px solid ${colors2000s.status.warning.border}`,
+        color: colors2000s.status.warning.text
+      }}
     >
       <TriangleAlert className="w-5 h-5 flex-shrink-0" />
-      <span>{message}</span>
+      <span className="min-w-0 break-words">{message}</span>
     </div>
   )
 }

@@ -83,9 +83,10 @@ export const UserCard: React.FC<UserCardProps> = ({
         {/* Header Section: Avatar initials + Titles */}
         <div className="flex items-center gap-4 pr-20">
           <div
-            className="w-12 h-12 rounded-full text-white flex items-center justify-center font-black text-sm shadow-md flex-shrink-0"
+            className="w-12 h-12 rounded-full flex items-center justify-center font-black text-sm shadow-md flex-shrink-0"
             style={{
               background: avatarGradient,
+              color: isAdmin ? colors2000s.text.onOrange : colors2000s.text.onOrangeSelection,
               boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`
             }}
           >

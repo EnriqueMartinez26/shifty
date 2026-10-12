@@ -9,31 +9,35 @@ interface StatusStyle {
 /** Colores de una tarjeta de turno segun su estado (agenda: dia, semana, mes, lista). */
 export const statusStyle = (status: string): StatusStyle => {
   if (status === 'absent') {
+    const color = colors2000s.status.danger
     return {
-      accent: '#b91c1c',
-      background: 'linear-gradient(180deg, #fef2f2 0%, #fecaca 100%)',
-      text: '#7f1d1d'
+      accent: color.accent,
+      background: `linear-gradient(180deg, ${color.bg} 0%, ${color.border} 100%)`,
+      text: color.text
     }
   }
   if (status === 'pending_payment') {
+    const color = colors2000s.status.warning
     return {
-      accent: '#d97706',
-      background: 'linear-gradient(180deg, #fff7ed 0%, #fed7aa 100%)',
-      text: '#9a3412'
+      accent: color.accent,
+      background: `linear-gradient(180deg, ${color.bg} 0%, ${color.border} 100%)`,
+      text: color.text
     }
   }
   if (status === 'confirmed') {
+    const color = colors2000s.status.info
     return {
-      accent: '#2563eb',
-      background: 'linear-gradient(180deg, #eff6ff 0%, #dbeafe 100%)',
-      text: '#1d4ed8'
+      accent: color.accent,
+      background: `linear-gradient(180deg, ${color.bg} 0%, ${color.border} 100%)`,
+      text: color.text
     }
   }
   if (status === 'completed') {
+    const color = colors2000s.status.success
     return {
-      accent: '#15803d',
-      background: 'linear-gradient(180deg, #ecfdf5 0%, #dcfce7 100%)',
-      text: '#166534'
+      accent: color.accent,
+      background: `linear-gradient(180deg, ${color.bg} 0%, ${color.border} 100%)`,
+      text: color.text
     }
   }
   return {

@@ -167,7 +167,7 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
         <div>
           <h2
             className="text-2xl font-black uppercase tracking-tight"
-            style={{ color: colors2000s.orange.accent }}
+            style={{ color: colors2000s.orange.heading }}
           >
             {heading}
           </h2>
@@ -206,12 +206,14 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
                       borderRadius: 6,
                       background: isSelected ? orangeCtaGradient : '#ffffff',
                       borderColor: isSelected
-                        ? colors2000s.orange.accent
+                        ? colors2000s.orange.dark
                         : colors2000s.border.default,
                       boxShadow: isSelected
                         ? colors2000s.shadows.insetLight
                         : colors2000s.shadows.insetDark,
-                      color: isSelected ? '#ffffff' : colors2000s.text.primary
+                      color: isSelected
+                        ? colors2000s.text.onOrangeSelection
+                        : colors2000s.text.primary
                     }}
                   >
                     {option.id === null && <Sparkles className="w-3.5 h-3.5" />}
@@ -249,11 +251,11 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
                   background: isSelected
                     ? orangeCtaGradient
                     : `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
-                  borderColor: isSelected ? colors2000s.orange.accent : colors2000s.border.default,
+                  borderColor: isSelected ? colors2000s.orange.dark : colors2000s.border.default,
                   boxShadow: isSelected
                     ? `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerOrange}`
                     : `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`,
-                  color: isSelected ? '#ffffff' : colors2000s.text.primary
+                  color: isSelected ? colors2000s.text.onOrangeSelection : colors2000s.text.primary
                 }}
               >
                 <span className="text-[9px] uppercase font-black tracking-widest opacity-80">
@@ -356,7 +358,7 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
                       ? `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerOrange}`
                       : `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`,
                     color: isSelected
-                      ? '#ffffff'
+                      ? colors2000s.text.onOrangeSelection
                       : isAvailable
                         ? colors2000s.text.primary
                         : colors2000s.text.disabled
@@ -365,7 +367,9 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
                   <div>{timeString}</div>
                   <div
                     className="text-[8px] uppercase tracking-widest mt-1"
-                    style={{ color: isSelected ? '#ffffff' : badgeColor }}
+                    style={{
+                      color: isSelected ? colors2000s.text.onOrangeSelection : badgeColor
+                    }}
                   >
                     {selectedStaffId ? slotStatusLabel(slot.status) : slot.staff_name}
                   </div>
