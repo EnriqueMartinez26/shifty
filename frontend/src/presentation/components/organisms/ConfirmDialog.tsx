@@ -1,6 +1,6 @@
 import React, { useEffect, useId, useRef } from 'react'
 
-import { orangeCtaGradient } from '../../../theme/colors'
+import { colors2000s, orangeCtaGradient } from '../../../theme/colors'
 
 interface ConfirmDialogProps {
   /** La pregunta, tal cual la mostraba window.confirm. */
@@ -77,8 +77,8 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
             ref={confirmRef}
             type="button"
             onClick={onConfirm}
-            className="rounded-xl px-4 py-2 text-xs font-black uppercase tracking-widest text-white"
-            style={{ background: orangeCtaGradient }}
+            className="rounded-xl px-4 py-2 text-xs font-black uppercase tracking-widest"
+            style={{ background: orangeCtaGradient, color: colors2000s.text.onOrangeSelection }}
           >
             {confirmLabel}
           </button>

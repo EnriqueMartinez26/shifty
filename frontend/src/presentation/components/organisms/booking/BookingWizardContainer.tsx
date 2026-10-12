@@ -250,13 +250,18 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
                     : isActive
                       ? `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerOrange}`
                       : `${colors2000s.shadows.insetLight}, 0 1px 2px rgba(0,0,0,0.05)`,
-                  color: isCompleted || isActive ? '#ffffff' : colors2000s.text.secondary
+                  color: isCompleted
+                    ? colors2000s.text.onOrange
+                    : isActive
+                      ? colors2000s.text.onOrangeSelection
+                      : colors2000s.text.secondary
                 }}
               >
                 {isCompleted ? <Check className="w-4 h-4 font-black" /> : i + 1}
               </div>
               <span
                 className={`text-[9px] uppercase tracking-wider hidden md:block mt-1 font-black text-center ${isActive ? 'text-orange-600' : isCompleted ? 'text-green-600' : 'text-gray-400'}`}
+                style={isActive ? { color: colors2000s.orange.accent } : undefined}
               >
                 {label}
               </span>

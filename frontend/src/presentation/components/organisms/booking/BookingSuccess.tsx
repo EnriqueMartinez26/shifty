@@ -225,10 +225,11 @@ export const BookingSuccess: React.FC<BookingSuccessProps> = ({
           href={asSafeHttpsUrl(confirmation.payment_link) ?? '#'}
           target="_blank"
           rel="noreferrer"
-          className="w-full mt-6 text-white font-black py-4 rounded-xl transition-all uppercase tracking-widest text-xs border cursor-pointer select-none inline-flex items-center justify-center gap-2"
+          className="w-full mt-6 font-black py-4 rounded-xl transition-all uppercase tracking-widest text-xs border cursor-pointer select-none inline-flex items-center justify-center gap-2"
           style={{
             background: orangeCtaGradient,
-            borderColor: colors2000s.orange.accent,
+            borderColor: colors2000s.orange.dark,
+            color: colors2000s.text.onOrangeSelection,
             boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerOrange}`
           }}
         >

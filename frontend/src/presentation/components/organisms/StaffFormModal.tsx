@@ -212,11 +212,14 @@ export const StaffFormModal: React.FC<StaffFormModalProps> = ({
                       style={{
                         borderColor:
                           formData.kind === kind
-                            ? colors2000s.orange.accent
+                            ? colors2000s.orange.dark
                             : colors2000s.border.default,
                         background:
                           formData.kind === kind ? orangeCtaGradient : colors2000s.bg.button,
-                        color: formData.kind === kind ? '#ffffff' : colors2000s.text.primary
+                        color:
+                          formData.kind === kind
+                            ? colors2000s.text.onOrangeSelection
+                            : colors2000s.text.primary
                       }}
                     >
                       <span className="block text-[10px] font-black uppercase tracking-widest">

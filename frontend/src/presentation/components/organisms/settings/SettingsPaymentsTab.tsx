@@ -230,8 +230,8 @@ export const SettingsPaymentsTab: React.FC<SettingsPaymentsTabProps> = ({
           className="rounded-2xl px-5 py-3 font-black uppercase tracking-widest text-xs inline-flex items-center gap-2 transition-all active:scale-95 cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
           style={{
             background: orangeCtaGradient,
-            border: `1px solid ${colors2000s.orange.accent}`,
-            color: colors2000s.text.onOrange,
+            border: `1px solid ${colors2000s.orange.dark}`,
+            color: colors2000s.text.onOrangeSelection,
             boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerOrange}`
           }}
         >

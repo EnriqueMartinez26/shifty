@@ -203,7 +203,7 @@ const PublicBooking: React.FC = () => {
 
         <h1
           className="text-4xl sm:text-5xl font-black tracking-tighter uppercase mb-4"
-          style={{ color: colors2000s.orange.accent }}
+          style={{ color: colors2000s.orange.heading }}
         >
           Reservar turno
         </h1>

@@ -38,7 +38,7 @@ export const BookingStepService: React.FC<BookingStepServiceProps> = ({
       <div className="mb-6">
         <h2
           className="text-2xl font-black uppercase tracking-tight"
-          style={{ color: colors2000s.orange.accent }}
+          style={{ color: colors2000s.orange.heading }}
         >
           ¿Qué servicio necesitás?
         </h2>
@@ -73,7 +73,7 @@ export const BookingStepService: React.FC<BookingStepServiceProps> = ({
                   boxShadow: isSelected
                     ? 'inset 0 1px 2px rgba(255,255,255,0.5)'
                     : colors2000s.shadows.insetDark,
-                  color: isSelected ? '#ffffff' : serviceColor
+                  color: isSelected ? colors2000s.text.onOrangeSelection : serviceColor
                 }}
               >
                 {svc.image_url ? (
@@ -96,7 +96,11 @@ export const BookingStepService: React.FC<BookingStepServiceProps> = ({
                     recortado y el circulo encima del titulo (QA movil 2026-10-08). */}
                 <p
                   className="text-base sm:text-lg font-black uppercase tracking-tight leading-tight mb-2 break-words"
-                  style={{ color: isSelected ? '#ffffff' : colors2000s.text.primary }}
+                  style={{
+                    color: isSelected
+                      ? colors2000s.text.onOrangeSelection
+                      : colors2000s.text.primary
+                  }}
                 >
                   {svc.name}
                 </p>
