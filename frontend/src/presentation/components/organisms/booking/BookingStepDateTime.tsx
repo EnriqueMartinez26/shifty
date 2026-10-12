@@ -166,7 +166,9 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
   // dentro del aviso minimo: ahi si tiene sentido la lista de espera.
   const diaSinAtencion =
     availability !== undefined &&
-    !availability.some((slot) => !staffFilterId || slot.staff_id === staffFilterId)
+    (staffFilterId
+      ? !availability.some((slot) => slot.staff_id === staffFilterId)
+      : availability.length === 0 && (staffList?.length ?? 0) === 0)
 
   const emptyReported = useRef<string | null>(null)
   useEffect(() => {
@@ -247,12 +249,20 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
 
       {!lockedStaffId && !soloStaff && (
         <div>
-          <div className="flex items-center gap-2 mb-3 text-xs font-black text-gray-500 uppercase tracking-widest ml-1">
+          <div
+            className="flex items-center gap-2 mb-3 text-xs font-black uppercase tracking-widest ml-1"
+            style={{ color: colors2000s.text.secondary }}
+          >
             <Users size={14} className="text-orange-500" />
             <span>{staffLabel}</span>
           </div>
 
-          <div className="flex gap-2 overflow-x-auto pb-1 hide-scrollbar">
+          <div
+            role="region"
+            aria-label={`${hayRecursos ? 'Canchas o salas' : 'Profesionales'} disponibles, desplazable horizontalmente`}
+            tabIndex={0}
+            className="flex gap-2 overflow-x-auto overscroll-x-contain pb-2 hide-scrollbar"
+          >
             {isStaffLoading ? (
               <Loader2 className="w-5 h-5 animate-spin text-orange-500" />
             ) : (
@@ -262,8 +272,9 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
                   <button
                     key={option.id ?? 'any-professional'}
                     type="button"
+                    aria-pressed={isSelected}
                     onClick={() => setSelectedStaffId(option.id)}
-                    className="flex items-center gap-1.5 px-3 py-2 text-xs font-black uppercase tracking-widest whitespace-nowrap border transition-all active:scale-95"
+                    className="min-h-11 min-w-11 flex items-center gap-1.5 px-3 py-2 text-xs font-black uppercase tracking-widest whitespace-nowrap border transition-all active:scale-95"
                     style={{
                       borderRadius: 6,
                       background: isSelected ? orangeCtaGradient : '#ffffff',
@@ -285,16 +296,31 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
               })
             )}
           </div>
+          {staffOptions.length > 2 && (
+            <p
+              className="mt-1 text-[10px] font-semibold"
+              style={{ color: colors2000s.text.secondary }}
+            >
+              Deslizá para ver más opciones.
+            </p>
+          )}
         </div>
       )}
 
       <div>
-        <div className="flex items-center gap-2 mb-3 text-xs font-black text-gray-500 uppercase tracking-widest ml-1">
-          <CalendarIcon size={14} className="text-orange-500" />
-          <span>Fechas Disponibles</span>
+        <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 mb-3 ml-1">
+          <div className="flex min-w-0 items-center gap-2 text-xs font-black text-gray-500 uppercase tracking-widest">
+            <CalendarIcon size={14} className="text-orange-500" />
+            <span>Fechas disponibles</span>
+          </div>
+          <span className="ml-auto text-right text-[10px] font-semibold text-gray-500">
+            Deslizá para ver más
+          </span>
         </div>
 
         <div
+          role="group"
+          aria-label="Fechas disponibles. Deslizá horizontalmente para ver más días"
           className="flex gap-3 overflow-x-auto p-4 snap-x hide-scrollbar border"
           style={createBookingSurfaceStyle()}
         >
@@ -306,9 +332,12 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
             return (
               <button
                 key={formattedDate}
+                type="button"
                 data-testid={`date-${formattedDate}`}
+                aria-label={format(date, "EEEE d 'de' MMMM 'de' yyyy", { locale: es })}
+                aria-pressed={isSelected}
                 onClick={() => setActiveDate(date)}
-                className="flex flex-col items-center justify-center min-w-[72px] py-3 rounded-md border transition-all snap-center active:scale-95"
+                className="min-h-11 min-w-[72px] flex flex-col items-center justify-center py-3 rounded-md border transition-all snap-center active:scale-95"
                 style={{
                   background: isSelected
                     ? orangeCtaGradient
@@ -347,7 +376,7 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
             role="switch"
             aria-checked={forceAll}
             onClick={() => setForceAll(!forceAll)}
-            className="flex items-center gap-2 cursor-pointer opacity-80 hover:opacity-100 transition-opacity rounded-full bg-transparent border-0 p-1 focus:outline-none focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-orange-500 focus-visible:ring-offset-2"
+            className="min-h-11 min-w-11 px-2 flex items-center gap-2 cursor-pointer opacity-80 hover:opacity-100 transition-opacity rounded-full bg-transparent border-0 p-1 focus:outline-none focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-orange-500 focus-visible:ring-offset-2"
           >
             <span className="text-[9px] font-black uppercase text-gray-500 tracking-wider">
               Ver todos
@@ -363,11 +392,39 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
           </button>
         </div>
 
+        {isError && availability && (
+          <div
+            role="status"
+            className="flex flex-col items-start gap-3 rounded-md border p-4 sm:flex-row sm:items-center sm:justify-between"
+            style={{
+              background: colors2000s.status.warning.bg,
+              borderColor: colors2000s.status.warning.border,
+              color: colors2000s.status.warning.text
+            }}
+          >
+            <p className="min-w-0 break-words text-sm font-bold">
+              La información visible puede estar desactualizada.
+            </p>
+            <button
+              type="button"
+              onClick={() => void refetchAvailability()}
+              className="min-h-11 shrink-0 rounded-md border px-4 py-2 text-xs font-black uppercase tracking-wide"
+              style={{
+                background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
+                borderColor: colors2000s.border.default,
+                color: colors2000s.text.primary
+              }}
+            >
+              Reintentar
+            </button>
+          </div>
+        )}
+
         {isLoading ? (
           <div className="flex flex-col items-center justify-center py-10">
             <Loader2 className="w-8 h-8 animate-spin text-orange-500 mb-4" />
           </div>
-        ) : isError ? (
+        ) : isError && !availability ? (
           <div
             role="alert"
             className="text-center py-8 px-4 border space-y-3"
@@ -393,10 +450,13 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
           </div>
         ) : visibleSlots.length === 0 ? (
           <div className="text-center py-10 border" style={createBookingSurfaceStyle()}>
-            <p className="font-black text-gray-400 uppercase tracking-widest text-xs">
+            <p
+              className="font-black uppercase tracking-widest text-xs"
+              style={{ color: colors2000s.text.secondary }}
+            >
               {diaSinAtencion ? 'Este día no hay atención.' : 'No hay turnos disponibles.'}
             </p>
-            <p className="text-xs text-gray-400 mt-2 font-medium">
+            <p className="text-xs mt-2 font-medium" style={{ color: colors2000s.text.secondary }}>
               {diaSinAtencion ? 'Probá con otro día.' : 'Probá seleccionando otro día.'}
             </p>
             {waitlistAvailable && !diaSinAtencion && (
@@ -412,20 +472,22 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
             )}
           </div>
         ) : (
-          <div className="grid grid-cols-3 sm:grid-cols-4 gap-3">
+          <div className="grid grid-cols-2 min-[380px]:grid-cols-3 sm:grid-cols-4 gap-3">
             {visibleSlots.map((slot) => {
               const timeString = formatArgentinaTime(slot.starts_at)
               const isSelected = selectedDate === dateStr && selectedTime === timeString
               return (
                 <button
                   key={`${slot.staff_id}-${slot.start_time || slot.starts_at}`}
+                  type="button"
+                  aria-pressed={isSelected}
                   onClick={() =>
                     onSelect(dateStr, timeString, slot.staff_id, staffFilterId, slot.starts_at, {
                       name: slot.staff_name,
                       isResource: resourceIds.has(slot.staff_id)
                     })
                   }
-                  className="py-3 rounded-md font-black text-lg transition-all active:scale-95 border"
+                  className="min-h-11 min-w-0 py-2 sm:py-3 rounded-md font-black text-base sm:text-lg transition-all active:scale-95 border"
                   style={{
                     background: isSelected
                       ? orangeCtaGradient
