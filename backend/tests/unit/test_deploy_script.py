@@ -212,6 +212,71 @@ def test_compuerta_fallida_vuelve_a_la_version_anterior_sin_migrar(
     assert (host.repo / ".deploy" / "current").read_text().strip() == "v1"
 
 
+# --- redeploy del mismo sha (2026-10-12, produccion) ---------------------------
+# Correr otra vez `make deploy` con el sha que ya corria pisaba
+# .deploy/previous con ese mismo sha: el log decia
+# `deploy: 494f5072... -> 494f5072...` y previous paso de a203ee54 a 494f5072.
+# El destino del rollback se perdia y `make rollback` "volvia" a lo que ya
+# corria.
+
+
+def _con_previous(host: Host, actual: str, previa: str) -> None:
+    _preparar_deploy(host, actual=actual)
+    (host.repo / ".deploy" / "previous").write_text(f"{previa}\n", encoding="utf-8")
+
+
+def test_redeploy_del_mismo_sha_conserva_el_destino_del_rollback(
+    host: Host,
+) -> None:
+    _con_previous(host, actual="v2", previa="v1")
+
+    resultado = host.correr("deploy.sh", "deploy", APP_VERSION="v2", **_BASE_DEPLOY)
+
+    assert resultado.returncode == 0, resultado.stderr
+    assert (host.repo / ".deploy" / "previous").read_text().strip() == "v1"
+    assert (host.repo / ".deploy" / "current").read_text().strip() == "v2"
+    assert "redeploy de la misma version" in resultado.stderr
+
+
+def test_deploy_de_otra_version_guarda_la_que_corria_como_previous(
+    host: Host,
+) -> None:
+    _con_previous(host, actual="v2", previa="v1")
+
+    resultado = host.correr("deploy.sh", "deploy", APP_VERSION="v3", **_BASE_DEPLOY)
+
+    assert resultado.returncode == 0, resultado.stderr
+    assert (host.repo / ".deploy" / "previous").read_text().strip() == "v2"
+    assert (host.repo / ".deploy" / "current").read_text().strip() == "v3"
+    assert "redeploy" not in resultado.stderr
+
+
+def test_compuerta_fallida_en_un_redeploy_no_hace_rollback_y_conserva_previous(
+    host: Host,
+) -> None:
+    """Antes del redeploy ya corria esta misma version: no hay a que volver.
+    Ir a previous cambiaria de version sin que nadie lo pidiera, y una
+    compuerta que falla con un sha que ya la paso apunta al entorno."""
+    _con_previous(host, actual="v2", previa="v1")
+
+    resultado = host.correr(
+        "deploy.sh", "deploy", APP_VERSION="v2", FAKE_CURL_EXIT="22", **_BASE_DEPLOY
+    )
+
+    assert resultado.returncode == 1
+    assert "ALERTA: deploy v2: fallo la compuerta en un redeploy" in resultado.stderr
+    assert "make rollback" in resultado.stderr
+    llamadas = host.llamadas()
+    # Una sola ronda de backend: ni rollback a v2 ni a v1.
+    rondas = [ll for ll in llamadas if re.search(r"compose up .*--scale backend=", ll)]
+    assert len(rondas) == 1, rondas
+    assert not _hay(llamadas, r"shifty-backend:v1")
+    ids = (host.fake / "backend_ids").read_text().split()
+    assert ids and all(i.endswith("-v2") for i in ids), ids
+    assert (host.repo / ".deploy" / "previous").read_text().strip() == "v1"
+    assert (host.repo / ".deploy" / "current").read_text().strip() == "v2"
+
+
 def test_compuerta_con_5xx_sobre_el_umbral_hace_rollback(host: Host) -> None:
     _preparar_deploy(host, actual="v1")
     lineas = ['{"m":"GET","u":"/x","s":200,"rt":"0.010"}'] * 100
