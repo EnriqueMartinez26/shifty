@@ -15,6 +15,12 @@
   Locust contra STAGING y la juzga `scripts/perf_acceptance_check.py`. Staging
   comparte el host con produccion, asi que el nocturno esta apagado hasta que
   el dueno lo prenda (`vars.PERF_NIGHTLY`).
+- #155 (P4, 2026-10-12): antes del manifiesto, de Locust y de cualquier
+  request a la API, un paso propio corre `scripts/verify_perf_target.py` y
+  falla cerrado. El job exige un runner dedicado (`vars.PERF_RUNNER`, nunca
+  uno alojado por GitHub, cuyo egress no se puede restringir), el checkout no
+  deja el token de GitHub en disco y cada paso recibe solo los secretos que
+  usa.
 """
 
 from __future__ import annotations
@@ -22,6 +28,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -550,6 +557,163 @@ def test_perf_corre_locust_y_lo_juzga_el_script() -> None:
         assert "continue-on-error" not in paso, paso.get("name")
         assert "|| true" not in str(paso.get("run", "")), paso.get("name")
         assert "DATABASE_URL" not in (paso.get("env") or {}), paso.get("name")
+
+
+# --- preflight del destino (#155) -------------------------------------------
+
+PREFLIGHT = "scripts/verify_perf_target.py"
+CONFIGURADO = {
+    **{s: "x" for s in SECRETOS_PERF},
+    "PERF_RUNNER": "perf-ar",
+    "PERF_ALLOWED_ORIGIN": "https://staging.example.com",
+}
+
+
+def _indice_perf(texto: str) -> int:
+    pasos = _pasos_perf()
+    return next(i for i, p in enumerate(pasos) if texto in str(p.get("run", "")))
+
+
+def test_perf_verifica_el_destino_antes_de_tocar_staging() -> None:
+    """El verificador corre antes del manifiesto, Locust y el veredicto.
+
+    El manifiesto es el primer paso que le habla a la API de staging: un
+    destino mal configurado tiene que frenar ahi, en un paso propio y sin
+    escape (`if`, `continue-on-error`), no dentro de cada cliente.
+    """
+    pasos = _pasos_perf()
+    preflight = _indice_perf(PREFLIGHT)
+    paso = pasos[preflight]
+    assert paso["run"].split() == ["uv", "run", "python", PREFLIGHT]
+    for despues in (
+        "loadtests/aceptacion.py",
+        "locust_aceptacion.py",
+        "perf_acceptance_check.py",
+    ):
+        assert preflight < _indice_perf(despues), despues
+    assert "if" not in paso and "continue-on-error" not in paso
+    assert paso["env"] == {"STAGING_URL": "${{ secrets.STAGING_URL }}"}
+    assert (
+        _job_perf()["env"]["PERF_ALLOWED_ORIGIN"] == "${{ vars.PERF_ALLOWED_ORIGIN }}"
+    )
+    # Entre la verificacion de la configuracion y el preflight solo se instala.
+    for anterior in pasos[1:preflight]:
+        assert "STAGING_URL" not in str(anterior), anterior.get("name")
+    assert "PERF_ALLOW_LOCAL_TARGET" not in PERF.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    ("url", "origen", "motivo"),
+    [
+        ("https://shifty-ar.tech/api", "https://shifty-ar.tech", "dominio de producci"),
+        ("https://www.shifty-ar.tech/api", "https://www.shifty-ar.tech", "producci"),
+        ("http://localhost/api", "", "no est"),
+        ("https://staging.example.com/api", "https://otro.example.com", "no coincide"),
+    ],
+)
+def test_el_preflight_del_workflow_falla_cerrado_sin_tocar_la_red(
+    url: str, origen: str, motivo: str
+) -> None:
+    """El comando del paso, tal cual, rechaza produccion y loopback en Actions."""
+    comando = _pasos_perf()[_indice_perf(PREFLIGHT)]["run"].split()
+    assert comando[:3] == ["uv", "run", "python"]
+    resultado = subprocess.run(
+        [sys.executable, *comando[3:]],
+        cwd=REPO_ROOT / "backend",
+        env={
+            **os.environ,
+            "GITHUB_ACTIONS": "true",
+            "PERF_ALLOW_LOCAL_TARGET": "true",
+            "PYTHONIOENCODING": "utf-8",
+            "STAGING_URL": url,
+            "PERF_ALLOWED_ORIGIN": origen,
+        },
+        capture_output=True,
+        encoding="utf-8",
+        timeout=30,
+        check=False,
+    )
+    assert resultado.returncode == 1
+    assert "Destino de staging rechazado" in resultado.stderr
+    assert motivo in resultado.stderr
+    assert "validado" not in resultado.stdout
+
+
+def test_perf_cada_paso_recibe_solo_los_secretos_que_usa() -> None:
+    assert "secrets." not in str(_job_perf().get("env", {}))
+    texto = PERF.read_text(encoding="utf-8")
+    assert "GITHUB_TOKEN" not in texto and "github.token" not in texto
+    for i, paso in enumerate(_pasos_perf()):
+        run = str(paso.get("run", ""))
+        if i == 0 or "locust_aceptacion.py" in run:
+            esperados = set(SECRETOS_PERF)
+        elif PREFLIGHT in run or "loadtests/aceptacion.py" in run:
+            esperados = {"STAGING_URL"}
+        else:
+            esperados = set()
+        usados = set(re.findall(r"secrets\.(\w+)", str(paso)))
+        assert usados == esperados, paso.get("name")
+
+
+def test_perf_no_deja_el_token_de_github_en_el_checkout() -> None:
+    """Locust y las dependencias corren despues: el token no queda en .git."""
+    checkout = next(
+        p
+        for p in _pasos_perf()
+        if str(p.get("uses", "")).startswith("actions/checkout@")
+    )
+    assert checkout["with"]["persist-credentials"] is False
+
+
+@pytest.mark.skipif(BASH is None, reason="hace falta bash")
+@pytest.mark.parametrize(
+    ("variables", "falla"),
+    [
+        ({"PERF_RUNNER": ""}, "Faltan las variables del repo: PERF_RUNNER."),
+        (
+            {"PERF_ALLOWED_ORIGIN": ""},
+            "Faltan las variables del repo: PERF_ALLOWED_ORIGIN.",
+        ),
+        ({"PERF_RUNNER": "ubuntu-latest"}, "runner dedicado"),
+        ({"PERF_RUNNER": "ubuntu-24.04"}, "runner dedicado"),
+        ({"PERF_RUNNER": "windows-2025"}, "runner dedicado"),
+        ({"PERF_RUNNER": "macos-15"}, "runner dedicado"),
+        ({"PERF_RUNNER": "self-hosted"}, "runner dedicado"),
+    ],
+)
+def test_perf_exige_un_runner_dedicado_y_el_origen_aprobado(
+    variables: dict[str, str], falla: str
+) -> None:
+    """Un runner de GitHub no restringe el egress: no corre la prueba."""
+    assert BASH is not None
+    primero = _pasos_perf()[0]
+    assert primero["env"]["PERF_RUNNER"] == "${{ vars.PERF_RUNNER }}"
+    resultado = subprocess.run(
+        [BASH, "-c", primero["run"]],
+        env={**os.environ, **CONFIGURADO, **variables},
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert resultado.returncode == 1
+    assert "::error" in resultado.stdout
+    assert falla in resultado.stdout
+
+
+@pytest.mark.skipif(BASH is None, reason="hace falta bash")
+def test_perf_con_runner_dedicado_y_todo_configurado_sigue() -> None:
+    assert BASH is not None
+    resultado = subprocess.run(
+        [BASH, "-c", _pasos_perf()[0]["run"]],
+        env={**os.environ, **CONFIGURADO},
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert resultado.returncode == 0, resultado.stdout
+    assert "::error" not in resultado.stdout
 
 
 def test_perf_sube_el_csv_aunque_falle() -> None:
