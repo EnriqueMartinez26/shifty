@@ -1,12 +1,53 @@
 @import 'tailwindcss';
 
 @theme {
-  --color-primary: #4f46e5; /* Indigo 600 */
+  --color-primary: #b4530a;
   --color-primary-foreground: #ffffff;
-  --color-background: #09090b; /* Zinc 950 (Dark) */
-  --color-foreground: #fafafa;
-  --color-card: #09090b;
-  --color-card-foreground: #fafafa;
+  --color-background: #e5e5e5;
+  --color-background-end: #d9d9d9;
+  --color-foreground: #404040;
+  /* Espeja colors2000s.surface.white; lo fija colors.contrast.test.ts. */
+  --color-card: #ffffff;
+  --color-card-foreground: #404040;
+  --color-brand-light: #ff8c42;
+  --color-brand: #e67e22;
+  --color-brand-accent: #9a4507;
+  --color-surface: #f5f5f5;
+  --color-surface-subtle: #ebebeb;
+  --color-success: #166534;
+  --color-success-background: #ecfdf5;
+  --color-warning: #92400e;
+  --color-warning-background: #fffbeb;
+  --color-danger: #7f1d1d;
+  --color-danger-background: #fef2f2;
+  --color-info: #1d4ed8;
+  --color-info-background: #eff6ff;
+
+  /* Las utilidades orange-* heredadas siguen siendo acentos AA para texto.
+     Para marca decorativa, usar brand-light/brand; el CTA usa primary +
+     primary-foreground. */
+  --color-orange-400: #9a4507;
+  --color-orange-500: #9a4507;
+  --color-orange-600: #9a4507;
+  --color-orange-700: #9a4507;
+  --color-orange-900: #9a4507;
+  --color-red-50: #fef2f2;
+  --color-red-200: #fecaca;
+  --color-red-600: #7f1d1d;
+  --color-red-700: #7f1d1d;
+  --color-green-500: #166534;
+  --color-green-600: #166534;
+  --color-green-700: #166534;
+  --color-green-900: #166534;
+  --color-emerald-200: #bbf7d0;
+  --color-emerald-500: #166534;
+  --color-emerald-600: #166534;
+  --color-emerald-700: #166534;
+  --color-amber-500: #92400e;
+  --color-amber-700: #92400e;
+  --color-amber-800: #92400e;
+  --color-amber-900: #92400e;
+  --color-blue-500: #1d4ed8;
 }
 
 :root {
@@ -15,8 +56,8 @@
   font-weight: 400;
 
   color-scheme: light;
-  color: #404040;
-  background-color: #e5e5e5;
+  color: var(--color-foreground);
+  background-color: var(--color-background);
 
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -26,14 +67,49 @@
 
 body {
   margin: 0;
-  display: flex;
   min-width: 320px;
   min-height: 100vh;
-  background: linear-gradient(180deg, #e5e5e5 0%, #d9d9d9 100%);
+  background: linear-gradient(180deg, var(--color-background) 0%, var(--color-background-end) 100%);
 }
 
 #root {
   width: 100%;
+  min-height: 100vh;
+}
+
+/* Objetivos táctiles en pantallas angostas o con puntero táctil. En escritorio
+   con puntero preciso, los componentes conservan su densidad propia. */
+@media (pointer: coarse), (max-width: 767px) {
+  button,
+  select,
+  input:not([type='checkbox']):not([type='radio']),
+  textarea {
+    min-height: 44px;
+  }
+}
+
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 3px solid var(--color-brand-accent);
+  outline-offset: 2px;
+}
+
+@media (max-width: 639px) {
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 
 /* Tiras con scroll horizontal sin barra visible (paso de fecha y hora). */

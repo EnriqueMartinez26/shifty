@@ -22,7 +22,7 @@ import { colors2000s, orangeCtaGradient } from '../../theme/colors'
 const SURFACE_BACKGROUNDS = {
   brand: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
   orange: orangeCtaGradient,
-  plain: '#ffffff'
+  plain: colors2000s.surface.white
 } as const
 
 const SURFACE_SHADOWS = {
@@ -94,8 +94,7 @@ export const create2000sInputStyle = (): CSSProperties =>
   })
 
 export const create2000sModalInputStyle = (): CSSProperties => ({
-  ...create2000sInputStyle(),
-  outline: 'none'
+  ...create2000sInputStyle()
 })
 
 export const createBookingInputStyle = (): CSSProperties => ({
@@ -109,7 +108,6 @@ export const createBookingClientInputStyle = (): CSSProperties => ({
   ...createBookingInputStyle(),
   borderRadius: 6,
   fontFamily: 'inherit',
-  outline: 'none',
   transition: 'all 0.15s'
 })
 
@@ -188,5 +186,5 @@ export const createBookingBackButtonStyle = (): CSSProperties => ({
   background: SURFACE_BACKGROUNDS.orange,
   borderColor: colors2000s.orange.accent,
   boxShadow: SURFACE_SHADOWS.raisedOrange,
-  color: '#ffffff'
+  color: colors2000s.text.onOrange
 })
