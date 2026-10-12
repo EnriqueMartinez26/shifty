@@ -13,7 +13,8 @@
 #      con DEPLOY_GITHUB_TOKEN si el repo es privado; `workflow_dispatch` de
 #      build-images.yml publica sin esa compuerta). El rollback no pregunta:
 #      es el camino de emergencia.
-#   2. Guarda la version que corre hoy en .deploy/previous.
+#   2. Guarda la version que corre hoy en .deploy/previous, salvo en un
+#      redeploy del mismo sha: ahi previous queda como estaba.
 #   3. `pull` de las imagenes de APP_VERSION y verificacion de que cada
 #      `imagen:tag` quedo local (las construye CI:
 #      .github/workflows/build-images.yml). El VPS NUNCA construye: todo `up`
@@ -39,7 +40,8 @@
 #   8. Compuerta de 60 s: /api/ops/health/ready y la home responden, ningun
 #      contenedor unhealthy, `rabbitmq-diagnostics alarms` sin alarmas, 5xx < 0,5 %
 #      en el log de nginx de los ultimos 2 minutos. Si falla: rollback
-#      automatico (sin migrar).
+#      automatico (sin migrar); en un redeploy del mismo sha, alerta sin
+#      rollback (antes ya corria esa version).
 #
 # Rollback: APP_VERSION = .deploy/previous; pull, pasos 5 a 8, NUNCA migra.
 # Si el pull falla sigue con las imagenes locales, pero solo si estan todas:
@@ -464,9 +466,15 @@ cmd_deploy() {
   tomar_lock
   preflight 1
 
-  local anterior
+  # Un redeploy del sha que ya corre (re-correr un deploy que salio bien) no
+  # toca previous: pisarlo con ese mismo sha perdia el destino del rollback
+  # (2026-10-12, produccion: previous paso de a203ee54 a 494f5072).
+  local anterior redeploy=0
   anterior="$(version_en_curso)"
-  if [ -n "$anterior" ]; then
+  if [ -n "$anterior" ] && [ "$anterior" = "$nueva" ]; then
+    redeploy=1
+    log "deploy: redeploy de la misma version $nueva; previous sigue en $(head -n 1 "$estado_dir/previous" 2>/dev/null || echo '(ninguna)')"
+  elif [ -n "$anterior" ]; then
     printf '%s\n' "$anterior" >"$estado_dir/previous"
   fi
   log "deploy: ${anterior:-(sin version previa)} -> $nueva"
@@ -486,6 +494,15 @@ cmd_deploy() {
     return 0
   fi
 
+  # En un redeploy, antes ya corria esta misma version: no hay estado al que
+  # volver. Ir a previous seria cambiar de version sin que nadie lo pidiera, y
+  # un sha que ya paso la compuerta y ahora falla apunta al entorno (rabbitmq,
+  # base, disco), no al codigo. Se avisa y previous queda intacto.
+  if [ "$redeploy" = 1 ]; then
+    alert "deploy $nueva: fallo la compuerta en un redeploy de la misma version; sin rollback automatico" \
+      "Sigue corriendo $nueva, como antes. Revisar el entorno (docs/DEPLOY_RUNBOOK.md); si el codigo es el problema, make rollback vuelve a $(head -n 1 "$estado_dir/previous" 2>/dev/null || echo '(sin previous)')."
+    exit 1
+  fi
   alert "deploy $nueva: fallo la compuerta, rollback a ${anterior:-?}" "Ver docs/DEPLOY_RUNBOOK.md"
   if [ "$DEPLOY_AUTO_ROLLBACK" != 1 ] || [ -z "$anterior" ]; then
     log "deploy: sin rollback automatico (DEPLOY_AUTO_ROLLBACK=$DEPLOY_AUTO_ROLLBACK, previa=${anterior:-ninguna})"
