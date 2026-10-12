@@ -126,6 +126,7 @@ def _pedir(
     **kwargs: Any,
 ) -> Any:
     """Request que marca como exito los codigos de negocio esperados."""
+    kwargs["allow_redirects"] = False
     with client.request(
         metodo, url, name=name, catch_response=True, **kwargs
     ) as respuesta:
@@ -505,9 +506,12 @@ def _una_rafaga(environment: Environment) -> None:
         servicio = _RNG.choice(tienda.service_ids)
         # Fecha lejana (15-40 dias): fuera de lo que reservan los clientes.
         dia = _hoy() + timedelta(days=_RNG.randint(15, 40))
-        respuesta = sondeo.get(
+        respuesta = _pedir(
+            sondeo,
+            "GET",
             "/public/availability",
             name="/public/availability [rafaga]",
+            ok=(200,),
             params={
                 "store_public_id": tienda.store_public_id,
                 "service_id": servicio,
@@ -526,15 +530,15 @@ def _una_rafaga(environment: Environment) -> None:
         sesion = HttpSession(
             base_url=host, request_event=environment.events.request, user=None
         )
-        with sesion.post(
+        respuesta = _pedir(
+            sesion,
+            "POST",
             "/public/appointments",
             name="/public/appointments [rafaga]",
+            ok=(201, 409),
             json=_reserva(tienda, servicio, slot),
-            catch_response=True,
-        ) as r:
-            if r.status_code in (201, 409):
-                r.success()
-            return int(r.status_code or 0)
+        )
+        return int(respuesta.status_code or 0)
 
     hilos = [gevent.spawn(reservar, i) for i in range(RAFAGA_TAMANO)]
     gevent.joinall(hilos)
@@ -553,12 +557,14 @@ def _muestrear_slo(environment: Environment) -> None:
                 login = sesion.post(
                     f"{host}/auth/login",
                     timeout=10,
+                    allow_redirects=False,
                     json={"email": SUPERADMIN_EMAIL, "password": SUPERADMIN_PASSWORD},
                 )
                 token = str(datos_de(login.json()).get("access_token", ""))
             respuesta = sesion.get(
                 f"{host}/ops/slo",
                 timeout=10,
+                allow_redirects=False,
                 headers={"Authorization": f"Bearer {token}"},
             )
             if respuesta.status_code == 401:

@@ -252,12 +252,45 @@ def test_main_falla_antes_de_efectos_y_reusa_el_host_canonico(
     }
 
 
+def test_obtener_http_rechaza_redirecciones_sin_abrir_otro_destino(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    m = _modulo()
+    handlers: list[object] = []
+    destinos: list[str] = []
+
+    class AbridorFalso:
+        def open(self, url: str, *, timeout: int) -> object:
+            destinos.append(url)
+            raise m.urllib.error.HTTPError(url, 302, "Found", {}, None)
+
+    def crear_abridor(*recibidos: object) -> AbridorFalso:
+        handlers.extend(recibidos)
+        return AbridorFalso()
+
+    monkeypatch.setattr(m.urllib.request, "build_opener", crear_abridor)
+    host = "https://staging.example.com/api"
+    obtener = m._obtener_http(host, pausa_s=0)
+
+    with pytest.raises(m.urllib.error.HTTPError) as error:
+        obtener("/public/stores/cap-001")
+
+    assert error.value.code == 302
+    assert destinos == [f"{host}/public/stores/cap-001"]
+    handler = handlers[0]
+    assert isinstance(handler, m._SinRedirecciones)
+    assert (
+        handler.redirect_request(None, None, 302, "Found", {}, "https://other/") is None
+    )
+
+
 def test_locust_sondea_staging_antes_de_cargar_manifest_en_subprocess(
     tmp_path: Path,
 ) -> None:
     marcador = tmp_path / "readiness-url.txt"
     script = f"""\
 import importlib.util, sys
+import os
 from pathlib import Path
 from types import SimpleNamespace
 sys.path.insert(0, {str(BACKEND_ROOT)!r})
@@ -270,6 +303,21 @@ assert spec and spec.loader
 acceptance = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = acceptance
 spec.loader.exec_module(acceptance)
+request_options = []
+request_failures = []
+class FakeResponse:
+    status_code = 302
+    def __enter__(self): return self
+    def __exit__(self, *_args): return False
+    def success(self): pass
+    def failure(self, message): request_failures.append(message)
+class FakeClient:
+    def request(self, _method, _url, **kwargs):
+        request_options.append(kwargs)
+        return FakeResponse()
+acceptance._pedir(FakeClient(), "GET", "/redirect", name="/redirect")
+assert request_options[0]["allow_redirects"] is False
+assert request_failures == ["HTTP 302"]
 expected = "https://staging.example.com/api/ops/health/ready"
 loaded = []
 def cargar(path):
@@ -295,6 +343,33 @@ except SystemExit as exc:
 else:
     raise AssertionError("Locust aceptó loopback en GitHub Actions")
 assert loaded == ["manifiesto-de-prueba.json"]
+request_options = []
+class FakeSloResponse:
+    status_code = 200
+    ok = True
+    def __init__(self, data): self.data = data
+    def json(self): return self.data
+class FakeSloSession:
+    def post(self, url, **kwargs):
+        request_options.append(("POST", url, kwargs))
+        return FakeSloResponse({{"success": True, "data": {{"access_token": "token"}}}})
+    def get(self, url, **kwargs):
+        request_options.append(("GET", url, kwargs))
+        return FakeSloResponse({{"success": True, "data": {{"status": "ok", "metrics": {{}}}}}})
+acceptance.requests.Session = FakeSloSession
+class StopSampling(Exception): pass
+def detener(_seconds): raise StopSampling()
+acceptance.gevent = SimpleNamespace(sleep=detener)
+os.chdir({str(tmp_path)!r})
+try:
+    acceptance._muestrear_slo(SimpleNamespace(host="https://staging.example.com/api", parsed_options=None))
+except StopSampling:
+    pass
+else:
+    raise AssertionError("el sondeo SLO no alcanzó el sleep de su ciclo")
+assert [call[2]["allow_redirects"] for call in request_options] == [False, False]
+assert request_options[0][0:2] == ("POST", "https://staging.example.com/api/auth/login")
+assert request_options[1][0:2] == ("GET", "https://staging.example.com/api/ops/slo")
 """
     entorno = os.environ.copy()
     entorno.update(
