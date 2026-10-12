@@ -14,9 +14,13 @@ export const colors2000s = {
     disabledBottom: '#dcdcdc' // Botones deshabilitados - bottom
   },
 
-  // Naranja. light/dark son la marca (logo, barras, decoracion): blanco
-  // encima da 2.31/2.85:1, asi que el texto blanco va sobre cta -> accent
-  // (orangeCtaGradient). Los pares se miden en colors.contrast.test.ts.
+  surface: {
+    white: '#ffffff' // Tarjetas y superficies blancas
+  },
+
+  // Marca: light/dark se reservan para logos y detalles decorativos. El CTA
+  // usa su rampa oscura independiente para sostener texto blanco AA. Los pares
+  // se miden en colors.contrast.test.ts.
   orange: {
     light: '#ff8c42', // Marca - top
     dark: '#e67e22', // Marca - bottom (theme-color)
@@ -72,7 +76,7 @@ export const colors2000s = {
       accent: '#b91c1c',
       bg: '#fef2f2',
       border: '#fecaca',
-      text: '#b91c1c'
+      text: '#7f1d1d'
     },
     warning: {
       light: '#eab308',
