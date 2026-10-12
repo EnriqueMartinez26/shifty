@@ -137,7 +137,17 @@ Rehearsal on 2026-09-24 (3 stores, 20 users, 90 s plateau, local uvicorn): 1336 
 
 ### From CI
 
-`.github/workflows/perf-acceptance.yml` runs on `workflow_dispatch` and, only when the repo variable `PERF_NIGHTLY` is `true`, every night at 03:30 ART. Staging shares the VPS with production, so the nightly stays off until the owner decides otherwise. It builds the manifest from staging's public API by slug, runs Locust, runs the check and uploads `perf-acceptance` (CSV, codes, SLO samples, manifest) as an artifact even when it fails.
+`.github/workflows/perf-acceptance.yml` runs on `workflow_dispatch` and, only when the repo variable `PERF_NIGHTLY` is `true`, every night at 03:30 ART. It never runs on `push` or `pull_request`, so a fork cannot trigger it. Staging shares the VPS with production, so the nightly stays off until the owner decides otherwise. The token only reads the repo (`permissions: contents: read`).
+
+The steps, in order, each one fail-closed:
+
+1. **Configuration check**, before checkout: the four secrets, `PERF_RUNNER` and `PERF_ALLOWED_ORIGIN` are set, and `PERF_RUNNER` is not a GitHub-hosted label (`ubuntu-*`, `windows-*`, `macos-*`) or the generic `self-hosted`.
+2. Checkout without persisting the GitHub token (`persist-credentials: false`), Python, uv and `uv sync --frozen`.
+3. **Target preflight** (`uv run python scripts/verify_perf_target.py`, #155): `STAGING_URL` must be HTTPS on exactly `PERF_ALLOWED_ORIGIN`, the production apex and `www` host are rejected, loopback is rejected in Actions, and `/api/ops/health/ready` must answer 200 with `"environment": "staging"` without following a redirect. This step gets only `STAGING_URL`; no password reaches it. Nothing below runs if it fails.
+4. Manifest from staging's public API by slug, Locust, and the verdict script. The manifest builder and Locust run the same target check again on their own before their first request, and no acceptance client follows redirects.
+5. Upload `perf-acceptance` (CSV, codes, SLO samples, manifest) as an artifact even when the run fails.
+
+Each step gets only the secrets it uses: the configuration check and Locust get all four, the preflight and the manifest only `STAGING_URL`, the rest none.
 
 | Setting | Kind | What |
 | --- | --- | --- |
@@ -145,11 +155,20 @@ Rehearsal on 2026-09-24 (3 stores, 20 users, 90 s plateau, local uvicorn): 1336 
 | `PERF_ALLOWED_ORIGIN` | variable | exact HTTPS staging origin; the production apex and `www` host are rejected |
 | `SEED_OWNER_PASSWORD` | secret | the password the seed ran with |
 | `SHIFTY_SUPERADMIN_EMAIL`, `SHIFTY_SUPERADMIN_PASSWORD` | secrets | a staging superadmin (samples `/ops/slo`) |
-| `PERF_RUNNER` | variable | runner label; default `ubuntu-latest` |
+| `PERF_RUNNER` | variable | label of the dedicated runner; required, GitHub-hosted labels are rejected |
 | `PERF_NETWORK_OFFSET_MS` | variable | ms added to the p95 thresholds |
 | `PERF_NIGHTLY` | variable | `true` to enable the nightly run |
 
-Runner location matters. A GitHub-hosted runner is in the US and adds 120-150 ms of round trip to Argentina on every request: with it, a 500 ms threshold is really judging 350 ms of server time. Either register a self-hosted runner close to the VPS (Argentina or Brazil) and set `PERF_RUNNER` to its label, or set `PERF_NETWORK_OFFSET_MS=150` (or pass `network_offset_ms` when dispatching) so the thresholds are raised by the network cost. Write down which one was used.
+**Runner and egress.** The acceptance runs only on a dedicated self-hosted runner, because a GitHub-hosted runner cannot restrict its egress. Requirements for that runner, set up by hand on its host (the workflow cannot check them):
+
+- It is used only for this workflow, and its label is unique to it; no other workflow names that label.
+- Its outbound traffic is limited to GitHub (Actions, checkout, artifacts), the package indexes `uv sync` needs, and the staging origin. The production host is blocked at the firewall, so a wrong DNS answer or a misconfigured origin cannot reach production.
+- It does not live on the production VPS and holds no production credentials.
+- The repository is public: under Settings → Actions → General, fork pull request workflows require approval for all outside collaborators, and the runner is ephemeral (`--ephemeral`) or reset between jobs. A fork PR that edits another workflow to use the runner's label must not get to run on it.
+
+Runner location still matters: a runner far from Argentina adds round-trip time to every request. Register it close to the VPS (Argentina or Brazil), or set `PERF_NETWORK_OFFSET_MS` (or pass `network_offset_ms` when dispatching) so the thresholds are raised by the network cost. Write down which one was used.
+
+**Status (2026-10-12).** The workflow wiring is in place, but the real 200-user acceptance has not run. It still needs a private, isolated staging environment, the dedicated runner above, and the staging secrets and variables configured privately. Until then a workflow run stops at the configuration check.
 
 ## 5. Reading the results
 
