@@ -1,8 +1,10 @@
-import type { ComponentProps } from 'react'
+import { createRef, type ComponentProps } from 'react'
 
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 
 import type { GatewayConfig } from '@application/services/PaymentsService'
+
+import { ForbiddenError } from '@shared/errors/ForbiddenError'
 
 import { SettingsPaymentsTab } from './SettingsPaymentsTab'
 
@@ -89,5 +91,29 @@ describe('SettingsPaymentsTab', () => {
     expect(guardar).toBeDisabled()
     expect(guardar).toHaveAttribute('title', 'Tienda suspendida')
     expect(screen.getByRole('button', { name: 'Conectar con Mercado Pago' })).not.toBeDisabled()
+  })
+
+  // 2026-10-12: con los cobros apagados el orden importa (el backend no deja
+  // prenderlos sin la politica guardada), asi que el aviso lo lista.
+  it('con los cobros apagados lista los tres pasos en orden', () => {
+    renderTab({
+      gatewayError: new ForbiddenError('x', { errorCode: 'FEATURE_DISABLED', statusCode: 403 })
+    })
+
+    const steps = within(screen.getByRole('status')).getAllByRole('listitem')
+    expect(steps.map((step) => step.textContent)).toEqual([
+      'Escribí y guardá acá abajo tu política de seña.',
+      'Activá «Cobros online y señas» en la pestaña Funciones.',
+      'Volvé a esta pestaña y conectá Mercado Pago.'
+    ])
+  })
+
+  it('el campo de la politica tiene su etiqueta y recibe la ref de la pagina', () => {
+    const policyFieldRef = createRef<HTMLTextAreaElement>()
+    renderTab({ policyFieldRef })
+
+    expect(policyFieldRef.current).toBe(
+      screen.getByLabelText('Política de seña, cancelación y reembolso')
+    )
   })
 })

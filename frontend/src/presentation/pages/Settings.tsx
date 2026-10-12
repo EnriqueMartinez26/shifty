@@ -1,4 +1,6 @@
-import React, { useState } from 'react'
+import React, { useRef, useState } from 'react'
+
+import { flushSync } from 'react-dom'
 
 import {
   Store,
@@ -51,6 +53,7 @@ import {
 } from '../hooks/useStores'
 import { useStoreWriteAccess } from '../hooks/useStoreWriteAccess'
 import { getBusinessLabels } from '../lib/businessLabels'
+import { revealSection } from '../lib/revealOnMount'
 import { planSave, type SettingsFormData } from '../lib/settingsDraft'
 import { validateSettingsDraft } from '../lib/settingsValidation'
 import { create2000sPanelStyle } from '../lib/surfaceStyles'
@@ -113,7 +116,15 @@ const SettingsPage: React.FC = () => {
   )
   const [passwordForm, setPasswordForm] = useState({ current: '', new: '', confirm: '' })
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'success' | 'error'>('idle')
-  const [errorMessage, setErrorMessage] = useState('')
+  const [errorMessage, setErrorMessageText] = useState('')
+  // El codigo del error que se ve, para ofrecer la salida que corresponde. Va
+  // junto con el texto: cada cartel nuevo (o limpiarlo) pisa los dos.
+  const [errorCode, setErrorCode] = useState<string | undefined>(undefined)
+  const setErrorMessage = (message: string, code?: string) => {
+    setErrorMessageText(message)
+    setErrorCode(code)
+  }
+  const policyFieldRef = useRef<HTMLTextAreaElement>(null)
   // El slug que el backend rechazo por repetido. El error del campo se deriva
   // en el render: se ve mientras el campo siga diciendo eso mismo.
   const [slugConflict, setSlugConflict] = useState<string | null>(null)
@@ -208,7 +219,8 @@ const SettingsPage: React.FC = () => {
         setErrorMessage(
           saved.length > 0
             ? `Se guardó ${saved.join(' y ')}, pero no ${half.label}. ${detail}`
-            : detail
+            : detail,
+          getErrorCode(error)
         )
         return
       }
@@ -216,6 +228,16 @@ const SettingsPage: React.FC = () => {
     resetDraft()
     setSaveStatus('success')
     setTimeout(() => setSaveStatus('idle'), 3000)
+  }
+
+  // DEPOSIT_POLICY_REQUIRED: la politica se escribe en la pestana Mercado Pago,
+  // no en "Sena segun riesgo" de Politicas (2026-10-12). flushSync monta la
+  // pestana dentro del mismo clic, asi el campo ya existe cuando se enfoca.
+  const goToDepositPolicy = () => {
+    flushSync(() => setActiveTab('payments'))
+    const field = policyFieldRef.current
+    revealSection(field)
+    field?.focus({ preventScroll: true })
   }
 
   const handlePasswordChange = async (e: React.FormEvent) => {
@@ -405,7 +427,18 @@ const SettingsPage: React.FC = () => {
           }}
         >
           <TriangleAlert className="w-5 h-5 flex-shrink-0" />
-          <p>{errorMessage}</p>
+          <div className="space-y-2">
+            <p>{errorMessage}</p>
+            {errorCode === 'DEPOSIT_POLICY_REQUIRED' && (
+              <button
+                type="button"
+                onClick={goToDepositPolicy}
+                className="underline underline-offset-2 font-black"
+              >
+                Ir a la política de seña
+              </button>
+            )}
+          </div>
         </div>
       )}
 
@@ -467,6 +500,7 @@ const SettingsPage: React.FC = () => {
             saveStatus={saveStatus}
             saveBlockedNotice={saveBlockedNotice}
             readOnlyReason={readOnlyTitle ?? null}
+            policyFieldRef={policyFieldRef}
           />
         )}
 

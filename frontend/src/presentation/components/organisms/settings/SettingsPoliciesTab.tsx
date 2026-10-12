@@ -134,6 +134,10 @@ export const SettingsPoliciesTab: React.FC<SettingsPoliciesTabProps> = ({ value,
           el precio y no aparece en servicios sin seña. 0 apaga la regla. El link que generás vos
           desde el panel sigue usando la seña base.
         </p>
+        <p className="mt-1 text-[10px] font-bold" style={{ color: colors2000s.text.secondary }}>
+          Esto no es tu política de seña: el texto de seña, cancelación y reembolso se escribe en la
+          pestaña Mercado Pago.
+        </p>
       </div>
       <div className="grid md:grid-cols-2 gap-6">
         <DepositRuleInput

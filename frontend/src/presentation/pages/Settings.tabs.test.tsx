@@ -5,6 +5,7 @@ import type { GatewayConfig } from '@application/services/PaymentsService'
 import type { StoreSettings } from '@application/services/StoreSettingsService'
 
 import { ForbiddenError } from '@shared/errors/ForbiddenError'
+import { ValidationError } from '@shared/errors/ValidationError'
 
 import SettingsPage from './Settings'
 
@@ -169,6 +170,66 @@ describe('Settings - funciones', () => {
     expect(await screen.findByRole('button', { name: 'Guardado' })).toBeInTheDocument()
     expect(updateFeatureFlags).toHaveBeenCalledWith({ payments: true })
     expect(updateStore).not.toHaveBeenCalled()
+  })
+})
+
+// 2026-10-12: una duena lleno "Sena segun riesgo" en Politicas, quiso prender
+// los cobros y el backend respondio DEPOSIT_POLICY_REQUIRED. La politica que
+// pide se escribe en la pestana Mercado Pago y no la encontro: el error tiene
+// que decir donde y llevarla hasta el campo.
+describe('Settings - cobros sin politica de sena', () => {
+  const scrollIntoViewOriginal = Element.prototype.scrollIntoView
+  const scrollIntoView = jest.fn()
+
+  beforeEach(() => {
+    Element.prototype.scrollIntoView = scrollIntoView
+  })
+
+  afterEach(() => {
+    if (scrollIntoViewOriginal) Element.prototype.scrollIntoView = scrollIntoViewOriginal
+    else delete (Element.prototype as Partial<Element>).scrollIntoView
+  })
+
+  const policyRequired = () =>
+    new ValidationError('Para activar los cobros online primero tenes que publicar tu politica', {
+      errorCode: 'DEPOSIT_POLICY_REQUIRED',
+      statusCode: 422
+    })
+
+  it('dice donde se escribe la politica y lleva al campo de la pestana Mercado Pago', async () => {
+    updateFeatureFlags.mockRejectedValue(policyRequired())
+    renderSettings()
+    openTab('Funciones')
+
+    fireEvent.click(screen.getByRole('switch', { name: 'Cobros online y señas' }))
+    saveChanges()
+
+    expect(
+      await screen.findByText(
+        'Para activar los cobros online primero escribí y guardá tu política de seña, cancelación y reembolso en la pestaña Mercado Pago.'
+      )
+    ).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Ir a la política de seña' }))
+
+    const field = screen.getByLabelText('Política de seña, cancelación y reembolso')
+    expect(screen.getByRole('button', { name: 'Guardar condiciones' })).toBeInTheDocument()
+    expect(field).toHaveFocus()
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: 'start', behavior: 'smooth' })
+  })
+
+  it('otro error del guardado no ofrece ir a la politica', async () => {
+    updateFeatureFlags.mockRejectedValue(
+      new ValidationError('x', { errorCode: 'VALIDATION_ERROR', statusCode: 422 })
+    )
+    renderSettings()
+    openTab('Funciones')
+
+    fireEvent.click(screen.getByRole('switch', { name: 'Cobros online y señas' }))
+    saveChanges()
+
+    expect(await screen.findByText('No se pudieron guardar las funciones')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Ir a la política de seña' })).toBeNull()
   })
 })
 

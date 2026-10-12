@@ -37,4 +37,16 @@ describe('SettingsPoliciesTab', () => {
 
     expect(onChange).toHaveBeenCalledWith({ deposit_absent_client_extra_percent: 100 })
   })
+
+  // 2026-10-12: "Sena segun riesgo" se confundia con la politica de sena que
+  // exige activar los cobros, y esa se escribe en la pestana Mercado Pago.
+  it('aclara que los recargos no son la politica de sena y dice donde se escribe', () => {
+    render(<SettingsPoliciesTab value={value} onChange={jest.fn()} />)
+
+    expect(
+      screen.getByText(
+        'Esto no es tu política de seña: el texto de seña, cancelación y reembolso se escribe en la pestaña Mercado Pago.'
+      )
+    ).toBeInTheDocument()
+  })
 })
