@@ -99,6 +99,13 @@ export const ERROR_CODE_MESSAGES: ReadonlyMap<string, string> = new Map([
     'RESOURCE_CONFLICT',
     'Los datos chocan con un registro existente. Revisalos y volvé a intentar.'
   ],
+  // PUT /stores/me/feature-flags (stores/router.py): prender los cobros sin la
+  // politica guardada. El texto del servidor no tiene tildes ni dice donde se
+  // escribe, y la duena la buscaba en "Sena segun riesgo" (2026-10-12).
+  [
+    'DEPOSIT_POLICY_REQUIRED',
+    'Para activar los cobros online primero escribí y guardá tu política de seña, cancelación y reembolso en la pestaña Mercado Pago.'
+  ],
   // Reportes.
   ['EXPORT_TOO_LARGE', 'El reporte es demasiado grande para exportarlo. Acotá el rango de fechas.'],
   // Imagenes (logo, portada, foto de servicio).

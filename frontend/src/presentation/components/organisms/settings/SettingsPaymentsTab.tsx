@@ -33,7 +33,11 @@ interface SettingsPaymentsTabProps {
   saveBlockedNotice: React.ReactNode
   /** Tienda suspendida: PATCH /stores/me responde 402; el OAuth sigue (FF-15). */
   readOnlyReason?: string | null
+  /** La pagina enfoca el campo de la politica desde el error DEPOSIT_POLICY_REQUIRED. */
+  policyFieldRef?: React.Ref<HTMLTextAreaElement>
 }
+
+const DEPOSIT_POLICY_FIELD_ID = 'settings-deposit-policy'
 
 /**
  * Pestana "Mercado Pago" de Configuracion (F11b-08). Solo pinta: conectar,
@@ -54,7 +58,8 @@ export const SettingsPaymentsTab: React.FC<SettingsPaymentsTabProps> = ({
   saveDisabled,
   saveStatus,
   saveBlockedNotice,
-  readOnlyReason = null
+  readOnlyReason = null,
+  policyFieldRef
 }) => {
   // Con los cobros apagados el backend responde 403 a todo /payments: no es una
   // falla. La politica de sena se sigue guardando aca (activar los cobros la
@@ -85,8 +90,14 @@ export const SettingsPaymentsTab: React.FC<SettingsPaymentsTabProps> = ({
             color: colors2000s.status.info.text
           }}
         >
-          Los cobros online están apagados para tu negocio. Guardá acá tu política de seña y
-          activalos en la pestaña Funciones para conectar Mercado Pago.
+          {/* El orden importa: el backend no deja prender los cobros sin la
+              politica guardada (DEPOSIT_POLICY_REQUIRED, 2026-10-12). */}
+          <p>Los cobros online están apagados para tu negocio. Para activarlos:</p>
+          <ol className="mt-2 list-decimal space-y-1 pl-5">
+            <li>Escribí y guardá acá abajo tu política de seña.</li>
+            <li>Activá «Cobros online y señas» en la pestaña Funciones.</li>
+            <li>Volvé a esta pestaña y conectá Mercado Pago.</li>
+          </ol>
         </div>
       ) : (
         <QueryErrorNotice
@@ -202,12 +213,15 @@ export const SettingsPaymentsTab: React.FC<SettingsPaymentsTabProps> = ({
 
         <div className="space-y-2">
           <label
+            htmlFor={DEPOSIT_POLICY_FIELD_ID}
             className="text-[10px] font-black uppercase tracking-widest"
             style={{ color: colors2000s.text.secondary }}
           >
             Política de seña, cancelación y reembolso
           </label>
           <textarea
+            id={DEPOSIT_POLICY_FIELD_ID}
+            ref={policyFieldRef}
             rows={5}
             maxLength={2000}
             value={value.deposit_policy}
