@@ -145,19 +145,24 @@ Historical rehearsal on 2026-09-24 (3 stores, 20 users, 90 s plateau, local uvic
 
 ### From CI
 
-`.github/workflows/perf-acceptance.yml` runs on `workflow_dispatch` and, only when the repo variable `PERF_NIGHTLY` is `true`, every night at 03:30 ART. Staging shares the VPS with production, so the nightly stays off until the owner decides otherwise. It builds the manifest from staging's public API by slug, runs Locust, runs the check and uploads `perf-acceptance` (CSV, codes, SLO samples, manifest) as an artifact even when it fails.
+`.github/workflows/perf-acceptance.yml` accepts `workflow_dispatch` only from `main`, and runs nightly at 03:30 ART only when the repository variable `PERF_NIGHTLY` is `true`. It uses the GitHub Environment `staging` with `deployment: false`: configure required reviewers and allow deployments only from `main`, so the job cannot expose staging secrets to a branch or start before approval. The job is pinned to a repository self-hosted runner with labels `self-hosted`, `linux`, `x64`, and `shifty-perf-staging`; there is no GitHub-hosted fallback. If no dedicated runner is online, the job stays queued rather than moving to a general runner.
 
-| Setting | Kind | What |
+The workflow fails before checkout unless both infrastructure attestations are `true`. Set them only after the operator has captured evidence: `PERF_STAGING_ISOLATED=true` means the staging host, database, Redis, and broker are isolated from production; `PERF_RUNNER_EGRESS_RESTRICTED=true` means the dedicated runner uses default-deny egress and passed allow/deny checks from that host. The firewall may reach only the exact staging API origin plus the minimum GitHub Actions, artifact, and package endpoints required by the runner. It must deny production and all other application destinations. A unit test or successful target health check does not prove those network controls.
+
+After the guard passes, the workflow installs the locked dependencies, runs `scripts/verify_perf_target.py` to require the approved HTTPS origin and a healthy staging response, then builds the manifest, runs Locust, and passes its exit code and CSV to the checker. The checker requires a zero Locust exit code, at least four bursts, and at least 24 minutes of SLO coverage before it can print `APROBADA`. The workflow uploads `perf-acceptance` even when a later step fails. The verifier and the probes independently reject redirects. The current staging setup shares the production VPS, and no dedicated runner or egress proof has been recorded, so both attestations must remain unset and no 200-user run should be dispatched yet.
+
+| Setting | Scope | What |
 | --- | --- | --- |
-| `STAGING_URL` | secret | staging API URL with `/api` |
-| `PERF_ALLOWED_ORIGIN` | variable | exact HTTPS staging origin; the production apex and `www` host are rejected |
-| `SEED_OWNER_PASSWORD` | secret | the password the seed ran with |
-| `SHIFTY_SUPERADMIN_EMAIL`, `SHIFTY_SUPERADMIN_PASSWORD` | secrets | a staging superadmin (samples `/ops/slo`) |
-| `PERF_RUNNER` | variable | runner label; default `ubuntu-latest` |
-| `PERF_NETWORK_OFFSET_MS` | variable | measured ms added to p95 thresholds; the checker rejects values outside 0–150 ms |
-| `PERF_NIGHTLY` | variable | `true` to enable the nightly run |
+| `STAGING_URL` | Environment secret | staging API URL with `/api` |
+| `PERF_ALLOWED_ORIGIN` | Environment variable | exact HTTPS staging origin; production apex and `www` are rejected |
+| `SEED_OWNER_PASSWORD` | Environment secret | the password the seed ran with |
+| `SHIFTY_SUPERADMIN_EMAIL`, `SHIFTY_SUPERADMIN_PASSWORD` | Environment secrets | a staging superadmin (samples `/ops/slo`) |
+| `PERF_STAGING_ISOLATED` | Environment variable | set to `true` only with evidence of host and data isolation from production |
+| `PERF_RUNNER_EGRESS_RESTRICTED` | Environment variable | set to `true` only after allow/deny egress checks pass from the dedicated runner |
+| `PERF_NETWORK_OFFSET_MS` | Environment variable | measured ms added to p95 thresholds; the checker rejects values outside 0–150 ms |
+| `PERF_NIGHTLY` | Repository variable | `true` to enable the nightly run; keep unset/false until the isolated environment is accepted |
 
-Runner location matters. A GitHub-hosted runner is in the US and adds 120–150 ms of round trip to Argentina on every request: with it, a 500 ms threshold is really judging 350 ms of server time. Either register a self-hosted runner close to the VPS (Argentina or Brazil) and set `PERF_RUNNER` to its label, or use a measured offset up to 150 ms (`PERF_NETWORK_OFFSET_MS` or `network_offset_ms` when dispatching). Record the measurement; do not use it to hide server latency.
+Register a dedicated, preferably ephemeral runner near staging (Argentina or Brazil) at repository scope and apply the required labels. Do not reuse a production host, general-purpose runner, or runner that executes pull-request code. Configure the Environment to allow only `main` and require an independent reviewer before releasing its secrets. Keep firewall evidence with the acceptance artifact. `PERF_NETWORK_OFFSET_MS` can account for measured residual network latency; document the measurement and do not use it to hide server latency.
 
 ## 5. Reading the results
 

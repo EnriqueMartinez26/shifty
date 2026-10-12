@@ -6,17 +6,15 @@ name: Perf Acceptance
 # y scripts/perf_acceptance_check.py decide: p95 < 500 ms por ruta, 0 5xx,
 # 0 429, rafagas 1 x 201 + 409, outbox al dia. docs/PERF_ACCEPTANCE.md.
 #
-# Staging comparte el VPS con produccion (docs/DEPLOY_RUNBOOK.md §6): 200
-# usuarios de noche le pegan a los clientes reales. El nocturno queda APAGADO
-# hasta que el dueno fije la variable del repo PERF_NIGHTLY=true; a mano
-# (workflow_dispatch) corre siempre.
+# Staging comparte el VPS con produccion (docs/DEPLOY_RUNBOOK.md §6): no correr
+# hasta que este aislado y el runner tenga egress restringido. Ambos controles
+# se declaran en el Environment `staging` despues de verificar la infraestructura.
+# El nocturno queda APAGADO hasta que se fije PERF_NIGHTLY=true; el despacho
+# manual solo se acepta desde main y pasa por la proteccion del Environment.
 #
-# Donde corre: un runner de GitHub esta en EE.UU. y suma 120-150 ms de ida y
-# vuelta a Argentina a cada request. Para juzgar el servidor y no la red,
-# usar un runner self-hosted cerca (variable PERF_RUNNER, p. ej. la etiqueta
-# de un runner en AR/BR) o compensar con PERF_NETWORK_OFFSET_MS (ms que se
-# suman a los umbrales). Desde una sola IP el borde limita por cliente
-# (limit_req): staging necesita los limites de prueba del runbook.
+# Solo corre en el runner self-hosted dedicado `shifty-perf-staging`; no hay
+# fallback a GitHub-hosted. Ajustar PERF_NETWORK_OFFSET_MS si la medicion aun
+# incluye latencia entre el runner y staging. Ver docs/PERF_ACCEPTANCE.md.
 
 on:
   schedule:
@@ -39,8 +37,13 @@ concurrency:
 
 jobs:
   acceptance:
-    if: github.event_name == 'workflow_dispatch' || vars.PERF_NIGHTLY == 'true'
-    runs-on: ${{ vars.PERF_RUNNER || 'ubuntu-latest' }}
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'schedule' && vars.PERF_NIGHTLY == 'true')
+    runs-on: [self-hosted, linux, x64, shifty-perf-staging]
+    environment:
+      name: staging
+      deployment: false
     timeout-minutes: 50
     defaults:
       run:
@@ -49,6 +52,26 @@ jobs:
       NETWORK_OFFSET_MS: ${{ inputs.network_offset_ms || vars.PERF_NETWORK_OFFSET_MS || '0' }}
       PERF_ALLOWED_ORIGIN: ${{ vars.PERF_ALLOWED_ORIGIN }}
     steps:
+      - name: Verificar aislamiento y egress del staging
+        working-directory: .
+        env:
+          PERF_ALLOWED_ORIGIN: ${{ vars.PERF_ALLOWED_ORIGIN }}
+          PERF_STAGING_ISOLATED: ${{ vars.PERF_STAGING_ISOLATED }}
+          PERF_RUNNER_EGRESS_RESTRICTED: ${{ vars.PERF_RUNNER_EGRESS_RESTRICTED }}
+        run: |
+          if [ "$PERF_STAGING_ISOLATED" != "true" ]; then
+            echo "::error title=Staging sin aislamiento verificado::Configure PERF_STAGING_ISOLATED=true en el Environment staging solo despues de probar que sus servicios y datos estan aislados de produccion."
+            exit 1
+          fi
+          if [ "$PERF_RUNNER_EGRESS_RESTRICTED" != "true" ]; then
+            echo "::error title=Runner sin egress verificado::Configure PERF_RUNNER_EGRESS_RESTRICTED=true en el Environment staging solo despues de probar las reglas allow/deny desde el runner dedicado."
+            exit 1
+          fi
+          if [ -z "$PERF_ALLOWED_ORIGIN" ]; then
+            echo "::error title=Falta el origen aprobado::Configure PERF_ALLOWED_ORIGIN en el Environment staging."
+            exit 1
+          fi
+
       - name: Verificar secretos de la prueba
         working-directory: .
         env:
@@ -63,7 +86,7 @@ jobs:
           [ -n "$SHIFTY_SUPERADMIN_EMAIL" ] || faltan="$faltan SHIFTY_SUPERADMIN_EMAIL"
           [ -n "$SHIFTY_SUPERADMIN_PASSWORD" ] || faltan="$faltan SHIFTY_SUPERADMIN_PASSWORD"
           if [ -n "$faltan" ]; then
-            echo "::error title=Prueba de aceptacion sin configurar::Faltan los secretos del repo:$faltan. STAGING_URL = URL de la API de STAGING con /api (nunca produccion); SEED_OWNER_PASSWORD = la clave con la que se corrio scripts/seed_capacidad.py; SHIFTY_SUPERADMIN_* = un superadmin de staging (muestrea /ops/slo). Ver docs/PERF_ACCEPTANCE.md."
+            echo "::error title=Prueba de aceptacion sin configurar::Faltan los secretos del Environment staging:$faltan. STAGING_URL = URL de la API de STAGING con /api (nunca produccion); SEED_OWNER_PASSWORD = la clave con la que se corrio scripts/seed_capacidad.py; SHIFTY_SUPERADMIN_* = un superadmin de staging (muestrea /ops/slo). Ver docs/PERF_ACCEPTANCE.md."
             exit 1
           fi
 
@@ -76,6 +99,11 @@ jobs:
       - name: Install dependencies
         # Locust ya esta en el grupo dev del lock: no es dependencia nueva.
         run: uv sync --frozen
+
+      - name: Verificar destino de staging y salud
+        env:
+          STAGING_URL: ${{ secrets.STAGING_URL }}
+        run: uv run python scripts/verify_perf_target.py
 
       - name: Manifiesto de tiendas desde staging
         env:

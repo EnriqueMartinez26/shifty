@@ -31,6 +31,7 @@ Use this checklist for every production release. A release is ready only when ea
 - [ ] Error-rate, latency, worker-queue, webhook/outbox, and backup/drill alerts are active (`deploy/cron/shifty-latency`, `deploy/cron/shifty-guard`).
 - [ ] Dashboard links for API health, database, Redis, background jobs, payments, and Sentry are included in release notes.
 - [ ] The capacity acceptance test (`docs/PERF_ACCEPTANCE.md`) passed on staging with the release candidate: `scripts/perf_acceptance_check.py` printed `APROBADA` and its output, the runner used and the rate-limit setup are attached to the release notes. For the first launch it ran on the real VPS within the provider's 30-day guarantee window. Required for releases that touch availability, booking, the dashboard, reports, jobs or database configuration.
+- [ ] A green GitHub Actions workflow is not the capacity verdict: the attached artifact must contain `APROBADA`, and the release evidence must include the isolated staging identity, dedicated runner, and runner egress allow/deny proof. The workflow deliberately stops before network access until `PERF_STAGING_ISOLATED` and `PERF_RUNNER_EGRESS_RESTRICTED` are explicitly attested in the `staging` Environment.
 
 ## 3. Database migrations
 
