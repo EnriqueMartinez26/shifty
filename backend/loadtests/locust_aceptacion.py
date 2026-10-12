@@ -56,6 +56,14 @@ from locust.clients import HttpSession
 from locust.env import Environment
 from locust.runners import LocalRunner
 
+# Locust's CLI patches gevent before loading this file; remote HTTP runs only
+# in the verifier's isolated worker process.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from scripts.verify_perf_target import (  # noqa: E402
+    TargetCheckError,
+    verify_target,
+)
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from aceptacion import (  # noqa: E402
@@ -90,7 +98,7 @@ MESETA = int(os.getenv("SHIFTY_MESETA_S", str(MESETA_S)))
 RAFAGA_CADA = int(os.getenv("SHIFTY_RAFAGA_CADA_S", str(RAFAGA_CADA_S)))
 USUARIOS = int(os.getenv("SHIFTY_USUARIOS", str(TOTAL_USUARIOS)))
 
-TIENDAS: list[TiendaSembrada] = cargar_manifiesto(MANIFEST) if MANIFEST else []
+TIENDAS: list[TiendaSembrada] = []
 CONTEO = ConteoDeCodigos()
 _DUENO_SIGUIENTE = itertools.count()
 _RNG = random.Random()
@@ -149,7 +157,20 @@ def _contar(
 
 @events.init.add_listener  # type: ignore[untyped-decorator]
 def _validar(environment: Environment, **_kwargs: Any) -> None:
-    if not TIENDAS:
+    try:
+        host = verify_target(
+            {
+                "STAGING_URL": environment.host or "",
+                "PERF_ALLOWED_ORIGIN": os.getenv("PERF_ALLOWED_ORIGIN", ""),
+                "PERF_ALLOW_LOCAL_TARGET": os.getenv("PERF_ALLOW_LOCAL_TARGET", ""),
+                "GITHUB_ACTIONS": os.getenv("GITHUB_ACTIONS", ""),
+            }
+        )
+    except TargetCheckError as exc:
+        raise SystemExit(f"Destino de Locust rechazado: {exc}") from None
+    environment.host = host
+
+    if not MANIFEST:
         raise SystemExit("Falta SHIFTY_MANIFEST (manifiesto de seed_capacidad.py)")
     if not OWNER_PASSWORD:
         raise SystemExit("Falta SEED_OWNER_PASSWORD")
@@ -157,6 +178,15 @@ def _validar(environment: Environment, **_kwargs: Any) -> None:
         # Sin superadmin no hay muestras de /ops/slo y el veredicto rechaza
         # despues de 25 minutos: mejor cortar ahora.
         raise SystemExit("Faltan SHIFTY_SUPERADMIN_EMAIL / SHIFTY_SUPERADMIN_PASSWORD")
+
+    try:
+        tiendas = cargar_manifiesto(MANIFEST)
+    except OSError, UnicodeError, ValueError:
+        raise SystemExit(
+            "No se pudo cargar el manifiesto de seed_capacidad.py"
+        ) from None
+    TIENDAS.clear()
+    TIENDAS.extend(tiendas)
 
 
 class ClientePublico(HttpUser):

@@ -539,6 +539,7 @@ def test_sin_secretos_perf_falla_diciendo_cuales_faltan() -> None:
 def test_perf_corre_locust_y_lo_juzga_el_script() -> None:
     pasos = _pasos_perf()
     textos = [str(p.get("run", "")) for p in pasos]
+    assert "PERF_ALLOWED_ORIGIN" in _job_perf()["env"]
     locust = next(i for i, t in enumerate(textos) if "locust_aceptacion.py" in t)
     veredicto = next(i for i, t in enumerate(textos) if "perf_acceptance_check.py" in t)
     assert locust < veredicto

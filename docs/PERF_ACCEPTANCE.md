@@ -119,6 +119,8 @@ done >> stats.log
 ### Rehearsal against the local Docker stack
 
 Useful to check the scenario, not to judge capacity (the numbers of a desktop mean nothing for the VPS). The local seed writes `cap-` stores into your local database.
+Loopback targets require the explicit `PERF_ALLOW_LOCAL_TARGET=true` opt-in;
+GitHub Actions rejects loopback even if that flag is set.
 
 1. Disable the app rate limit for the run: `RATE_LIMIT_ENABLED=false docker compose up -d backend` (the dev compose reads it from the shell or `.env`; ENV is not production, so rule 17 does not apply). Put it back afterwards.
 2. Seed a few stores and copy the manifest out:
@@ -128,7 +130,7 @@ Useful to check the scenario, not to judge capacity (the numbers of a desktop me
        --allow-database-name shifty_db --stores 5 --manifest /tmp/capacidad.json
    docker compose cp backend:/tmp/capacidad.json manifiesto.json
    ```
-3. Point Locust at `http://localhost/api` to go through nginx (the dev `nginx.conf` allows 200 r/s per IP, ten times production, so a single IP fits) or at the backend directly (`--host http://127.0.0.1:8000`) to leave the edge out.
+3. Set `PERF_ALLOW_LOCAL_TARGET=true` for the local rehearsal, then point the manifest builder and Locust at `http://localhost/api` to go through nginx (the dev `nginx.conf` allows 200 r/s per IP, ten times production, so a single IP fits) or at the backend directly (`--host http://127.0.0.1:8000`) to leave the edge out. Clear the variable before running against staging.
 4. Shorten the run with `SHIFTY_USUARIOS=20 SHIFTY_RAMPA_S=20 SHIFTY_MESETA_S=90 SHIFTY_RAFAGA_CADA_S=40 SHIFTY_THINK_SCALE=0.3`. These overrides exist only for rehearsals; the acceptance is judged with the plan's values.
 
 Rehearsal on 2026-09-24 (3 stores, 20 users, 90 s plateau, local uvicorn): 1336 requests, 0 errors, two bursts of 1 × 201 + 9 × 409, 4 SLO samples, verdict `APROBADA`.
@@ -140,6 +142,7 @@ Rehearsal on 2026-09-24 (3 stores, 20 users, 90 s plateau, local uvicorn): 1336 
 | Setting | Kind | What |
 | --- | --- | --- |
 | `STAGING_URL` | secret | staging API URL with `/api` |
+| `PERF_ALLOWED_ORIGIN` | variable | exact HTTPS staging origin; the production apex and `www` host are rejected |
 | `SEED_OWNER_PASSWORD` | secret | the password the seed ran with |
 | `SHIFTY_SUPERADMIN_EMAIL`, `SHIFTY_SUPERADMIN_PASSWORD` | secrets | a staging superadmin (samples `/ops/slo`) |
 | `PERF_RUNNER` | variable | runner label; default `ubuntu-latest` |

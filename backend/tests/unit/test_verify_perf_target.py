@@ -75,6 +75,110 @@ def test_validates_exact_https_origin_and_canonical_staging_readiness() -> None:
     assert request.headers["accept-encoding"] == "identity"
 
 
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("http://localhost/api", "http://localhost/api"),
+        ("http://localhost/api/", "http://localhost/api"),
+        ("http://localhost", "http://localhost"),
+        ("http://localhost/", "http://localhost"),
+        ("http://localhost:80/api", "http://localhost/api"),
+        ("http://localhost:8000/", "http://localhost:8000"),
+        ("http://127.0.0.1/api", "http://127.0.0.1/api"),
+        ("http://127.0.0.1/api/", "http://127.0.0.1/api"),
+        ("http://127.0.0.1", "http://127.0.0.1"),
+        ("http://127.0.0.1:8000/api", "http://127.0.0.1:8000/api"),
+        ("http://[::1]/api", "http://[::1]/api"),
+        ("http://[::1]/api/", "http://[::1]/api"),
+        ("http://[::1]/", "http://[::1]"),
+        ("http://[::1]:8000", "http://[::1]:8000"),
+    ],
+)
+def test_acepta_y_canoniza_solo_loopback_literal_local(url: str, expected: str) -> None:
+    transport = _MockTransport(httpx.Response(200, content=READY))
+
+    assert (
+        module.verify_target(
+            {"STAGING_URL": url, "PERF_ALLOW_LOCAL_TARGET": "true"},
+            transport=transport,
+        )
+        == expected
+    )
+    assert transport.requests == []
+
+
+@pytest.mark.parametrize("url", ["http://localhost/api", "http://127.0.0.1/api"])
+def test_rechaza_loopback_sin_optin_local(url: str) -> None:
+    with pytest.raises(
+        module.TargetCheckError, match="requiere PERF_ALLOW_LOCAL_TARGET"
+    ):
+        module.verify_target({"STAGING_URL": url})
+
+
+@pytest.mark.parametrize("github_actions", ["true", "TRUE"])
+def test_rechaza_loopback_en_github_actions_aunque_haya_optin(
+    github_actions: str,
+) -> None:
+    with pytest.raises(
+        module.TargetCheckError, match="no está permitido en GitHub Actions"
+    ):
+        module.verify_target(
+            {
+                "STAGING_URL": "http://localhost/api",
+                "PERF_ALLOW_LOCAL_TARGET": "true",
+                "GITHUB_ACTIONS": github_actions,
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://staging.example.test/api",
+        "http://LOCALHOST/api",
+        "http://localhost.example/api",
+        "http://not-localhost/api",
+        "http://internal.localhost/api",
+        "http://localhost./api",
+        "http://127.0.0.2/api",
+        "http://127.000.0.1/api",
+        "http://0177.0.0.1/api",
+        "http://2130706433/api",
+        "http://0x7f000001/api",
+        "http://[0:0:0:0:0:0:0:1]/api",
+        "http://[::ffff:127.0.0.1]/api",
+        "http://localhost/other",
+        "http://localhost/api/v1",
+        "http://localhost/api?next=x",
+        "http://localhost/api#fragment",
+        "http://user@localhost/api",
+        "http://localhost\\@example.test/api",
+        "http://localhost:0/api",
+        "http://localhost:65536/api",
+        "http://localhost:abc/api",
+        "http://localhost:/api",
+    ],
+)
+def test_rechaza_loopback_no_literal_y_bypass_local(url: str) -> None:
+    transport = _MockTransport(httpx.Response(200, content=READY))
+    with pytest.raises(module.TargetCheckError):
+        module.verify_target({"STAGING_URL": url}, transport=transport)
+    with pytest.raises(module.TargetCheckError):
+        module.canonical_target_url(url)
+    assert transport.requests == []
+
+
+def test_destino_local_rechaza_un_origen_aprobado_configurado() -> None:
+    with pytest.raises(module.TargetCheckError, match="no debe configurar"):
+        module.canonical_target_url("http://localhost/api", ALLOWED_ORIGIN)
+
+
+def test_helper_canoniza_remoto_sin_hacer_red() -> None:
+    assert module.canonical_target_url(STAGING_URL, ALLOWED_ORIGIN) == (
+        "https://staging.example.test/api"
+    )
+
+
 def test_origin_mismatch_fails_before_probe() -> None:
     transport = _MockTransport(httpx.Response(200, content=READY))
     with pytest.raises(module.TargetCheckError, match="no coincide"):
@@ -82,6 +186,37 @@ def test_origin_mismatch_fails_before_probe() -> None:
             STAGING_URL, "https://other.example.test", transport=transport
         )
     assert transport.requests == []
+
+
+@pytest.mark.parametrize(
+    "host",
+    [
+        "shifty-ar.tech",
+        "www.shifty-ar.tech",
+        "SHifty-AR.TECH",
+    ],
+)
+def test_rechaza_el_dominio_de_produccion_como_origen_aprobado(host: str) -> None:
+    with pytest.raises(module.TargetCheckError, match="producción"):
+        module.normalize_origin(f"https://{host}")
+
+
+@pytest.mark.parametrize("host", ["shifty-ar.tech", "www.shifty-ar.tech"])
+def test_rechaza_el_dominio_de_produccion_como_destino_sin_consultarlo(
+    host: str,
+) -> None:
+    transport = _MockTransport(httpx.Response(200, content=READY))
+    with pytest.raises(module.TargetCheckError, match="producción"):
+        module.verify_target_url(
+            f"https://{host}/api", ALLOWED_ORIGIN, transport=transport
+        )
+    assert transport.requests == []
+
+
+def test_no_bloquea_subdominios_que_pueden_ser_staging() -> None:
+    assert module.normalize_origin("https://staging.shifty-ar.tech") == (
+        "https://staging.shifty-ar.tech"
+    )
 
 
 @pytest.mark.parametrize(
