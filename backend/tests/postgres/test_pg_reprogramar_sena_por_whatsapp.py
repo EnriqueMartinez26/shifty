@@ -126,6 +126,7 @@ async def _sena_por_whatsapp_verificada(
         },
     )
     assert verificado.status_code == 200, verificado.text
+    client.headers["X-Client-Token"] = verificado.json()["client_token"]
     return store, token, str(reserva.json()["public_id"]), dia
 
 

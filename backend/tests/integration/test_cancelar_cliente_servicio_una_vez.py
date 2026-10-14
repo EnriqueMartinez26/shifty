@@ -73,6 +73,7 @@ async def test_cancelar_desde_el_portal_lee_el_servicio_una_vez(
         },
     )
     assert verificado.status_code == 200, verificado.text
+    client.headers["X-Client-Token"] = verificado.json()["client_token"]
 
     lecturas_de_servicio: list[str] = []
     original = test_session.execute

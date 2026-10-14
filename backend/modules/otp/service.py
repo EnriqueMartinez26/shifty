@@ -19,6 +19,13 @@ from core.exceptions import OTPException, OTPRateLimitedException, ValidationExc
 from core.rate_limit import subject_quota_allows
 from core.redis import REDIS_UNAVAILABLE_ERRORS, get_redis
 from core.security import hash_otp_code
+from modules.otp.client_token import (
+    TOKEN_EMAIL_MISMATCH,
+    TOKEN_VERIFICATION_NOT_FOUND,
+    email_digest,
+    issue_client_token,
+    read_client_token,
+)
 from modules.auth.service import normalize_email
 from modules.notifications.tasks import client_mail_footer, is_deliverable_email
 from modules.otp.model import OtpVerification
@@ -409,10 +416,12 @@ class OtpService:
         self.db = db
         self._contact_memo: dict[tuple[str, str], str | None] = {}
         self._reason_memo: dict[tuple[str, str, int], str] = {}
+        self._token_memo: dict[tuple[str, str, str, str | None, int], str] = {}
 
     def _forget_verification(self) -> None:
         self._contact_memo.clear()
         self._reason_memo.clear()
+        self._token_memo.clear()
 
     async def _registered_client_email(
         self, store_id: str, normalized_phone: str
@@ -692,8 +701,27 @@ class OtpService:
         # telefono tiene que mirar tambien contra que email se verifico
         # (`may_book_with_otp` / `is_client_contact_verified`). 2026-09-20.
         otp.verified_at = now
+        # El token ata la autogestion a ESTA verificacion y a quien la hizo
+        # (``client_token.py``, 2026-10-14). Sin email no hay token: una
+        # verificacion sin buzon no otorga ningun privilegio.
+        client_token = (
+            issue_client_token(
+                store_id=store_id,
+                phone=normalized_phone,
+                email=otp.email,
+                verification_id=otp.id,
+                verified_at=now,
+            )
+            if otp.email
+            else None
+        )
         await self.db.commit()
-        return {"ok": True, "verified_at": now.isoformat(), "phone": normalized_phone}
+        return {
+            "ok": True,
+            "verified_at": now.isoformat(),
+            "phone": normalized_phone,
+            "client_token": client_token,
+        }
 
     async def client_contact_verification_reason(
         self, *, store_id: str, phone: str, window_minutes: int = 30
@@ -742,9 +770,11 @@ class OtpService:
     ) -> bool:
         """El email verificado COINCIDE con el contacto guardado de esa ficha.
 
-        Es el unico predicado que habilita autogestion, historial y contacto:
-        listar, cancelar o reprogramar turnos ajenos, y decidir si se trae
-        `get_client_history` o `UNKNOWN_HISTORY`.
+        Es la mitad en la base del predicado que habilita autogestion,
+        historial y contacto (listar, cancelar o reprogramar turnos, y decidir
+        si se trae `get_client_history` o `UNKNOWN_HISTORY`). Sola NO alcanza:
+        no dice que quien pregunta sea quien verifico. Los llamadores usan
+        `is_self_service_allowed`, que exige ademas el token (2026-10-14).
 
         False si no hay cliente con ese telefono en la tienda, si su email no
         es entregable (el tecnico `{tel}@store{id}.noreply`) o si la
@@ -790,11 +820,163 @@ class OtpService:
         opcionales. La seguridad la da el PUNTO DE DESPACHO: si el telefono
         tiene ficha con email entregable, `_resolve_destination` manda el
         codigo a ESE buzon y el solicitante ya no lo elige. 2026-09-20.
+
+        Mitad en la base: el llamador usa `may_book`, que exige ademas el
+        token de quien verifico (2026-10-14).
         """
         reason = await self.booking_otp_reason(
             store_id=store_id, phone=phone, window_minutes=window_minutes
         )
         return reason == OTP_GATE_OK
+
+    async def self_service_reason(
+        self,
+        *,
+        store_id: str,
+        phone: str,
+        client_token: str | None,
+        window_minutes: int = 30,
+    ) -> str:
+        """Motivo del veredicto de ``is_self_service_allowed``.
+
+        Primero el chequeo de siempre en la base
+        (``client_contact_verification_reason``) y despues el token: los dos
+        tienen que pasar. 2026-10-14.
+        """
+        reason = await self.client_contact_verification_reason(
+            store_id=store_id, phone=phone, window_minutes=window_minutes
+        )
+        if reason != OTP_GATE_OK:
+            return reason
+        normalized_phone = normalize_phone(phone)
+        return await self._client_token_reason(
+            store_id=store_id,
+            normalized_phone=normalized_phone,
+            client_token=client_token,
+            expected_email=await self._registered_client_email(
+                store_id, normalized_phone
+            ),
+            window_minutes=window_minutes,
+        )
+
+    async def is_self_service_allowed(
+        self,
+        *,
+        store_id: str,
+        phone: str,
+        client_token: str | None,
+        window_minutes: int = 30,
+    ) -> bool:
+        """Autogestion, historial y contacto de la ficha de ese telefono.
+
+        ``is_client_contact_verified`` dice que ALGUIEN verifico el email de la
+        ficha en los ultimos 30 minutos, no que sea quien pregunta. Esto exige
+        ademas el token que ``verify_code`` le devolvio a quien verifico, atado
+        a la tienda, al telefono y a esa verificacion. Es el predicado que usan
+        los llamadores; el de la base solo no alcanza (2026-10-14).
+        """
+        reason = await self.self_service_reason(
+            store_id=store_id,
+            phone=phone,
+            client_token=client_token,
+            window_minutes=window_minutes,
+        )
+        return reason == OTP_GATE_OK
+
+    async def booking_reason(
+        self,
+        *,
+        store_id: str,
+        phone: str,
+        client_token: str | None,
+        window_minutes: int = 30,
+    ) -> str:
+        """Motivo del veredicto de ``may_book``: ``booking_otp_reason`` y el
+        token. Sin ficha, el token vale con cualquier email verificado, igual
+        que el chequeo en la base."""
+        reason = await self.booking_otp_reason(
+            store_id=store_id, phone=phone, window_minutes=window_minutes
+        )
+        if reason != OTP_GATE_OK:
+            return reason
+        normalized_phone = normalize_phone(phone)
+        return await self._client_token_reason(
+            store_id=store_id,
+            normalized_phone=normalized_phone,
+            client_token=client_token,
+            expected_email=await self._registered_client_email(
+                store_id, normalized_phone
+            ),
+            window_minutes=window_minutes,
+        )
+
+    async def may_book(
+        self,
+        *,
+        store_id: str,
+        phone: str,
+        client_token: str | None,
+        window_minutes: int = 30,
+    ) -> bool:
+        """Gate del flag ``otp_booking``: ``may_book_with_otp`` y el token."""
+        reason = await self.booking_reason(
+            store_id=store_id,
+            phone=phone,
+            client_token=client_token,
+            window_minutes=window_minutes,
+        )
+        return reason == OTP_GATE_OK
+
+    async def _client_token_reason(
+        self,
+        *,
+        store_id: str,
+        normalized_phone: str,
+        client_token: str | None,
+        expected_email: str | None,
+        window_minutes: int,
+    ) -> str:
+        """El token vale para (tienda, telefono) y su verificacion sigue viva.
+
+        La verificacion ``vid`` del token tiene que existir, ser de esa tienda
+        y ese telefono, estar dentro de la ventana, tener el email del token y,
+        si el telefono tiene ficha, ser el email de la ficha (``expected_email``).
+        Se resuelve una vez por instancia, como el chequeo de la base.
+        """
+        memo_key = (
+            store_id,
+            normalized_phone,
+            client_token or "",
+            expected_email,
+            window_minutes,
+        )
+        if memo_key in self._token_memo:
+            return self._token_memo[memo_key]
+        claims, reason = read_client_token(
+            client_token, store_id=store_id, phone=normalized_phone
+        )
+        if claims is not None:
+            cutoff = datetime.now(timezone.utc) - timedelta(minutes=window_minutes)
+            verified_email = await self.db.scalar(
+                select(OtpVerification.email).where(
+                    OtpVerification.id == claims.verification_id,
+                    OtpVerification.store_id == store_id,
+                    OtpVerification.phone == normalized_phone,
+                    OtpVerification.verified_at.is_not(None),
+                    OtpVerification.verified_at >= cutoff,
+                    OtpVerification.email.is_not(None),
+                )
+            )
+            if verified_email is None:
+                reason = TOKEN_VERIFICATION_NOT_FOUND
+            elif not hmac.compare_digest(
+                email_digest(verified_email), claims.email_digest
+            ) or (expected_email is not None and verified_email != expected_email):
+                reason = TOKEN_EMAIL_MISMATCH
+            else:
+                reason = OTP_GATE_OK
+        self._token_memo[memo_key] = reason
+        return reason
 
     async def _matches_verified_email(
         self,

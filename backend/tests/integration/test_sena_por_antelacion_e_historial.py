@@ -98,7 +98,7 @@ def _slot(dias: int) -> datetime:
 
 async def _verificar_telefono(
     session: AsyncSession, store_slug: str, telefono: str
-) -> None:
+) -> str:
     """Deja el telefono con CONTACTO verificado: ficha con email entregable.
 
     Desde el 2026-09-20 el historial no se abre con "este telefono paso por
@@ -106,6 +106,9 @@ async def _verificar_telefono(
     email verificado es el que ESA ficha tiene guardado". Por eso el helper
     crea la ficha con un email entregable antes de pedir el codigo: pedirlo
     devuelve el codigo al email de la ficha, no al del request.
+
+    Devuelve el token del cliente: desde el 2026-10-14 el historial se abre
+    solo para quien trae el token de la verificacion (``X-Client-Token``).
     """
     from modules.otp.service import OtpService
     from modules.public_api.repository import PublicRepository
@@ -131,11 +134,12 @@ async def _verificar_telefono(
         # El envio no importa aca; la cola lo acepta y el codigo se guarda.
         schedule_dispatch=lambda *args: True,
     )
-    await servicio.verify_code(
+    verificado = await servicio.verify_code(
         store_id=tienda.store_id,
         phone=telefono,
         code=str(pedido["debug_code"]),
     )
+    return str(verificado["client_token"])
 
 
 async def _preview(
@@ -168,7 +172,15 @@ async def test_cliente_nuevo_con_mucha_antelacion_paga_los_recargos_y_queda_el_s
     anonimo = await _preview(client, store, service, 10, "+5491155550301")
     assert anonimo["reasons"] == ["base", "far_notice"]
 
-    await _verificar_telefono(test_session, "sena-nuevo", "5491155550301")
+    token = await _verificar_telefono(test_session, "sena-nuevo", "5491155550301")
+    # La verificacion sola no abre el historial: hace falta el token de quien
+    # verifico. Sin el, cualquiera leia el historial ajeno durante la ventana
+    # de 30 minutos (2026-10-14).
+    assert _reasons(await _preview(client, store, service, 10, "+5491155550301")) == [
+        "base",
+        "far_notice",
+    ]
+    client.headers["X-Client-Token"] = token
     preview = await _preview(client, store, service, 10, "+5491155550301")
     # base 30% + 20 (antelacion >= 7 dias) + 10 (cliente nuevo) = 60% de 10000
     assert preview["amount"] == 6000.0
@@ -219,7 +231,9 @@ async def test_el_historial_del_cliente_cambia_la_sena(
     monkeypatch.setattr(tasks, "_send_email", Buzon())
     store, token, service, staff = await _tienda_con_sena(client, "sena-historial")
     telefono = "+5491155550302"
-    await _verificar_telefono(test_session, "sena-historial", "5491155550302")
+    client.headers["X-Client-Token"] = await _verificar_telefono(
+        test_session, "sena-historial", "5491155550302"
+    )
 
     # Sin historial y con poca antelacion: base + cliente nuevo.
     assert _reasons(await _preview(client, store, service, 2, telefono)) == [

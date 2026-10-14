@@ -500,6 +500,7 @@ app.add_middleware(
         "Content-Type",
         "X-Requested-With",
         "X-Idempotency-Key",
+        "X-Client-Token",
     ],
     # X-Total-Count: total del listado de tiendas del superadmin (FF-24).
     expose_headers=["X-Idempotency-Key", "Content-Disposition", "X-Total-Count"],

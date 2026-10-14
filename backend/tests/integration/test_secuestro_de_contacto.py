@@ -533,6 +533,7 @@ async def test_el_duenio_del_email_de_la_ficha_lista_y_cancela_sus_turnos(
         },
     )
     assert verificado.status_code == 200, verificado.text
+    client.headers["X-Client-Token"] = verificado.json()["client_token"]
 
     listado = await client.get(f"/public/client/{store}/{VICTIMA}/appointments")
     assert listado.status_code == 200, listado.text
@@ -677,6 +678,7 @@ async def test_un_cliente_nuevo_reserva_con_otp_booking_activo(
         },
     )
     assert verificado.status_code == 200, verificado.text
+    client.headers["X-Client-Token"] = verificado.json()["client_token"]
 
     reserva = await client.post(
         "/public/appointments",
@@ -736,6 +738,7 @@ async def test_el_gate_de_reserva_no_exige_que_los_dos_emails_coincidan(
         },
     )
     assert verificado.status_code == 200, verificado.text
+    client.headers["X-Client-Token"] = verificado.json()["client_token"]
 
     # Sin `client_email`: el caso que el gate viejo rechazaba con `email=""`.
     sin_email = await client.post(
@@ -837,6 +840,7 @@ async def test_sin_contacto_verificado_la_sena_no_filtra_el_historial(
         },
     )
     assert verificado.status_code == 200, verificado.text
+    client.headers["X-Client-Token"] = verificado.json()["client_token"]
 
     preview = await _preview(client, store, service, 2, VICTIMA)
     assert _reasons(preview) == ["base"], (

@@ -292,6 +292,7 @@ async def _verificar_otp(client: AsyncClient, store: str) -> None:
         },
     )
     assert verificado.status_code == 200, verificado.text
+    client.headers["X-Client-Token"] = verificado.json()["client_token"]
 
 
 async def _preparar_reprogramacion(

@@ -52,6 +52,7 @@ async def _verificar_telefono(client: AsyncClient, store: str) -> None:
         },
     )
     assert verificado.status_code == 200, verificado.text
+    client.headers["X-Client-Token"] = verificado.json()["client_token"]
 
 
 async def _tienda_de_dia(client: AsyncClient, slug: str) -> tuple[str, str, str, str]:
