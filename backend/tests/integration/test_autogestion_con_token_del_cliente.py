@@ -35,6 +35,7 @@ from core.config import settings
 from core.security import create_access_token, decode_token
 from modules.appointments.model import Appointment
 from modules.otp.model import OtpVerification
+from modules.users.model import User, UserRole
 from modules.waitlist.model import WaitlistEntry
 from tests.integration.test_caracterizacion_alta_publica import _reserva, _Tienda
 from tests.integration.test_feature_flags_finance_and_public_privacy import (
@@ -424,6 +425,28 @@ async def test_con_su_token_lista_reprograma_y_cancela(
     cancelado = await _cancelar(client, segundo, TEL_A, token)
     assert cancelado.status_code == 200, cancelado.text
     assert cancelado.json()["status"] == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_si_la_tienda_cambia_el_email_de_la_ficha_el_token_deja_de_valer(
+    client: AsyncClient, test_session: AsyncSession
+) -> None:
+    """El token esta atado al email verificado: si la ficha cambia de email
+    despues de verificar, falla cerrado (revision del PR #183)."""
+    t = await _tienda(client, "tok-email-cambiado")
+    turno = await _reservar(client, t, TEL_A, "tok-email-cambiado-0001")
+    token = await _token(client, t, TEL_A)
+    cambio = await test_session.execute(
+        update(User)
+        .where(User.role == UserRole.CLIENT, User.phone == _digitos(TEL_A))
+        .values(email="nuevo-email@example.com")
+    )
+    assert cambio.rowcount == 1  # type: ignore[attr-defined]
+    await test_session.commit()
+
+    await _tres_rechazos(
+        client, test_session, t, turno, TEL_A, token, "tok-email-cambiado-r"
+    )
 
 
 # ---------------------------------------------------------------------------
