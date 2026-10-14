@@ -3,9 +3,9 @@ import type { ComponentProps } from 'react'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router'
 
-import { NetworkError, RateLimitError } from '@shared/errors'
 import { forgetClientToken, rememberClientToken } from '@application/services/clientToken'
 
+import { NetworkError, RateLimitError } from '@shared/errors'
 import { forgetOtpVerification, rememberOtpVerification } from '@shared/utils/otpSession'
 
 import { BookingWizardContainer } from './BookingWizardContainer'
