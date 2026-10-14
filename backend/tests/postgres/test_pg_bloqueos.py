@@ -52,6 +52,7 @@ async def test_reserva_y_bloqueo_concurrentes_no_dejan_un_turno_adentro(
                     "starts_at": (slot + timedelta(hours=intento)).isoformat(),
                     "client_name": "Carrera",
                     "client_phone": f"+54911555{intento:05d}",
+                    "client_email": f"c54911555{intento:05d}@example.com",
                     "accepts_terms": True,
                     "idempotency_key": f"pg-carrera-{intento:03d}",
                 },
@@ -147,6 +148,7 @@ async def _turnos_originales(
                 ).isoformat(),
                 "client_name": "Reprogramar",
                 "client_phone": phone,
+                "client_email": f"c{phone.lstrip('+')}@example.com",
                 "accepts_terms": True,
                 "idempotency_key": f"{prefijo}-original-{i:03d}",
             },
@@ -294,6 +296,7 @@ async def test_reprogramacion_del_cliente_y_bloqueo_concurrentes_no_dejan_un_tur
         },
     )
     assert verificado.status_code == 200, verificado.text
+    client.headers["X-Client-Token"] = verificado.json()["client_token"]
 
     async def reprogramar(turno: str, nuevo_inicio: datetime, i: int) -> Response:
         return await client.patch(

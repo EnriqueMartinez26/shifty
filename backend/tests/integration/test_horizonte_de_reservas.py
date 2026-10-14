@@ -187,6 +187,7 @@ async def _lista_de_espera(client: AsyncClient, slug: str) -> tuple[str, str]:
             "window_ends_at": (manana + timedelta(days=2)).isoformat(),
             "client_name": "En Espera",
             "client_phone": "+5491100001111",
+            "client_email": "c5491100001111@example.com",
         },
     )
     assert anotado.status_code == 201, anotado.text

@@ -71,6 +71,7 @@ async def _reserva(client: AsyncClient, slug: str) -> dict[str, Any]:
         ).isoformat(),
         "client_name": "Cliente Sin Link",
         "client_phone": "+5491122277766",
+        "client_email": "c5491122277766@example.com",
         "accepts_terms": True,
         "payment_method": "mercadopago",
         "idempotency_key": f"{slug}-0001",

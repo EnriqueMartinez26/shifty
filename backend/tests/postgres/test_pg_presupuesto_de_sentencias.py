@@ -490,6 +490,7 @@ async def test_los_endpoints_calientes_no_pasan_su_presupuesto(
                 "starts_at": tienda.slot_libre.isoformat(),
                 "client_name": "Cliente Presupuesto",
                 "client_phone": "+5491166600001",
+                "client_email": "c5491166600001@example.com",
                 "accepts_terms": True,
                 "idempotency_key": "presupuesto-reserva-1",
             },

@@ -231,7 +231,7 @@ async def test_la_reoferta_saltea_a_quien_no_tiene_email(
     ids: list[str] = []
     for nombre, telefono, email in (
         ("Lucia", "+5491155550121", "lucia-reoferta@example.com"),
-        ("Sin Email", "+5491155550122", None),
+        ("Sin Email", "+5491155550122", "sin-email-reoferta@example.com"),
         ("Marta", "+5491155550123", "marta-reoferta@example.com"),
     ):
         alta = await client.post(
@@ -247,6 +247,15 @@ async def test_la_reoferta_saltea_a_quien_no_tiene_email(
         )
         assert alta.status_code == 201, alta.text
         ids.append(str(alta.json()["public_id"]))
+    # Desde el 2026-10-14 el alta publica exige email (decision de Mateo); una
+    # entrada sin email es una anterior a ese cambio: se fuerza en la fila.
+    sin_email = (
+        await test_session.execute(
+            select(WaitlistEntry).where(WaitlistEntry.id == ids[1])
+        )
+    ).scalar_one()
+    sin_email.client_email = None
+    await test_session.commit()
     pid = await _reservar(client, store, service, staff, slot, "reoferta-sinmail1")
     cancelar = await client.patch(
         f"/appointments/{pid}/cancel", headers=auth_headers(token)

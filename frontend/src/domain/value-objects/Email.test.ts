@@ -16,6 +16,13 @@ describe('Email Value Object', () => {
     expect(() => Email.create('@example.com')).toThrow()
   })
 
+  it('isValid sigue el mismo criterio que create sin lanzar', () => {
+    expect(Email.isValid('  Lucia@Example.com ')).toBe(true)
+    expect(Email.isValid('')).toBe(false)
+    expect(Email.isValid('lucia@')).toBe(false)
+    expect(Email.isValid('lucia@example')).toBe(false)
+  })
+
   it('debe comparar emails', () => {
     const e1 = Email.create('a@a.com')
     const e2 = Email.create('A@A.COM')

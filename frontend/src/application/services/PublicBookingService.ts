@@ -82,7 +82,8 @@ export interface PublicBookingPayload {
   notes?: string
   idempotency_key: string
   client_name: string
-  client_email?: string
+  /** Obligatorio en el portal (decision de Mateo, 2026-10-14). */
+  client_email: string
   client_phone: string
   custom_fields?: Record<string, string>
   promotion_code?: string
@@ -183,7 +184,7 @@ export interface WaitlistJoinPayload {
   window_ends_at: string
   client_name: string
   client_phone: string
-  client_email?: string | null
+  client_email: string
   notes?: string | null
 }
 

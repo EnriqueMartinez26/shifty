@@ -980,6 +980,7 @@ async def _verificar_otp(m: Mundo, a: Actor, t: Tienda) -> Llamada:
 
 
 async def _reserva_publica(m: Mundo, a: Actor, t: Tienda) -> Llamada:
+    telefono = m.telefono_nuevo()
     return Llamada(
         "POST",
         "/public/appointments",
@@ -989,7 +990,8 @@ async def _reserva_publica(m: Mundo, a: Actor, t: Tienda) -> Llamada:
             "staff_id": t.staff,
             "starts_at": m.slot(t).isoformat(),
             "client_name": "Cliente Portal",
-            "client_phone": m.telefono_nuevo(),
+            "client_phone": telefono,
+            "client_email": m.email_de(telefono),
             "accepts_terms": True,
             "idempotency_key": m.unico("clave-portal"),
         },
@@ -1032,6 +1034,7 @@ async def _reprogramar_mi_turno(m: Mundo, a: Actor, t: Tienda) -> Llamada:
 
 async def _anotarse(m: Mundo, a: Actor, t: Tienda) -> Llamada:
     inicio = m.slot(t)
+    telefono = m.telefono_nuevo()
     return Llamada(
         "POST",
         "/public/waitlist",
@@ -1042,7 +1045,8 @@ async def _anotarse(m: Mundo, a: Actor, t: Tienda) -> Llamada:
             "window_starts_at": inicio.isoformat(),
             "window_ends_at": (inicio + timedelta(minutes=60)).isoformat(),
             "client_name": "Cliente Espera",
-            "client_phone": m.telefono_nuevo(),
+            "client_phone": telefono,
+            "client_email": m.email_de(telefono),
         },
     )
 

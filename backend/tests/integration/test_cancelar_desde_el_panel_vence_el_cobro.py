@@ -185,6 +185,7 @@ async def _con_sena(client: AsyncClient, t: _Tienda, hora: int) -> str:
             ).isoformat(),
             "client_name": "Cliente Sena",
             "client_phone": f"+54911556{hora:05d}",
+            "client_email": f"c54911556{hora:05d}@example.com",
             "accepts_terms": True,
             "payment_method": "mercadopago",
             "idempotency_key": f"d2-sena-{t.store}-{hora}",

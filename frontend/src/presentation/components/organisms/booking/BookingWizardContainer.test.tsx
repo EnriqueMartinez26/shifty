@@ -380,6 +380,10 @@ describe('BookingWizardContainer', () => {
       fireEvent.change(screen.getByPlaceholderText('PREFIJO + NUM'), {
         target: { value: '+5491155550101' }
       })
+      // Obligatorio en el portal (decision de Mateo, 2026-10-14).
+      fireEvent.change(screen.getByPlaceholderText('juan@email.com'), {
+        target: { value: 'lucia@example.com' }
+      })
       fireEvent.click(screen.getByRole('checkbox'))
       await enviar()
     }
@@ -425,6 +429,7 @@ describe('BookingWizardContainer', () => {
       expect(crudo).not.toContain('Lucia')
       expect(crudo).not.toContain('5491155550101')
       expect(crudo).not.toContain('1155550101')
+      expect(crudo).not.toContain('lucia@example.com')
       expect(JSON.parse(crudo)).toEqual({
         fpHash: expect.stringMatching(/^[0-9a-f]{64}$/),
         key: claveDelIntento(0)

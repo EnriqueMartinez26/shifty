@@ -498,6 +498,7 @@ async def test_la_reserva_cierra_la_entrada_de_la_lista_de_espera(
             "window_ends_at": (t.slot + timedelta(hours=2)).isoformat(),
             "client_name": "Cliente Caracterizado",
             "client_phone": "+5491155558001",
+            "client_email": "c5491155558001@example.com",
         },
     )
     assert alta.status_code == 201, alta.text

@@ -19,9 +19,11 @@ jest.mock('@presentation/hooks/usePublic', () => ({
   usePublicServices: (...args: unknown[]) => mockServices(...args)
 }))
 
+// El portal exige email (decision de Mateo, 2026-10-14): el cliente de los
+// tests lo trae completo, salvo los que prueban justamente su falta.
 const cliente = (patch: Partial<BookingClientData> = {}): BookingClientData => ({
   name: '',
-  email: '',
+  email: 'lucia@example.com',
   phone: '',
   notes: '',
   customFields: {},
@@ -142,7 +144,7 @@ describe('BookingStepConfirmation', () => {
       expect(screen.getByPlaceholderText('PREFIJO + NUM')).toBeInTheDocument()
     })
 
-    it('reservar queda deshabilitado hasta tener nombre, telefono y terminos', () => {
+    it('reservar queda deshabilitado hasta tener nombre, telefono, email y terminos', () => {
       const { rerender } = render(<BookingStepConfirmation {...props()} />)
       aceptarTerminos()
       expect(botonReservar()).toBeDisabled()
@@ -199,6 +201,46 @@ describe('BookingStepConfirmation', () => {
       const aviso = (await screen.findByText(/Revisá el teléfono/)).closest('[role="alert"]')
       expect(aviso).toHaveTextContent(/al menos 6 dígitos/)
       expect(aviso).not.toHaveTextContent(/ocupado/)
+    })
+
+    // 2026-10-14: un cliente reservo sin email (el campo decia "Opcional") y
+    // despues no pudo entrar a "Mis turnos", que se abre con un codigo que
+    // sale solo por email. Decision de Mateo: el email es obligatorio.
+    it('el email es obligatorio y dice para que se usa', () => {
+      render(
+        <BookingStepConfirmation
+          {...props({
+            bookingState: estado({
+              client: cliente({ name: 'Lucia', phone: '1155550101', email: '' })
+            })
+          })}
+        />
+      )
+      aceptarTerminos()
+
+      expect(botonReservar()).toBeDisabled()
+      expect(screen.queryByText(/Email \(Opcional\)/i)).not.toBeInTheDocument()
+      expect(screen.getByPlaceholderText('juan@email.com')).toHaveAttribute('required')
+      expect(
+        screen.getByText('Te enviamos la confirmación y el acceso a tus turnos.')
+      ).toBeInTheDocument()
+    })
+
+    it('un email mal escrito bloquea la reserva y lo dice junto al campo', () => {
+      render(
+        <BookingStepConfirmation
+          {...props({
+            bookingState: estado({
+              client: cliente({ name: 'Lucia', phone: '1155550101', email: 'lucia@' })
+            })
+          })}
+        />
+      )
+      aceptarTerminos()
+
+      expect(botonReservar()).toBeDisabled()
+      expect(screen.getByPlaceholderText('juan@email.com')).toHaveAttribute('aria-invalid', 'true')
+      expect(screen.getByText('Revisá el email: no parece válido.')).toBeInTheDocument()
     })
 
     it('un campo personalizado obligatorio vacio bloquea la reserva', () => {

@@ -126,6 +126,7 @@ async def _reservas_con_sena_pendiente(
                 ).isoformat(),
                 "client_name": f"Cliente {i}",
                 "client_phone": f"+54911555{i:05d}",
+                "client_email": f"c54911555{i:05d}@example.com",
                 "payment_method": "mercadopago",
                 "accepts_terms": True,
                 "idempotency_key": f"{slug}-{i:06d}",

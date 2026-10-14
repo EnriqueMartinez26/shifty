@@ -394,8 +394,13 @@ async def test_el_cupo_se_ofrece_solo_a_quien_tiene_email_entregable(
         slot,
         client_name="Sin Email",
         client_phone="+5491155550111",
-        client_email=None,
+        client_email="sin-email@example.com",
     )
+    # Desde el 2026-10-14 el alta publica exige email (decision de Mateo); una
+    # entrada sin email es una anterior a ese cambio: se fuerza en la fila.
+    fila_sin_email = await _entrada(test_session, sin_email)
+    fila_sin_email.client_email = None
+    await test_session.commit()
     tecnico = await _anotar(
         client,
         store,
@@ -463,7 +468,13 @@ async def test_sin_ninguna_entrada_con_email_no_hay_oferta_y_avisa_al_duenio(
     buzon = Buzon()
     monkeypatch.setattr(tasks, "_send_email", buzon)
     store, token, service, staff, slot = await _tienda(client, "sin-email-solo")
-    sin_email = await _anotar(client, store, service, slot, client_email=None)
+    sin_email = await _anotar(
+        client, store, service, slot, client_email="sin-email@example.com"
+    )
+    # Una entrada anterior al 2026-10-14, cuando el email no era obligatorio.
+    fila = await _entrada(test_session, sin_email)
+    fila.client_email = None
+    await test_session.commit()
 
     pid = await _reservar(client, store, service, staff, slot, "sin-email-0002")
     res = await client.patch(f"/appointments/{pid}/cancel", headers=auth_headers(token))

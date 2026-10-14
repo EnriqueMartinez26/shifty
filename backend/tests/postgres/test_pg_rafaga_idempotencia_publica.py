@@ -82,6 +82,7 @@ async def test_la_rafaga_con_la_misma_clave_deja_el_resultado_en_redis(
         "starts_at": slot.isoformat(),
         "client_name": "Cliente Rafaga",
         "client_phone": "+5491155551234",
+        "client_email": "c5491155551234@example.com",
         "accepts_terms": True,
         "idempotency_key": "pg-idem-release-0001",
     }

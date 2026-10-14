@@ -323,6 +323,7 @@ async def test_portal_publico_con_la_tienda_suspendida(
             "starts_at": (inicio + timedelta(hours=2)).isoformat(),
             "client_name": "Otra",
             "client_phone": "+5491155550978",
+            "client_email": "c5491155550978@example.com",
             "accepts_terms": True,
             "idempotency_key": "susp-portal-0002",
         },
@@ -338,6 +339,7 @@ async def test_portal_publico_con_la_tienda_suspendida(
             "window_ends_at": (inicio + timedelta(hours=4)).isoformat(),
             "client_name": "Espera",
             "client_phone": "+5491155550979",
+            "client_email": "c5491155550979@example.com",
         },
     )
     assert lista.status_code == 404, lista.text
@@ -422,6 +424,7 @@ async def test_tienda_suspendida_cancela_y_libera_turnos_ya_tomados(
             "starts_at": _inicio(12),
             "client_name": "Cliente Sena",
             "client_phone": "+5491155560001",
+            "client_email": "c5491155560001@example.com",
             "accepts_terms": True,
             "payment_method": "mercadopago",
             "idempotency_key": "susp-cancel-sena-01",

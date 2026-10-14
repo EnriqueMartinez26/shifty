@@ -156,6 +156,7 @@ async def _cobro_pendiente(
             ).isoformat(),
             "client_name": "Cliente F121",
             "client_phone": "+5491155512121",
+            "client_email": "c5491155512121@example.com",
             "payment_method": "mercadopago",
             "accepts_terms": True,
             "idempotency_key": f"{slug}-reserva",

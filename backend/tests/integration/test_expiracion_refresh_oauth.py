@@ -81,6 +81,7 @@ async def _tienda_con_turno_vencido(
             ).isoformat(),
             "client_name": "Cliente MP",
             "client_phone": f"+549115558{len(slug):04d}",
+            "client_email": f"c549115558{len(slug):04d}@example.com",
             "payment_method": "mercadopago",
             "accepts_terms": True,
             "idempotency_key": f"{slug}-reserva",

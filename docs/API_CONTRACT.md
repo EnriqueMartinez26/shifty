@@ -3924,7 +3924,7 @@ Type: `enum("efectivo", "transferencia", "mercadopago", "otro")`
 | `idempotency_key` | string \| null | no | minLength=10, maxLength=128 |
 | `client_name` | string | yes | minLength=1, maxLength=100 |
 | `client_phone` | string | yes | minLength=6, maxLength=30 |
-| `client_email` | string \| null | no | maxLength=255, format="email" |
+| `client_email` | string | yes | maxLength=255, format="email" |
 | `custom_fields` | object<string, string> | no |  |
 | `promotion_code` | string \| null | no | minLength=3, maxLength=30, pattern="^[A-Za-z0-9_-]+$" |
 | `payment_method` | string | no | pattern="^(auto\|manual\|mercadopago)$", default="manual" |
@@ -4850,10 +4850,10 @@ Type: `enum("admin", "staff", "receptionist", "client")`
 | `window_ends_at` | string | yes | format="date-time" |
 | `client_name` | string | yes | minLength=1, maxLength=100 |
 | `client_phone` | string | yes | minLength=6, maxLength=30 |
-| `client_email` | string \| null | no | maxLength=255, format="email" |
+| `client_email` | string | yes | maxLength=255, format="email" |
 | `notes` | string \| null | no | maxLength=300 |
 | `accepts_terms` | boolean \| null | no |  |
 | `terms_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 | `privacy_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 
-Generado desde app.openapi() el 2026-10-14, commit 8353f409
+Generado desde app.openapi() el 2026-10-14, commit 8df17468

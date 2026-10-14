@@ -63,6 +63,7 @@ async def _reserva(
             ).isoformat(),
             "client_name": f"Cliente {clave}",
             "client_phone": f"+54911000{len(clave):04d}{ord(clave[-1]):03d}",
+            "client_email": f"c54911000{len(clave):04d}{ord(clave[-1]):03d}@example.com",
             "accepts_terms": True,
             "idempotency_key": f"fiado-turno-{clave}",
         },

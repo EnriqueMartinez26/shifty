@@ -1,8 +1,9 @@
 from datetime import datetime, timezone
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 import re
 
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
+from pydantic_core import PydanticCustomError
 
 from core.utils import MAX_BOOKING_AHEAD, now_utc, within_max_ahead
 from modules.legal.versions import LegalVersion
@@ -80,6 +81,28 @@ class PublicStaffResponse(BaseModel):
         from_attributes = True
 
 
+# El portal exige email (decision de Mateo, 2026-10-14): "Mis turnos" entra
+# con un codigo que sale SOLO por email, y sin email la ficha quedaba con el
+# tecnico ``{tel}@store{id}.noreply``, que no recibe nada. El alta del panel
+# sigue sin pedirlo: la tienda puede no tenerlo.
+PUBLIC_BOOKING_EMAIL_REQUIRED = (
+    "Para reservar hace falta un email: ahí te enviamos la confirmación "
+    "y el acceso a tus turnos."
+)
+
+
+def require_client_email(data: Any, message: str) -> Any:
+    """Antes de validar el campo: sin email (ausente, nulo o en blanco) el 422
+    lleva un mensaje claro y neutro en vez del "Field required" de Pydantic
+    (regla 20). Un email presente pero invalido sigue el camino de ``EmailStr``.
+    """
+    if isinstance(data, dict):
+        email = data.get("client_email")
+        if email is None or (isinstance(email, str) and not email.strip()):
+            raise PydanticCustomError("client_email_required", message)
+    return data
+
+
 class PublicBookingCreate(BaseModel):
     store_public_id: Optional[str] = Field(
         None, min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN
@@ -93,7 +116,7 @@ class PublicBookingCreate(BaseModel):
     idempotency_key: Optional[str] = Field(default=None, min_length=10, max_length=128)
     client_name: str = Field(..., min_length=1, max_length=100)
     client_phone: str = Field(..., min_length=6, max_length=30)
-    client_email: Optional[EmailStr] = Field(default=None, max_length=255)
+    client_email: EmailStr = Field(..., max_length=255)
     custom_fields: dict[str, str] = Field(default_factory=dict, max_length=12)
     promotion_code: str | None = Field(
         default=None, min_length=3, max_length=30, pattern=r"^[A-Za-z0-9_-]+$"
@@ -110,6 +133,11 @@ class PublicBookingCreate(BaseModel):
     # vienen tienen que ser las vigentes (409 LEGAL_VERSION_MISMATCH).
     terms_version: LegalVersion | None = None
     privacy_version: LegalVersion | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def email_is_required(cls, data: Any) -> Any:
+        return require_client_email(data, PUBLIC_BOOKING_EMAIL_REQUIRED)
 
     @field_validator("client_phone")
     @classmethod

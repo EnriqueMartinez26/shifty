@@ -443,6 +443,7 @@ async def _anotarse(client: AsyncClient, t: _Tienda, telefono: str) -> str:
             "window_ends_at": (inicio + timedelta(hours=1)).isoformat(),
             "client_name": "Cliente Espera",
             "client_phone": telefono,
+            "client_email": _email(t, telefono),
         },
     )
     assert res.status_code == 201, res.text

@@ -43,6 +43,7 @@ def _reserva(
         "starts_at": slot.isoformat(),
         "client_name": "Clara Consentimiento",
         "client_phone": "+5491155557001",
+        "client_email": "c5491155557001@example.com",
         "accepts_terms": True,
         "idempotency_key": key,
     }
@@ -234,6 +235,7 @@ def test_las_versiones_no_aceptan_cualquier_texto() -> None:
         "starts_at": (datetime.now(timezone.utc) + timedelta(days=1)).isoformat(),
         "client_name": "X",
         "client_phone": "5491155557001",
+        "client_email": "c5491155557001@example.com",
         "accepts_terms": True,
     }
     for malo in ("a" * 21, "2026 09 25", "v1\x00"):
