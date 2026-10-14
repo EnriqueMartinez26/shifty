@@ -4,6 +4,7 @@ import { CalendarClock, Loader2, XCircle } from 'lucide-react'
 
 import { isBookingStatus, type BookingStatusValue } from '@domain/value-objects/BookingStatus'
 
+import { forgetClientToken } from '@application/services/clientToken'
 import type { ClientAppointmentItem, PublicStore } from '@application/services/PublicBookingService'
 
 import {
@@ -50,6 +51,10 @@ export const ClientAppointmentsContainer: React.FC<ClientAppointmentsContainerPr
   const [phone, setPhone] = useState<string | null>(null)
   const [message, setMessage] = useState('')
   const [rescheduling, setRescheduling] = useState<{ id: string } | null>(null)
+  // 2026-10-14: cancelar o reprogramar rebotaron con 403
+  // OTP_VERIFICATION_REQUIRED (el token del cliente vencio o se perdio): se
+  // vuelve a la puerta del codigo.
+  const [otpRejected, setOtpRejected] = useState(false)
   const appointments = usePublicClientAppointments(store.public_id, phone ?? '', Boolean(phone))
   const code = getErrorCode(appointments.error)
   const status = getHttpStatus(appointments.error)
@@ -64,7 +69,7 @@ export const ClientAppointmentsContainer: React.FC<ClientAppointmentsContainerPr
     )
   }
 
-  if (code === 'OTP_VERIFICATION_REQUIRED') {
+  if (code === 'OTP_VERIFICATION_REQUIRED' || otpRejected) {
     // FF-05 (2026-09-30): la verificacion recordada (la del wizard, 30 min)
     // no alcanza si la ficha no tiene ese email o ya vencio en el backend: el
     // GET respondia 403 y el atajo de la puerta volvia a entrar con ella, en
@@ -79,6 +84,7 @@ export const ClientAppointmentsContainer: React.FC<ClientAppointmentsContainerPr
         notice={`Para ver tus turnos verificá el email que tenés registrado en ${store.name}. Pedí un código nuevo.`}
         initialPhone={phone}
         onVerified={(p) => {
+          setOtpRejected(false)
           setPhone(p)
           void appointments.refetch()
         }}
@@ -88,6 +94,15 @@ export const ClientAppointmentsContainer: React.FC<ClientAppointmentsContainerPr
 
   // 403 y 404 no se arreglan reintentando; 429, 503 y el resto quiza si.
   const reintentable = status !== 403 && status !== 404
+
+  /** True si la accion rebota por la verificacion: vuelve a pedir el codigo. */
+  const volverAVerificar = (error: unknown): boolean => {
+    if (getErrorCode(error) !== 'OTP_VERIFICATION_REQUIRED') return false
+    forgetClientToken()
+    setRescheduling(null)
+    setOtpRejected(true)
+    return true
+  }
 
   // Un toque cancelaba sin preguntar (FF-07): se confirma con el dialogo propio.
   const cancelar = async (item: ClientAppointmentItem) => {
@@ -106,6 +121,7 @@ export const ClientAppointmentsContainer: React.FC<ClientAppointmentsContainerPr
       await cancelAppointment.mutateAsync({ publicId: item.public_id, phone })
       setMessage('Cancelamos tu turno y le avisamos a la tienda.')
     } catch (error: unknown) {
+      if (volverAVerificar(error)) return
       setMessage(getErrorMessage(error, 'No pudimos cancelar el turno'))
       // La lista quedo vieja (la tienda ya lo cancelo, o tiene un cobro vivo):
       // se recarga para no seguir ofreciendo la accion.
@@ -138,6 +154,7 @@ export const ClientAppointmentsContainer: React.FC<ClientAppointmentsContainerPr
       setRescheduling(null)
       setMessage('Listo, movimos tu turno.')
     } catch (error: unknown) {
+      if (volverAVerificar(error)) return
       // La grilla queda abierta para elegir otro horario; el hook ya la
       // vuelve a pedir. Si el turno cambio de estado, tambien la lista.
       // BOOKING_NOTICE_REQUIRED muestra el texto del servidor, que dice las
@@ -168,7 +185,10 @@ export const ClientAppointmentsContainer: React.FC<ClientAppointmentsContainerPr
         </h2>
         <button
           type="button"
-          onClick={() => setPhone(null)}
+          onClick={() => {
+            forgetClientToken()
+            setPhone(null)
+          }}
           className="px-3 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest"
           style={buttonStyles2000s.default}
         >

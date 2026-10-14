@@ -4,6 +4,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router'
 
 import { NetworkError, RateLimitError } from '@shared/errors'
+import { forgetOtpVerification, rememberOtpVerification } from '@shared/utils/otpSession'
 
 import { BookingWizardContainer } from './BookingWizardContainer'
 import { EMPTY_PRESELECT, initialStepFor } from './deepLink'
@@ -122,6 +123,8 @@ describe('BookingWizardContainer', () => {
     mockCreateBooking.mockReset()
     mockStaff.mockReturnValue({ data: [], isLoading: false })
     mockAvailability.mockReturnValue({ data: [slot], isLoading: false })
+    // La verificacion recordada vive en memoria (2026-10-14): se olvida entre tests.
+    forgetOtpVerification('tienda')
     window.sessionStorage.clear()
   })
 
@@ -303,10 +306,7 @@ describe('BookingWizardContainer', () => {
 
   it('un telefono verificado hace menos de 30 minutos en este dispositivo no pide otro codigo', async () => {
     mockServices.mockReturnValue({ data: [servicio('a')], isLoading: false })
-    window.sessionStorage.setItem(
-      'shifty:otp:tienda',
-      JSON.stringify({ phone: '5491155550101', verifiedAt: new Date().toISOString() })
-    )
+    rememberOtpVerification('tienda', '5491155550101', new Date().toISOString())
     render(<WizardEnRuta store={tienda(true)} />)
 
     await waitFor(() => expect(screen.getByText(HORARIO)).toBeInTheDocument())

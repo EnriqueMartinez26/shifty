@@ -9,7 +9,11 @@ import { InternalServerError } from '@shared/errors/InternalServerError'
 import { NotFoundError } from '@shared/errors/NotFoundError'
 import { RateLimitError } from '@shared/errors/RateLimitError'
 import { ServiceUnavailableError } from '@shared/errors/ServiceUnavailableError'
-import { isOtpStillValid, rememberOtpVerification } from '@shared/utils/otpSession'
+import {
+  forgetOtpVerification,
+  isOtpStillValid,
+  rememberOtpVerification
+} from '@shared/utils/otpSession'
 
 import { ClientAppointmentsContainer } from './ClientAppointmentsContainer'
 
@@ -93,6 +97,7 @@ describe('ClientAppointmentsContainer', () => {
       error: null,
       refetch: mockRefetch
     })
+    forgetOtpVerification('sol')
     try {
       window.sessionStorage.clear()
     } catch {
@@ -554,5 +559,58 @@ describe('ClientAppointmentsContainer', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Reintentar' }))
       expect(mockRefetch).toHaveBeenCalledTimes(1)
     })
+  })
+})
+
+describe('ClientAppointmentsContainer: el token del cliente vencio (2026-10-14)', () => {
+  // El backend ata cancelar y reprogramar al token que devolvio la
+  // verificacion (X-Client-Token, en memoria). Si vence o se pierde, la
+  // accion rebota con 403 OTP_VERIFICATION_REQUIRED: se vuelve a la puerta
+  // del codigo en vez de mostrar un error sin salida.
+  const rechazo = new ForbiddenError('Se requiere validar OTP antes de autogestionar turnos', {
+    errorCode: 'OTP_VERIFICATION_REQUIRED',
+    statusCode: 403
+  })
+  const aviso =
+    'Para ver tus turnos verificá el email que tenés registrado en Peluqueria Sol. Pedí un código nuevo.'
+
+  beforeEach(() => {
+    forgetOtpVerification('sol')
+    mockCancel.mockReset()
+    mockRefetch.mockReset()
+    mockRequestOtp.mockReset().mockResolvedValue({ expires_at: '', debug_code: '' })
+    mockVerifyOtp
+      .mockReset()
+      .mockResolvedValue({ ok: true, phone: '1155550101', verified_at: new Date().toISOString() })
+    mockAppointments.mockReset().mockReturnValue({
+      data: { client_name: 'Yo', client_phone: '1155550101', appointments: [turno] },
+      isLoading: false,
+      isError: false,
+      refetch: mockRefetch
+    })
+  })
+
+  it('un 403 al cancelar vuelve a pedir el codigo y, verificado, recarga la lista', async () => {
+    mockCancel.mockRejectedValue(rechazo)
+    render(<ClientAppointmentsContainer store={store} />)
+    await entrar()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancelar' }))
+    const dialogo = await screen.findByRole('alertdialog')
+    fireEvent.click(within(dialogo).getByRole('button', { name: 'Sí, cancelar turno' }))
+
+    expect(await screen.findByText(aviso)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Salir' })).not.toBeInTheDocument()
+    expect(isOtpStillValid('sol', '1155550101')).toBe(true)
+
+    // Pedir el codigo no entra por el atajo: manda uno nuevo de verdad.
+    fireEvent.change(screen.getByLabelText('Tu email'), { target: { value: 'yo@example.com' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Enviarme el código' }))
+    fireEvent.change(await screen.findByLabelText('Código'), { target: { value: '654321' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Ver mis turnos' }))
+
+    await screen.findByRole('button', { name: 'Salir' })
+    expect(mockRequestOtp).toHaveBeenCalledTimes(2)
+    expect(mockRefetch).toHaveBeenCalledTimes(1)
   })
 })

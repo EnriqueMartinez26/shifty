@@ -1,11 +1,16 @@
 /**
- * Ventana de verificacion OTP recordada en el dispositivo.
+ * Ventana de verificacion OTP recordada mientras la pagina siga abierta.
  *
- * El backend acepta un telefono verificado en los ultimos 30 minutos
- * (``is_recently_verified``), pero el front volvia a pedir el codigo en cada
- * corrida del wizard y agotaba el presupuesto de 5 pedidos por hora ante
- * cualquier reintento. Se guarda {telefono, verificadoEn} en sessionStorage,
- * por tienda; se lee con try/catch porque el storage puede no existir.
+ * El backend acepta un telefono verificado en los ultimos 30 minutos, pero el
+ * front volvia a pedir el codigo en cada corrida del wizard y agotaba el
+ * presupuesto de 5 pedidos por hora ante cualquier reintento. Se recuerda
+ * {telefono, verificadoEn} por tienda.
+ *
+ * 2026-10-14: SOLO en memoria. El backend ahora exige ademas el token del
+ * cliente que devuelve la verificacion (X-Client-Token), y ese token vive en
+ * memoria (regla 28, `PublicBookingService`). Recordar la verificacion en
+ * sessionStorage hacia entrar por el atajo despues de recargar, sin token, y
+ * rebotar con 403: recargar la pagina pide un codigo nuevo.
  */
 
 const OTP_WINDOW_MINUTES = 30
@@ -15,7 +20,7 @@ interface OtpSession {
   verifiedAt: string
 }
 
-const key = (storeSlug: string): string => `shifty:otp:${storeSlug}`
+const sessions = new Map<string, OtpSession>()
 
 /**
  * Solo los digitos del telefono. El backend devuelve el verificado en formato
@@ -29,37 +34,22 @@ export const rememberOtpVerification = (
   phone: string,
   verifiedAt: string
 ): void => {
-  try {
-    const session: OtpSession = { phone: phoneDigits(phone), verifiedAt }
-    window.sessionStorage.setItem(key(storeSlug), JSON.stringify(session))
-  } catch {
-    // sin storage (privado, bloqueado): simplemente no se recuerda
-  }
+  sessions.set(storeSlug, { phone: phoneDigits(phone), verifiedAt })
 }
 
 export const forgetOtpVerification = (storeSlug: string): void => {
-  try {
-    window.sessionStorage.removeItem(key(storeSlug))
-  } catch {
-    // idem
-  }
+  sessions.delete(storeSlug)
 }
 
-/** True si el telefono fue verificado en este dispositivo dentro de la ventana. */
+/** True si el telefono fue verificado en esta pagina dentro de la ventana. */
 export const isOtpStillValid = (
   storeSlug: string,
   phone: string,
   now: Date = new Date()
 ): boolean => {
-  try {
-    const raw = window.sessionStorage.getItem(key(storeSlug))
-    if (!raw) return false
-    const session = JSON.parse(raw) as Partial<OtpSession>
-    if (!session.phone || !session.verifiedAt || session.phone !== phoneDigits(phone)) return false
-    const verifiedAt = new Date(session.verifiedAt).getTime()
-    if (Number.isNaN(verifiedAt)) return false
-    return now.getTime() - verifiedAt < OTP_WINDOW_MINUTES * 60_000
-  } catch {
-    return false
-  }
+  const session = sessions.get(storeSlug)
+  if (!session || session.phone !== phoneDigits(phone)) return false
+  const verifiedAt = new Date(session.verifiedAt).getTime()
+  if (Number.isNaN(verifiedAt)) return false
+  return now.getTime() - verifiedAt < OTP_WINDOW_MINUTES * 60_000
 }

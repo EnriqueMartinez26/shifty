@@ -1,7 +1,11 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 
 import { RateLimitError } from '@shared/errors'
-import { isOtpStillValid, rememberOtpVerification } from '@shared/utils/otpSession'
+import {
+  forgetOtpVerification,
+  isOtpStillValid,
+  rememberOtpVerification
+} from '@shared/utils/otpSession'
 
 import { ClientOtpGate } from './ClientOtpGate'
 
@@ -21,6 +25,7 @@ describe('ClientOtpGate', () => {
     mockRequestOtp.mockReset().mockResolvedValue({ expires_at: '', debug_code: '' })
     mockVerifyOtp.mockReset()
     try {
+      forgetOtpVerification('sol')
       window.sessionStorage.clear()
     } catch {
       // sin storage: la puerta igual funciona
@@ -106,6 +111,7 @@ describe('ClientOtpGate en el celular (F4-11, J7)', () => {
     jest.useFakeTimers()
     mockRequestOtp.mockReset().mockResolvedValue({ ok: true, expires_at: '' })
     mockVerifyOtp.mockReset()
+    forgetOtpVerification('sol')
     window.sessionStorage.clear()
   })
   afterEach(() => jest.useRealTimers())
