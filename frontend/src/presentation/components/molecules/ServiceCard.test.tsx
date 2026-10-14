@@ -130,4 +130,13 @@ describe('ServiceCard', () => {
     const { queryByText } = renderCard(true)
     expect(queryByText(/Sin profesionales asignados/)).not.toBeInTheDocument()
   })
+
+  // 2026-10-14: una tarjeta con botones no se escala. Al apretar, `active:scale`
+  // la achica hacia el centro y corre los botones: el mouseup cae afuera y el
+  // click se pierde (mismo bug que la tarjeta de la agenda del dia).
+  it('la tarjeta no se escala al pasar ni al apretar', () => {
+    const { getByTestId } = renderCard(true)
+    const tarjeta = getByTestId('service-card')
+    expect(Array.from(tarjeta.classList).filter((name) => /(^|:)-?scale-/.test(name))).toEqual([])
+  })
 })
