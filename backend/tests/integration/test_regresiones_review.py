@@ -153,7 +153,7 @@ async def test_borrar_un_bloqueo_no_ofrece_por_mail_un_horario_fuera_de_grilla(
 
     entrada = (await test_session.execute(select(WaitlistEntry))).scalar_one()
     assert entrada.status == "waiting"
-    assert not any(a.startswith("Se libero un turno") for _t, a, _c in buzon.enviados)
+    assert not any(a.startswith("Se liberó un turno") for _t, a, _c in buzon.enviados)
 
 
 @pytest.mark.asyncio
@@ -181,7 +181,7 @@ async def test_reprogramar_desde_el_panel_le_avisa_al_cliente(
 
     aviso = next(e for e in buzon.enviados if e[1].startswith("Te movimos el turno"))
     assert aviso[0] == "titular@example.com"
-    assert "movio tu turno" in aviso[2]
+    assert "movió tu turno" in aviso[2]
 
 
 @pytest.mark.asyncio

@@ -3,7 +3,7 @@
 Auditoria 2 (catalogo, 2026-09-20). ``matching_entries`` unia ``Service`` sin
 mirar ``is_active``, asi que un servicio borrado (baja logica:
 ``ServiceRepository.soft_delete``) seguia generando ofertas. El cliente
-recibia el mail "Se libero un turno", entraba al portal y el alta le
+recibia el mail "Se liberó un turno", entraba al portal y el alta le
 respondia 404 (``get_service_by_public_id`` exige ``Service.is_active``):
 encima la oferta vencia sola y le gastaba una de las ``MAX_LAPSED_OFFERS``
 que tiene antes de que su entrada expire.
@@ -55,7 +55,7 @@ async def test_un_servicio_borrado_no_genera_ofertas(
     assert (await _entrada(test_session, entrada)).status == "waiting"
     assert (await _entrada(test_session, entrada)).lapsed_offers == 0
     nuevos = buzon.enviados[mails_antes:]
-    assert not [e for e in nuevos if e[1].startswith("Se libero un turno")]
+    assert not [e for e in nuevos if e[1].startswith("Se liberó un turno")]
 
     # Por que importaba: ese mail llevaba a un alta que responde 404.
     reserva = await client.post(
