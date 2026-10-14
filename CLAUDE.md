@@ -293,8 +293,13 @@ Una instrucción en lenguaje natural no es una garantía.
    de idempotencia en otro lado.
 7. **Webhooks de MP**: HMAC + ventana de antigüedad + idempotencia por
    `event_id` + verificar collector y monto (`payments/router.py`,
-   `processing.py`). Del cuerpo, la firma cubre solo `data.id`: a MP se le
-   consulta SOLO ese id, y el estado y todo lo que valida la integridad
+   `processing.py`). Una notificación que se declara de otro tema (ningún
+   `topic`/`type` es `payment` ni hay `action` `payment.*`: el IPN de
+   `merchant_order`, `topic_merchant_order_wh`) responde 200 `ignored` sin
+   firma, sin base y sin consultar a MP; una de pago, o sin tema, sin firma
+   válida sigue rechazada (`router._tema_ajeno_a_pagos`, 2026-10-14,
+   `test_webhook_ignora_lo_que_no_es_un_pago.py`). Del cuerpo, la firma
+   cubre solo `data.id`: a MP se le consulta SOLO ese id, y el estado y todo lo que valida la integridad
    salen SOLO de `GET /v1/payments/{id}`; sin respuesta de MP el evento
    queda en el inbox sin aplicar. Un `approved` sin importe falla cerrado;
    sin `collector_id` falla si la tienda tiene `oauth_user_id`, y en
