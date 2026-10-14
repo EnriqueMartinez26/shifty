@@ -133,11 +133,20 @@ export const StaffColumn: React.FC<StaffColumnProps> = ({
       // del telefono un turno corto no entra, y un alto fijo con scroll propio
       // las escondia (revision de la PR #129). Si al crecer tapa al turno de
       // abajo, tocarla o enfocarla la trae al frente.
+      //
+      // Sin `scale` en la tarjeta (produccion, 2026-10-14): tiene botones
+      // adentro. Con un solo profesional mide ~1000 px y `active:scale-95` la
+      // achicaba hacia el centro al apretar; los botones, pegados a la
+      // izquierda, se corrian ~25 px, el mouseup caia afuera y el navegador no
+      // disparaba el click (Cancelar, Reprogramar y WhatsApp no hacian nada).
+      // La marca es un contorno, que no mueve nada; `outline` y no `shadow` o
+      // `ring` porque el `boxShadow` en linea los pisaria. Un boton que se
+      // escala a si mismo no tiene este problema: el puntero sigue adentro.
       return (
         <div
           key={card.id}
           data-appointment-card
-          className="absolute left-2 right-2 rounded-[6px] p-3 border border-l-[5px] transition-all hover:scale-[1.02] hover:z-20 focus-within:z-20 active:scale-95 cursor-pointer flex flex-col justify-between gap-1"
+          className="absolute left-2 right-2 rounded-[6px] p-3 border border-l-[5px] transition-colors hover:z-20 focus-within:z-20 hover:outline-2 hover:outline-orange-400 focus-within:outline-2 focus-within:outline-orange-400 cursor-pointer flex flex-col justify-between gap-1"
           style={{
             top: card.top,
             minHeight: card.height,

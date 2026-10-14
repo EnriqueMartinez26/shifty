@@ -48,9 +48,12 @@ export const UserCard: React.FC<UserCardProps> = ({
     ? `linear-gradient(180deg, ${colors2000s.status.info.light} 0%, ${colors2000s.status.info.dark} 100%)`
     : orangeCtaGradient
 
+  // Sin `scale` en la tarjeta (2026-10-14): tiene botones adentro y al apretar
+  // `active:scale` los corria; el mouseup caia afuera y se perdia el click.
+  // Ver StaffColumn. La marca al pasar es un contorno, que no mueve nada.
   return (
     <div
-      className="relative p-6 rounded-md transition-all duration-200 hover:scale-[1.01] active:scale-[0.99] border-l-[6px] flex flex-col justify-between h-full"
+      className="relative p-6 rounded-md transition-colors duration-200 hover:outline-2 hover:outline-orange-400 border-l-[6px] flex flex-col justify-between h-full"
       style={{
         background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
         borderTop: `1px solid ${colors2000s.border.default}`,

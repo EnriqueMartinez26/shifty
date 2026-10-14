@@ -1,7 +1,9 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 
 import { AgendaDayView } from './AgendaDayView'
 import type { DayGrid } from '../../../lib/calendarGrid'
+import { AppointmentActions } from '../../molecules/AppointmentActions'
+import { ClientWhatsAppButton } from '../../molecules/ClientWhatsAppButton'
 
 // 2026-09-30: la vista dia salio de CalendarContainer (F11c-08). Solo pinta:
 // abrir un hueco, editar un bloqueo y los controles de cada turno los decide
@@ -143,6 +145,68 @@ describe('AgendaDayView', () => {
     expect(tarjeta).toHaveClass('focus-within:z-20', 'hover:z-20')
   })
 
+  // Produccion 2026-10-14: en la vista dia de escritorio, Cancelar, Reprogramar
+  // y WhatsApp no hacian nada. Con un solo profesional la tarjeta mide ~1000 px
+  // y `active:scale-95` la achicaba hacia el centro al apretar: el boton se
+  // corria ~25 px, el mouseup caia afuera y el navegador no disparaba el
+  // click. jsdom no mide transformaciones, asi que se fijan las clases.
+  it('la tarjeta del turno no se escala al pasar ni al apretar', () => {
+    renderDayView()
+    const tarjeta = screen.getByText('Carla Ruiz').closest('[data-appointment-card]')
+    expect(tarjeta).not.toBeNull()
+    expect(scaleClasses(tarjeta as HTMLElement)).toEqual([])
+    // Sigue marcando la tarjeta activa sin moverla.
+    expect(tarjeta).toHaveClass('hover:outline-2', 'focus-within:outline-2')
+  })
+
+  it('Cancelar, Reprogramar y WhatsApp de la tarjeta reciben el click', () => {
+    const onAction = jest.fn()
+    render(
+      <AgendaDayView
+        staffMembers={staffMembers}
+        loading={false}
+        dayGrid={dayGrid}
+        hoursOfDay={{ byStaff: new Map() }}
+        blocks={[]}
+        cards={[card]}
+        canManageBlocks={false}
+        onToggleGap={jest.fn()}
+        onEditBlock={jest.fn()}
+        renderControls={(event) => (
+          <>
+            <AppointmentActions
+              status={event.status}
+              hasStarted={false}
+              canRelease={false}
+              canManage
+              canCancelOrReschedule
+              busy={false}
+              compact
+              onAction={onAction}
+            />
+            <ClientWhatsAppButton
+              phone="+5491155550031"
+              status={event.status}
+              compact
+              message={whatsAppMessage}
+            />
+          </>
+        )}
+      />
+    )
+    const tarjeta = screen.getByText('Carla Ruiz').closest('[data-appointment-card]') as HTMLElement
+
+    fireEvent.click(within(tarjeta).getByRole('button', { name: 'Cancelar turno' }))
+    fireEvent.click(within(tarjeta).getByRole('button', { name: 'Reprogramar turno' }))
+    expect(onAction.mock.calls).toEqual([['cancel'], ['reschedule']])
+
+    const whatsApp = within(tarjeta).getByRole('link', { name: 'Recordar por WhatsApp' })
+    const onWhatsAppClick = jest.fn((event: MouseEvent) => event.preventDefault())
+    whatsApp.addEventListener('click', onWhatsAppClick)
+    fireEvent.click(whatsApp)
+    expect(onWhatsAppClick).toHaveBeenCalledTimes(1)
+  })
+
   it('en el telefono muestra un profesional por vez y deja elegirlo', () => {
     renderDayView()
     const picker = screen.getByRole('group', { name: 'Profesional' })
@@ -182,6 +246,19 @@ describe('AgendaDayView', () => {
     expect(container.querySelector('[class~="md:min-w-[800px]"]')).not.toBeNull()
   })
 })
+
+const whatsAppMessage = {
+  clientName: 'Carla Ruiz',
+  serviceName: 'Corte',
+  staffName: 'Bruno Diaz',
+  startsAt: card.startsAt,
+  storeName: 'Sol',
+  rebookUrl: null
+}
+
+/** Clases de Tailwind que escalan el elemento, con o sin variante. */
+const scaleClasses = (element: HTMLElement) =>
+  Array.from(element.classList).filter((name) => /(^|:)-?scale-/.test(name))
 
 /** `a` aparece antes que `b` en el documento. */
 const precedesNode = (a: HTMLElement, b: HTMLElement) =>

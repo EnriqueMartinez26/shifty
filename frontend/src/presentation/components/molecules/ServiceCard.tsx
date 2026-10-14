@@ -44,10 +44,13 @@ export const ServiceCard: React.FC<ServiceCardProps> = ({
   const blocked = readOnlyReason !== null
   const title = readOnlyReason ?? undefined
 
+  // Sin `scale` en la tarjeta (2026-10-14): tiene botones adentro y al apretar
+  // `active:scale` los corria; el mouseup caia afuera y se perdia el click.
+  // Ver StaffColumn. La marca al pasar es un contorno, que no mueve nada.
   return (
     <div
       data-testid="service-card"
-      className={`relative p-6 rounded-md transition-all duration-200 hover:scale-[1.01] active:scale-[0.99] border-l-[6px] flex flex-col justify-between h-full ${
+      className={`relative p-6 rounded-md transition-colors duration-200 hover:outline-2 hover:outline-orange-400 border-l-[6px] flex flex-col justify-between h-full ${
         isSelected ? 'ring-2 ring-offset-2 ring-orange-400' : ''
       } ${service.isActive ? '' : 'opacity-60'}`}
       style={{

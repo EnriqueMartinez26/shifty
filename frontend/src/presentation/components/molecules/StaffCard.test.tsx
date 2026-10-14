@@ -210,4 +210,31 @@ describe('StaffCard', () => {
       expect(onEditSchedule).toHaveBeenCalledWith(duenio)
     })
   })
+
+  // 2026-10-14: una tarjeta con botones no se escala. Al apretar, `active:scale`
+  // la achica hacia el centro y corre los botones: el mouseup cae afuera y el
+  // click se pierde (mismo bug que la tarjeta de la agenda del dia).
+  it('la tarjeta no se escala al pasar ni al apretar', () => {
+    const persona = Staff.fromPrimitives({
+      public_id: 'st-1',
+      kind: 'person',
+      first_name: 'Ana',
+      last_name: 'Perez',
+      email: 'ana@example.com',
+      display_name: 'Ana P.',
+      is_active: true,
+      service_ids: []
+    })
+    const { container } = render(
+      <StaffCard
+        staff={persona}
+        onEdit={jest.fn()}
+        onDelete={jest.fn()}
+        onEditSchedule={jest.fn()}
+      />
+    )
+
+    const tarjeta = container.firstElementChild as HTMLElement
+    expect(Array.from(tarjeta.classList).filter((name) => /(^|:)-?scale-/.test(name))).toEqual([])
+  })
 })
