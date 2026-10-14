@@ -118,6 +118,7 @@ async def _turno_con_cobro(
             ).isoformat(),
             "client_name": "Cliente Release",
             "client_phone": "+5491155556001",
+            "client_email": "c5491155556001@example.com",
             "accepts_terms": True,
             "payment_method": "mercadopago",
             "idempotency_key": f"{slug}-reserva-0001",

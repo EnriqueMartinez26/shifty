@@ -88,6 +88,7 @@ async def test_oferta_de_la_lista_de_espera_resultado_y_mail(
                 "window_ends_at": (t.slot + timedelta(hours=2)).isoformat(),
                 "client_name": nombre,
                 "client_phone": telefono,
+                "client_email": f"c{telefono.lstrip('+')}@example.com",
                 **({"client_email": email} if email else {}),
             },
         )

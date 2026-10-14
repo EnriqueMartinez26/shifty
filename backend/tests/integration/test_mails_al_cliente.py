@@ -115,6 +115,7 @@ def _reserva(
         "starts_at": slot.isoformat(),
         "client_name": "Carla Ruiz",
         "client_phone": "+5491155550031",
+        "client_email": "c5491155550031@example.com",
         "accepts_terms": True,
         "idempotency_key": "mail-cliente-000001",
     }
@@ -183,9 +184,14 @@ async def test_sin_email_real_no_se_encola_ni_se_manda_nada(
     cola = usar_cola_de_reservas(monkeypatch, test_session)
     store, token, service, staff, slot = await _tienda_reservable(client, "mail-sin")
 
-    # Sin email: el alta inventa uno tecnico .noreply que no debe recibir nada.
+    # Un email que no es entregable (.noreply, como el tecnico que inventa el
+    # alta del panel) no recibe nada. Desde el 2026-10-14 el portal exige un
+    # email (decision de Mateo), asi que se manda uno de esos.
     reserva = await client.post(
-        "/public/appointments", json=_reserva(store, service, staff, slot)
+        "/public/appointments",
+        json=_reserva(
+            store, service, staff, slot, client_email="5491155550000@tienda.noreply"
+        ),
     )
     assert reserva.status_code == 201, reserva.text
     assert cola.encolados == [], "is_deliverable_email filtra antes de encolar"

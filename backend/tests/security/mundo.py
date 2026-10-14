@@ -207,6 +207,11 @@ class Mundo:
     def telefono_nuevo(self) -> str:
         return f"+54911{next(self._n) + 30_000_000:08d}"
 
+    @staticmethod
+    def email_de(telefono: str) -> str:
+        """El portal exige email (decision de Mateo, 2026-10-14): uno por telefono."""
+        return f"c{telefono.lstrip('+')}@example.com"
+
     def slot(self, tienda: Tienda) -> datetime:
         """Horario libre y unico dentro de la tienda (turnos y bloqueos)."""
         indice = next(tienda._slots)
@@ -413,7 +418,7 @@ class Mundo:
                 "client_name": nombre,
                 "client_phone": telefono,
                 "accepts_terms": True,
-                "client_email": email,
+                "client_email": email or self.email_de(telefono),
                 "idempotency_key": self.unico("clave-publica"),
             },
         )
@@ -538,6 +543,7 @@ class Mundo:
                 )
                 await s.commit()
         inicio = self.slot(tienda)
+        telefono = telefono or self.telefono_nuevo()
         res = await self.client.post(
             "/public/waitlist",
             json={
@@ -547,7 +553,8 @@ class Mundo:
                 "window_starts_at": inicio.isoformat(),
                 "window_ends_at": (inicio + timedelta(minutes=60)).isoformat(),
                 "client_name": nombre or f"Espera {tienda.nombre}",
-                "client_phone": telefono or self.telefono_nuevo(),
+                "client_phone": telefono,
+                "client_email": self.email_de(telefono),
             },
         )
         assert res.status_code == 201, res.text

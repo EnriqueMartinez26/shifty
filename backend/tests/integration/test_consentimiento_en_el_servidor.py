@@ -46,6 +46,7 @@ async def _cuerpo(client: AsyncClient, slug: str) -> dict[str, Any]:
         ).isoformat(),
         "client_name": "Cliente Consentimiento",
         "client_phone": "+5491155590909",
+        "client_email": "c5491155590909@example.com",
         "accepts_terms": True,
     }
 

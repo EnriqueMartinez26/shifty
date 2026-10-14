@@ -82,6 +82,7 @@ async def test_las_23_30_del_ultimo_dia_se_muestran_y_se_reservan(
             "starts_at": slot,
             "client_name": "Borde",
             "client_phone": "+5491100008888",
+            "client_email": "c5491100008888@example.com",
             "accepts_terms": True,
             "idempotency_key": "borde-horizonte-1",
         },

@@ -92,6 +92,7 @@ async def test_los_endpoints_del_portal_bajan_el_bypass_en_la_conexion(
                 "window_ends_at": (slot + timedelta(hours=2)).isoformat(),
                 "client_name": "Bypass",
                 "client_phone": "+5491155551001",
+                "client_email": "c5491155551001@example.com",
             },
         ),
         (
@@ -105,6 +106,7 @@ async def test_los_endpoints_del_portal_bajan_el_bypass_en_la_conexion(
                 "starts_at": slot.isoformat(),
                 "client_name": "Bypass",
                 "client_phone": "+5491155551002",
+                "client_email": "c5491155551002@example.com",
                 "accepts_terms": True,
                 "idempotency_key": "bypass-portal-0001",
             },

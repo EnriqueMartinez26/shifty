@@ -106,13 +106,16 @@ async def test_anotarse_en_la_lista_de_espera_no_secuestra_el_email_del_cliente(
             "starts_at": slot.isoformat(),
             "client_name": "Victima",
             "client_phone": VICTIMA,
+            "client_email": f"c{VICTIMA.lstrip('+')}@example.com",
             "accepts_terms": True,
             "idempotency_key": "secuestro-000001",
         },
     )
     assert reserva.status_code == 201, reserva.text
     tecnico = await _email_del_cliente(test_session, "5491155550999")
-    assert tecnico.endswith(".noreply")
+    # Desde el 2026-10-14 el portal exige email: la ficha nace con el de la
+    # victima, no con el tecnico .noreply. Lo que se prueba es que no cambie.
+    assert tecnico == f"c{VICTIMA.lstrip('+')}@example.com"
 
     alta = await client.post(
         "/public/waitlist",
@@ -151,6 +154,7 @@ async def test_reservar_sin_otp_no_pisa_el_contacto_pero_si_avisa_a_ese_mail(
             "starts_at": slot.isoformat(),
             "client_name": "Victima",
             "client_phone": VICTIMA,
+            "client_email": f"c{VICTIMA.lstrip('+')}@example.com",
             "accepts_terms": True,
             "idempotency_key": "secuestro-reserva-01",
         },
@@ -206,6 +210,10 @@ async def test_ni_con_el_telefono_verificado_por_otp_se_pisa_el_contacto_ajeno(
             "starts_at": slot.isoformat(),
             "client_name": "Duenio del telefono",
             "client_phone": VICTIMA,
+            # Desde el 2026-10-14 el portal exige email (decision de Mateo).
+            # Una ficha con email no entregable, como la que deja el alta del
+            # panel sin email: el codigo no se redirige a la victima.
+            "client_email": f"{VICTIMA.lstrip('+')}@tienda.noreply",
             "accepts_terms": True,
             "idempotency_key": "secuestro-otp-01",
         },
@@ -701,12 +709,13 @@ async def test_el_gate_de_reserva_no_exige_que_los_dos_emails_coincidan(
 ) -> None:
     """El wizard publico tiene DOS campos de email independientes.
 
-    `client_email` es OPCIONAL y es un campo distinto del email con el que se
-    pidio el codigo, y `canSubmit` solo exige que el OTP este verificado. Un
-    gate que compare los dos devuelve un 403 determinista al cliente que deja
-    el de contacto vacio (o pone otro), rompiendo un flujo que funcionaba, y
-    no aporta seguridad: quien ataca controla los dos campos igual. La
-    garantia es el punto de DESPACHO, no el match. 2026-09-20.
+    `client_email` es un campo distinto del email con el que se pidio el
+    codigo, y `canSubmit` solo exige que el OTP este verificado. Un gate que
+    compare los dos devuelve un 403 determinista al cliente que pone otro,
+    rompiendo un flujo que funcionaba, y no aporta seguridad: quien ataca
+    controla los dos campos igual. La garantia es el punto de DESPACHO, no el
+    match. 2026-09-20. Desde el 2026-10-14 `client_email` es obligatorio en el
+    portal (decision de Mateo): el primer caso pasa a ser el mismo email.
     """
     monkeypatch.setattr(tasks, "_send_email", Buzon())
     store, token, service, staff, slot = await _tienda(client, "otp-dos-emails")
@@ -737,7 +746,7 @@ async def test_el_gate_de_reserva_no_exige_que_los_dos_emails_coincidan(
     )
     assert verificado.status_code == 200, verificado.text
 
-    # Sin `client_email`: el caso que el gate viejo rechazaba con `email=""`.
+    # Con el mismo email del codigo.
     sin_email = await client.post(
         "/public/appointments",
         json={
@@ -747,12 +756,13 @@ async def test_el_gate_de_reserva_no_exige_que_los_dos_emails_coincidan(
             "starts_at": slot.isoformat(),
             "client_name": "Cliente Nuevo",
             "client_phone": "+5491155550777",
+            "client_email": "codigo@example.com",
             "accepts_terms": True,
             "idempotency_key": "otp-dos-emails-01",
         },
     )
     assert sin_email.status_code == 201, (
-        f"verificar el OTP y dejar el email de contacto vacio tiene que "
+        f"verificar el OTP y dejar el mismo email de contacto tiene que "
         f"reservar, y devolvio {sin_email.status_code}: {sin_email.text}"
     )
 
@@ -800,6 +810,9 @@ async def test_sin_contacto_verificado_la_sena_no_filtra_el_historial(
             "starts_at": _slot(2).isoformat(),
             "client_name": "Victima",
             "client_phone": VICTIMA,
+            # Una ficha con email no entregable, como la que deja el alta del
+            # panel sin email: el codigo no se redirige a la victima.
+            "client_email": f"{VICTIMA.lstrip('+')}@tienda.noreply",
             "accepts_terms": True,
             "payment_method": "manual",
             "idempotency_key": "otp-historial-01",

@@ -139,6 +139,7 @@ async def test_se_reserva_una_cancha_por_el_flujo_publico_y_el_mail_dice_en(
             "starts_at": slot.isoformat(),
             "client_name": "Otro",
             "client_phone": "+5491155550089",
+            "client_email": "c5491155550089@example.com",
             "accepts_terms": True,
             "idempotency_key": "padel-cancha-000002",
         },

@@ -123,6 +123,7 @@ async def _tienda_con_turno(client: AsyncClient) -> tuple[str, str, str, str]:
             "starts_at": slot["starts_at"],
             "client_name": "Colecciones",
             "client_phone": "+5491155550909",
+            "client_email": "c5491155550909@example.com",
             "accepts_terms": True,
             "idempotency_key": "colecciones-1200",
         },

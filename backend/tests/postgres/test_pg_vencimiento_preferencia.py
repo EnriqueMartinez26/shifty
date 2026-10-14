@@ -102,6 +102,7 @@ async def test_dos_corridas_del_outbox_vencen_el_link_una_sola_vez(
             ).isoformat(),
             "client_name": "Pg Release",
             "client_phone": "+5491155557001",
+            "client_email": "c5491155557001@example.com",
             "accepts_terms": True,
             "payment_method": "mercadopago",
             "idempotency_key": "pg-vence-link-reserva-0001",

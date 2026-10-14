@@ -569,6 +569,7 @@ async def test_el_panel_no_pide_consentimiento_y_el_portal_si(
             "starts_at": (agenda.slot + timedelta(hours=2)).isoformat(),
             "client_name": "Sin Terminos",
             "client_phone": "+5491155550606",
+            "client_email": "c5491155550606@example.com",
             "idempotency_key": "ff04-terminos-portal",
         },
     )

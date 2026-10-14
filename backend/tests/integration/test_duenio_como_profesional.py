@@ -196,6 +196,7 @@ async def test_el_duenio_se_agrega_con_su_nombre_y_el_portal_lo_reserva(
             "starts_at": suyos[0]["starts_at"],
             "client_name": "Cliente del dueno",
             "client_phone": "+5491155550123",
+            "client_email": "c5491155550123@example.com",
             "accepts_terms": True,
             "idempotency_key": "duenio-reserva-1",
         },

@@ -118,6 +118,7 @@ async def test_la_reserva_publica_compensada_no_deja_turno_ni_cobro(
             ).isoformat(),
             "client_name": "Cliente Compensado",
             "client_phone": "+5491155578001",
+            "client_email": "c5491155578001@example.com",
             "payment_method": "mercadopago",
             "accepts_terms": True,
         },

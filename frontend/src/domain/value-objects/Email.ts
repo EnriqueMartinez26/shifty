@@ -1,5 +1,7 @@
 import { InvalidValueError } from '../errors/DomainError'
 
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+
 export class Email {
   private readonly value: string
 
@@ -9,11 +11,15 @@ export class Email {
 
   static create(email: string): Email {
     const normalized = email.toLowerCase().trim()
-    const regex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
-    if (!regex.test(normalized)) {
+    if (!Email.isValid(normalized)) {
       throw new InvalidValueError('INVALID_EMAIL', `Email inválido: ${normalized}`)
     }
     return new Email(normalized)
+  }
+
+  /** El mismo criterio que `create`, sin lanzar: para habilitar un formulario. */
+  static isValid(email: string): boolean {
+    return EMAIL_PATTERN.test(email.toLowerCase().trim())
   }
 
   getValue(): string {

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
@@ -14,6 +14,14 @@ from core.utils import (
 )
 from core.validation import PUBLIC_ID_PATTERN, reject_payload_control_chars
 from modules.legal.versions import LegalVersion
+from modules.public_api.schemas import require_client_email
+
+# El cupo liberado solo se ofrece a quien tiene un email entregable
+# (D-20260930-11): anotarse sin email no servia para nada. Obligatorio desde la
+# decision de Mateo del 2026-10-14, junto con la reserva publica.
+WAITLIST_EMAIL_REQUIRED = (
+    "Para anotarte hace falta un email: ahí te avisamos si se libera un turno."
+)
 
 
 def _normalize_phone(value: str) -> str:
@@ -38,7 +46,7 @@ class WaitlistJoinRequest(BaseModel):
     window_ends_at: datetime
     client_name: str = Field(..., min_length=1, max_length=100)
     client_phone: str = Field(..., min_length=6, max_length=30)
-    client_email: Optional[EmailStr] = Field(default=None, max_length=255)
+    client_email: EmailStr = Field(..., max_length=255)
     notes: Optional[str] = Field(default=None, max_length=300)
     # Consentimiento (PV-09, 2026-09-25). Opcional mientras
     # ``LEGAL_WAITLIST_CONSENT_REQUIRED`` este apagado (el front actual no lo
@@ -47,6 +55,11 @@ class WaitlistJoinRequest(BaseModel):
     accepts_terms: Optional[bool] = None
     terms_version: Optional[LegalVersion] = None
     privacy_version: Optional[LegalVersion] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def email_is_required(cls, data: Any) -> Any:
+        return require_client_email(data, WAITLIST_EMAIL_REQUIRED)
 
     @field_validator("client_phone")
     @classmethod

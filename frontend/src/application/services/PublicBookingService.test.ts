@@ -99,6 +99,7 @@ describe('PublicBookingService', () => {
       starts_at: '2026-10-01T13:00:00Z',
       idempotency_key: 'idem-1',
       client_name: 'Ana Diaz',
+      client_email: 'ana@example.com',
       client_phone: '1155550000'
     }
     const confirmation = { public_id: 'apt-1', status: 'confirmed' }

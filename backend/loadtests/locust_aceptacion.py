@@ -4,7 +4,7 @@
 
 - 150 clientes publicos: tienda al azar -> vitrina -> servicios -> staff ->
   disponibilidad de 2-4 fechas de los proximos 14 dias -> preview de sena ->
-  30 % reserva un slot libre (sin email: sale el ``.noreply`` y no se manda
+  30 % reserva un slot libre (con un email ``.noreply``: no se manda
   correo). Pensar 2-8 s entre pasos.
 - 45 duenos: login una vez (escalonado por la rampa) -> dashboard y avisos ->
   agenda del dia y de manana -> confirmar o cancelar turnos -> editar nombre y
@@ -263,6 +263,7 @@ class ClientePublico(HttpUser):
 def _reserva(
     tienda: TiendaSembrada, servicio: str, slot: dict[str, Any]
 ) -> dict[str, Any]:
+    telefono = f"+54911{_RNG.randint(10_000_000, 99_999_999)}"
     return {
         "store_public_id": tienda.store_public_id,
         "service_id": servicio,
@@ -270,7 +271,11 @@ def _reserva(
         "starts_at": slot["starts_at"],
         "client_name": "Cliente Carga",
         # Numero de prueba unico por reserva: sin OTP nunca adopta a nadie.
-        "client_phone": f"+54911{_RNG.randint(10_000_000, 99_999_999)}",
+        "client_phone": telefono,
+        # El portal exige email (decision de Mateo, 2026-10-14). El dominio
+        # tecnico ``.noreply`` lo descarta ``is_deliverable_email``: la carga
+        # sigue sin mandar correo.
+        "client_email": f"carga-{telefono.lstrip('+')}@carga.noreply",
         "accepts_terms": True,
         "idempotency_key": f"cap-{uuid.uuid4().hex}",
     }

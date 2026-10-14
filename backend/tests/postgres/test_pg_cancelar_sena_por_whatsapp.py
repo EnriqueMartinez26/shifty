@@ -127,6 +127,7 @@ async def test_rafaga_de_cancelaciones_del_panel_de_una_sena_por_whatsapp(
             ).isoformat(),
             "client_name": "Cliente WhatsApp",
             "client_phone": "+5491155550777",
+            "client_email": "c5491155550777@example.com",
             "payment_method": "manual",
             "accepts_terms": True,
             "idempotency_key": f"{slug}-000001",
