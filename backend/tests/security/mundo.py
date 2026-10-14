@@ -418,7 +418,7 @@ class Mundo:
                 "client_name": nombre,
                 "client_phone": telefono,
                 "accepts_terms": True,
-                "client_email": email,
+                "client_email": email or self.email_de(telefono),
                 "idempotency_key": self.unico("clave-publica"),
             },
         )
