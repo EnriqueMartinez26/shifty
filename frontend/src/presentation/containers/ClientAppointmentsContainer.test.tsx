@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { format } from 'date-fns'
 
+import { forgetClientToken, rememberClientToken } from '@application/services/clientToken'
 import type { PublicStore } from '@application/services/PublicBookingService'
 
 import { ConflictError, ValidationError } from '@shared/errors'
@@ -16,6 +17,13 @@ import {
 } from '@shared/utils/otpSession'
 
 import { ClientAppointmentsContainer } from './ClientAppointmentsContainer'
+
+// La verificacion recordada solo sirve con el token del cliente en memoria
+// (2026-10-14): el atajo se simula con las dos cosas.
+const recordarConToken = (phone: string, verifiedAt: string) => {
+  rememberOtpVerification('sol', phone, verifiedAt)
+  rememberClientToken('store-1', 'tok-del-cliente')
+}
 
 const mockAppointments = jest.fn()
 const mockRefetch = jest.fn()
@@ -98,6 +106,7 @@ describe('ClientAppointmentsContainer', () => {
       refetch: mockRefetch
     })
     forgetOtpVerification('sol')
+    forgetClientToken()
     try {
       window.sessionStorage.clear()
     } catch {
@@ -155,7 +164,11 @@ describe('ClientAppointmentsContainer', () => {
       fireEvent.click(within(dialogo).getByRole('button', { name: 'Sí, cancelar turno' }))
 
       await waitFor(() =>
-        expect(mockCancel).toHaveBeenCalledWith({ publicId: 'appt-1', phone: '1155550101' })
+        expect(mockCancel).toHaveBeenCalledWith({
+          storePublicId: 'store-1',
+          publicId: 'appt-1',
+          phone: '1155550101'
+        })
       )
       expect(await screen.findByText(/le avisamos a la tienda/)).toBeInTheDocument()
       expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
@@ -431,7 +444,7 @@ describe('ClientAppointmentsContainer', () => {
 
     // El wizard dejo el telefono verificado; "Mis turnos" entra sin codigo.
     const entrarPorElAtajo = () => {
-      rememberOtpVerification('sol', '1155550101', new Date().toISOString())
+      recordarConToken('1155550101', new Date().toISOString())
       fireEvent.change(screen.getByLabelText('Teléfono'), { target: { value: '1155550101' } })
       fireEvent.click(screen.getByRole('button', { name: 'Enviarme el código' }))
     }
@@ -449,7 +462,7 @@ describe('ClientAppointmentsContainer', () => {
 
       // Aunque la marca del dispositivo siga vigente, pedir el codigo no entra
       // por el atajo: la olvida y manda uno nuevo.
-      rememberOtpVerification('sol', '1155550101', new Date().toISOString())
+      recordarConToken('1155550101', new Date().toISOString())
       fireEvent.change(screen.getByLabelText('Tu email'), { target: { value: 'yo@example.com' } })
       fireEvent.click(screen.getByRole('button', { name: 'Enviarme el código' }))
 
@@ -576,6 +589,7 @@ describe('ClientAppointmentsContainer: el token del cliente vencio (2026-10-14)'
 
   beforeEach(() => {
     forgetOtpVerification('sol')
+    forgetClientToken()
     mockCancel.mockReset()
     mockRefetch.mockReset()
     mockRequestOtp.mockReset().mockResolvedValue({ expires_at: '', debug_code: '' })
@@ -588,6 +602,21 @@ describe('ClientAppointmentsContainer: el token del cliente vencio (2026-10-14)'
       isError: false,
       refetch: mockRefetch
     })
+  })
+
+  it('"Salir" olvida la verificacion: volver a entrar pide un codigo nuevo', async () => {
+    render(<ClientAppointmentsContainer store={store} />)
+    await entrar()
+    expect(isOtpStillValid('sol', '1155550101')).toBe(true)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Salir' }))
+
+    expect(isOtpStillValid('sol', '1155550101')).toBe(false)
+    fireEvent.change(screen.getByLabelText('Teléfono'), { target: { value: '1155550101' } })
+    fireEvent.change(screen.getByLabelText('Tu email'), { target: { value: 'yo@example.com' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Enviarme el código' }))
+    expect(await screen.findByLabelText('Código')).toBeInTheDocument()
+    expect(mockRequestOtp).toHaveBeenCalledTimes(2)
   })
 
   it('un 403 al cancelar vuelve a pedir el codigo y, verificado, recarga la lista', async () => {

@@ -25,6 +25,13 @@ export const forgetClientToken = (): void => {
 }
 
 /**
+ * Hay token para esa tienda. Sin el, una verificacion recordada
+ * (`otpSession`) no alcanza: el backend responderia 403.
+ */
+export const hasClientToken = (storePublicId: string): boolean =>
+  current !== null && current.storePublicId === storePublicId
+
+/**
  * Config de axios con el token, o `undefined` si no hay token que mandar.
  * Con tienda, solo si el token es de esa tienda.
  */

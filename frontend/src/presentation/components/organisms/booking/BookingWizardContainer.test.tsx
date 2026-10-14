@@ -4,6 +4,8 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router'
 
 import { NetworkError, RateLimitError } from '@shared/errors'
+import { forgetClientToken, rememberClientToken } from '@application/services/clientToken'
+
 import { forgetOtpVerification, rememberOtpVerification } from '@shared/utils/otpSession'
 
 import { BookingWizardContainer } from './BookingWizardContainer'
@@ -125,6 +127,7 @@ describe('BookingWizardContainer', () => {
     mockAvailability.mockReturnValue({ data: [slot], isLoading: false })
     // La verificacion recordada vive en memoria (2026-10-14): se olvida entre tests.
     forgetOtpVerification('tienda')
+    forgetClientToken()
     window.sessionStorage.clear()
   })
 
@@ -307,6 +310,7 @@ describe('BookingWizardContainer', () => {
   it('un telefono verificado hace menos de 30 minutos en este dispositivo no pide otro codigo', async () => {
     mockServices.mockReturnValue({ data: [servicio('a')], isLoading: false })
     rememberOtpVerification('tienda', '5491155550101', new Date().toISOString())
+    rememberClientToken('store-1', 'tok-del-cliente')
     render(<WizardEnRuta store={tienda(true)} />)
 
     await waitFor(() => expect(screen.getByText(HORARIO)).toBeInTheDocument())
@@ -317,6 +321,22 @@ describe('BookingWizardContainer', () => {
 
     expect(screen.getByText('Teléfono validado correctamente')).toBeInTheDocument()
     expect(mockRequestOtp).not.toHaveBeenCalled()
+  })
+
+  it('sin el token del cliente la verificacion recordada no alcanza y pide el codigo (2026-10-14)', async () => {
+    // Con otp_booking el backend exige el token de la verificacion: entrar
+    // por el atajo sin token terminaba en un 403 al reservar.
+    mockServices.mockReturnValue({ data: [servicio('a')], isLoading: false })
+    rememberOtpVerification('tienda', '5491155550101', new Date().toISOString())
+    render(<WizardEnRuta store={tienda(true)} />)
+
+    await waitFor(() => expect(screen.getByText(HORARIO)).toBeInTheDocument())
+    fireEvent.click(screen.getByText('09:00'))
+    fireEvent.change(screen.getByPlaceholderText('PREFIJO + NUM'), {
+      target: { value: '+5491155550101' }
+    })
+
+    expect(screen.queryByText('Teléfono validado correctamente')).not.toBeInTheDocument()
   })
 
   it('sin sessionStorage, editar otro dato no des-verifica el telefono', async () => {

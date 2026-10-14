@@ -120,7 +120,7 @@ describe('PublicBookingService', () => {
   })
 
   it('cancelClientAppointment manda el telefono por PATCH', async () => {
-    await publicBookingService.cancelClientAppointment('apt-1', '1155550000')
+    await publicBookingService.cancelClientAppointment('st-1', 'apt-1', '1155550000')
 
     expect(mockPatch).toHaveBeenCalledWith('/public/client/appointments/apt-1/cancel', {
       phone: '1155550000'
@@ -129,6 +129,7 @@ describe('PublicBookingService', () => {
 
   it('rescheduleClientAppointment manda telefono, horario nuevo y clave por PATCH', async () => {
     await publicBookingService.rescheduleClientAppointment({
+      storePublicId: 'st-1',
       publicId: 'apt-1',
       phone: '1155550000',
       newStartsAt: '2026-10-02T14:00:00Z',
@@ -202,8 +203,9 @@ describe('PublicBookingService: token del cliente (2026-10-14)', () => {
     await verificar()
 
     await publicBookingService.getClientAppointments('st-1', '5491155550000')
-    await publicBookingService.cancelClientAppointment('apt-1', '5491155550000')
+    await publicBookingService.cancelClientAppointment('st-1', 'apt-1', '5491155550000')
     await publicBookingService.rescheduleClientAppointment({
+      storePublicId: 'st-1',
       publicId: 'apt-1',
       phone: '5491155550000',
       newStartsAt: '2026-10-20T14:00:00Z',
@@ -239,7 +241,8 @@ describe('PublicBookingService: token del cliente (2026-10-14)', () => {
       starts_at: '2026-10-01T13:00:00Z',
       idempotency_key: 'idem-1',
       client_name: 'Ana Diaz',
-      client_phone: '1155550000'
+      client_phone: '1155550000',
+      client_email: 'ana@example.com'
     }
 
     await publicBookingService.createBooking(payload)
@@ -276,11 +279,33 @@ describe('PublicBookingService: token del cliente (2026-10-14)', () => {
     }
   })
 
+  it('cancelar y reprogramar en otra tienda no mandan el token (revision del PR #183)', async () => {
+    await verificar('st-1')
+
+    await publicBookingService.cancelClientAppointment('otra-tienda', 'apt-1', '5491155550000')
+    await publicBookingService.rescheduleClientAppointment({
+      storePublicId: 'otra-tienda',
+      publicId: 'apt-1',
+      phone: '5491155550000',
+      newStartsAt: '2026-10-20T14:00:00Z',
+      idempotencyKey: 'idem-4'
+    })
+
+    expect(mockPatch).toHaveBeenCalledWith('/public/client/appointments/apt-1/cancel', {
+      phone: '5491155550000'
+    })
+    expect(mockPatch).toHaveBeenCalledWith('/public/client/appointments/apt-1/reschedule', {
+      phone: '5491155550000',
+      new_starts_at: '2026-10-20T14:00:00Z',
+      idempotency_key: 'idem-4'
+    })
+  })
+
   it('forgetClientToken lo olvida: las llamadas siguientes salen sin token', async () => {
     await verificar()
     publicBookingService.forgetClientToken()
 
-    await publicBookingService.cancelClientAppointment('apt-1', '5491155550000')
+    await publicBookingService.cancelClientAppointment('st-1', 'apt-1', '5491155550000')
 
     expect(mockPatch).toHaveBeenCalledWith('/public/client/appointments/apt-1/cancel', {
       phone: '5491155550000'

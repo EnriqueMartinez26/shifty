@@ -14,6 +14,7 @@ import {
   isStateConflictError
 } from '@shared/errors/getErrorMessage'
 import { formatArgentinaDateDisplay, formatArgentinaTime } from '@shared/utils/argentinaTime'
+import { forgetOtpVerification } from '@shared/utils/otpSession'
 import { createUuid } from '@shared/utils/uuid'
 
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
@@ -118,7 +119,11 @@ export const ClientAppointmentsContainer: React.FC<ClientAppointmentsContainerPr
     if (!confirmed) return
     setMessage('')
     try {
-      await cancelAppointment.mutateAsync({ publicId: item.public_id, phone })
+      await cancelAppointment.mutateAsync({
+        storePublicId: store.public_id,
+        publicId: item.public_id,
+        phone
+      })
       setMessage('Cancelamos tu turno y le avisamos a la tienda.')
     } catch (error: unknown) {
       if (volverAVerificar(error)) return
@@ -146,6 +151,7 @@ export const ClientAppointmentsContainer: React.FC<ClientAppointmentsContainerPr
     setMessage('')
     try {
       await rescheduleAppointment.mutateAsync({
+        storePublicId: store.public_id,
         publicId: item.public_id,
         phone,
         newStartsAt: startsAt,
@@ -186,7 +192,10 @@ export const ClientAppointmentsContainer: React.FC<ClientAppointmentsContainerPr
         <button
           type="button"
           onClick={() => {
+            // Sin olvidar tambien la verificacion recordada, la puerta
+            // entraba por el atajo con un GET sin token y rebotaba con 403.
             forgetClientToken()
+            forgetOtpVerification(store.slug)
             setPhone(null)
           }}
           className="px-3 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest"

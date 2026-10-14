@@ -339,14 +339,20 @@ class PublicBookingService {
     return data
   }
 
-  async cancelClientAppointment(publicId: string, phone: string): Promise<void> {
+  async cancelClientAppointment(
+    storePublicId: string,
+    publicId: string,
+    phone: string
+  ): Promise<void> {
     const url = `/public/client/appointments/${publicId}/cancel`
-    const config = clientTokenConfig()
+    // El token solo viaja a la tienda que lo emitio.
+    const config = clientTokenConfig(storePublicId)
     if (config) await apiClient.patch(url, { phone }, config)
     else await apiClient.patch(url, { phone })
   }
 
   async rescheduleClientAppointment(payload: {
+    storePublicId: string
     publicId: string
     phone: string
     newStartsAt: string
@@ -358,7 +364,7 @@ class PublicBookingService {
       new_starts_at: payload.newStartsAt,
       idempotency_key: payload.idempotencyKey
     }
-    const config = clientTokenConfig()
+    const config = clientTokenConfig(payload.storePublicId)
     if (config) await apiClient.patch(url, body, config)
     else await apiClient.patch(url, body)
   }
