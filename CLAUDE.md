@@ -589,7 +589,9 @@ Una instrucción en lenguaje natural no es una garantía.
   pública y el historial y el gate de la reserva lo exigen en
   `X-Client-Token` ADEMÁS del chequeo en la base: sin él, la verificación
   de otro abría sus turnos desde cualquier dispositivo. El front lo guarda
-  solo en memoria.
+  solo en memoria. Es un bearer corto: "Salir" lo olvida en el navegador,
+  pero un token copiado vale hasta su `exp` (≤30 min); el `jti` no se
+  revisa ni hay revocación.
   (`test_otp_por_email.py`, `test_otp_email_del_cliente.py`,
   `test_autogestion_con_token_del_cliente.py`,
   `test_otp_por_la_cola.py`, `test_otp_tope_por_mail_destino.py`,
