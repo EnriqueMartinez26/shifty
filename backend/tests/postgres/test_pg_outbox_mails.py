@@ -55,6 +55,7 @@ async def _tienda_con_reservas_manuales(
                 "starts_at": (base + timedelta(hours=i)).isoformat(),
                 "client_name": f"Cliente {i}",
                 "client_phone": f"+54911555{i:05d}",
+                "client_email": f"c54911555{i:05d}@example.com",
                 "payment_method": "manual",
                 "accepts_terms": True,
                 "idempotency_key": f"outbox-mails-pg-{i:06d}",

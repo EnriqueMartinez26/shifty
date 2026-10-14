@@ -152,6 +152,9 @@ def _reserva(
         "starts_at": slot,
         "client_name": f"Cliente {i}",
         "client_phone": f"+54911555{i:05d}",
+        # Obligatorio en el portal (decision de Mateo, 2026-10-14). El dominio
+        # ``.noreply`` no recibe correo (``is_deliverable_email``).
+        "client_email": f"carga-54911555{i:05d}@carga.noreply",
         "accepts_terms": True,
         "idempotency_key": key,
     }

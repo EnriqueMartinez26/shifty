@@ -99,6 +99,7 @@ async def _reserva_sin_pasarela(client: AsyncClient, slug: str) -> dict[str, Any
         ).isoformat(),
         "client_name": "Cliente Sin Pasarela",
         "client_phone": "+5491155500002",
+        "client_email": "c5491155500002@example.com",
         "payment_method": "mercadopago",
         "accepts_terms": True,
         "idempotency_key": f"clave-{slug}-0001",

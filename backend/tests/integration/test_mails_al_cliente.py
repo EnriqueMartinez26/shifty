@@ -115,6 +115,7 @@ def _reserva(
         "starts_at": slot.isoformat(),
         "client_name": "Carla Ruiz",
         "client_phone": "+5491155550031",
+        "client_email": "c5491155550031@example.com",
         "accepts_terms": True,
         "idempotency_key": "mail-cliente-000001",
     }

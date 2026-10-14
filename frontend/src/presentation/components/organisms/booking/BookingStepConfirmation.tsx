@@ -13,6 +13,8 @@ import {
   WalletCards
 } from 'lucide-react'
 
+import { Email } from '@domain/value-objects/Email'
+
 import type {
   BookingConfirmation,
   PromotionPreview
@@ -199,7 +201,10 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
   // El telefono con el criterio del backend: con menos de 6 digitos era un 422
   // que se leia como horario ocupado (QA 2026-10-02).
   const phoneValid = isValidClientPhone(client.phone)
-  const clientValid = Boolean(client.name.trim()) && phoneValid && customFieldsValid
+  // Obligatorio (decision de Mateo, 2026-10-14): "Mis turnos" se abre con un
+  // codigo que sale solo por email; sin email el cliente no podia volver.
+  const emailValid = Email.isValid(client.email)
+  const clientValid = Boolean(client.name.trim()) && phoneValid && emailValid && customFieldsValid
   // Gate duro: el backend rechaza la reserva si la tienda exige OTP y el
   // telefono no quedo verificado (create_public_booking, public_api/router.py).
   // No se debilita: el boton final queda deshabilitado hasta otpState.verified.
@@ -355,20 +360,32 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
         <div className="relative">
           <label className="text-[10px] font-black uppercase tracking-widest text-gray-400 ml-1 block mb-1">
-            Email (Opcional)
+            Email
           </label>
           <div className="relative">
             <Mail size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
             <input
               type="email"
+              required
               autoComplete="email"
               value={client.email}
               onChange={(e) => updateClient({ email: e.target.value })}
               className="w-full pl-12 pr-4 py-3.5 font-bold"
               style={clientInputStyle}
               placeholder="juan@email.com"
+              aria-invalid={Boolean(client.email.trim()) && !emailValid}
+              aria-describedby="booking-email-hint"
             />
           </div>
+          {client.email.trim() && !emailValid ? (
+            <p id="booking-email-hint" className="mt-1 ml-1 text-[11px] font-bold text-red-600">
+              {BOOKING_FIELD_MESSAGES.client_email}
+            </p>
+          ) : (
+            <p id="booking-email-hint" className="mt-1 ml-1 text-[11px] font-bold text-gray-500">
+              Te enviamos la confirmación y el acceso a tus turnos.
+            </p>
+          )}
         </div>
 
         <div className="relative">

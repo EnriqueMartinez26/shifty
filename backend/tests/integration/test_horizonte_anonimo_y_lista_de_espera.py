@@ -96,6 +96,7 @@ async def test_lista_de_espera_despues_del_horizonte_422(client: AsyncClient) ->
             "window_ends_at": (inicio + timedelta(days=2)).isoformat(),
             "client_name": "En Espera",
             "client_phone": telefono,
+            "client_email": f"c{telefono.lstrip('+')}@example.com",
         }
 
     lejos = await client.post(

@@ -162,6 +162,7 @@ async def _tres_retenciones_vencidas(
                 ).isoformat(),
                 "client_name": f"Cliente {i}",
                 "client_phone": f"+54911555000{i:02d}",
+                "client_email": f"c54911555000{i:02d}@example.com",
                 "payment_method": "mercadopago",
                 "accepts_terms": True,
                 "idempotency_key": f"vence-presupuesto-{i}",

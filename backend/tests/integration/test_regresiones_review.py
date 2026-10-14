@@ -93,6 +93,7 @@ async def test_el_link_del_panel_no_pisa_la_sena_calculada_por_la_regla(
             "starts_at": slot.isoformat(),
             "client_name": "Cliente",
             "client_phone": "+5491155550777",
+            "client_email": "c5491155550777@example.com",
             "accepts_terms": True,
             "payment_method": "auto",
             "idempotency_key": "link-panel-000001",

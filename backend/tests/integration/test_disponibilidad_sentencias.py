@@ -311,6 +311,7 @@ async def _reservar(client: AsyncClient, t: _Tienda) -> None:
             "starts_at": _local(t.dia, "09:30").isoformat(),
             "client_name": "Cliente Sentencias",
             "client_phone": "+5491155559001",
+            "client_email": "c5491155559001@example.com",
             "accepts_terms": True,
             "idempotency_key": f"{t.store}-publica-01",
         },

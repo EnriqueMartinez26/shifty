@@ -446,6 +446,7 @@ def _reserva(
         "starts_at": slot.isoformat(),
         "client_name": nombre,
         "client_phone": tel,
+        "client_email": f"c{tel.lstrip('+')}@example.com",
         "accepts_terms": True,
         "idempotency_key": clave,
     }

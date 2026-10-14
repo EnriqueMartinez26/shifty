@@ -106,6 +106,7 @@ async def test_dos_workers_del_outbox_no_duplican_la_oferta(
             "starts_at": slot.isoformat(),
             "client_name": "Titular",
             "client_phone": "+5491155559999",
+            "client_email": "c5491155559999@example.com",
             "accepts_terms": True,
             "idempotency_key": "espera-doble-000001",
         },

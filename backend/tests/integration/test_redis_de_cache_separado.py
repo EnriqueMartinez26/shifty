@@ -60,6 +60,7 @@ async def test_cada_clave_va_a_su_redis(
             "starts_at": slot.isoformat(),
             "client_name": "Dos Redis",
             "client_phone": "+5491155550077",
+            "client_email": "c5491155550077@example.com",
             "accepts_terms": True,
             "idempotency_key": "dos-redis-000001",
         },

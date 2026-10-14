@@ -53,6 +53,7 @@ async def _clientes(
                 ).isoformat(),
                 "client_name": f"Cliente {i}",
                 "client_phone": f"+54911777{i:05d}",
+                "client_email": f"c54911777{i:05d}@example.com",
                 "accepts_terms": True,
                 "idempotency_key": f"{slug}-{i:04d}",
             },

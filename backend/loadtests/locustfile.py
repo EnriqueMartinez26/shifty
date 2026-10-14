@@ -107,14 +107,17 @@ class PublicAvailabilityUser(HttpUser):
         starts_at = datetime.now(timezone.utc) + timedelta(
             days=7, hours=random.randint(8, 18)
         )
+        telefono = f"{BOOKING_PHONE_PREFIX}{random.randint(1000000, 9999999)}"
         payload = {
             "store_public_id": store_public_id,
             "service_id": service_public_id,
             "staff_id": staff_public_id,
             "starts_at": starts_at.isoformat(),
             "client_name": "Load Test",
-            "client_phone": f"{BOOKING_PHONE_PREFIX}{random.randint(1000000, 9999999)}",
-            "client_email": None,
+            "client_phone": telefono,
+            # Obligatorio en el portal (decision de Mateo, 2026-10-14). El
+            # dominio ``.noreply`` no recibe correo (``is_deliverable_email``).
+            "client_email": f"carga-{telefono.lstrip('+')}@carga.noreply",
             # Obligatorio en el servidor (PV-09): sin esto toda reserva da 422
             # y la carga mide el rechazo, no la reserva (X-19, 2026-09-30).
             "accepts_terms": True,

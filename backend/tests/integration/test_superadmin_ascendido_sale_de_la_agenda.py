@@ -175,6 +175,7 @@ async def test_el_portal_no_reserva_con_el_ascendido(
             "starts_at": slot["starts_at"],
             "client_name": "Cliente",
             "client_phone": "+5491155550199",
+            "client_email": "c5491155550199@example.com",
             "accepts_terms": True,
             "idempotency_key": "asc-reserva-1",
         },

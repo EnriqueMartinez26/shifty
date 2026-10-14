@@ -398,7 +398,7 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
                 // recompone fecha local + hora (un turno de 21:00 caia en el dia anterior).
                 starts_at: bookingState.startsAt ?? '',
                 client_name: bookingState.client.name,
-                client_email: bookingState.client.email || undefined,
+                client_email: bookingState.client.email.trim(),
                 client_phone: bookingState.client.phone,
                 notes: bookingState.client.notes,
                 custom_fields: bookingState.client.customFields,

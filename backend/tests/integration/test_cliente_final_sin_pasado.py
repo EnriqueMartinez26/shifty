@@ -68,6 +68,7 @@ async def test_los_caminos_del_cliente_rechazan_el_pasado_sin_antelacion(
             "window_ends_at": _hace_un_minuto().isoformat(),
             "client_name": "Tarde",
             "client_phone": "+5491100007777",
+            "client_email": "c5491100007777@example.com",
         },
     )
 

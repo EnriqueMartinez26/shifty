@@ -418,6 +418,7 @@ async def test_el_cliente_sigue_respetando_la_antelacion_de_la_tienda(
             "starts_at": dentro_de_10_min.isoformat(),
             "client_name": "Cliente Apurado",
             "client_phone": "+5491155500222",
+            "client_email": "c5491155500222@example.com",
             "accepts_terms": True,
             "idempotency_key": "cliente-antelacion-0001",
         },

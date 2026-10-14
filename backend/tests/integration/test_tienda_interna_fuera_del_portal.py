@@ -115,6 +115,7 @@ async def _pedidos(
         "starts_at": _inicio(),
         "client_name": "Cliente",
         "client_phone": "+5491155550101",
+        "client_email": "c5491155550101@example.com",
         "accepts_terms": True,
         "idempotency_key": f"interna-{store}",
     }
@@ -125,6 +126,7 @@ async def _pedidos(
         "window_ends_at": (datetime.now(timezone.utc) + timedelta(days=6)).isoformat(),
         "client_name": "Cliente",
         "client_phone": "+5491155550101",
+        "client_email": "c5491155550101@example.com",
     }
     return {
         "vitrina": await client.get(f"/public/stores/{slug}"),
@@ -217,6 +219,7 @@ async def test_sus_servicios_son_un_servicio_inexistente(
             "starts_at": _inicio(),
             "client_name": "Cliente",
             "client_phone": "+5491155550102",
+            "client_email": "c5491155550102@example.com",
             "accepts_terms": True,
             "idempotency_key": "interna-servicio-1",
         },
