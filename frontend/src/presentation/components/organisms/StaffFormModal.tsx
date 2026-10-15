@@ -1,8 +1,11 @@
 import React, { useState, useEffect } from 'react'
 
 import { X, Loader2, User, Mail, Briefcase, Check } from 'lucide-react'
+import { Link } from 'react-router'
 
 import { Staff } from '@domain/entities/Staff'
+
+import { getClientValidationMessages } from '@application/validators/service.validators'
 
 import { useManagedServices } from '@presentation/hooks/useManagedServices'
 
@@ -11,6 +14,19 @@ import { getErrorMessage } from '@shared/errors/getErrorMessage'
 import { colors2000s, buttonStyles2000s, orangeCtaGradient } from '../../../theme/colors'
 import { create2000sModalInputStyle, create2000sModalSurfaceStyle } from '../../lib/surfaceStyles'
 import type { StaffFormValues } from '../../types/forms'
+
+/** Cada profesional necesita al menos un servicio: sin catalogo no hay alta. */
+const NO_SERVICES_NOTICE =
+  'Primero creá al menos un servicio en Servicios: cada profesional tiene que tener uno asignado.'
+
+/** Texto por campo para un 422 del servidor (nunca el texto crudo, regla 20). */
+const STAFF_FIELD_ERRORS: Partial<Record<string, string>> = {
+  service_ids: 'Elegí al menos un servicio para este profesional.',
+  display_name: 'El nombre público tiene que tener al menos 2 caracteres.',
+  first_name: 'El nombre tiene que tener al menos 2 caracteres.',
+  last_name: 'El apellido tiene que tener al menos 2 caracteres.',
+  email: 'Revisá el email: no es válido.'
+}
 
 interface StaffFormModalProps {
   isOpen: boolean
@@ -57,6 +73,9 @@ export const StaffFormModal: React.FC<StaffFormModalProps> = ({
   })
 
   const { data: services } = useManagedServices()
+  // Solo con el catalogo cargado y vacio: mientras carga no se bloquea nada.
+  const hasNoServices = services !== undefined && services.length === 0
+  const submitBlockedReason = readOnlyReason ?? (hasNoServices ? NO_SERVICES_NOTICE : null)
 
   useEffect(() => {
     if (editingStaff) {
@@ -91,7 +110,14 @@ export const StaffFormModal: React.FC<StaffFormModalProps> = ({
       await onSubmit(formData)
       onClose()
     } catch (err) {
-      setError(getErrorMessage(err, 'No se pudo guardar'))
+      // Si lo rechazo la validacion del cliente se dice que corregir; un 422
+      // del servidor se traduce por campo. "No se pudo guardar" no lo decia.
+      const motivos = getClientValidationMessages(err)
+      setError(
+        motivos.length > 0
+          ? motivos.join(' · ')
+          : getErrorMessage(err, 'No se pudo guardar', {}, STAFF_FIELD_ERRORS)
+      )
     } finally {
       setLoading(false)
     }
@@ -339,6 +365,21 @@ export const StaffFormModal: React.FC<StaffFormModalProps> = ({
                 </h4>
               </div>
 
+              {hasNoServices && (
+                <div
+                  className="rounded-xl px-4 py-3 text-xs font-bold space-y-2"
+                  style={{ background: '#fffbeb', color: '#92400e' }}
+                >
+                  <p>{NO_SERVICES_NOTICE}</p>
+                  <Link
+                    to="/dashboard/services"
+                    className="inline-block underline font-black uppercase tracking-widest text-[10px]"
+                  >
+                    Ir a Servicios
+                  </Link>
+                </div>
+              )}
+
               <div
                 className="rounded-md p-4 max-h-[300px] overflow-y-auto space-y-2"
                 style={{
@@ -396,8 +437,8 @@ export const StaffFormModal: React.FC<StaffFormModalProps> = ({
             </button>
             <button
               type="submit"
-              disabled={loading || readOnlyReason !== null}
-              title={readOnlyReason ?? undefined}
+              disabled={loading || submitBlockedReason !== null}
+              title={submitBlockedReason ?? undefined}
               className="flex-1 font-black py-4 rounded-xl transition-all uppercase tracking-widest text-xs active:scale-95 disabled:opacity-50"
               style={buttonStyles2000s.selected}
             >
