@@ -1,4 +1,14 @@
-from sqlalchemy import CheckConstraint, ForeignKey, Integer, Numeric, String
+from decimal import Decimal
+
+from sqlalchemy import (
+    CheckConstraint,
+    ForeignKey,
+    Index,
+    Integer,
+    Numeric,
+    SmallInteger,
+    String,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from core.models import BaseEntity
@@ -56,4 +66,50 @@ class Service(BaseEntity):
         # (F1-13, ck_appointments_max_span; migraciones c3d5e7f9a1b4 +
         # d4e6f8a0b2c5).
         CheckConstraint("duration_minutes <= 1440", name="ck_services_duration_max"),
+    )
+
+
+# Topes de un adicional: los mismos en el schema de entrada
+# (``schemas.ServiceAddonInput``), en la funcion pura que cotiza
+# (``addons.price_selection``) y en los CHECK de la base.
+ADDON_MAX_UNIT_PRICE = 1_000_000
+ADDON_MAX_QUANTITY = 99
+ADDONS_PER_SERVICE = 20
+
+
+class ServiceAddon(BaseEntity):
+    """Un adicional de un servicio: suma PRECIO, nunca tiempo.
+
+    Decision de Mateo (2026-10-14): la duracion del servicio ya cubre el
+    maximo, asi que un adicional no estira el turno ni toca la disponibilidad.
+    El ``id`` (ULID) es el id publico. Se borra fisicamente: el turno que lo
+    eligio guarda su snapshot (``appointments.addons_snapshot``) y no depende
+    de esta fila.
+    """
+
+    __tablename__ = "service_addons"
+
+    store_id: Mapped[str] = mapped_column(ForeignKey("stores.id"))
+    service_id: Mapped[str] = mapped_column(ForeignKey("services.id"))
+    name: Mapped[str] = mapped_column(String(100))
+    unit_price: Mapped[Decimal] = mapped_column(Numeric(10, 2))
+    max_quantity: Mapped[int] = mapped_column(Integer)
+    position: Mapped[int] = mapped_column(SmallInteger)
+
+    __table_args__ = (
+        CheckConstraint(
+            f"unit_price >= 0 AND unit_price <= {ADDON_MAX_UNIT_PRICE}",
+            name="ck_service_addons_unit_price",
+        ),
+        CheckConstraint(
+            f"max_quantity >= 1 AND max_quantity <= {ADDON_MAX_QUANTITY}",
+            name="ck_service_addons_max_quantity",
+        ),
+        CheckConstraint("length(name) > 0", name="ck_service_addons_name"),
+        CheckConstraint(
+            f"position >= 0 AND position <= {ADDONS_PER_SERVICE - 1}",
+            name="ck_service_addons_position",
+        ),
+        # El catalogo se lee por tienda y servicio, en orden (``addons_for``).
+        Index("ix_service_addons_store_service", "store_id", "service_id", "position"),
     )

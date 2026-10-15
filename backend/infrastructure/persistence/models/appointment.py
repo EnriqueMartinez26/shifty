@@ -84,6 +84,23 @@ class AppointmentModel(Base):
     price_amount: Mapped[Optional[Decimal]] = mapped_column(
         Numeric(12, 2), nullable=True
     )
+    # Adicionales elegidos al reservar (decision de Mateo, 2026-10-14): suman
+    # precio, nunca tiempo. ``price_amount`` ya los incluye (es el TOTAL);
+    # ``addons_amount`` es la parte que corresponde a los adicionales y
+    # ``addons_snapshot`` las lineas congeladas
+    # (``[{addon_id, name, unit_price, quantity, amount}]``, importes como
+    # texto): editar o borrar un adicional no cambia un turno ya tomado.
+    # ``ck_appointments_addons_amount`` (migraciones e2a4c6e8f0b1 +
+    # f3b5d7f9a1c2): no negativo y nunca mayor que el total.
+    addons_amount: Mapped[Decimal] = mapped_column(
+        Numeric(12, 2),
+        nullable=False,
+        default=Decimal("0.00"),
+        server_default=text("0"),
+    )
+    addons_snapshot: Mapped[list[dict[str, Any]] | None] = mapped_column(
+        JSON, nullable=True
+    )
     # Columna privada: la unica escritura legitima es apply_status_transition().
     # Se expone como hybrid_property de solo lectura, asi que
     # `appointment.status = "completed"` levanta AttributeError en vez de
@@ -185,6 +202,11 @@ class AppointmentModel(Base):
         CheckConstraint(
             "status IN ('pending', 'pending_payment', 'confirmed', 'absent', 'completed', 'cancelled', 'expired')",
             name="check_appointment_status_v3",
+        ),
+        CheckConstraint(
+            "addons_amount >= 0 AND "
+            "(price_amount IS NULL OR price_amount >= addons_amount)",
+            name="ck_appointments_addons_amount",
         ),
         # Retenciones vivas para el job de vencimiento (cada minuto):
         # ``expires_at`` nunca se limpia y el indice plano barria todas las
