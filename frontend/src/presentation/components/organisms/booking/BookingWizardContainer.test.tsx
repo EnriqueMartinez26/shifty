@@ -386,6 +386,8 @@ describe('BookingWizardContainer', () => {
         target: { value: 'lucia@example.com' }
       })
       fireEvent.click(screen.getByRole('checkbox'))
+      // La seña se recalcula con el telefono tipeado (400 ms de espera).
+      await waitFor(() => expect(screen.getByText('Confirmar reserva')).not.toBeDisabled())
       await enviar()
     }
     // La huella se calcula con crypto.subtle, que es asincronico: se espera al

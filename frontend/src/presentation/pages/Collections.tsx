@@ -273,6 +273,11 @@ const CollectionsPage: React.FC = () => {
               status={appointment.status}
               charge={chargeOf(appointment)}
               addonsAmount={Number(appointment.addons_amount ?? 0)}
+              priceAmount={
+                appointment.price_amount === null || appointment.price_amount === undefined
+                  ? null
+                  : Number(appointment.price_amount)
+              }
               latestLink={
                 createPreference.data?.appointment_id === appointment.public_id
                   ? (createPreference.data.payment_link ?? null)

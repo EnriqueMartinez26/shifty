@@ -44,6 +44,36 @@ describe('PublicBookingService.getServices', () => {
   })
 })
 
+describe('PublicBookingService.previewPromotion', () => {
+  beforeEach(() => {
+    mockGet.mockReset()
+    mockGet.mockResolvedValue({ data: {} })
+  })
+
+  it('manda los adicionales como addon repetido: la promo se mide contra el total', async () => {
+    await publicBookingService.previewPromotion('st-1', 'svc-1', 'MIN6000', ['strass:2'])
+
+    expect(mockGet).toHaveBeenCalledWith('/public/promotions/preview', {
+      params: {
+        store_public_id: 'st-1',
+        service_id: 'svc-1',
+        code: 'MIN6000',
+        addon: ['strass:2']
+      },
+      paramsSerializer: { indexes: null }
+    })
+  })
+
+  it('sin adicionales no manda addon', async () => {
+    await publicBookingService.previewPromotion('st-1', 'svc-1', 'MIN6000')
+
+    expect(mockGet).toHaveBeenCalledWith('/public/promotions/preview', {
+      params: { store_public_id: 'st-1', service_id: 'svc-1', code: 'MIN6000', addon: undefined },
+      paramsSerializer: { indexes: null }
+    })
+  })
+})
+
 describe('PublicBookingService', () => {
   beforeEach(() => {
     mockGet.mockReset()

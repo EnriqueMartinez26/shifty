@@ -354,13 +354,26 @@ class PublicBookingService {
     return data
   }
 
+  /**
+   * La promo se mide contra el total (servicio + adicionales; decision de
+   * Mateo, 2026-10-15): con `addons` (`<id>:<cantidad>`) el backend valida el
+   * minimo y calcula el descuento sobre ese total.
+   */
   async previewPromotion(
     storePublicId: string,
     serviceId: string,
-    code: string
+    code: string,
+    addons: readonly string[] = []
   ): Promise<PromotionPreview> {
     const { data } = await apiClient.get<PromotionPreview>('/public/promotions/preview', {
-      params: { store_public_id: storePublicId, service_id: serviceId, code }
+      params: {
+        store_public_id: storePublicId,
+        service_id: serviceId,
+        code,
+        addon: addons.length ? [...addons] : undefined
+      },
+      // `addon` repetido, sin corchetes (igual que el preview de la seña).
+      paramsSerializer: { indexes: null }
     })
     return data
   }

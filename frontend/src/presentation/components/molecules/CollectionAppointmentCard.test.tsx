@@ -188,3 +188,37 @@ describe('CollectionAppointmentCard: adicionales', () => {
     expect(screen.queryByText(/Incluye adicionales/)).not.toBeInTheDocument()
   })
 })
+
+describe('CollectionAppointmentCard: adicionales con promo', () => {
+  const props = {
+    clientName: 'Lucia',
+    serviceName: 'Uñas',
+    staffName: 'Ana',
+    startsAt: '2026-10-08T13:00:00Z',
+    status: 'confirmed',
+    charge: { kind: 'unpaid', suggested: 1000 } as AppointmentCharge,
+    latestLink: null,
+    linkBlockedReason: null,
+    confirmBlockedReason: null,
+    remainderBlockedReason: null,
+    onCreateLink: jest.fn(),
+    onConfirmPayment: jest.fn(),
+    onRecordRemainder: jest.fn(),
+    onRevertRemainder: null
+  }
+
+  it('si el precio quedo por debajo de los adicionales, aclara que son antes de descuentos', () => {
+    render(<CollectionAppointmentCard {...props} addonsAmount={3000} priceAmount={1000} />)
+
+    expect(screen.getByText(/Adicionales elegidos:/)).toHaveTextContent(
+      /3\.000.*antes de descuentos/
+    )
+    expect(screen.queryByText(/Incluye adicionales/)).not.toBeInTheDocument()
+  })
+
+  it('con el precio por encima conserva "Incluye adicionales"', () => {
+    render(<CollectionAppointmentCard {...props} addonsAmount={3000} priceAmount={30000} />)
+
+    expect(screen.getByText(/Incluye adicionales por/)).toBeInTheDocument()
+  })
+})

@@ -153,7 +153,7 @@ describe('BookingStepConfirmation', () => {
       expect(screen.getByPlaceholderText('PREFIJO + NUM')).toBeInTheDocument()
     })
 
-    it('reservar queda deshabilitado hasta tener nombre, telefono, email y terminos', () => {
+    it('reservar queda deshabilitado hasta tener nombre, telefono, email y terminos', async () => {
       const { rerender } = render(<BookingStepConfirmation {...props()} />)
       aceptarTerminos()
       expect(botonReservar()).toBeDisabled()
@@ -165,7 +165,10 @@ describe('BookingStepConfirmation', () => {
           })}
         />
       )
-      expect(botonReservar()).not.toBeDisabled()
+      // Con el telefono nuevo la seña se recalcula (400 ms de espera): hasta
+      // entonces no se reserva con la seña vieja.
+      expect(botonReservar()).toBeDisabled()
+      await waitFor(() => expect(botonReservar()).not.toBeDisabled())
     })
 
     // 2026-10-02, QA en navegador (S\05): con el telefono "123" el boton
@@ -516,7 +519,8 @@ describe('BookingStepConfirmation', () => {
       expect(mockPreviewPromotion).toHaveBeenCalledWith({
         storePublicId: 'store-1',
         serviceId: 'svc-1',
-        code: 'BIENVENIDA10'
+        code: 'BIENVENIDA10',
+        addons: []
       })
       expect(onPromotionCodeChange).toHaveBeenLastCalledWith(
         'BIENVENIDA10',
@@ -1182,5 +1186,164 @@ describe('BookingStepConfirmation: promo sobre el total', () => {
 
     expect(resumen()).toHaveTextContent(/Total\s*\$\s*4\.500/)
     expect(screen.getByTestId('booking-price-discount')).toHaveTextContent(/500/)
+  })
+})
+
+describe('BookingStepConfirmation: la promo se revalida con los adicionales', () => {
+  const servicio = {
+    public_id: 'svc-1',
+    price: 5000,
+    deposit_mode: 'none',
+    deposit_type: 'percent',
+    deposit_amount: null,
+    addons: [{ id: 'strass', name: 'Strass', unit_price: 500, max_quantity: 10, position: 0 }]
+  }
+  const promo = (patch: Partial<PromotionPreview> = {}): PromotionPreview => ({
+    code: 'MIN6000',
+    title: 'Desde 6.000',
+    promotion_type: 'percent',
+    base_amount: 6000,
+    discount_amount: 600,
+    final_amount: 5400,
+    ...patch
+  })
+  const conPromo = (quantity: number) => ({
+    ...props({
+      bookingState: estado({
+        client: cliente({ name: 'Lucia', phone: '1155550101' }),
+        promotionCode: 'MIN6000',
+        promotionPreview: promo(),
+        addons: [{ addonId: 'strass', name: 'Strass', unitPrice: 500, quantity }]
+      })
+    })
+  })
+  const ultimoPreviewDeSena = () =>
+    mockDepositPreview.mock.calls[mockDepositPreview.mock.calls.length - 1]?.[0] as {
+      addons?: string[]
+    }
+  const quitarUno = () =>
+    fireEvent.click(screen.getByRole('button', { name: 'Quitar uno de Strass' }))
+
+  beforeEach(() => {
+    mockDepositPreview.mockReset()
+    mockServices.mockReset()
+    mockPreviewPromotion.mockReset()
+    mockDepositPreview.mockReturnValue({ data: undefined, isLoading: false })
+    mockServices.mockReturnValue({ data: [servicio], isLoading: false })
+  })
+
+  it('aplicar un codigo lo valida con los adicionales elegidos', async () => {
+    mockPreviewPromotion.mockResolvedValue(promo())
+    render(<ConEstado base={props({ bookingState: estado({ addons: [] }) })} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Agregar uno de Strass' }))
+    fireEvent.change(screen.getByPlaceholderText('Ej: BIENVENIDA10'), {
+      target: { value: 'min6000' }
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Aplicar' }))
+
+    await waitFor(() =>
+      expect(mockPreviewPromotion).toHaveBeenCalledWith({
+        storePublicId: 'store-1',
+        serviceId: 'svc-1',
+        code: 'MIN6000',
+        addons: ['strass:1']
+      })
+    )
+  })
+
+  it('cambiar la seleccion vuelve a validar el codigo tras la espera, y mientras no deja reservar', async () => {
+    mockPreviewPromotion.mockResolvedValue(promo({ base_amount: 5500, final_amount: 4950 }))
+    render(<ConEstado base={conPromo(2)} />)
+    aceptarTerminos()
+    quitarUno()
+
+    expect(screen.getByRole('button', { name: RESERVAR })).toBeDisabled()
+    expect(mockPreviewPromotion).not.toHaveBeenCalled()
+    await waitFor(() =>
+      expect(mockPreviewPromotion).toHaveBeenCalledWith({
+        storePublicId: 'store-1',
+        serviceId: 'svc-1',
+        code: 'MIN6000',
+        addons: ['strass:1']
+      })
+    )
+    await waitFor(() => expect(screen.getByRole('button', { name: RESERVAR })).not.toBeDisabled())
+    expect(mockPreviewPromotion).toHaveBeenCalledTimes(1)
+    expect(screen.queryByText(/Quitamos el código/)).not.toBeInTheDocument()
+  })
+
+  it('si el codigo ya no aplica (total bajo el minimo) se quita y se avisa', async () => {
+    mockPreviewPromotion.mockRejectedValue(
+      new ValidationError('La promocion no aplica a este servicio', { statusCode: 400 })
+    )
+    render(<ConEstado base={conPromo(2)} />)
+    expect(screen.getByText('Desde 6.000')).toBeInTheDocument()
+    aceptarTerminos()
+    quitarUno()
+
+    await waitFor(() =>
+      expect(
+        screen.getByText('Quitamos el código MIN6000: La promocion no aplica a este servicio')
+      ).toBeInTheDocument()
+    )
+    // El wizard quedo sin codigo: no hay descuento ni caja de la promo.
+    expect(screen.queryByText('Desde 6.000')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('booking-price-discount')).not.toBeInTheDocument()
+    expect((screen.getByPlaceholderText('Ej: BIENVENIDA10') as HTMLInputElement).value).toBe('')
+    await waitFor(() => expect(screen.getByRole('button', { name: RESERVAR })).not.toBeDisabled())
+  })
+
+  it('un fallo de red no quita el codigo pero lo dice', async () => {
+    mockPreviewPromotion.mockRejectedValue(new Error('sin red'))
+    render(<ConEstado base={conPromo(2)} />)
+    quitarUno()
+
+    await waitFor(() =>
+      expect(screen.getByText(/No pudimos volver a validar el código MIN6000/)).toBeInTheDocument()
+    )
+    expect(screen.getByText('Desde 6.000')).toBeInTheDocument()
+  })
+
+  it('sin codigo aplicado cambiar adicionales no consulta la promo', async () => {
+    render(<ConEstado base={props({ bookingState: estado({ addons: [] }) })} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Agregar uno de Strass' }))
+
+    await waitFor(() => expect(ultimoPreviewDeSena().addons).toEqual(['strass:1']))
+    expect(mockPreviewPromotion).not.toHaveBeenCalled()
+  })
+})
+
+describe('BookingStepConfirmation: adicionales de un servicio que no esta en el catalogo', () => {
+  const elegidos = [{ addonId: 'strass', name: 'Strass', unitPrice: 500, quantity: 2 }]
+  const conAdicionales = () =>
+    props({
+      bookingState: estado({
+        client: cliente({ name: 'Lucia', phone: '1155550101' }),
+        addons: elegidos
+      })
+    })
+
+  beforeEach(() => {
+    mockDepositPreview.mockReset()
+    mockServices.mockReset()
+    mockDepositPreview.mockReturnValue({ data: undefined, isLoading: false })
+  })
+
+  it('con el catalogo cargado y sin el servicio, avisa y no deja reservar', () => {
+    mockServices.mockReturnValue({ data: [], isLoading: false })
+    render(<BookingStepConfirmation {...conAdicionales()} />)
+    aceptarTerminos()
+
+    expect(screen.getByText(/Los adicionales del servicio cambiaron/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: RESERVAR })).toBeDisabled()
+  })
+
+  it('mientras el catalogo carga no avisa, pero tampoco deja reservar sin los adicionales', () => {
+    mockServices.mockReturnValue({ data: undefined, isLoading: true })
+    render(<BookingStepConfirmation {...conAdicionales()} />)
+    aceptarTerminos()
+
+    expect(screen.queryByText(/Los adicionales del servicio cambiaron/)).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: RESERVAR })).toBeDisabled()
   })
 })

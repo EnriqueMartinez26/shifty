@@ -248,9 +248,13 @@ export const usePublicPaymentStatus = (
 }
 
 export const usePreviewPublicPromotion = () =>
-  useMutation<PromotionPreview, Error, { storePublicId: string; serviceId: string; code: string }>({
-    mutationFn: ({ storePublicId, serviceId, code }) =>
-      publicBookingService.previewPromotion(storePublicId, serviceId, code)
+  useMutation<
+    PromotionPreview,
+    Error,
+    { storePublicId: string; serviceId: string; code: string; addons?: readonly string[] }
+  >({
+    mutationFn: ({ storePublicId, serviceId, code, addons }) =>
+      publicBookingService.previewPromotion(storePublicId, serviceId, code, addons)
   })
 
 export const useRequestPublicOtp = () =>
