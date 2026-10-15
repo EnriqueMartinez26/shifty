@@ -139,6 +139,7 @@ async def test_reprogramar_desde_el_cliente_toma_el_lock_antes_de_leer_bloqueos(
         },
     )
     assert verificado.status_code == 200, verificado.text
+    client.headers["X-Client-Token"] = verificado.json()["client_token"]
     registro = _espiar_orden_de_sentencias(test_session, monkeypatch)
 
     res = await client.patch(

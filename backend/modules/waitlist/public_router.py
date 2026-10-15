@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import Depends, Path, Request, status
+from fastapi import Depends, Header, Path, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.config import settings
@@ -19,6 +19,7 @@ from core.rate_limit import enforce_rate_limit
 from core.router import CanonicalAPIRouter
 from core.validation import PUBLIC_ID_PATTERN
 from modules.billing.dependencies import reject_new_public_business_when_suspended
+from modules.otp.client_token import CLIENT_TOKEN_HEADER
 from modules.public_api.repository import PublicRepository
 from modules.public_api.service import (
     require_recent_client_otp as _require_recent_client_otp,
@@ -35,6 +36,8 @@ router = CanonicalAPIRouter(prefix="/public/waitlist", tags=["Public Waitlist"])
 EntryIdPath = Annotated[
     str, Path(min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)
 ]
+# El token de quien verifico el OTP, igual que "Mis turnos" (2026-10-14).
+ClientTokenHeader = Annotated[str | None, Header(alias=CLIENT_TOKEN_HEADER)]
 
 
 async def _store(db: AsyncSession, store_public_id: str) -> Store:
@@ -90,6 +93,7 @@ async def my_waitlist_entries(
     request: Request,
     data: WaitlistClientQuery,
     db: AsyncSession = Depends(get_db),
+    client_token: ClientTokenHeader = None,
 ) -> list[WaitlistEntryResponse]:
     await enforce_rate_limit(
         request,
@@ -99,7 +103,9 @@ async def my_waitlist_entries(
     )
     async with tenant_bypass(db):
         store = await _store(db, data.store_public_id)
-        await _require_recent_client_otp(db, store_id=store.id, phone=data.phone)
+        await _require_recent_client_otp(
+            db, store_id=store.id, phone=data.phone, client_token=client_token
+        )
         rows = await WaitlistService(db).list_for_client(store.id, data.phone)
         return [
             WaitlistEntryResponse(**to_row_dict(r, show_contact=True)) for r in rows
@@ -112,6 +118,7 @@ async def leave_waitlist(
     request: Request,
     data: WaitlistClientQuery,
     db: AsyncSession = Depends(get_db),
+    client_token: ClientTokenHeader = None,
 ) -> None:
     await enforce_rate_limit(
         request,
@@ -121,7 +128,9 @@ async def leave_waitlist(
     )
     async with tenant_bypass(db):
         store = await _store(db, data.store_public_id)
-        await _require_recent_client_otp(db, store_id=store.id, phone=data.phone)
+        await _require_recent_client_otp(
+            db, store_id=store.id, phone=data.phone, client_token=client_token
+        )
         svc = WaitlistService(db)
         entry = await svc.get_open(store.id, entry_id)
         if entry.client_phone != data.phone:

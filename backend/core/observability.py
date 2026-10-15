@@ -119,9 +119,10 @@ def _scrub_event(event: "Event", _hint: "Hint") -> "Event | None":
             request["url"] = _mask_url(url)
         headers = request.get("headers")
         if isinstance(headers, dict):
-            for header in ("authorization", "cookie", "x-signature"):
-                headers.pop(header, None)
-                headers.pop(header.title(), None)
+            # Sin importar mayusculas: el SDK y los proxies no las normalizan.
+            for header in list(headers):
+                if isinstance(header, str) and header.lower() in _SENSITIVE_HEADERS:
+                    headers.pop(header, None)
 
     # extra/contexts pueden traer PII o secretos si algun logger los adjunta.
     # Se recortan por clave sensible en vez de confiar en que nadie los ponga.
@@ -138,6 +139,7 @@ def _scrub_event(event: "Event", _hint: "Hint") -> "Event | None":
     _scrub_mapping(extra)
     for context in (event.get("contexts") or {}).values():
         _scrub_mapping(context)
+    _drop_span_headers(event)
     _mask_breadcrumb_urls(event)
     _drop_frame_vars(event)
     return event
@@ -147,6 +149,42 @@ def _scrub_event(event: "Event", _hint: "Hint") -> "Event | None":
 # los separadores habituales y un ``+`` opcional. Un ULID o un slug tienen
 # letras y no entran.
 _PHONE_SEGMENT = re.compile(r"\+?[\d\s\-().]{8,}")
+
+
+# Headers que nunca salen a Sentry. ``x-client-token`` (2026-10-14) es el
+# bearer de 30 minutos de la autogestion, con el telefono en claro en el
+# payload; ni los ``SENSITIVE_HEADERS`` del SDK ni su ``EventScrubber`` lo
+# cubren.
+_SENSITIVE_HEADERS = frozenset(
+    {"authorization", "cookie", "set-cookie", "x-signature", "x-client-token"}
+)
+_SPAN_HEADER_PREFIX = "http.request.header."
+
+
+def _drop_span_headers(event: "Event") -> None:
+    """Saca los headers sensibles de los atributos de los spans.
+
+    La integracion ASGI puede dejar los headers del request como
+    ``http.request.header.<nombre>`` en ``data`` de cada span y del trace
+    (``contexts.trace.data``) de una transaccion.
+    """
+    spans: Any = event.get("spans")
+    datas: list[Any] = [
+        span.get("data") for span in spans or [] if isinstance(span, dict)
+    ]
+    trace: Any = (event.get("contexts") or {}).get("trace")
+    if isinstance(trace, dict):
+        datas.append(trace.get("data"))
+    for data in datas:
+        if not isinstance(data, dict):
+            continue
+        for key in list(data):
+            if (
+                isinstance(key, str)
+                and key.lower().startswith(_SPAN_HEADER_PREFIX)
+                and key.lower()[len(_SPAN_HEADER_PREFIX) :] in _SENSITIVE_HEADERS
+            ):
+                data.pop(key, None)
 
 
 def _mask_url(url: str) -> str:

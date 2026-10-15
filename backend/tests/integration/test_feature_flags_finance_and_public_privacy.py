@@ -700,6 +700,7 @@ async def test_public_booking_requires_otp_when_feature_enabled(
         },
     )
     assert otp_verify.status_code == 200, otp_verify.text
+    client.headers["X-Client-Token"] = otp_verify.json()["client_token"]
 
     allowed_booking = await client.post("/public/appointments", json=booking_payload)
     assert allowed_booking.status_code == 201, allowed_booking.text
@@ -784,6 +785,7 @@ async def test_public_client_self_service_requires_recent_otp_and_releases_faile
         },
     )
     assert otp_verify.status_code == 200, otp_verify.text
+    client.headers["X-Client-Token"] = otp_verify.json()["client_token"]
 
     allowed_list = await client.get(
         f"/public/client/{store_public_id}/5491177700011/appointments",

@@ -94,6 +94,7 @@ async def test_el_motivo_llega_al_duenio_en_una_linea_y_el_asunto_no_cambia(
         },
     )
     assert verificado.status_code == 200, verificado.text
+    client.headers["X-Client-Token"] = verificado.json()["client_token"]
 
     cancelado = await client.patch(
         f"/public/client/appointments/{reserva.json()['public_id']}/cancel",

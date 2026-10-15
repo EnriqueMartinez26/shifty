@@ -568,6 +568,7 @@ async def _cliente_conocido_verificado(
         },
     )
     assert verificado.status_code == 200, verificado.text
+    client.headers["X-Client-Token"] = verificado.json()["client_token"]
 
 
 @pytest.mark.asyncio
