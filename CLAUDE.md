@@ -638,6 +638,23 @@ Una instrucción en lenguaje natural no es una garantía.
 - **Un cobro con `deposit_rule` conserva su importe.** Regenerar el link
   desde el panel no re-tarifa: hacerlo dejaba el snapshot mintiendo y rompía
   para siempre la validación de importe del webhook.
+- **Un adicional suma precio, nunca tiempo** (decisión de Mateo, 2026-10-14;
+  `service_addons`, `services/addons.py::price_selection`). El turno congela
+  el total (`price_amount`: servicio con promo + adicionales), `addons_amount`
+  y `addons_snapshot` (`ck_appointments_addons_amount`: el total nunca es
+  menor que los adicionales); la seña porcentual se calcula sobre el total,
+  con la misma cotización en `/public/deposit/preview` y en el alta. Un
+  adicional que no es del catálogo vigente del servicio es 422
+  `ADDON_UNAVAILABLE` antes de escribir nada. Editar el catálogo no toca un
+  turno tomado; las dos reprogramaciones y `carry_manual_deposit` mudan los
+  adicionales con el turno; el link del panel cobra el precio de lista más
+  los adicionales congelados. Propuestas del coordinador, pendientes de OK de
+  Mateo y Enrique: la promo baja solo el servicio, `full` cobra también los
+  adicionales, y que el link del panel cobre sobre `price_amount` entero (no
+  aplicado: dejaría de re-tarifar tras un cambio de precio). Las altas del
+  panel y de la lista de espera todavía no eligen adicionales.
+  (`test_adicionales_precio.py`, `test_adicionales_del_servicio.py`,
+  `test_reserva_con_adicionales.py`, `test_pg_adicionales.py`)
 - **Una seña obligatoria se cobra por Mercado Pago o por WhatsApp**
   (decisión de Mateo, 2026-10-03; `payments/deposit_channels.py`).
   Configurarla exige un canal: MP conectado con el flag `payments`, o un
