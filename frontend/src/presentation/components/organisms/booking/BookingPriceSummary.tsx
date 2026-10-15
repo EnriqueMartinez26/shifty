@@ -7,16 +7,24 @@ import { formatCurrency } from '@shared/utils/currency'
 import { createBookingAccentBoxStyle } from '../../../lib/surfaceStyles'
 
 interface BookingPriceSummaryProps {
-  /** Precio del servicio, con la promo aplicada si hay. */
+  /** Precio de lista del servicio. */
   basePrice: number
   addons: readonly AddonLine[]
-  total: number
+  /** Descuento del codigo sobre el total (servicio y adicionales), o null. */
+  discount: number | null
+  promotionCode?: string
+  /** Total a cobrar; null mientras el backend lo calcula. */
+  total: number | null
 }
 
-/** Servicio, adicionales y total del turno. Solo pinta. */
+const rowClass = 'flex justify-between gap-3 text-sm font-bold text-slate-700'
+
+/** Servicio, adicionales, descuento y total del turno. Solo pinta. */
 export const BookingPriceSummary: React.FC<BookingPriceSummaryProps> = ({
   basePrice,
   addons,
+  discount,
+  promotionCode,
   total
 }) => (
   <div
@@ -24,25 +32,28 @@ export const BookingPriceSummary: React.FC<BookingPriceSummaryProps> = ({
     style={createBookingAccentBoxStyle('#f8fafc', '#cbd5e1')}
     data-testid="booking-price-summary"
   >
-    <div className="flex justify-between gap-3 text-sm font-bold text-slate-700">
+    <div className={rowClass}>
       <span>Servicio</span>
       <span>{formatCurrency(basePrice)}</span>
     </div>
     {addons.map((line) => (
-      <div
-        key={line.addonId}
-        className="flex justify-between gap-3 text-sm font-bold text-slate-700"
-      >
+      <div key={line.addonId} className={rowClass}>
         <span className="min-w-0 break-words">{formatAddonLabel(line)}</span>
         <span>{formatCurrency(line.amount)}</span>
       </div>
     ))}
+    {discount !== null && discount > 0 && (
+      <div className={rowClass} data-testid="booking-price-discount">
+        <span>Descuento{promotionCode ? ` (${promotionCode})` : ''}</span>
+        <span>-{formatCurrency(discount)}</span>
+      </div>
+    )}
     <div
       className="flex justify-between gap-3 pt-2 border-t text-base font-black text-slate-900"
       style={{ borderColor: '#cbd5e1' }}
     >
       <span>Total</span>
-      <span>{formatCurrency(total)}</span>
+      <span>{total === null ? 'Calculando…' : formatCurrency(total)}</span>
     </div>
   </div>
 )

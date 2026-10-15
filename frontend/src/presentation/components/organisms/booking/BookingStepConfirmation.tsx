@@ -194,12 +194,8 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
   const addonLines = addonSelection.lines()
   const addonsKey = addonSelection.toQueryParams().join(',')
   const debouncedAddonsKey = useDebouncedValue(addonsKey, ADDONS_PREVIEW_DEBOUNCE_MS)
-  // El total que se muestra es el mismo calculo del backend (promo solo sobre
-  // el servicio, adicionales aparte); la seña sale del preview, sobre el total.
-  const basePrice = promotionPreview
-    ? Number(promotionPreview.final_amount)
-    : Number(selectedService?.price ?? 0)
-  const totalPrice = sumAmounts(basePrice, addonSelection.total())
+  const listPrice = Number(selectedService?.price ?? 0)
+  const subtotal = sumAmounts(listPrice, addonSelection.total())
   // La seña real la decide el backend (antelación e historial del cliente):
   // inferirla desde los campos crudos del servicio divergía en cuanto la
   // tienda configuraba un recargo. Mientras carga, se cae a la inferencia.
@@ -227,6 +223,29 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
     addonsKey !== debouncedAddonsKey ||
     Boolean(depositQuery.isPlaceholderData) ||
     Boolean(depositQuery.isFetching)
+  // El total lo dice el backend: la promo descuenta el TOTAL (servicio y
+  // adicionales; decision de Mateo, 2026-10-14) y `price` del preview de la
+  // seña es ese total ya descontado, el mismo que se cobra. El preview de la
+  // promo cotiza solo el servicio, asi que no se usa para el total cuando hay
+  // adicionales. Sin el preview vigente solo se muestra lo que es exacto sin
+  // la red: sin codigo, la suma; con codigo y sin adicionales, el total de la
+  // promo. Lo demas espera al backend ("Calculando…").
+  const promotionApplied = Boolean(bookingState.promotionCode) && promotionPreview !== null
+  const serverTotal =
+    depositQuery.data && !depositUpdating && !depositQuery.error
+      ? Number(depositQuery.data.price)
+      : null
+  const totalPrice =
+    serverTotal ??
+    (!promotionApplied
+      ? subtotal
+      : addonSelection.isEmpty() && promotionPreview
+        ? Number(promotionPreview.final_amount)
+        : null)
+  const discount =
+    promotionApplied && totalPrice !== null
+      ? Math.max(0, Math.round((subtotal - totalPrice) * 100) / 100)
+      : null
 
   const handleAddonChange = (addonId: string, quantity: number) => {
     onAddonsChange(
@@ -685,11 +704,19 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
               <p className="text-[10px] font-black uppercase tracking-widest text-green-700">
                 {promotionPreview.title}
               </p>
-              <div className="mt-2 space-y-1 text-sm font-black text-green-900">
-                <p>Servicio: {formatCurrency(Number(promotionPreview.base_amount))}</p>
-                <p>Descuento: -{formatCurrency(Number(promotionPreview.discount_amount))}</p>
-                <p>Total final: {formatCurrency(Number(promotionPreview.final_amount))}</p>
-              </div>
+              {addonOptions.length > 0 ? (
+                // Con adicionales el descuento sale sobre el total: los importes
+                // de este preview (solo el servicio) no son los que se cobran.
+                <p className="mt-2 text-sm font-black text-green-900">
+                  El descuento se aplica al total, adicionales incluidos.
+                </p>
+              ) : (
+                <div className="mt-2 space-y-1 text-sm font-black text-green-900">
+                  <p>Servicio: {formatCurrency(Number(promotionPreview.base_amount))}</p>
+                  <p>Descuento: -{formatCurrency(Number(promotionPreview.discount_amount))}</p>
+                  <p>Total final: {formatCurrency(Number(promotionPreview.final_amount))}</p>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -745,7 +772,13 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
                 </button>
               </div>
             )}
-            <BookingPriceSummary basePrice={basePrice} addons={addonLines} total={totalPrice} />
+            <BookingPriceSummary
+              basePrice={listPrice}
+              addons={addonLines}
+              discount={discount}
+              promotionCode={promotionApplied ? bookingState.promotionCode : undefined}
+              total={totalPrice}
+            />
           </>
         )}
 

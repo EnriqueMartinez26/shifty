@@ -2,7 +2,10 @@ import React from 'react'
 
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 
-import type { BookingConfirmation } from '@application/services/PublicBookingService'
+import type {
+  BookingConfirmation,
+  PromotionPreview
+} from '@application/services/PublicBookingService'
 
 import { ConflictError, ValidationError } from '@shared/errors'
 
@@ -1065,8 +1068,43 @@ describe('BookingStepConfirmation: adicionales', () => {
     expect(mockRefreshServices).toHaveBeenCalledTimes(1)
   })
 })
+describe('BookingStepConfirmation: promo sobre el total', () => {
+  const strassX2 = [{ addonId: 'strass', name: 'Strass', unitPrice: 500, quantity: 2 }]
+  const promo = (patch: Partial<PromotionPreview> = {}): PromotionPreview => ({
+    code: 'BIENVENIDA10',
+    title: 'Bienvenida',
+    promotion_type: 'percent',
+    base_amount: 5000,
+    discount_amount: 500,
+    final_amount: 4500,
+    ...patch
+  })
+  // `price` del preview de la seña: el total que cobra el backend, con la
+  // promo aplicada a servicio + adicionales.
+  const precioDelBackend = (price: number) =>
+    mockDepositPreview.mockReturnValue({
+      isLoading: false,
+      data: {
+        amount: 0,
+        base_amount: 0,
+        extra_percent: 0,
+        reasons: [],
+        price,
+        addons_amount: 1000,
+        payments_enabled: false,
+        online_payment_mandatory: false
+      }
+    })
+  const conPromo = (preview: PromotionPreview, addons = strassX2) =>
+    props({
+      bookingState: estado({
+        promotionCode: preview.code,
+        promotionPreview: preview,
+        addons
+      })
+    })
+  const resumen = () => screen.getByTestId('booking-price-summary')
 
-describe('BookingStepConfirmation: promo al volver un paso', () => {
   beforeEach(() => {
     mockDepositPreview.mockReset()
     mockServices.mockReset()
@@ -1089,26 +1127,60 @@ describe('BookingStepConfirmation: promo al volver un paso', () => {
   // El descuento vivia solo en el paso: al volver y avanzar, el total se
   // mostraba sin la promo que el backend si aplica.
   it('al volver a montar, el total sigue con el descuento aplicado', () => {
+    precioDelBackend(5400)
+    render(<BookingStepConfirmation {...conPromo(promo())} />)
+
+    expect(resumen()).toHaveTextContent(/Total\s*\$\s*5\.400/)
+    expect(screen.getByText('Bienvenida')).toBeInTheDocument()
+  })
+
+  it('un porcentaje descuenta el total con adicionales: muestra el total del backend', () => {
+    // 10% de (5.000 + 2 x 500) = 600: total 5.400, no 4.500 + 1.000 = 5.500.
+    precioDelBackend(5400)
+    render(<BookingStepConfirmation {...conPromo(promo())} />)
+
+    expect(screen.getByTestId('booking-price-discount')).toHaveTextContent(/BIENVENIDA10/)
+    expect(screen.getByTestId('booking-price-discount')).toHaveTextContent(/600/)
+    expect(resumen()).toHaveTextContent(/Total\s*\$\s*5\.400/)
+    expect(resumen()).not.toHaveTextContent(/5\.500/)
+    // Los importes del preview de la promo son solo del servicio: no se muestran.
+    expect(screen.queryByText(/Total final:/)).not.toBeInTheDocument()
+    expect(screen.getByText(/El descuento se aplica al total/)).toBeInTheDocument()
+  })
+
+  it('un monto fijo mayor al servicio sigue descontando sobre los adicionales', () => {
+    // Fijo de 5.500 sobre 6.000: el preview de la promo lo topea en el
+    // servicio (5.000), pero el backend descuenta del total y cobra 500.
+    precioDelBackend(500)
     render(
       <BookingStepConfirmation
-        {...props({
-          bookingState: estado({
-            promotionCode: 'BIENVENIDA10',
-            promotionPreview: {
-              code: 'BIENVENIDA10',
-              title: 'Bienvenida',
-              promotion_type: 'percent',
-              base_amount: 5000,
-              discount_amount: 500,
-              final_amount: 4500
-            },
-            addons: [{ addonId: 'strass', name: 'Strass', unitPrice: 500, quantity: 2 }]
+        {...conPromo(
+          promo({
+            code: 'FIJO5500',
+            promotion_type: 'fixed',
+            discount_amount: 5000,
+            final_amount: 0
           })
-        })}
+        )}
       />
     )
 
-    expect(screen.getByTestId('booking-price-summary')).toHaveTextContent(/Total\s*\$\s*5\.500/)
-    expect(screen.getByText('Bienvenida')).toBeInTheDocument()
+    expect(screen.getByTestId('booking-price-discount')).toHaveTextContent(/5\.500/)
+    expect(resumen()).toHaveTextContent(/Total\s*\$\s*500/)
+  })
+
+  it('con promo y adicionales, sin el total del backend dice "Calculando…"', () => {
+    mockDepositPreview.mockReturnValue({ data: undefined, isLoading: true, isFetching: true })
+    render(<BookingStepConfirmation {...conPromo(promo())} />)
+
+    expect(resumen()).toHaveTextContent(/Total\s*Calculando…/)
+    expect(screen.queryByTestId('booking-price-discount')).not.toBeInTheDocument()
+  })
+
+  it('con promo y sin adicionales el total es el de la promo aunque el backend no respondio', () => {
+    render(<BookingStepConfirmation {...conPromo(promo(), [])} />)
+
+    expect(resumen()).toHaveTextContent(/Total\s*\$\s*4\.500/)
+    expect(screen.getByTestId('booking-price-discount')).toHaveTextContent(/500/)
   })
 })
