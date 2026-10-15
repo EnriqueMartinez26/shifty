@@ -367,17 +367,14 @@ async def test_la_base_rechaza_un_adicional_fuera_de_los_topes(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("precio", "adicionales"),
-    [(Decimal("2999.99"), Decimal("3000")), (Decimal("100"), Decimal("-1"))],
-)
-async def test_el_turno_no_congela_adicionales_mayores_que_el_total(
+async def test_el_turno_no_congela_adicionales_negativos(
     client: AsyncClient,
     app_sessions: async_sessionmaker[AsyncSession],
     owner_engine: AsyncEngine,
-    precio: Decimal,
-    adicionales: Decimal,
 ) -> None:
+    """``ck_appointments_addons_amount`` = ``addons_amount >= 0``. Un total
+    menor que los adicionales SI vale: la promo se aplica al total (decision
+    de Mateo, 2026-10-15) y ``addons_amount`` es la suma sin descuento."""
     store, servicio, staff, adicional, slot = await _tienda(
         client, app_sessions, "pg-adic-check-turno"
     )
@@ -386,16 +383,20 @@ async def test_el_turno_no_congela_adicionales_mayores_que_el_total(
         json=_reserva(store, servicio, staff, adicional, slot, 1),
     )
     assert alta.status_code == 201, alta.text
+    turno = alta.json()["public_id"]
+    actualizar = text(
+        "update appointments set price_amount = :p, addons_amount = :a where id = :id"
+    )
 
     with pytest.raises(IntegrityError, match="ck_appointments_addons_amount"):
         async with owner_engine.begin() as conn:
             await conn.execute(
-                text(
-                    "update appointments set price_amount = :p, addons_amount = :a "
-                    "where id = :id"
-                ),
-                {"p": precio, "a": adicionales, "id": alta.json()["public_id"]},
+                actualizar, {"p": Decimal("100"), "a": Decimal("-1"), "id": turno}
             )
+    async with owner_engine.begin() as conn:
+        await conn.execute(
+            actualizar, {"p": Decimal("1000"), "a": Decimal("3000"), "id": turno}
+        )
     async with owner_engine.connect() as conn:
         validada = (
             await conn.execute(

@@ -3,10 +3,10 @@
 Un adicional suma PRECIO, nunca tiempo. El turno congela el total
 (``price_amount`` = servicio con promo + adicionales), la parte de adicionales
 (``addons_amount``) y las lineas elegidas (``addons_snapshot``); la sena
-porcentual sale sobre el total. Decisiones del coordinador a confirmar en la
-PR: (a) la promo baja solo el servicio; (b) ``full`` cobra los adicionales;
-(c) el link del panel cobra sobre el precio congelado del turno (esta PR
-implementa una variante conservadora, ver el test del link del panel).
+porcentual sale sobre el total. Decisiones de Mateo (2026-10-15): la promo
+se aplica al TOTAL (servicio + adicionales) y la sena sale del total con
+descuento; ``full`` cobra los adicionales; el link del panel cobra precio de
+lista + adicionales congelados.
 
 Caso del diseno: servicio de $27.000 con 30 % de sena, 6 "Strass" de $500 =
 $3.000 de adicionales, total $30.000, sena $9.000 (no $8.100).
@@ -413,47 +413,126 @@ async def test_editar_los_adicionales_no_cambia_un_turno_ya_tomado(
     assert otra.json()["error_code"] == "ADDON_UNAVAILABLE"
 
 
-@pytest.mark.asyncio
-async def test_la_promo_baja_solo_el_servicio(
-    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Decision (a) del coordinador: 10 % sobre 27.000 = 24.300, mas 3.000 de
-    adicionales = 27.300; la sena del 30 % es 8.190."""
-    monkeypatch.setattr(tasks, "_send_email", Buzon())
-    t = await _tienda(client, "adic-promo")
+async def _promo(t: _Tienda, client: AsyncClient, **valores: Any) -> None:
     promo = await client.post(
         "/promotions/",
         headers=auth_headers(t.token),
-        json={
-            "code": "VERANO10",
-            "title": "Verano",
-            "promotion_type": "percent",
-            "value": 10,
-        },
+        json={"title": "Promo", **valores},
     )
     assert promo.status_code == 201, promo.text
 
+
+@pytest.mark.asyncio
+async def test_la_promo_se_aplica_al_total_y_los_previews_dicen_lo_mismo(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Decision de Mateo (2026-10-15): 10 % sobre 27.000 + 3.000 = 27.000; la
+    sena del 30 % es 8.100. El preview de la promo y el de la sena (con los
+    mismos adicionales) muestran lo que cobra el alta."""
+    monkeypatch.setattr(tasks, "_send_email", Buzon())
+    t = await _tienda(client, "adic-promo")
+    await _promo(t, client, code="VERANO10", promotion_type="percent", value=10)
+    comunes: list[tuple[str, Any]] = [
+        ("store_public_id", t.store),
+        ("service_id", t.servicio),
+        ("addon", f"{t.strass}:6"),
+    ]
+
+    vista_promo = await client.get(
+        "/public/promotions/preview", params=[*comunes, ("code", "VERANO10")]
+    )
+    vista_sena = await client.get(
+        "/public/deposit/preview",
+        params=[
+            *comunes,
+            ("starts_at", _slot(t, 13).isoformat()),
+            ("promotion_code", "VERANO10"),
+        ],
+    )
     res = await _reservar(client, t, _seis_strass(t), promotion_code="VERANO10")
 
+    assert vista_promo.status_code == 200, vista_promo.text
+    assert (
+        Decimal(str(vista_promo.json()["base_amount"])),
+        Decimal(str(vista_promo.json()["discount_amount"])),
+        Decimal(str(vista_promo.json()["final_amount"])),
+    ) == (TOTAL, Decimal("3000"), Decimal("27000"))
+    assert vista_sena.status_code == 200, vista_sena.text
+    assert Decimal(str(vista_sena.json()["price"])) == Decimal("27000")
+    assert Decimal(str(vista_sena.json()["amount"])) == Decimal("8100")
     assert res.status_code == 201, res.text
     cuerpo = res.json()
-    assert Decimal(str(cuerpo["final_price"])) == Decimal("27300")
-    assert Decimal(str(cuerpo["discount_amount"])) == Decimal("2700")
-    assert Decimal(str(cuerpo["payment_amount"])) == Decimal("8190")
+    assert Decimal(str(cuerpo["final_price"])) == Decimal("27000")
+    assert Decimal(str(cuerpo["discount_amount"])) == Decimal("3000")
+    assert Decimal(str(cuerpo["service_price"])) == PRECIO
+    assert Decimal(str(cuerpo["addons_amount"])) == ADICIONALES
+    assert cuerpo["payment_amount"] == vista_sena.json()["amount"]
+    assert cuerpo["final_price"] == vista_promo.json()["final_amount"]
     turno = await _turno(test_session, cuerpo["public_id"])
-    assert turno.price_amount == Decimal("27300.00")
-    assert turno.addons_amount == ADICIONALES
+    # El total congelado lleva el descuento; los adicionales, sin descuento.
+    assert (turno.price_amount, turno.addons_amount) == (
+        Decimal("27000.00"),
+        ADICIONALES,
+    )
     cobro = await _cobro(test_session, turno.id)
-    # Antes de la promo: 30 % de 27.000 + 3.000.
-    assert cobro.original_amount == SENA
-    assert cobro.amount == Decimal("8190.00")
+    # Antes de la promo: 30 % de 30.000.
+    assert (cobro.original_amount, cobro.amount) == (SENA, Decimal("8100.00"))
+    assert cobro.discount_amount == Decimal("900.00")
+    # Sin ``addon`` el preview de la promo es el de siempre (solo el servicio).
+    sola = await client.get(
+        "/public/promotions/preview", params=[*comunes[:2], ("code", "VERANO10")]
+    )
+    assert Decimal(str(sola.json()["final_amount"])) == Decimal("24300")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("deposit_type", "deposit_amount", "sena"),
+    [
+        ("percent", 30, Decimal("300")),
+        ("fixed", 5000, Decimal("1000")),
+        ("full", None, Decimal("1000")),
+    ],
+)
+async def test_un_descuento_grande_deja_el_total_debajo_de_los_adicionales(
+    client: AsyncClient,
+    test_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    deposit_type: str,
+    deposit_amount: int | None,
+    sena: Decimal,
+) -> None:
+    """Un fijo de 29.000 sobre 30.000 deja un total de 1.000, menor que los
+    3.000 de adicionales: la reserva se toma, ``addons_amount`` queda sin
+    descuento (lo que dice el snapshot) y la sena sale del total con descuento
+    (percent, fixed acotado al total y full)."""
+    monkeypatch.setattr(tasks, "_send_email", Buzon())
+    t = await _tienda(
+        client,
+        f"adic-promo-grande-{deposit_type}",
+        deposit_type=deposit_type,
+        deposit_amount=deposit_amount,
+    )
+    await _promo(t, client, code="GRANDE", promotion_type="fixed", value=29000)
+
+    res = await _reservar(client, t, _seis_strass(t), promotion_code="GRANDE")
+
+    assert res.status_code == 201, res.text
+    assert Decimal(str(res.json()["final_price"])) == Decimal("1000")
+    assert Decimal(str(res.json()["payment_amount"])) == sena
+    turno = await _turno(test_session, res.json()["public_id"])
+    assert (turno.price_amount, turno.addons_amount) == (
+        Decimal("1000.00"),
+        ADICIONALES,
+    )
+    assert turno.addons_snapshot == _lineas_congeladas(t)
 
 
 @pytest.mark.asyncio
 async def test_full_cobra_tambien_los_adicionales(
     client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Decision (b) del coordinador."""
+    """Decision de Mateo (2026-10-15)."""
     monkeypatch.setattr(tasks, "_send_email", Buzon())
     t = await _tienda(client, "adic-full", deposit_type="full", deposit_amount=None)
 
@@ -673,9 +752,8 @@ async def test_el_link_del_panel_cobra_tambien_los_adicionales_congelados(
     client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Sin sena en el servicio, el link del panel cobra el turno entero:
-    precio de lista + adicionales congelados (antes, solo el precio de
-    lista). La decision (c) del coordinador (cobrar sobre ``price_amount``)
-    queda pendiente de OK: ver ``payments.router._payment_amount_for_appointment``."""
+    precio de lista + adicionales congelados (decision de Mateo, 2026-10-15;
+    antes, solo el precio de lista)."""
     monkeypatch.setattr(tasks, "_send_email", Buzon())
     _mercadopago(monkeypatch, {})
     t = await _tienda(

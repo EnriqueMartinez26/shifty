@@ -1142,6 +1142,7 @@ Parameters:
 | query | `store_public_id` | yes | string | minLength=1, maxLength=64, pattern="^[A-Za-z0-9_-]{1,64}$" |
 | query | `service_id` | yes | string | minLength=1, maxLength=64, pattern="^[A-Za-z0-9_-]{1,64}$" |
 | query | `code` | yes | string | minLength=3, maxLength=30 |
+| query | `addon` | no | array<string> | maxItems=20, default=[] |
 
 Responses:
 
@@ -4912,4 +4913,4 @@ Type: `enum("admin", "staff", "receptionist", "client")`
 | `terms_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 | `privacy_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 
-Generado desde app.openapi() el 2026-10-15, commit bf3f8012
+Generado desde app.openapi() el 2026-10-15, commit c43e4239

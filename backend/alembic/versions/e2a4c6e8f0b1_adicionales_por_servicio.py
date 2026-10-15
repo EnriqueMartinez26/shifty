@@ -15,9 +15,14 @@ Expand puro (docs/DEPLOY_RUNBOOK.md, seccion 5):
 - ``appointments.addons_amount``: NOT NULL con default constante, que en
   Postgres 11+ no reescribe la tabla (solo catalogo). ``addons_snapshot``:
   nullable, sin default.
-- ``ck_appointments_addons_amount``: se agrega ``NOT VALID`` (lock breve, no
-  recorre la tabla); ``f3b5d7f9a1c2`` lo valida aparte, con un lock que no
-  frena lecturas ni escrituras (patron ``c4e6a8b0d2f1`` + ``d5f7b9c1e3a2``).
+- ``ck_appointments_addons_amount`` (``addons_amount >= 0``): se agrega
+  ``NOT VALID`` (lock breve, no recorre la tabla); ``f3b5d7f9a1c2`` lo valida
+  aparte, con un lock que no frena lecturas ni escrituras (patron
+  ``c4e6a8b0d2f1`` + ``d5f7b9c1e3a2``). No exige ``price_amount >=
+  addons_amount``: la promo se aplica al total (decision de Mateo,
+  2026-10-15) y ``addons_amount`` es la suma SIN descuento de las lineas del
+  snapshot, asi que un descuento grande deja el total por debajo de los
+  adicionales sin que nada este mal.
 
 El codigo anterior no lee nada de esto: la ventana del deploy (codigo viejo
 sobre el esquema nuevo) y el rollback sin migrar siguen sirviendo. Un turno
@@ -121,8 +126,7 @@ def upgrade() -> None:
         return
     op.execute(
         f"ALTER TABLE appointments ADD CONSTRAINT {CHECK_TURNO} "
-        "CHECK (addons_amount >= 0 AND "
-        "(price_amount IS NULL OR price_amount >= addons_amount)) NOT VALID"
+        "CHECK (addons_amount >= 0) NOT VALID"
     )
     _rls()
 

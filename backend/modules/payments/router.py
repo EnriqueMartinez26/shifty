@@ -156,9 +156,9 @@ def _payment_amount_for_appointment(
     Los adicionales suman precio (decision de Mateo, 2026-10-14): sin ellos el
     link dejaba afuera lo que el cliente eligio. El servicio se sigue cobrando
     al precio de lista de hoy, como antes: regenerar el link despues de un
-    cambio de precio lo re-tarifa (``test_cobro_del_panel_dos_fases``). Cobrar
-    sobre ``price_amount`` entero (decision (c) del coordinador) cambiaria eso
-    para todos los turnos y queda pendiente de OK de Mateo y Enrique.
+    cambio de precio lo re-tarifa (``test_cobro_del_panel_dos_fases``).
+    Decision de Mateo (2026-10-15): lista + adicionales congelados, no
+    ``price_amount`` entero.
     """
     price = Decimal(str(service.price)) + (appointment.addons_amount or Decimal("0"))
     return calculate_service_payment_amount(service, base_price=price) or price

@@ -2,8 +2,9 @@
 
 Decision de Mateo (2026-10-14): un adicional suma PRECIO, nunca tiempo, y la
 sena porcentual se calcula sobre el total (servicio + adicionales). Decisiones
-del coordinador a confirmar en la PR: (a) la promo baja solo el servicio y los
-adicionales suman encima; (b) ``full`` cobra tambien los adicionales.
+de Mateo (2026-10-15): la promo se aplica al TOTAL (servicio + adicionales) y
+la sena sale sobre ese total con descuento; ``full`` cobra tambien los
+adicionales.
 
 ``services.addons.price_selection`` es la unica cotizacion: la usan el preview
 de la sena y el alta publica. ``deposit_rules.decide_deposit`` no cambia: se le
@@ -152,7 +153,7 @@ def test_la_sena_fija_no_cambia_con_los_adicionales() -> None:
 
 
 def test_full_cobra_tambien_los_adicionales() -> None:
-    """Decision (b) del coordinador: el total entero."""
+    """Decision de Mateo (2026-10-15): el total entero."""
     total = _sena(_Servicio(deposit_type="full", deposit_amount=None), Decimal("30000"))
 
     assert total == Decimal("30000.00")
@@ -170,11 +171,33 @@ def test_los_recargos_tambien_salen_sobre_el_total() -> None:
     assert sena == Decimal("12000.00")
 
 
-def test_la_promo_baja_solo_el_servicio() -> None:
-    """Decision (a) del coordinador: 10 % de promo sobre 27.000 = 24.300, mas
-    3.000 de adicionales = 27.300; la sena del 30 % es 8.190."""
-    servicio_con_promo = Decimal("27000") * Decimal("0.9")
-    total = servicio_con_promo + _cotizar(("add-strass", 6))
+def _con_promo(total: Decimal, *, porcentaje: int = 0, fijo: int = 0) -> Decimal:
+    """Lo que hace ``promotions.service._calculate_discount`` sobre la base:
+    un porcentaje, o un fijo acotado a la base."""
+    descuento = total * Decimal(porcentaje) / Decimal("100") + Decimal(fijo)
+    return max(Decimal("0"), total - min(descuento, total))
 
-    assert total == Decimal("27300.00")
-    assert _sena(_Servicio(), total) == Decimal("8190.00")
+
+def test_la_promo_se_aplica_al_total_y_la_sena_sale_del_total_con_descuento() -> None:
+    """Decision de Mateo (2026-10-15): 10 % sobre 27.000 + 3.000 = 27.000; la
+    sena del 30 % es 8.100."""
+    total = _con_promo(Decimal("27000") + _cotizar(("add-strass", 6)), porcentaje=10)
+
+    assert total == Decimal("27000.00")
+    assert _sena(_Servicio(), total) == Decimal("8100.00")
+    fija = _Servicio(deposit_type="fixed", deposit_amount=Decimal("5000"))
+    assert _sena(fija, total) == Decimal("5000.00")
+    assert _sena(_Servicio(deposit_type="full", deposit_amount=None), total) == total
+
+
+def test_un_descuento_grande_deja_el_total_por_debajo_de_los_adicionales() -> None:
+    """Un fijo de 29.000 sobre 30.000 deja 1.000: menos que los 3.000 de
+    adicionales (``addons_amount`` es la suma sin descuento; el CHECK solo
+    exige que no sea negativo). La sena fija se acota al total."""
+    adicionales = _cotizar(("add-strass", 6))
+    total = _con_promo(Decimal("27000") + adicionales, fijo=29000)
+
+    assert total == Decimal("1000.00") < adicionales
+    assert _sena(_Servicio(), total) == Decimal("300.00")
+    fija = _Servicio(deposit_type="fixed", deposit_amount=Decimal("5000"))
+    assert _sena(fija, total) == Decimal("1000.00")

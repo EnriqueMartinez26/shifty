@@ -78,7 +78,7 @@ from modules.public_api.schemas import (
     PublicStoreRefResponse,
     PublicStoreResponse,
 )
-from modules.services.addons import AddonChoice
+from modules.services.addons import AddonChoice, AddonsQuote
 from modules.services.model import ADDONS_PER_SERVICE, Service
 from modules.services.repository import ServiceRepository
 from modules.services.schemas import ServiceAddonResponse
@@ -413,7 +413,7 @@ async def preview_public_deposit(
             raise ServiceNotFoundException(identifier=service_id)
 
         addons = await quote_addons(db, service, _parse_addons(addon))
-        price = await _preview_price(db, store, service, promotion_code) + addons.total
+        price = await _preview_total(db, store, service, promotion_code, addons)
         history = UNKNOWN_HISTORY
         if telefono and await OtpService(db).is_client_contact_verified(
             store_id=store.id, phone=telefono
@@ -458,18 +458,27 @@ def _parse_addons(raw: list[str]) -> list[AddonChoice]:
     return choices
 
 
-async def _preview_price(
-    db: AsyncSession, store: Store, service: Service, promotion_code: str | None
+async def _preview_total(
+    db: AsyncSession,
+    store: Store,
+    service: Service,
+    promotion_code: str | None,
+    addons: AddonsQuote,
 ) -> Decimal:
-    """Precio del servicio con la promo, si el codigo vale (sin adicionales)."""
-    price = Decimal(str(service.price or 0))
+    """Servicio + adicionales con la promo, si el codigo vale: la misma
+    cotizacion que el alta (``quote_promotion`` sobre el total)."""
+    gross_price = Decimal(str(service.price or 0)) + addons.total
     if promotion_code:
         _promotion, quote, _error = await quote_promotion(
-            db, store_id=store.id, service=service, code=promotion_code
+            db,
+            store_id=store.id,
+            service=service,
+            code=promotion_code,
+            base_amount=gross_price,
         )
         if quote:
-            price = quote.final_amount
-    return price
+            return quote.final_amount
+    return gross_price
 
 
 @router.get("/promotions/preview", response_model=PublicPromotionPreviewResponse)
@@ -477,8 +486,12 @@ async def preview_public_promotion(
     store_public_id: PublicIdQuery,
     service_id: PublicIdQuery,
     code: Annotated[str, Query(min_length=3, max_length=30)],
+    addon: AddonQuery = [],
     db: AsyncSession = Depends(get_db),
 ) -> PublicPromotionPreviewResponse:
+    """La promo sobre el total de la reserva: servicio + adicionales elegidos
+    (``addon`` repetible, ``<id>:<cantidad>``; decision de Mateo 2026-10-15).
+    Sin ``addon``, sobre el servicio solo, como antes."""
     async with tenant_bypass(db):
         repo = PublicRepository(db)
         store = await repo.get_store_by_public_id(store_public_id)
@@ -488,11 +501,13 @@ async def preview_public_promotion(
         if not service or service.store_id != store.id:
             raise ServiceNotFoundException(identifier=service_id)
 
+        addons = await quote_addons(db, service, _parse_addons(addon))
         _promotion, quote, error = await quote_promotion(
             db,
             store_id=store.id,
             service=service,
             code=code,
+            base_amount=Decimal(str(service.price or 0)) + addons.total,
         )
         if not quote:
             raise ValidationException(error or "Promocion invalida")
