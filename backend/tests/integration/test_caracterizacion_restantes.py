@@ -224,4 +224,6 @@ async def test_busqueda_de_turnos_items_y_paginado(
         # (``test_saldo_restante_del_turno.py``). Sin cobro no hay saldo.
         "remaining_amount": "0.00",
         "remainder_payment": None,
+        # Aditivo (2026-10-14): la parte del precio que son adicionales.
+        "addons_amount": "0.00",
     }

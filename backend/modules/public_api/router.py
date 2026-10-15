@@ -11,6 +11,7 @@ from decimal import Decimal
 from typing import Annotated
 
 import structlog
+from pydantic import StringConstraints
 from fastapi import (
     BackgroundTasks,
     Depends,
@@ -67,6 +68,7 @@ from modules.public_api.service import (
     client_may_leave,
     client_reschedule_denial,
     decide,
+    quote_addons,
     require_recent_client_otp as _require_recent_client_otp,
 )
 from modules.public_api.schemas import (
@@ -86,6 +88,9 @@ from modules.public_api.schemas import (
     PublicStoreRefResponse,
     PublicStoreResponse,
 )
+from modules.services.addons import AddonChoice, AddonsQuote
+from modules.services.model import ADDONS_PER_SERVICE, Service
+from modules.services.schemas import ServiceAddonResponse
 from modules.stores.model import Store
 from modules.stores.schemas import StoreCustomField
 
@@ -97,11 +102,22 @@ PublicIdPath = Annotated[
 PublicIdQuery = Annotated[
     str, Query(min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)
 ]
+# Un adicional elegido en el preview: ``<id publico>:<cantidad>``.
+AddonQuery = Annotated[
+    list[
+        Annotated[
+            str,
+            StringConstraints(pattern=r"^[A-Za-z0-9_-]{1,64}:\d{1,2}$"),
+        ]
+    ],
+    Query(max_length=ADDONS_PER_SERVICE),
+]
 # Token que ``/public/otp/verify`` le devuelve a quien verifico: la
 # autogestion lo exige ademas de la verificacion en la base (2026-10-14,
 # ``modules/otp/client_token.py``). Opcional en el esquema: faltante o
 # invalido da el mismo 403 neutro ``OTP_VERIFICATION_REQUIRED``.
 ClientTokenHeader = Annotated[str | None, Header(alias=CLIENT_TOKEN_HEADER)]
+
 # El slug canonico es minuscula, pero la URL publica la tipean humanos:
 # "MiBarberia" tiene que resolver a "mibarberia", no dar 422.
 SlugPath = Annotated[
@@ -241,7 +257,8 @@ async def get_public_services(
         store = await repo.get_store_by_public_id(store_public_id)
         if not store:
             raise StoreNotFoundException(identifier=store_public_id)
-        services = await repo.get_services(store.id)
+        # Servicios y adicionales en UNA sentencia (presupuesto del endpoint).
+        catalogo = await repo.get_services_with_addons(store.id)
         return [
             PublicServiceResponse(
                 public_id=service.public_id,
@@ -256,8 +273,9 @@ async def get_public_services(
                 else None,
                 color=service.color,
                 image_url=service.image_url,
+                addons=[ServiceAddonResponse.model_validate(a) for a in addons],
             )
-            for service in services
+            for service, addons in catalogo
         ]
 
 
@@ -367,6 +385,7 @@ async def preview_public_deposit(
     starts_at: datetime,
     client_phone: Annotated[str | None, Query(min_length=6, max_length=30)] = None,
     promotion_code: Annotated[str | None, Query(min_length=3, max_length=30)] = None,
+    addon: AddonQuery = [],
     client_token: ClientTokenHeader = None,
     db: AsyncSession = Depends(get_db),
 ) -> PublicDepositPreviewResponse:
@@ -381,6 +400,11 @@ async def preview_public_deposit(
     (2026-09-11), y con el predicado viejo bastaba pedir el codigo al email
     propio para abrirlo igual (2026-09-20). Y exige el token de quien verifico:
     sin el, la verificacion de otro abria su historial (2026-10-14).
+
+    ``addon`` (repetible, ``<id>:<cantidad>``): los adicionales elegidos. La
+    sena sale sobre el total (servicio + adicionales, con la promo aplicada a
+    esa suma) con la misma funcion que el alta; uno que ya no es del servicio
+    es 422 ``ADDON_UNAVAILABLE``.
     """
     telefono = re.sub(r"[\s\-\(\)\+]", "", client_phone) if client_phone else ""
     await enforce_rate_limit(
@@ -398,13 +422,8 @@ async def preview_public_deposit(
         if not service or service.store_id != store.id:
             raise ServiceNotFoundException(identifier=service_id)
 
-        price = Decimal(str(service.price or 0))
-        if promotion_code:
-            _promotion, quote, _error = await quote_promotion(
-                db, store_id=store.id, service=service, code=promotion_code
-            )
-            if quote:
-                price = quote.final_amount
+        addons = await quote_addons(db, service, _parse_addons(addon))
+        price = await _preview_total(db, store, service, promotion_code, addons)
         history = UNKNOWN_HISTORY
         if telefono and await OtpService(db).is_self_service_allowed(
             store_id=store.id, phone=telefono, client_token=client_token
@@ -435,7 +454,41 @@ async def preview_public_deposit(
                 deposit_mode=deposit_mode,
                 allow_manual_coordination=store.allow_manual_coordination,
             ),
+            addons_amount=float(addons.total),
         )
+
+
+def _parse_addons(raw: list[str]) -> list[AddonChoice]:
+    """``<id>:<cantidad>`` ya validado por el patron de ``AddonQuery``. Una
+    cantidad fuera de rango la rechaza la cotizacion (``ADDON_UNAVAILABLE``)."""
+    choices = []
+    for item in raw:
+        addon_id, _, quantity = item.rpartition(":")
+        choices.append(AddonChoice(addon_id, int(quantity)))
+    return choices
+
+
+async def _preview_total(
+    db: AsyncSession,
+    store: Store,
+    service: Service,
+    promotion_code: str | None,
+    addons: AddonsQuote,
+) -> Decimal:
+    """Servicio + adicionales con la promo, si el codigo vale: la misma
+    cotizacion que el alta (``quote_promotion`` sobre el total)."""
+    gross_price = Decimal(str(service.price or 0)) + addons.total
+    if promotion_code:
+        _promotion, quote, _error = await quote_promotion(
+            db,
+            store_id=store.id,
+            service=service,
+            code=promotion_code,
+            base_amount=gross_price,
+        )
+        if quote:
+            return quote.final_amount
+    return gross_price
 
 
 @router.get("/promotions/preview", response_model=PublicPromotionPreviewResponse)
@@ -443,8 +496,12 @@ async def preview_public_promotion(
     store_public_id: PublicIdQuery,
     service_id: PublicIdQuery,
     code: Annotated[str, Query(min_length=3, max_length=30)],
+    addon: AddonQuery = [],
     db: AsyncSession = Depends(get_db),
 ) -> PublicPromotionPreviewResponse:
+    """La promo sobre el total de la reserva: servicio + adicionales elegidos
+    (``addon`` repetible, ``<id>:<cantidad>``; decision de Mateo 2026-10-15).
+    Sin ``addon``, sobre el servicio solo, como antes."""
     async with tenant_bypass(db):
         repo = PublicRepository(db)
         store = await repo.get_store_by_public_id(store_public_id)
@@ -454,11 +511,13 @@ async def preview_public_promotion(
         if not service or service.store_id != store.id:
             raise ServiceNotFoundException(identifier=service_id)
 
+        addons = await quote_addons(db, service, _parse_addons(addon))
         _promotion, quote, error = await quote_promotion(
             db,
             store_id=store.id,
             service=service,
             code=code,
+            base_amount=Decimal(str(service.price or 0)) + addons.total,
         )
         if not quote:
             raise ValidationException(error or "Promocion invalida")

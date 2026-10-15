@@ -101,7 +101,13 @@ async def quote_promotion(
     service: Service,
     code: str,
     for_update: bool = False,
+    base_amount: Decimal | None = None,
 ) -> tuple[StorePromotion | None, PromotionQuote | None, str | None]:
+    """Cotiza el codigo sobre ``base_amount``: el TOTAL de la reserva
+    (servicio + adicionales, decision de Mateo 2026-10-15). Sin el, el precio
+    de lista del servicio (panel y llamadores sin adicionales). El minimo
+    (``min_service_amount``) y el tope del descuento se miden contra esa base.
+    """
     normalized_code = normalize_promotion_code(code)
     if not normalized_code:
         return None, None, "Codigo de promocion invalido"
@@ -112,7 +118,9 @@ async def quote_promotion(
     if not promotion:
         return None, None, "No encontramos una promocion con ese codigo"
 
-    base_amount = _money(Decimal(str(service.price or 0)))
+    base_amount = _money(
+        Decimal(str(base_amount if base_amount is not None else service.price or 0))
+    )
     validation_error = _validate_promotion_window(promotion, base_amount)
     if validation_error:
         return promotion, None, validation_error
@@ -137,6 +145,7 @@ async def redeem_promotion(
     client: User | None,
     service: Service,
     code: str,
+    base_amount: Decimal | None = None,
 ) -> PromotionQuote:
     promotion, quote, error = await quote_promotion(
         db,
@@ -144,6 +153,7 @@ async def redeem_promotion(
         service=service,
         code=code,
         for_update=True,
+        base_amount=base_amount,
     )
     if not promotion or not quote:
         raise ValueError(error or "Promocion invalida")

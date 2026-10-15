@@ -1,11 +1,20 @@
 from datetime import datetime
 from decimal import Decimal
 
-from typing import Self
+from typing import Annotated, Self
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from core.validation import reject_control_chars, reject_unsafe_url
+from core.validation import (
+    PUBLIC_ID_PATTERN,
+    reject_control_chars,
+    reject_unsafe_url,
+)
+from modules.services.model import (
+    ADDON_MAX_QUANTITY,
+    ADDON_MAX_UNIT_PRICE,
+    ADDONS_PER_SERVICE,
+)
 from modules.stores.media import reject_media_url, validate_image_url
 
 
@@ -40,6 +49,68 @@ def reject_sub_cent(value: float | None) -> float | None:
     return value
 
 
+class ServiceAddonInput(BaseModel):
+    """Un adicional del servicio tal como lo carga el panel.
+
+    Suma precio, nunca tiempo (decision de Mateo, 2026-10-14). La lista es
+    el conjunto completo y la posicion es el indice. ``id`` (opcional) es el
+    de un adicional que ya existe: si es de ESTE servicio y el precio no
+    cambio, conserva el id (``ServiceRepository.replace_addons``); si no, nace
+    uno nuevo.
+    """
+
+    id: str | None = Field(None, min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)
+    name: str = Field(..., min_length=1, max_length=100)
+    unit_price: float = Field(..., ge=0, le=ADDON_MAX_UNIT_PRICE)
+    max_quantity: int = Field(1, ge=1, le=ADDON_MAX_QUANTITY)
+
+    @field_validator("name")
+    @classmethod
+    def clean_name(cls, value: str) -> str:
+        # Regla 19: sale al catalogo publico, a la agenda y a los mails.
+        cleaned = (reject_control_chars(value) or "").strip()
+        if not cleaned:
+            raise ValueError("el nombre del adicional no puede quedar vacio")
+        return cleaned
+
+    @field_validator("unit_price")
+    @classmethod
+    def reject_sub_cent_price(cls, value: float) -> float:
+        reject_sub_cent(value)
+        return value
+
+
+AddonList = Annotated[list[ServiceAddonInput], Field(max_length=ADDONS_PER_SERVICE)]
+
+
+def reject_duplicated_addon_names(
+    addons: list[ServiceAddonInput] | None,
+) -> list[ServiceAddonInput] | None:
+    """Dos adicionales con el mismo nombre (sin distinguir mayusculas) son
+    indistinguibles para el cliente y en el snapshot del turno; dos con el
+    mismo ``id`` serian el mismo adicional dos veces."""
+    if addons is None:
+        return None
+    names = [addon.name.casefold() for addon in addons]
+    if len(names) != len(set(names)):
+        raise ValueError("addons: hay dos adicionales con el mismo nombre")
+    ids = [addon.id for addon in addons if addon.id is not None]
+    if len(ids) != len(set(ids)):
+        raise ValueError("addons: hay dos adicionales con el mismo id")
+    return addons
+
+
+class ServiceAddonResponse(BaseModel):
+    id: str
+    name: str
+    unit_price: float
+    max_quantity: int
+    position: int
+
+    class Config:
+        from_attributes = True
+
+
 DEPOSIT_FIELDS = ("deposit_mode", "deposit_type", "deposit_amount")
 
 
@@ -63,6 +134,16 @@ def deposit_policy_error(
 
 
 class ServiceCreate(ServiceBase):
+    # Si viene, es el conjunto completo de adicionales del servicio.
+    addons: AddonList | None = None
+
+    @field_validator("addons")
+    @classmethod
+    def unique_addon_names(
+        cls, value: list[ServiceAddonInput] | None
+    ) -> list[ServiceAddonInput] | None:
+        return reject_duplicated_addon_names(value)
+
     @field_validator("youtube_trailer_url")
     @classmethod
     def validate_media_url(cls, value: str | None) -> str | None:
@@ -126,6 +207,16 @@ class ServiceUpdate(BaseModel):
     image_url: str | None = Field(None, max_length=500)
     youtube_trailer_url: str | None = Field(None, max_length=500)
     is_active: bool | None = None
+    # Si viene, REEMPLAZA el conjunto de adicionales (una lista vacia los
+    # quita todos). Un null explicito no cambia nada.
+    addons: AddonList | None = None
+
+    @field_validator("addons")
+    @classmethod
+    def unique_addon_names(
+        cls, value: list[ServiceAddonInput] | None
+    ) -> list[ServiceAddonInput] | None:
+        return reject_duplicated_addon_names(value)
 
     @field_validator("name", "description")
     @classmethod
@@ -169,3 +260,15 @@ class ServiceResponse(ServiceBase):
 
     class Config:
         from_attributes = True
+
+
+class ServiceCatalogResponse(ServiceResponse):
+    """El servicio con sus adicionales, para ``/services`` (el catalogo).
+
+    Aparte de ``ServiceResponse`` para que el listado de personal, que embebe
+    sus servicios sin leer adicionales, no los muestre vacios.
+    """
+
+    # Ordenados por ``position``. Los arma el mapper (una consulta con
+    # ``in_()``): el modelo no tiene relacion para no cargarlos sin querer.
+    addons: list[ServiceAddonResponse] = Field(default_factory=list)

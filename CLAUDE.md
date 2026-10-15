@@ -652,6 +652,32 @@ Una instrucción en lenguaje natural no es una garantía.
 - **Un cobro con `deposit_rule` conserva su importe.** Regenerar el link
   desde el panel no re-tarifa: hacerlo dejaba el snapshot mintiendo y rompía
   para siempre la validación de importe del webhook.
+- **Un adicional suma precio, nunca tiempo** (decisión de Mateo, 2026-10-14;
+  `service_addons`, `services/addons.py::price_selection`). El turno congela
+  el total (`price_amount`: servicio + adicionales, con la promo aplicada a
+  esa suma), `addons_amount` (la suma SIN descuento de las líneas) y
+  `addons_snapshot`; `ck_appointments_addons_amount` exige que ninguno de los
+  dos sea negativo pero no que el total supere a los adicionales, porque un
+  descuento grande lo deja por debajo. La promo (`quote_promotion` con `base_amount` = total) y la
+  seña (porcentual, fija acotada al total o `full`) salen del total con
+  descuento, con la misma cotización en `/public/deposit/preview`,
+  `/public/promotions/preview` (con `addon`) y el alta (decisiones de Mateo,
+  2026-10-15). Un adicional que no es del catálogo vigente del servicio es
+  422 `ADDON_UNAVAILABLE` antes de escribir nada. El PATCH del servicio
+  reemplaza el conjunto con upsert por id bajo el lock del servicio
+  (`ServiceRepository.replace_addons`): con el mismo precio el id se conserva
+  (la reserva en vuelo y el catálogo cacheado en el borde siguen valiendo);
+  si cambia el precio el id rota, para que un catálogo cacheado nunca cotice
+  otro precio bajo el mismo id; un id ajeno (otro servicio u otra tienda)
+  nace nuevo, nunca se adopta. Editar el catálogo no toca un turno tomado;
+  las dos reprogramaciones y `carry_manual_deposit` mudan los adicionales con
+  el turno. El link del panel cobra el precio de lista de hoy más los
+  adicionales congelados, y nunca más que el precio congelado de un turno con
+  promo (decisión de Mateo, 2026-10-15; `_payment_amount_for_appointment`):
+  sin promo sigue re-tarifando tras un cambio de precio. Las altas del panel y de la lista de espera
+  todavía no eligen adicionales. (`test_adicionales_precio.py`,
+  `test_adicionales_del_servicio.py`, `test_reserva_con_adicionales.py`,
+  `test_pg_adicionales.py`)
 - **Una seña obligatoria se cobra por Mercado Pago o por WhatsApp**
   (decisión de Mateo, 2026-10-03; `payments/deposit_channels.py`).
   Configurarla exige un canal: MP conectado con el flag `payments`, o un

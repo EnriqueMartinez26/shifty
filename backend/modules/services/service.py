@@ -98,17 +98,30 @@ class ServiceCatalogService:
             await require_deposit_channel(self.db, store_id)
 
     async def create(self, service_data: dict[str, Any], store_id: str) -> Service:
+        addons = service_data.pop("addons", None)
         await self._require_channel_for(
             store_id, str(service_data.get("deposit_mode") or "none")
         )
         service = await self.repo.create(service_data, store_id)
+        # Mismo commit que el servicio: o nacen los dos o ninguno.
+        if addons:
+            await self.repo.replace_addons(service, addons)
         await self.db.commit()
         return service
 
     async def update(
         self, public_id: str, store_id: str, changes: dict[str, Any]
     ) -> Service:
-        service = await self.repo.get_by_id(public_id, store_id)
+        # ``addons`` reemplaza el conjunto entero; un null no cambia nada.
+        # Reemplazar toma el lock del servicio (regla 4): dos PATCH a la vez
+        # no dejan la union de los dos conjuntos. Los adicionales suman
+        # precio y no tiempo, asi que por ellos solos la grilla no cambia.
+        addons = changes.pop("addons", None)
+        service = await (
+            self.repo.lock(public_id, store_id)
+            if addons is not None
+            else self.repo.get_by_id(public_id, store_id)
+        )
         if not service:
             raise ServiceNotFoundException(public_id)
         _validate_deposit_patch(service, changes)
@@ -118,6 +131,8 @@ class ServiceCatalogService:
             await self._require_channel_for(
                 store_id, str(changes.get("deposit_mode", service.deposit_mode))
             )
+        if addons is not None:
+            await self.repo.replace_addons(service, addons)
         await self.images.apply_image_url_change(service, changes)
         updated = await self.repo.update(service, changes)
         await self.db.commit()

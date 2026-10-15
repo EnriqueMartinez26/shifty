@@ -128,6 +128,13 @@ class AppointmentResponse(BaseModel):
         from_attributes = True
 
 
+class AppointmentAddonItem(BaseModel):
+    """Un adicional del turno en la agenda: que y cuantos."""
+
+    name: str
+    quantity: int
+
+
 class AppointmentListItem(BaseModel):
     public_id: str
     service_id: str
@@ -146,6 +153,9 @@ class AppointmentListItem(BaseModel):
     notes: Optional[str] = None
     notes_staff: Optional[str] = None
     intake_answers: Dict[str, str] = Field(default_factory=dict)
+    # Aditivo (2026-10-14): los adicionales congelados del turno, sin importes
+    # (la recepcion ve la agenda y no opera cobros).
+    addons: List[AppointmentAddonItem] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -258,6 +268,9 @@ class AppointmentSearchResult(BaseModel):
     # cobrar (calculado en SQL) y el resto ya registrado aparte del cobro.
     remaining_amount: Optional[Decimal] = None
     remainder_payment: Optional[AppointmentRemainderPayment] = None
+    # Aditivo (2026-10-14): la parte de ``price_amount`` que son adicionales.
+    # Mismo criterio que el precio: solo para quien opera cobros.
+    addons_amount: Optional[Decimal] = None
 
 
 class AppointmentSearchResponse(BaseModel):

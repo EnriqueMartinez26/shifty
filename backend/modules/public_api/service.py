@@ -22,6 +22,7 @@ en el router) vive tambien aca; la fijan los tests de
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
@@ -108,10 +109,22 @@ from modules.public_api.repository import PublicRepository, RangeRejection
 from modules.public_api.schemas import (
     ClientCancelRequest,
     ClientRescheduleRequest,
+    PublicAddonChoice,
+    PublicBookingAddonLine,
     PublicBookingCreate,
     PublicBookingResponse,
 )
+from modules.services.addons import (
+    NO_ADDONS,
+    AddonChoice,
+    AddonSelectionError,
+    AddonsQuote,
+    lines_from_snapshot,
+    price_selection,
+    snapshot_label,
+)
 from modules.services.model import Service
+from modules.services.repository import ServiceRepository
 from modules.staff.model import Staff
 from modules.stores.model import Store
 from modules.users.model import User
@@ -411,6 +424,65 @@ def decide(
     )
 
 
+def addon_unavailable() -> AppException:
+    """422 neutro: el adicional no existe, es de otro servicio, se repitio o
+    pide mas que el maximo. El front vuelve a pedir el catalogo."""
+    return AppException(
+        message="Alguno de los adicionales elegidos ya no está disponible",
+        http_status=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        error_code="ADDON_UNAVAILABLE",
+    )
+
+
+async def quote_addons(
+    db: AsyncSession, service: Service, choices: Sequence[AddonChoice]
+) -> AddonsQuote:
+    """Cotiza los adicionales elegidos contra el catalogo VIGENTE del servicio.
+
+    La misma funcion pura (``services.addons.price_selection``) para el
+    preview y el alta: lo que se muestra es lo que se cobra. Sin elegidos no
+    consulta la base.
+    """
+    if not choices:
+        return NO_ADDONS
+    catalog = await ServiceRepository(db).addons_for(
+        str(service.store_id), [service.id]
+    )
+    try:
+        return price_selection(
+            catalog.get(service.id, []),
+            choices,
+            service_id=service.id,
+        )
+    except AddonSelectionError:
+        raise addon_unavailable() from None
+
+
+def _addon_choices(addons: list[PublicAddonChoice]) -> list[AddonChoice]:
+    return [AddonChoice(addon.addon_id, addon.quantity) for addon in addons]
+
+
+def service_label(service_name: str, snapshot: object) -> str:
+    """``Unas (+ Strass x6)`` para el aviso al dueno; el nombre solo sin
+    adicionales."""
+    extras = snapshot_label(snapshot)
+    return f"{service_name} (+ {extras})" if extras else service_name
+
+
+def addon_lines(snapshot: object) -> list[PublicBookingAddonLine]:
+    """Las lineas congeladas del turno para la respuesta."""
+    return [
+        PublicBookingAddonLine(
+            addon_id=str(line.get("addon_id", "")),
+            name=str(line.get("name", "")),
+            unit_price=float(Decimal(str(line.get("unit_price", "0")))),
+            quantity=int(line.get("quantity", 0)),
+            amount=float(Decimal(str(line.get("amount", "0")))),
+        )
+        for line in lines_from_snapshot(snapshot)
+    ]
+
+
 async def revert_failed_booking(
     db: AsyncSession, redis: Redis, appointment: Appointment
 ) -> None:
@@ -506,11 +578,20 @@ class _BookingRequest:
     contact_verified: bool
     custom_fields: dict[str, str]
     base_price: Decimal
-    discounted_price: Decimal
+    # Lo que congela el turno: la promo aplicada al TOTAL (servicio +
+    # adicionales; decision de Mateo, 2026-10-15). Sin promo, la suma.
+    total_price: Decimal
     history: ClientHistory
     deposit: DepositDecision
     # Por donde se cobra la sena (``deposit_channels``); None: no se cobra.
     deposit_channel: DepositChannel | None
+    # Adicionales cotizados contra el catalogo vigente (suman precio).
+    addons: AddonsQuote = NO_ADDONS
+
+    @property
+    def gross_price(self) -> Decimal:
+        """Servicio + adicionales, antes de la promo."""
+        return self.base_price + self.addons.total
 
     @property
     def payment_required(self) -> bool:
@@ -646,8 +727,9 @@ class PublicBookingService:
 
         custom_fields = validate_custom_fields(store, data.custom_fields)
         base_price = Decimal(str(service.price or 0))
-        discounted_price = await self._discounted_price(
-            data, service, store, base_price
+        addons = await quote_addons(self.db, service, _addon_choices(data.addons))
+        total_price = await self._discounted_total(
+            data, service, store, base_price + addons.total
         )
         # Los canales solo se consultan para una sena obligatoria.
         channels = await deposit_channels_for(
@@ -662,7 +744,8 @@ class PublicBookingService:
             contact_verified=contact_verified,
             custom_fields=custom_fields,
             base_price=base_price,
-            discounted_price=discounted_price,
+            total_price=total_price,
+            addons=addons,
             history=(
                 # Mismo criterio que el preview: un telefono sin CONTACTO
                 # verificado no trae el historial de nadie, ni para mostrar ni
@@ -701,20 +784,23 @@ class PublicBookingService:
             http_status=status.HTTP_403_FORBIDDEN,
         )
 
-    async def _discounted_price(
+    async def _discounted_total(
         self,
         data: PublicBookingCreate,
         service: Service,
         store: Store,
-        base_price: Decimal,
+        gross_price: Decimal,
     ) -> Decimal:
+        """La promo sobre el total (servicio + adicionales), con la misma
+        funcion que los previews (``quote_promotion``)."""
         if not data.promotion_code:
-            return base_price
+            return gross_price
         _promotion, preview_quote, preview_error = await quote_promotion(
             self.db,
             store_id=store.id,
             service=service,
             code=data.promotion_code,
+            base_amount=gross_price,
         )
         if not preview_quote:
             raise ValidationException(preview_error or "Promocion invalida")
@@ -731,16 +817,18 @@ class PublicBookingService:
         contact_verified: bool,
         custom_fields: dict[str, str],
         base_price: Decimal,
-        discounted_price: Decimal,
+        total_price: Decimal,
+        addons: AddonsQuote,
         history: ClientHistory,
     ) -> _BookingRequest:
         # La regla de sena se evalua UNA vez (misma antelacion, mismo
         # historial) y el resultado viaja hasta el pago y la respuesta. Antes
-        # se recalculaba tres veces con `now` distinto.
+        # se recalculaba tres veces con `now` distinto. Sobre el TOTAL con la
+        # promo (servicio + adicionales, decision de Mateo 2026-10-15).
         deposit = decide(
             service,
             store,
-            price=discounted_price,
+            price=total_price,
             starts_at=starts_at_utc,
             history=history,
         )
@@ -764,10 +852,11 @@ class PublicBookingService:
             contact_verified=contact_verified,
             custom_fields=custom_fields,
             base_price=base_price,
-            discounted_price=discounted_price,
+            total_price=total_price,
             history=history,
             deposit=deposit,
             deposit_channel=deposit_channel,
+            addons=addons,
         )
 
     async def _persist(
@@ -822,7 +911,8 @@ class PublicBookingService:
                 else AppointmentStatus.PENDING.value
             ),
             buffer_minutes=request.store.buffer_minutes or 0,
-            price_amount=request.discounted_price,
+            # El total congelado: servicio + adicionales, con la promo.
+            price_amount=request.total_price,
             client_email=str(data.client_email) if data.client_email else None,
             # Un turno esperando la seña retiene el slot hasta su plazo de pago
             # (por MP una ventana corta, por WhatsApp hasta 2 h antes): si no
@@ -840,9 +930,11 @@ class PublicBookingService:
             accepted_versions=AcceptedVersions(
                 data.terms_version, data.privacy_version
             ),
+            addons_amount=request.addons.total,
+            addons_snapshot=request.addons.snapshot(),
         )
         promotion_quote = await self._redeem_promotion_code(
-            data, store_id, appointment, client, service
+            data, store_id, appointment, client, service, request.gross_price
         )
         booking = _Booking(appointment, service, staff, None, promotion_quote)
         if request.payment_required:
@@ -853,7 +945,9 @@ class PublicBookingService:
                 _pending_confirmation_message(
                     booking.appointment,
                     client_name=data.client_name,
-                    service_name=booking.service.name,
+                    service_name=service_label(
+                        booking.service.name, booking.appointment.addons_snapshot
+                    ),
                     deposit=booking.payment,
                 )
             )
@@ -866,9 +960,10 @@ class PublicBookingService:
         appointment: Appointment,
         client: User,
         service: Service,
+        gross_price: Decimal,
     ) -> PromotionQuote | None:
         """Canje del codigo de promocion dentro del alta (regla 29: extraido
-        de ``_write_booking``)."""
+        de ``_write_booking``), sobre el total con adicionales."""
         if not data.promotion_code:
             return None
         try:
@@ -879,6 +974,7 @@ class PublicBookingService:
                 client=client,
                 service=service,
                 code=data.promotion_code,
+                base_amount=gross_price,
             )
         except ValueError as exc:
             raise ValidationException(str(exc))
@@ -886,13 +982,16 @@ class PublicBookingService:
     async def _create_pending_payment(
         self, request: _BookingRequest, booking: _Booking
     ) -> Payment:
-        # Misma regla (antelacion e historial), dos precios: el de lista para
-        # mostrar el descuento y el final para cobrar.
+        # Misma regla (antelacion e historial), dos precios: el total sin
+        # promo para mostrar el descuento y el total con promo para cobrar. Los
+        # dos incluyen los adicionales: la promo se aplica al total (decision
+        # de Mateo, 2026-10-15).
         service, quote = booking.service, booking.promotion_quote
+        addons_total = request.addons.total
         payable_before_discount = decide(
             service,
             request.store,
-            price=request.base_price,
+            price=request.gross_price,
             starts_at=request.starts_at_utc,
             history=request.history,
         ).amount
@@ -908,6 +1007,11 @@ class PublicBookingService:
             else request.deposit
         )
         payable_after_discount = final_decision.amount
+        # El snapshot dice sobre que total se calculo la sena.
+        deposit_rule = final_decision.snapshot() | {
+            "price": str(booking.appointment.price_amount),
+            "addons_amount": str(addons_total),
+        }
         # Dentro de la transaccion (que sostiene el lock FOR UPDATE del staff)
         # solo se crea el Payment PENDING con link placeholder: la llamada HTTP
         # a Mercado Pago se hace DESPUES del commit, con el lock ya soltado,
@@ -924,7 +1028,7 @@ class PublicBookingService:
             ),
             promotion_code=quote.code if quote else None,
             create_provider_link=False,
-            deposit_rule=final_decision.snapshot(),
+            deposit_rule=deposit_rule,
             provider=provider_for(request.deposit_channel or "mercadopago"),
         )
 
@@ -1211,7 +1315,9 @@ class PublicBookingService:
             _pending_confirmation_message(
                 new_appointment,
                 client_name=client.full_name or "Un cliente",
-                service_name=service.name,
+                service_name=service_label(
+                    service.name, new_appointment.addons_snapshot
+                ),
                 deposit=nueva,
             )
         )
@@ -1350,8 +1456,11 @@ def _rescheduled_copy(
         starts_at=data.new_starts_at,
         ends_at=new_ends_at,
         duration_minutes=service.duration_minutes,
-        # Preservar el precio congelado del turno original.
+        # Preservar el precio congelado del turno original, con sus
+        # adicionales (el total ya los incluye).
         price_amount=original.price_amount,
+        addons_amount=original.addons_amount or Decimal("0.00"),
+        addons_snapshot=original.addons_snapshot,
         client_name=client.full_name or client.email,
         client_email=client.email,
         client_phone=client.phone,
@@ -1431,6 +1540,8 @@ def _self_service_response(
         payment_required=_deposit_deadline(appointment) is not None,
         deposit_channel="whatsapp" if _deposit_deadline(appointment) else None,
         deposit_deadline=_deposit_deadline(appointment),
+        addons=addon_lines(appointment.addons_snapshot),
+        addons_amount=float(appointment.addons_amount or 0),
     )
 
 
@@ -1471,5 +1582,9 @@ def _booking_response(
         promotion_code=quote.code if quote else None,
         service_price=float(request.base_price),
         discount_amount=float(quote.discount_amount) if quote else 0.0,
-        final_price=float(quote.final_amount) if quote else float(request.base_price),
+        # Total: servicio + adicionales, con la promo si la hubo (el
+        # descuento ya cuenta los adicionales).
+        final_price=float(quote.final_amount if quote else request.gross_price),
+        addons=addon_lines(appointment.addons_snapshot),
+        addons_amount=float(request.addons.total),
     )

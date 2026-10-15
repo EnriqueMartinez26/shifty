@@ -1087,6 +1087,7 @@ Parameters:
 | query | `starts_at` | yes | string | format="date-time" |
 | query | `client_phone` | no | string \| null | minLength=6, maxLength=30 |
 | query | `promotion_code` | no | string \| null | minLength=3, maxLength=30 |
+| query | `addon` | no | array<string> | maxItems=20, default=[] |
 | header | `X-Client-Token` | no | string \| null |  |
 
 Responses:
@@ -1151,6 +1152,7 @@ Parameters:
 | query | `store_public_id` | yes | string | minLength=1, maxLength=64, pattern="^[A-Za-z0-9_-]{1,64}$" |
 | query | `service_id` | yes | string | minLength=1, maxLength=64, pattern="^[A-Za-z0-9_-]{1,64}$" |
 | query | `code` | yes | string | minLength=3, maxLength=30 |
+| query | `addon` | no | array<string> | maxItems=20, default=[] |
 
 Responses:
 
@@ -1424,7 +1426,7 @@ Parameters:
 
 Responses:
 
-- `200` Successful Response — `application/json`: `ApiSuccess_list_ServiceResponse__`
+- `200` Successful Response — `application/json`: `ApiSuccess_list_ServiceCatalogResponse__`
 - `422` Validation Error — `application/json`: `HTTPValidationError`
 
 ### POST /services/
@@ -1438,7 +1440,7 @@ Request body (required):
 
 Responses:
 
-- `201` Successful Response — `application/json`: `ApiSuccess_ServiceResponse_`
+- `201` Successful Response — `application/json`: `ApiSuccess_ServiceCatalogResponse_`
 - `422` Validation Error — `application/json`: `HTTPValidationError`
 
 ### GET /services/{public_id}
@@ -1454,7 +1456,7 @@ Parameters:
 
 Responses:
 
-- `200` Successful Response — `application/json`: `ApiSuccess_ServiceResponse_`
+- `200` Successful Response — `application/json`: `ApiSuccess_ServiceCatalogResponse_`
 - `422` Validation Error — `application/json`: `HTTPValidationError`
 
 ### PATCH /services/{public_id}
@@ -1474,7 +1476,7 @@ Request body (required):
 
 Responses:
 
-- `200` Successful Response — `application/json`: `ApiSuccess_ServiceResponse_`
+- `200` Successful Response — `application/json`: `ApiSuccess_ServiceCatalogResponse_`
 - `422` Validation Error — `application/json`: `HTTPValidationError`
 
 ### DELETE /services/{public_id}
@@ -1510,7 +1512,7 @@ Request body (required):
 
 Responses:
 
-- `200` Successful Response — `application/json`: `ApiSuccess_ServiceResponse_`
+- `200` Successful Response — `application/json`: `ApiSuccess_ServiceCatalogResponse_`
 - `422` Validation Error — `application/json`: `HTTPValidationError`
 
 ### DELETE /services/{public_id}/image
@@ -1526,7 +1528,7 @@ Parameters:
 
 Responses:
 
-- `200` Successful Response — `application/json`: `ApiSuccess_ServiceResponse_`
+- `200` Successful Response — `application/json`: `ApiSuccess_ServiceCatalogResponse_`
 - `422` Validation Error — `application/json`: `HTTPValidationError`
 
 ## Staff
@@ -2676,12 +2678,12 @@ Responses:
 | `data` | array<ScheduleResponse> | yes |  |
 | `meta` | object \| null | no |  |
 
-### ApiSuccess_list_ServiceResponse__
+### ApiSuccess_list_ServiceCatalogResponse__
 
 | field | type | required | constraints |
 |---|---|---|---|
 | `success` | boolean | no | default=true |
-| `data` | array<ServiceResponse> | yes |  |
+| `data` | array<ServiceCatalogResponse> | yes |  |
 | `meta` | object \| null | no |  |
 
 ### ApiSuccess_list_StaffResponse__
@@ -2924,12 +2926,12 @@ Responses:
 | `data` | ScheduleResponse | yes |  |
 | `meta` | object \| null | no |  |
 
-### ApiSuccess_ServiceResponse_
+### ApiSuccess_ServiceCatalogResponse_
 
 | field | type | required | constraints |
 |---|---|---|---|
 | `success` | boolean | no | default=true |
-| `data` | ServiceResponse | yes |  |
+| `data` | ServiceCatalogResponse | yes |  |
 | `meta` | object \| null | no |  |
 
 ### ApiSuccess_SessionListResponse_
@@ -3079,6 +3081,13 @@ Responses:
 | `currency` | string \| null | yes |  |
 | `is_active` | boolean | yes |  |
 
+### AppointmentAddonItem
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `name` | string | yes |  |
+| `quantity` | integer | yes |  |
+
 ### AppointmentBlockBatchResponse
 
 | field | type | required | constraints |
@@ -3148,6 +3157,7 @@ Responses:
 | `notes` | string \| null | no |  |
 | `notes_staff` | string \| null | no |  |
 | `intake_answers` | object<string, string> | no |  |
+| `addons` | array<AppointmentAddonItem> | no |  |
 
 ### AppointmentNotesStaffUpdate
 
@@ -3222,6 +3232,7 @@ Responses:
 | `payment_amount` | string \| null | no | pattern="^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$" |
 | `remaining_amount` | string \| null | no | pattern="^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$" |
 | `remainder_payment` | AppointmentRemainderPayment \| null | no |  |
+| `addons_amount` | string \| null | no | pattern="^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$" |
 
 ### AppointmentStatus
 
@@ -3912,6 +3923,23 @@ Type: `enum("efectivo", "transferencia", "mercadopago", "otro")`
 | `valid_until` | string \| null | no | format="date-time" |
 | `is_active` | boolean \| null | no |  |
 
+### PublicAddonChoice
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `addon_id` | string | yes | minLength=1, maxLength=64, pattern="^[A-Za-z0-9_-]{1,64}$" |
+| `quantity` | integer | yes | minimum=1.0, maximum=99.0 |
+
+### PublicBookingAddonLine
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `addon_id` | string | yes |  |
+| `name` | string | yes |  |
+| `unit_price` | number | yes |  |
+| `quantity` | integer | yes |  |
+| `amount` | number | yes |  |
+
 ### PublicBookingCreate
 
 | field | type | required | constraints |
@@ -3931,6 +3959,7 @@ Type: `enum("efectivo", "transferencia", "mercadopago", "otro")`
 | `accepts_terms` | boolean | no | default=false |
 | `terms_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 | `privacy_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
+| `addons` | array<PublicAddonChoice> | no | maxItems=20 |
 
 ### PublicBookingResponse
 
@@ -3959,6 +3988,8 @@ Type: `enum("efectivo", "transferencia", "mercadopago", "otro")`
 | `service_price` | number \| null | no |  |
 | `discount_amount` | number \| null | no |  |
 | `final_price` | number \| null | no |  |
+| `addons` | array<PublicBookingAddonLine> | no |  |
+| `addons_amount` | number | no | default=0.0 |
 
 ### PublicDepositPreviewResponse
 
@@ -3971,6 +4002,7 @@ Type: `enum("efectivo", "transferencia", "mercadopago", "otro")`
 | `price` | number | yes |  |
 | `payments_enabled` | boolean | yes |  |
 | `online_payment_mandatory` | boolean | yes |  |
+| `addons_amount` | number | no | default=0.0 |
 
 ### PublicPaymentStatusResponse
 
@@ -4009,6 +4041,7 @@ Type: `enum("efectivo", "transferencia", "mercadopago", "otro")`
 | `deposit_amount` | number \| null | no |  |
 | `color` | string \| null | no |  |
 | `image_url` | string \| null | no |  |
+| `addons` | array<ServiceAddonResponse> | no |  |
 
 ### PublicStaffResponse
 
@@ -4270,6 +4303,45 @@ Type: `enum("efectivo", "transferencia", "mercadopago", "otro")`
 |---|---|---|---|
 | `schedules` | array<ScheduleCreate> | yes | maxItems=42 |
 
+### ServiceAddonInput
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `id` | string \| null | no | minLength=1, maxLength=64, pattern="^[A-Za-z0-9_-]{1,64}$" |
+| `name` | string | yes | minLength=1, maxLength=100 |
+| `unit_price` | number | yes | minimum=0.0, maximum=1000000.0 |
+| `max_quantity` | integer | no | minimum=1.0, maximum=99.0, default=1 |
+
+### ServiceAddonResponse
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `id` | string | yes |  |
+| `name` | string | yes |  |
+| `unit_price` | number | yes |  |
+| `max_quantity` | integer | yes |  |
+| `position` | integer | yes |  |
+
+### ServiceCatalogResponse
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `name` | string | yes | minLength=2, maxLength=255 |
+| `description` | string \| null | no | maxLength=1000 |
+| `duration_minutes` | integer | yes | maximum=480.0, exclusiveMinimum=0.0 |
+| `price` | number | yes | minimum=0.0, maximum=10000000.0 |
+| `deposit_mode` | string | no | pattern="^(none\|optional\|required)$", default="none" |
+| `deposit_type` | string | no | pattern="^(percent\|fixed\|full)$", default="percent" |
+| `deposit_amount` | number \| null | no | minimum=0.0, maximum=10000000.0 |
+| `color` | string \| null | no | pattern="^#([A-Fa-f0-9]{6}\|[A-Fa-f0-9]{3})$" |
+| `image_url` | string \| null | no | maxLength=500 |
+| `youtube_trailer_url` | string \| null | no | maxLength=500 |
+| `public_id` | string | yes |  |
+| `is_active` | boolean | yes |  |
+| `created_at` | string | yes | format="date-time" |
+| `updated_at` | string | yes | format="date-time" |
+| `addons` | array<ServiceAddonResponse> | no |  |
+
 ### ServiceCreate
 
 | field | type | required | constraints |
@@ -4284,6 +4356,7 @@ Type: `enum("efectivo", "transferencia", "mercadopago", "otro")`
 | `color` | string \| null | no | pattern="^#([A-Fa-f0-9]{6}\|[A-Fa-f0-9]{3})$" |
 | `image_url` | string \| null | no | maxLength=500 |
 | `youtube_trailer_url` | string \| null | no | maxLength=500 |
+| `addons` | array<ServiceAddonInput> \| null | no | maxItems=20 |
 
 ### ServiceResponse
 
@@ -4319,6 +4392,7 @@ Type: `enum("efectivo", "transferencia", "mercadopago", "otro")`
 | `image_url` | string \| null | no | maxLength=500 |
 | `youtube_trailer_url` | string \| null | no | maxLength=500 |
 | `is_active` | boolean \| null | no |  |
+| `addons` | array<ServiceAddonInput> \| null | no | maxItems=20 |
 
 ### SessionItem
 
@@ -4856,4 +4930,4 @@ Type: `enum("admin", "staff", "receptionist", "client")`
 | `terms_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 | `privacy_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 
-Generado desde app.openapi() el 2026-10-14, commit 8df17468
+Generado desde app.openapi() el 2026-10-15, commit fecbb98c

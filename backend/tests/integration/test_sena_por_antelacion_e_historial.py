@@ -223,6 +223,9 @@ async def test_cliente_nuevo_con_mucha_antelacion_paga_los_recargos_y_queda_el_s
         "base_amount": "3000.00",
         "extra_percent": 30,
         "reasons": ["base", "far_notice", "new_client"],
+        # Aditivo (2026-10-14): sobre que total se calculo la sena.
+        "price": "10000.00",
+        "addons_amount": "0.00",
     }
 
 

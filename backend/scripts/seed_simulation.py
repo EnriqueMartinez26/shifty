@@ -39,7 +39,7 @@ from modules.payments.model import (
     WebhookInbox,
 )
 from modules.promotions.model import PromotionRedemption, StorePromotion
-from modules.services.model import Service
+from modules.services.model import Service, ServiceAddon
 from modules.staff.model import Schedule, Staff, StaffBlock, staff_services
 from modules.stores.model import Store, StoreSchedule
 from modules.users.model import User, UserRole
@@ -450,6 +450,10 @@ async def cleanup_seed(session: AsyncSession) -> None:
     if service_ids:
         await session.execute(
             delete(staff_services).where(staff_services.c.service_id.in_(service_ids))
+        )
+        # Los adicionales cuelgan del servicio (FK): primero ellos.
+        await session.execute(
+            delete(ServiceAddon).where(ServiceAddon.service_id.in_(service_ids))
         )
         await session.execute(delete(Service).where(Service.id.in_(service_ids)))
 

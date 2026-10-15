@@ -97,6 +97,7 @@ from modules.payments.schemas import (
     RemainingPaymentRequest,
     RemainingPaymentResponse,
 )
+from modules.promotions.model import PromotionRedemption
 from modules.services.model import Service
 from modules.stores.model import Store
 from modules.users.model import User, UserRole
@@ -146,12 +147,40 @@ def _payment_response(payment: Payment) -> PaymentResponse:
     )
 
 
-def _payment_amount_for_service(
-    service: Service, requested_amount: Decimal | None = None
+def _payment_amount_for_appointment(
+    appointment: Appointment, service: Service, *, with_promotion: bool
 ) -> Decimal:
-    if requested_amount is not None:
-        return requested_amount
-    return calculate_service_payment_amount(service) or Decimal(str(service.price))
+    """Importe del link del panel: la sena del servicio sobre el precio de
+    lista MAS los adicionales congelados del turno, o esa suma entera si el
+    servicio no pide sena.
+
+    Los adicionales suman precio (decision de Mateo, 2026-10-14): sin ellos el
+    link dejaba afuera lo que el cliente eligio. El servicio se sigue cobrando
+    al precio de lista de hoy, como antes: regenerar el link despues de un
+    cambio de precio lo re-tarifa (``test_cobro_del_panel_dos_fases``).
+    Decision de Mateo (2026-10-15): lista + adicionales congelados, nunca mas
+    que el precio congelado de un turno con promo (``with_promotion``): la
+    promo ya se aplico al total y ``price_amount`` es lo que el cliente
+    acepto; sin el tope el link cobraba el total sin descuento y el saldo
+    (``remaining_balance_of``, que no baja de cero) lo escondia.
+    """
+    price = Decimal(str(service.price)) + (appointment.addons_amount or Decimal("0"))
+    if with_promotion and appointment.price_amount is not None:
+        price = min(price, appointment.price_amount)
+    return calculate_service_payment_amount(service, base_price=price) or price
+
+
+async def _has_promotion(db: AsyncSession, appointment: Appointment) -> bool:
+    """El turno canjeo una promocion (su ``price_amount`` lleva el descuento)."""
+    canje = await db.scalar(
+        select(PromotionRedemption.id)
+        .where(
+            PromotionRedemption.appointment_id == appointment.id,
+            PromotionRedemption.store_id == appointment.store_id,
+        )
+        .limit(1)
+    )
+    return canje is not None
 
 
 def _require_payment_manager(user: User) -> None:
@@ -745,7 +774,11 @@ async def create_payment_preference(
             appointment=appointment,
             service=service,
             store_id=user.store_id,
-            amount_override=_payment_amount_for_service(service),
+            amount_override=_payment_amount_for_appointment(
+                appointment,
+                service,
+                with_promotion=await _has_promotion(db, appointment),
+            ),
         )
     # SEG-04: mensajes fijos; el texto de la excepcion puede traer el detalle
     # de Mercado Pago y no sale al cliente. Al log va solo el tipo.

@@ -31,7 +31,7 @@ from modules.appointments.working_hours import staff_ids_working_range
 from modules.legal.versions import AcceptedVersions
 from modules.payments.deposit_rules import ClientHistory
 from modules.payments.repository import live_charge_provider_of, paid_appointment_of
-from modules.services.model import Service
+from modules.services.model import Service, ServiceAddon
 from modules.staff.model import Staff, StaffBlock, StaffServiceModel
 from modules.stores.model import Store
 from modules.users.model import User, UserRole
@@ -140,13 +140,23 @@ class PublicRepository:
         )
         return result.scalar_one_or_none()
 
-    async def get_services(self, store_id: str) -> list[Service]:
-        """Servicios activos que algun profesional activo de la tienda toma.
+    async def get_services_with_addons(
+        self, store_id: str
+    ) -> list[tuple[Service, list[ServiceAddon]]]:
+        """Servicios activos que algun profesional activo de la tienda toma,
+        cada uno con sus adicionales en orden de ``position``.
 
         Uno sin profesional salia en el portal y todas sus fechas decian "No
         hay turnos disponibles" (QA movil 2026-10-08). El panel los sigue
         listando con su aviso. EXISTS en la misma sentencia: sin consulta
         extra, y con ``store_id`` en el profesional (defensa en profundidad).
+
+        Los adicionales (2026-10-14) vienen en la MISMA sentencia por un LEFT
+        JOIN con ``store_id`` explicito (camino al indice
+        ``ix_service_addons_store_service`` bajo RLS): ``/public/services`` es
+        un endpoint caliente con presupuesto de sentencias
+        (``test_pg_presupuesto_de_sentencias``). Cada servicio repite su fila
+        por adicional (a lo sumo 20); el orden de alta lo hace estable.
         """
         someone_does_it = exists().where(
             StaffServiceModel.service_id == Service.id,
@@ -155,13 +165,25 @@ class PublicRepository:
             Staff.is_active == True,
         )
         result = await self.db.execute(
-            select(Service).where(
+            select(Service, ServiceAddon)
+            .outerjoin(
+                ServiceAddon,
+                (ServiceAddon.service_id == Service.id)
+                & (ServiceAddon.store_id == store_id),
+            )
+            .where(
                 Service.store_id == store_id,
                 Service.is_active == True,
                 someone_does_it,
             )
+            .order_by(Service.created_at, Service.id, ServiceAddon.position)
         )
-        return list(result.scalars().all())
+        por_servicio: dict[str, tuple[Service, list[ServiceAddon]]] = {}
+        for service, addon in result.tuples().all():
+            _, addons = por_servicio.setdefault(service.id, (service, []))
+            if addon is not None:
+                addons.append(addon)
+        return list(por_servicio.values())
 
     async def get_service_by_public_id(self, public_id: str) -> Service | None:
         result = await self.db.execute(
@@ -569,13 +591,16 @@ class PublicRepository:
         expires_at: datetime | None = None,
         terms_accepted_at: datetime | None = None,
         accepted_versions: AcceptedVersions | None = None,
+        addons_amount: Decimal = Decimal("0.00"),
+        addons_snapshot: list[dict[str, str | int]] | None = None,
     ) -> tuple[Appointment, Service, Staff]:
         """Alta del turno: lock del profesional, relectura bajo lock e INSERT.
 
         ``service``: el servicio que el llamador ya resolvio (F3-03, la reserva
         publica lo leia dos veces). Se valida contra la tienda, el public_id y
         que siga activo; sin el, se lee aca. ``expires_at`` y
-        ``terms_accepted_at`` van en el INSERT (antes un UPDATE aparte).
+        ``terms_accepted_at`` van en el INSERT (antes un UPDATE aparte), igual
+        que los adicionales congelados (``price_amount`` ya los incluye).
         """
         service = await self._service_for_booking(store_id, service_public_id, service)
         ends_at = starts_at + timedelta(minutes=service.duration_minutes)
@@ -613,6 +638,8 @@ class PublicRepository:
                 if price_amount is not None
                 else Decimal(str(service.price or 0))
             ),
+            addons_amount=addons_amount,
+            addons_snapshot=addons_snapshot,
             expires_at=expires_at,
             terms_accepted_at=terms_accepted_at,
             terms_version=(accepted_versions or AcceptedVersions()).terms_version,
