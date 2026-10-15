@@ -17,7 +17,6 @@ import { formatArgentinaTime } from '@shared/utils/argentinaTime'
 
 import { WaitlistJoinForm } from './WaitlistJoinForm'
 import { colors2000s, orangeCtaGradient } from '../../../../theme/colors'
-import { slotStatusLabel } from '../../../lib/enumLabels'
 import { createBookingBackButtonStyle, createBookingSurfaceStyle } from '../../../lib/surfaceStyles'
 
 interface BookingStepDateTimeProps {
@@ -106,33 +105,40 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
 
   const visibleSlots = useMemo(() => {
     if (!availability) return []
+    // El portal solo ofrece horarios libres: uno bloqueado u ocupado no se
+    // muestra en ningun modo (2026-10-14: de noche todo el dia quedaba
+    // "Bloqueado" por el aviso minimo y el cliente veia 18 botones grises).
+    const libres = availability.filter((slot) => slot.status === 'available')
     if (selectedStaffId) {
-      return availability.filter((slot) => slot.staff_id === selectedStaffId)
+      return libres.filter((slot) => slot.staff_id === selectedStaffId)
     }
 
     const firstSlotByTime = new Map<string, (typeof availability)[number]>()
-    for (const slot of availability) {
+    for (const slot of libres) {
       // Hora argentina del instante: starts_at es la fuente de verdad (UTC).
       const timeKey = formatArgentinaTime(slot.starts_at)
-      const current = firstSlotByTime.get(timeKey)
-      if (!current) {
-        firstSlotByTime.set(timeKey, slot)
-        continue
-      }
-      if (current.status !== 'available' && slot.status === 'available') {
-        firstSlotByTime.set(timeKey, slot)
-      }
+      if (!firstSlotByTime.has(timeKey)) firstSlotByTime.set(timeKey, slot)
     }
     return Array.from(firstSlotByTime.values()).sort((a, b) =>
       a.starts_at.localeCompare(b.starts_at)
     )
   }, [availability, selectedStaffId])
 
+  // El backend solo genera horarios dentro de las franjas del profesional: un
+  // dia sin ninguno (para el profesional elegido, si hay uno) es un dia sin
+  // atencion. Un dia con horarios pero ninguno libre esta lleno, bloqueado o
+  // dentro del aviso minimo: ahi si tiene sentido la lista de espera.
+  const diaSinAtencion =
+    availability !== undefined &&
+    !availability.some((slot) => !selectedStaffId || slot.staff_id === selectedStaffId)
+
   const emptyReported = useRef<string | null>(null)
   useEffect(() => {
     if (!onEmptyAvailability || isLoading || isFetching || isError || !availability) return
     const key = `${storePublicId}:${serviceId}:${dateStr}:${selectedStaffId ?? ''}:${forceAll}`
-    if (visibleSlots.some((slot) => slot.status === 'available')) {
+    // availability_empty sigue midiendo todo dia sin horarios libres, tambien el
+    // que no tiene atencion: es el contrato de la metrica del embudo.
+    if (visibleSlots.length > 0) {
       emptyReported.current = null
     } else if (emptyReported.current !== key) {
       emptyReported.current = key
@@ -308,10 +314,12 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
         ) : visibleSlots.length === 0 ? (
           <div className="text-center py-10 border" style={createBookingSurfaceStyle()}>
             <p className="font-black text-gray-400 uppercase tracking-widest text-xs">
-              No hay turnos disponibles.
+              {diaSinAtencion ? 'Este día no hay atención.' : 'No hay turnos disponibles.'}
             </p>
-            <p className="text-xs text-gray-400 mt-2 font-medium">Probá seleccionando otro día.</p>
-            {showWaitlist && (
+            <p className="text-xs text-gray-400 mt-2 font-medium">
+              {diaSinAtencion ? 'Probá con otro día.' : 'Probá seleccionando otro día.'}
+            </p>
+            {showWaitlist && !diaSinAtencion && (
               <div className="px-4 text-left">
                 <WaitlistJoinForm
                   key={dateStr}
@@ -328,29 +336,17 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
             {visibleSlots.map((slot) => {
               const timeString = formatArgentinaTime(slot.starts_at)
               const isSelected = selectedDate === dateStr && selectedTime === timeString
-              const isAvailable = slot.status === 'available'
-              const badgeColor =
-                slot.status === 'blocked'
-                  ? colors2000s.status.danger.dark
-                  : slot.status === 'booked'
-                    ? colors2000s.status.info.dark
-                    : colors2000s.text.secondary
-
               return (
                 <button
                   key={`${slot.staff_id}-${slot.start_time || slot.starts_at}`}
                   onClick={() =>
-                    isAvailable &&
                     onSelect(dateStr, timeString, slot.staff_id, selectedStaffId, slot.starts_at)
                   }
-                  disabled={!isAvailable}
-                  className="py-3 rounded-md font-black text-lg transition-all active:scale-95 border disabled:cursor-not-allowed disabled:opacity-70"
+                  className="py-3 rounded-md font-black text-lg transition-all active:scale-95 border"
                   style={{
                     background: isSelected
                       ? orangeCtaGradient
-                      : isAvailable
-                        ? `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`
-                        : `linear-gradient(180deg, ${colors2000s.bg.disabled} 0%, ${colors2000s.bg.disabledBottom} 100%)`,
+                      : `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
                     borderColor: isSelected
                       ? colors2000s.orange.accent
                       : colors2000s.border.default,
@@ -359,37 +355,27 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
                       : `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`,
                     color: isSelected
                       ? colors2000s.text.onOrangeSelection
-                      : isAvailable
-                        ? colors2000s.text.primary
-                        : colors2000s.text.disabled
+                      : colors2000s.text.primary
                   }}
                 >
                   <div>{timeString}</div>
-                  <div
-                    className="text-[8px] uppercase tracking-widest mt-1"
-                    style={{
-                      color: isSelected ? colors2000s.text.onOrangeSelection : badgeColor
-                    }}
-                  >
-                    {selectedStaffId ? slotStatusLabel(slot.status) : slot.staff_name}
-                  </div>
+                  {!selectedStaffId && (
+                    <div
+                      className="text-[8px] uppercase tracking-widest mt-1"
+                      style={{
+                        color: isSelected
+                          ? colors2000s.text.onOrangeSelection
+                          : colors2000s.text.secondary
+                      }}
+                    >
+                      {slot.staff_name}
+                    </div>
+                  )}
                 </button>
               )
             })}
           </div>
         )}
-        {showWaitlist &&
-          !isLoading &&
-          visibleSlots.length > 0 &&
-          !visibleSlots.some((slot) => slot.status === 'available') && (
-            <WaitlistJoinForm
-              key={dateStr}
-              storePublicId={storePublicId}
-              serviceId={serviceId}
-              staffId={staffId}
-              date={dateStr}
-            />
-          )}
       </div>
     </div>
   )
