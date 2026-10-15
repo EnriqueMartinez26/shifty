@@ -159,3 +159,32 @@ describe('CollectionAppointmentCard: resto con la sena devuelta', () => {
     expect(screen.queryByRole('button', { name: /Revertir resto/ })).not.toBeInTheDocument()
   })
 })
+
+describe('CollectionAppointmentCard: adicionales', () => {
+  const props = {
+    clientName: 'Lucia',
+    serviceName: 'Uñas',
+    staffName: 'Ana',
+    startsAt: '2026-10-08T13:00:00Z',
+    status: 'confirmed',
+    charge: { kind: 'unpaid', suggested: 30000 } as AppointmentCharge,
+    latestLink: null,
+    linkBlockedReason: null,
+    confirmBlockedReason: null,
+    remainderBlockedReason: null,
+    onCreateLink: jest.fn(),
+    onConfirmPayment: jest.fn(),
+    onRecordRemainder: jest.fn(),
+    onRevertRemainder: null
+  }
+
+  it('dice cuanto del precio son adicionales', () => {
+    render(<CollectionAppointmentCard {...props} addonsAmount={3000} />)
+    expect(screen.getByText(/Incluye adicionales por/)).toHaveTextContent('3.000')
+  })
+
+  it('sin adicionales no lo menciona', () => {
+    render(<CollectionAppointmentCard {...props} />)
+    expect(screen.queryByText(/Incluye adicionales/)).not.toBeInTheDocument()
+  })
+})

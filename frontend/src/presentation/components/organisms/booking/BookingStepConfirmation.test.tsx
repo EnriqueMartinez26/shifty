@@ -39,6 +39,7 @@ const estado = (patch: Partial<BookingWizardState> = {}): BookingWizardState => 
   startsAt: '2026-09-25T12:00:00+00:00',
   client: cliente(),
   promotionCode: '',
+  addons: {},
   ...patch
 })
 
@@ -95,6 +96,7 @@ const props = (patch: Partial<Props> = {}): Props => ({
   onBack: jest.fn(),
   onClientChange: jest.fn(),
   onPromotionCodeChange: jest.fn(),
+  onAddonsChange: jest.fn(),
   onConfirm: jest.fn().mockResolvedValue(confirmacion()),
   ...patch
 })
@@ -110,6 +112,7 @@ const ConEstado: React.FC<{ base: Props }> = ({ base }) => {
       onPromotionCodeChange={(promotionCode) =>
         setBookingState((prev) => ({ ...prev, promotionCode }))
       }
+      onAddonsChange={(addons) => setBookingState((prev) => ({ ...prev, addons }))}
     />
   )
 }
@@ -414,7 +417,8 @@ describe('BookingStepConfirmation', () => {
         serviceId: 'svc-1',
         startsAt: '2026-09-25T12:00:00+00:00',
         clientPhone: '1155550101',
-        promotionCode: 'BIENVENIDA10'
+        promotionCode: 'BIENVENIDA10',
+        addons: []
       })
     })
 
@@ -736,7 +740,7 @@ describe('BookingStepConfirmation', () => {
       fireEvent.click(botonReservar())
 
       await waitFor(() => expect(screen.getByText('Reserva Confirmada')).toBeInTheDocument())
-      expect(base.onConfirm).toHaveBeenCalledWith('manual', true)
+      expect(base.onConfirm).toHaveBeenCalledWith('manual', true, [])
       expect(screen.getByText('Te enviamos los detalles a lucia@example.com')).toBeInTheDocument()
     })
 
@@ -846,5 +850,149 @@ describe('BookingStepConfirmation', () => {
       resolver(confirmacion())
       await waitFor(() => expect(screen.getByText('Reserva Confirmada')).toBeInTheDocument())
     })
+  })
+})
+
+describe('BookingStepConfirmation: adicionales', () => {
+  const mockRefetch = jest.fn()
+  const servicioConAdicionales = {
+    public_id: 'svc-1',
+    price: 27000,
+    deposit_mode: 'required',
+    deposit_type: 'percent',
+    deposit_amount: 30,
+    addons: [
+      { id: 'strass', name: 'Strass', unit_price: 500, max_quantity: 10, position: 0 },
+      { id: 'diseno', name: 'Diseño', unit_price: 1500, max_quantity: 2, position: 1 }
+    ]
+  }
+  const completo = (patch: Partial<BookingWizardState> = {}) =>
+    props({
+      bookingState: estado({
+        client: cliente({ name: 'Lucia', phone: '1155550101' }),
+        ...patch
+      })
+    })
+  const ultimoPreview = () =>
+    mockDepositPreview.mock.calls[mockDepositPreview.mock.calls.length - 1]?.[0] as {
+      addons?: string[]
+    }
+
+  beforeEach(() => {
+    mockDepositPreview.mockReset()
+    mockServices.mockReset()
+    mockRefetch.mockReset()
+    mockDepositPreview.mockReturnValue({ data: undefined, isLoading: false })
+    mockServices.mockReturnValue({
+      data: [servicioConAdicionales],
+      isLoading: false,
+      refetch: mockRefetch
+    })
+  })
+
+  it('un servicio sin adicionales no muestra el selector ni el total', () => {
+    mockServices.mockReturnValue({
+      data: [{ ...servicioConAdicionales, addons: [] }],
+      isLoading: false,
+      refetch: mockRefetch
+    })
+    render(<BookingStepConfirmation {...completo()} />)
+
+    expect(screen.queryByRole('heading', { name: 'Adicionales' })).not.toBeInTheDocument()
+    expect(screen.queryByTestId('booking-price-summary')).not.toBeInTheDocument()
+  })
+
+  it('sumar adicionales actualiza el total y la seña se pide con ellos', () => {
+    render(<ConEstado base={completo()} />)
+
+    expect(screen.getByTestId('booking-price-summary')).toHaveTextContent(/Total\s*\$\s*27\.000/)
+    expect(ultimoPreview().addons).toEqual([])
+
+    for (let i = 0; i < 6; i += 1) {
+      fireEvent.click(screen.getByRole('button', { name: 'Agregar uno de Strass' }))
+    }
+
+    const resumen = screen.getByTestId('booking-price-summary')
+    expect(resumen).toHaveTextContent('Strass x6')
+    expect(resumen).toHaveTextContent(/3\.000/)
+    expect(resumen).toHaveTextContent(/Total\s*\$\s*30\.000/)
+    expect(ultimoPreview().addons).toEqual(['strass:6'])
+  })
+
+  it('muestra la seña que devuelve el backend sobre el total', () => {
+    mockDepositPreview.mockReturnValue({
+      isLoading: false,
+      data: {
+        amount: 9000,
+        base_amount: 9000,
+        extra_percent: 0,
+        reasons: [],
+        price: 30000,
+        addons_amount: 3000,
+        payments_enabled: false,
+        online_payment_mandatory: false
+      }
+    })
+    render(<BookingStepConfirmation {...completo({ addons: { strass: 6 } })} />)
+
+    expect(screen.getByTestId('deposit-preview')).toHaveTextContent(/9\.000/)
+    expect(ultimoPreview().addons).toEqual(['strass:6'])
+  })
+
+  it('reservar manda los adicionales elegidos sin los que quedaron en 0', async () => {
+    const base = completo({ addons: { strass: 6, diseno: 0 } })
+    render(<BookingStepConfirmation {...base} />)
+    aceptarTerminos()
+    fireEvent.click(screen.getByRole('button', { name: RESERVAR_CON_SENA }))
+
+    await waitFor(() =>
+      expect(base.onConfirm).toHaveBeenCalledWith('manual', true, [
+        { addon_id: 'strass', quantity: 6 }
+      ])
+    )
+  })
+
+  it('un adicional que ya no existe se descarta y una cantidad de mas se acota', () => {
+    const base = completo({ addons: { borrado: 2, diseno: 5 } })
+    render(<BookingStepConfirmation {...base} />)
+
+    expect(screen.getByLabelText('Cantidad de Diseño')).toHaveTextContent('2')
+    expect(ultimoPreview().addons).toEqual(['diseno:2'])
+  })
+
+  it('un 422 ADDON_UNAVAILABLE vuelve a pedir los servicios y lo explica sin culpar al horario', async () => {
+    const base = completo({ addons: { strass: 1 } })
+    base.onConfirm = jest.fn().mockRejectedValue(
+      new ValidationError('Adicional no disponible', {
+        errorCode: 'ADDON_UNAVAILABLE',
+        statusCode: 422
+      })
+    )
+    render(<BookingStepConfirmation {...base} />)
+    aceptarTerminos()
+    fireEvent.click(screen.getByRole('button', { name: RESERVAR_CON_SENA }))
+
+    await waitFor(() =>
+      expect(
+        screen.getByText(/Uno de los adicionales que elegiste ya no está disponible/)
+      ).toBeInTheDocument()
+    )
+    expect(mockRefetch).toHaveBeenCalledTimes(1)
+    expect(screen.queryByText(/El horario podria haberse ocupado/)).not.toBeInTheDocument()
+  })
+
+  it('si el preview de la seña rechaza un adicional, avisa y ofrece actualizar', () => {
+    mockDepositPreview.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      error: new ValidationError('Adicional no disponible', {
+        errorCode: 'ADDON_UNAVAILABLE',
+        statusCode: 422
+      })
+    })
+    render(<BookingStepConfirmation {...completo({ addons: { strass: 1 } })} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Actualizar adicionales' }))
+    expect(mockRefetch).toHaveBeenCalledTimes(1)
   })
 })

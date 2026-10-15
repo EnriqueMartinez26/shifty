@@ -13,11 +13,14 @@ import {
   WalletCards
 } from 'lucide-react'
 
+import { AddonSelection } from '@domain/value-objects/AddonSelection'
 import { Email } from '@domain/value-objects/Email'
 
+import { publicAddonOptions } from '@application/mappers/PublicAddonMapper'
 import type {
   BookingConfirmation,
-  PromotionPreview
+  PromotionPreview,
+  PublicBookingAddon
 } from '@application/services/PublicBookingService'
 import type { StoreCustomField } from '@application/services/StoreSettingsService'
 
@@ -35,7 +38,9 @@ import { formatCurrency } from '@shared/utils/currency'
 import { phoneDigits } from '@shared/utils/otpSession'
 import { navigateExternal } from '@shared/utils/safeUrl'
 
+import { BookingAddonsPicker } from './BookingAddonsPicker'
 import { BookingOtpSection } from './BookingOtpSection'
+import { BookingPriceSummary } from './BookingPriceSummary'
 import { BookingSuccess } from './BookingSuccess'
 import { depositBreakdownText } from './depositReasons'
 import type { BookingClientData, BookingOtpState, BookingWizardState } from './types'
@@ -57,6 +62,18 @@ const BOOKING_FIELD_MESSAGES: Partial<Record<string, string>> = {
   notes: 'Las notas son demasiado largas o tienen caracteres no permitidos.',
   custom_fields: 'Revisá los datos adicionales que pide el negocio.'
 }
+
+// 422 ADDON_UNAVAILABLE: el catalogo cambio mientras se elegia (un adicional
+// borrado o con otro maximo). Se vuelve a pedir y se avisa; el horario no tiene
+// nada que ver.
+const ADDON_UNAVAILABLE = 'ADDON_UNAVAILABLE'
+const ADDON_UNAVAILABLE_MESSAGE =
+  'Uno de los adicionales que elegiste ya no está disponible o cambió. Revisá la selección y volvé a confirmar.'
+const BOOKING_CODE_MESSAGES: Partial<Record<string, string>> = {
+  [ADDON_UNAVAILABLE]: ADDON_UNAVAILABLE_MESSAGE
+}
+
+const sumAmounts = (a: number, b: number): number => Math.round((a + b) * 100) / 100
 
 interface BookingStepConfirmationProps {
   storePublicId: string
@@ -83,9 +100,12 @@ interface BookingStepConfirmationProps {
   onBack: () => void
   onClientChange: (client: BookingClientData) => void
   onPromotionCodeChange: (promotionCode: string) => void
+  /** Cantidades de adicionales elegidas (por id). */
+  onAddonsChange: (addons: Record<string, number>) => void
   onConfirm: (
     paymentMethod: 'manual' | 'mercadopago',
-    acceptsTerms: boolean
+    acceptsTerms: boolean,
+    addons: PublicBookingAddon[]
   ) => Promise<BookingConfirmation>
 }
 
@@ -134,6 +154,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
   onBack,
   onClientChange,
   onPromotionCodeChange,
+  onAddonsChange,
   onConfirm
 }) => {
   const [acceptsTerms, setAcceptsTerms] = useState(false)
@@ -147,6 +168,17 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
   const previewPromotion = usePreviewPublicPromotion()
   const servicesQuery = usePublicServices(storePublicId)
   const selectedService = servicesQuery.data?.find((service) => service.public_id === serviceId)
+  // Tolerante: tras volver a pedir el catalogo, lo que ya no existe se
+  // descarta y cada cantidad se acota a su maximo nuevo.
+  const addonOptions = publicAddonOptions(selectedService)
+  const addonSelection = AddonSelection.sanitize(addonOptions, bookingState.addons)
+  const addonLines = addonSelection.lines()
+  // El total que se muestra es el mismo calculo del backend (promo solo sobre
+  // el servicio, adicionales aparte); la seña sale del preview, sobre el total.
+  const basePrice = promotionPreview
+    ? Number(promotionPreview.final_amount)
+    : Number(selectedService?.price ?? 0)
+  const totalPrice = sumAmounts(basePrice, addonSelection.total())
   // La seña real la decide el backend (antelación e historial del cliente):
   // inferirla desde los campos crudos del servicio divergía en cuanto la
   // tienda configuraba un recargo. Mientras carga, se cae a la inferencia.
@@ -164,8 +196,14 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
     serviceId,
     startsAt: bookingState.startsAt,
     clientPhone: debouncedDepositPhone,
-    promotionCode: bookingState.promotionCode || undefined
+    promotionCode: bookingState.promotionCode || undefined,
+    addons: addonSelection.toQueryParams()
   })
+  const addonsOutdated = getErrorCode(depositQuery.error) === ADDON_UNAVAILABLE
+
+  const handleAddonChange = (addonId: string, quantity: number) => {
+    onAddonsChange({ ...addonSelection.toQuantities(), [addonId]: quantity })
+  }
   const inferredDeposit = Boolean(
     selectedService &&
     selectedService.deposit_mode !== 'none' &&
@@ -252,7 +290,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
     dispatchSubmission({ type: 'submit' })
     setErrorMessage('')
     try {
-      const result = await onConfirm(paymentMethod, acceptsTerms)
+      const result = await onConfirm(paymentMethod, acceptsTerms, addonSelection.toPayload())
       if (paymentMethod === 'mercadopago') {
         if (!navigateExternal(result.payment_link)) {
           throw new Error('Mercado Pago no devolvió un enlace de pago válido')
@@ -261,17 +299,20 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
       }
       dispatchSubmission({ type: 'succeed', confirmation: result })
     } catch (error: unknown) {
-      // Sin canal para cobrar la seña (409 DEPOSIT_CHANNEL_UNAVAILABLE) el
-      // horario no tiene nada que ver: no se sugiere elegir otro.
+      // Sin canal para cobrar la seña (409 DEPOSIT_CHANNEL_UNAVAILABLE) o con
+      // un adicional que ya no existe (422 ADDON_UNAVAILABLE) el horario no
+      // tiene nada que ver: no se sugiere elegir otro.
+      const code = getErrorCode(error)
+      if (code === ADDON_UNAVAILABLE) void servicesQuery.refetch()
       dispatchSubmission({
         type: 'fail',
-        slotMayBeTaken: getErrorCode(error) !== 'DEPOSIT_CHANNEL_UNAVAILABLE'
+        slotMayBeTaken: code !== 'DEPOSIT_CHANNEL_UNAVAILABLE' && code !== ADDON_UNAVAILABLE
       })
       setErrorMessage(
         getErrorMessage(
           error,
           'No pudimos procesar tu reserva. El horario podria estar ocupado.',
-          {},
+          BOOKING_CODE_MESSAGES,
           BOOKING_FIELD_MESSAGES
         )
       )
@@ -621,6 +662,40 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
             </div>
           )}
         </div>
+
+        {addonOptions.length > 0 && (
+          <>
+            <BookingAddonsPicker
+              addons={addonOptions}
+              quantities={addonSelection.toQuantities()}
+              onChange={handleAddonChange}
+            />
+            {addonsOutdated && (
+              <div
+                role="alert"
+                className="p-3 text-xs font-bold flex flex-wrap items-center gap-2"
+                style={createBookingAccentBoxStyle(
+                  colors2000s.status.warning.bg,
+                  colors2000s.status.warning.border,
+                  colors2000s.status.warning.text
+                )}
+              >
+                <TriangleAlert className="w-4 h-4 flex-shrink-0" />
+                <span className="flex-1">{ADDON_UNAVAILABLE_MESSAGE}</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    void servicesQuery.refetch()
+                  }}
+                  className="underline font-black"
+                >
+                  Actualizar adicionales
+                </button>
+              </div>
+            )}
+            <BookingPriceSummary basePrice={basePrice} addons={addonLines} total={totalPrice} />
+          </>
+        )}
 
         {errorMessage && (
           <div

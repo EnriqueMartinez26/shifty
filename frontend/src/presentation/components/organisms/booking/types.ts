@@ -16,6 +16,11 @@ export interface BookingWizardState {
   startsAt: string | null
   client: BookingClientData
   promotionCode: string
+  /**
+   * Cantidad elegida por id de adicional del servicio. Se vacia al cambiar de
+   * servicio: los adicionales son de UN servicio.
+   */
+  addons: Record<string, number>
 }
 
 export interface BookingOtpState {

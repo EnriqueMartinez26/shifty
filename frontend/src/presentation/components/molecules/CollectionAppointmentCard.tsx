@@ -22,6 +22,11 @@ interface CollectionAppointmentCardProps {
   startsAt: string
   status: string
   charge: AppointmentCharge
+  /**
+   * Parte del precio del turno que son adicionales. La busqueda de Cobros trae
+   * solo el importe, no el detalle (el detalle se ve en la agenda).
+   */
+  addonsAmount?: number
   /** Link de Mercado Pago recien creado para este turno, si hay. */
   latestLink: string | null
   linkBlockedReason: string | null
@@ -117,6 +122,7 @@ export const CollectionAppointmentCard: React.FC<CollectionAppointmentCardProps>
   startsAt,
   status,
   charge,
+  addonsAmount = 0,
   latestLink,
   linkBlockedReason,
   confirmBlockedReason,
@@ -148,6 +154,11 @@ export const CollectionAppointmentCard: React.FC<CollectionAppointmentCardProps>
         <p className="text-[11px] font-bold mt-1" style={{ color: colors2000s.text.secondary }}>
           {serviceName} · {staffName} · {formatDateTimeEsAr(startsAt)}
         </p>
+        {addonsAmount > 0 && (
+          <p className="text-[11px] font-bold mt-1" style={{ color: colors2000s.text.secondary }}>
+            Incluye adicionales por {formatCurrency(addonsAmount)}
+          </p>
+        )}
         <ChargeSummary charge={charge} />
       </div>
 

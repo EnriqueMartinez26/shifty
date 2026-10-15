@@ -109,6 +109,8 @@ export const usePublicDepositPreview = (params: {
   startsAt: string | null
   clientPhone?: string
   promotionCode?: string
+  /** `<id>:<cantidad>` de los adicionales elegidos: la seña sale sobre el total. */
+  addons?: readonly string[]
 }) =>
   useQuery<DepositPreview>({
     queryKey: [
@@ -117,11 +119,13 @@ export const usePublicDepositPreview = (params: {
       params.serviceId,
       params.startsAt,
       params.clientPhone,
-      params.promotionCode
+      params.promotionCode,
+      params.addons?.join(',') ?? ''
     ],
     enabled: Boolean(params.storePublicId && params.serviceId && params.startsAt),
     // Al completar el telefono o aplicar un codigo cambia la clave: sin la seña
-    // anterior mientras carga, el boton de Mercado Pago parpadeaba (FF-32). Solo
+    // anterior mientras carga, el boton de Mercado Pago parpadeaba (FF-32). Igual
+    // al sumar o quitar un adicional. Solo
     // para el MISMO turno: con otro horario la seña vieja pasaba por actual.
     placeholderData: (previous, previousQuery) =>
       previousQuery?.queryKey[1] === params.storePublicId &&
@@ -135,7 +139,8 @@ export const usePublicDepositPreview = (params: {
         serviceId: params.serviceId,
         startsAt: params.startsAt as string,
         clientPhone: params.clientPhone,
-        promotionCode: params.promotionCode
+        promotionCode: params.promotionCode,
+        addons: params.addons
       })
   })
 

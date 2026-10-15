@@ -51,3 +51,20 @@ describe('AgendaEventPill', () => {
     expect(screen.queryByRole('button')).not.toBeInTheDocument()
   })
 })
+
+describe('AgendaEventPill: adicionales', () => {
+  it('muestra los adicionales del turno como "Strass x6"', () => {
+    render(
+      <AgendaEventPill
+        event={{ ...appointment, addonsLabel: 'Strass x6, Diseño x1' }}
+        actions={null}
+      />
+    )
+    expect(screen.getByText('+ Strass x6, Diseño x1')).toBeInTheDocument()
+  })
+
+  it('sin adicionales no agrega la linea', () => {
+    render(<AgendaEventPill event={appointment} actions={null} />)
+    expect(screen.queryByText(/^\+ /)).not.toBeInTheDocument()
+  })
+})

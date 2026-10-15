@@ -448,6 +448,49 @@ describe('BookingWizardContainer', () => {
       expect(claveDelIntento(1)).not.toBe(claveDelIntento(0))
     })
 
+    it('manda los adicionales elegidos y otros adicionales son otro pedido', async () => {
+      mockServices.mockReturnValue({
+        data: [
+          {
+            ...servicio('a'),
+            addons: [
+              { id: 'strass', name: 'Strass', unit_price: 500, max_quantity: 10, position: 0 }
+            ]
+          }
+        ],
+        isLoading: false
+      })
+      mockCreateBooking.mockRejectedValue(new NetworkError('No se pudo conectar con el servidor.'))
+      render(<WizardEnRuta store={tienda(false)} />)
+      await waitFor(() => expect(screen.getByText(HORARIO)).toBeInTheDocument())
+      fireEvent.click(screen.getByText('09:00'))
+      fireEvent.click(screen.getByRole('button', { name: 'Agregar uno de Strass' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Agregar uno de Strass' }))
+      fireEvent.change(screen.getByPlaceholderText('Ej: Juan Perez'), {
+        target: { value: 'Lucia' }
+      })
+      fireEvent.change(screen.getByPlaceholderText('PREFIJO + NUM'), {
+        target: { value: '+5491155550101' }
+      })
+      fireEvent.change(screen.getByPlaceholderText('juan@email.com'), {
+        target: { value: 'lucia@example.com' }
+      })
+      fireEvent.click(screen.getByRole('checkbox'))
+      await enviar()
+
+      expect(mockCreateBooking.mock.calls[0]?.[0]).toMatchObject({
+        addons: [{ addon_id: 'strass', quantity: 2 }]
+      })
+
+      fireEvent.click(screen.getByRole('button', { name: 'Quitar uno de Strass' }))
+      await enviar()
+
+      expect(mockCreateBooking.mock.calls[1]?.[0]).toMatchObject({
+        addons: [{ addon_id: 'strass', quantity: 1 }]
+      })
+      expect(claveDelIntento(1)).not.toBe(claveDelIntento(0))
+    })
+
     it('una reserva confirmada borra la clave guardada', async () => {
       mockCreateBooking.mockRejectedValueOnce(new NetworkError('sin red')).mockResolvedValueOnce({
         public_id: 'appt-1',

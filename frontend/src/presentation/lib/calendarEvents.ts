@@ -4,6 +4,7 @@
  */
 
 import type { Appointment } from '@domain/entities/Appointment'
+import { formatAddonsLabel } from '@domain/value-objects/AddonSelection'
 import { isBookingStatus } from '@domain/value-objects/BookingStatus'
 
 import type { AppointmentBlock } from '@application/services/AppointmentBlocksService'
@@ -26,6 +27,8 @@ export type UnifiedCalendarEvent =
       /** Solo llega para administradores (dato personal). */
       clientPhone: string | null
       serviceId: string
+      /** "Strass x6, Diseño x1"; ausente si el turno no tiene adicionales. */
+      addonsLabel?: string
     }
   | {
       id: string
@@ -92,7 +95,8 @@ export const buildUnifiedEvents = ({
       endsAt: appointment.timeSpan.getEndsAt(),
       status: appointment.status,
       clientPhone: appointment.clientPhone,
-      serviceId: appointment.serviceId
+      serviceId: appointment.serviceId,
+      addonsLabel: formatAddonsLabel(appointment.addons) || undefined
     }
   })
 

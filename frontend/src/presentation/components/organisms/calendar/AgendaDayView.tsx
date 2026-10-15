@@ -218,7 +218,10 @@ const AgendaDayGrid: React.FC<
                       .map((event) => ({
                         id: event.id,
                         title: event.title,
-                        subtitle: event.subtitle,
+                        subtitle:
+                          event.type !== 'block' && event.addonsLabel
+                            ? `${event.subtitle} + ${event.addonsLabel}`
+                            : event.subtitle,
                         status: event.status,
                         top: event.top,
                         height: event.height,
