@@ -80,7 +80,6 @@ from modules.public_api.schemas import (
 )
 from modules.services.addons import AddonChoice, AddonsQuote
 from modules.services.model import ADDONS_PER_SERVICE, Service
-from modules.services.repository import ServiceRepository
 from modules.services.schemas import ServiceAddonResponse
 from modules.stores.model import Store
 from modules.stores.schemas import StoreCustomField
@@ -243,11 +242,8 @@ async def get_public_services(
         store = await repo.get_store_by_public_id(store_public_id)
         if not store:
             raise StoreNotFoundException(identifier=store_public_id)
-        services = await repo.get_services(store.id)
-        # Los adicionales de todos, en una consulta (regla 12).
-        addons = await ServiceRepository(db).addons_for(
-            store.id, [service.id for service in services]
-        )
+        # Servicios y adicionales en UNA sentencia (presupuesto del endpoint).
+        catalogo = await repo.get_services_with_addons(store.id)
         return [
             PublicServiceResponse(
                 public_id=service.public_id,
@@ -262,12 +258,9 @@ async def get_public_services(
                 else None,
                 color=service.color,
                 image_url=service.image_url,
-                addons=[
-                    ServiceAddonResponse.model_validate(addon)
-                    for addon in addons.get(service.id, [])
-                ],
+                addons=[ServiceAddonResponse.model_validate(a) for a in addons],
             )
-            for service in services
+            for service, addons in catalogo
         ]
 
 

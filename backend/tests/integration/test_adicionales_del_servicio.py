@@ -389,3 +389,46 @@ async def test_dos_adicionales_con_el_mismo_id_es_422(client: AsyncClient) -> No
     )
 
     assert res.status_code == 422, res.text
+
+
+@pytest.mark.asyncio
+async def test_el_catalogo_publico_agrupa_los_adicionales_de_cada_servicio(
+    client: AsyncClient,
+) -> None:
+    """``/public/services`` trae servicios y adicionales en UNA sentencia (LEFT
+    JOIN, presupuesto del endpoint): cada servicio con los suyos, en orden, y
+    uno sin adicionales con la lista vacia."""
+    store, token = await _tienda(client, "adic-pub-agrupa")
+    con_dos = (await _crear_servicio(client, token)).json()
+    sin = (await _crear_servicio(client, token, addons=[])).json()
+    con_uno = (
+        await _crear_servicio(
+            client, token, addons=[{"name": "Brillo", "unit_price": 100}]
+        )
+    ).json()
+    staff = await create_staff(client, token, con_dos["public_id"], email="pro-g@t.com")
+    vinculo = await client.patch(
+        f"/staff/{staff}",
+        headers=auth_headers(token),
+        json={
+            "service_ids": [
+                con_dos["public_id"],
+                sin["public_id"],
+                con_uno["public_id"],
+            ]
+        },
+    )
+    assert vinculo.status_code == 200, vinculo.text
+
+    res = await client.get(f"/public/services?store_public_id={store}")
+
+    assert res.status_code == 200, res.text
+    por_servicio = {s["public_id"]: s["addons"] for s in res.json()}
+    assert [s["public_id"] for s in res.json()] == [
+        con_dos["public_id"],
+        sin["public_id"],
+        con_uno["public_id"],
+    ]
+    assert por_servicio[con_dos["public_id"]] == con_dos["addons"]
+    assert por_servicio[sin["public_id"]] == []
+    assert por_servicio[con_uno["public_id"]] == con_uno["addons"]
