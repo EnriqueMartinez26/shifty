@@ -124,10 +124,20 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
     )
   }, [availability, selectedStaffId])
 
+  // El backend solo genera horarios dentro de las franjas del profesional: un
+  // dia sin ninguno (para el profesional elegido, si hay uno) es un dia sin
+  // atencion. Un dia con horarios pero ninguno libre esta lleno, bloqueado o
+  // dentro del aviso minimo: ahi si tiene sentido la lista de espera.
+  const diaSinAtencion =
+    availability !== undefined &&
+    !availability.some((slot) => !selectedStaffId || slot.staff_id === selectedStaffId)
+
   const emptyReported = useRef<string | null>(null)
   useEffect(() => {
     if (!onEmptyAvailability || isLoading || isFetching || isError || !availability) return
     const key = `${storePublicId}:${serviceId}:${dateStr}:${selectedStaffId ?? ''}:${forceAll}`
+    // availability_empty sigue midiendo todo dia sin horarios libres, tambien el
+    // que no tiene atencion: es el contrato de la metrica del embudo.
     if (visibleSlots.length > 0) {
       emptyReported.current = null
     } else if (emptyReported.current !== key) {
@@ -304,10 +314,12 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
         ) : visibleSlots.length === 0 ? (
           <div className="text-center py-10 border" style={createBookingSurfaceStyle()}>
             <p className="font-black text-gray-400 uppercase tracking-widest text-xs">
-              No hay turnos disponibles.
+              {diaSinAtencion ? 'Este día no hay atención.' : 'No hay turnos disponibles.'}
             </p>
-            <p className="text-xs text-gray-400 mt-2 font-medium">Probá seleccionando otro día.</p>
-            {showWaitlist && (
+            <p className="text-xs text-gray-400 mt-2 font-medium">
+              {diaSinAtencion ? 'Probá con otro día.' : 'Probá seleccionando otro día.'}
+            </p>
+            {showWaitlist && !diaSinAtencion && (
               <div className="px-4 text-left">
                 <WaitlistJoinForm
                   key={dateStr}

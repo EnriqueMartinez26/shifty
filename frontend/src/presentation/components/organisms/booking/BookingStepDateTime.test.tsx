@@ -332,8 +332,11 @@ describe('BookingStepDateTime', () => {
       expect(screen.queryByText('booked')).not.toBeInTheDocument()
     })
 
-    it('sin showWaitlist la lista de espera sigue apareciendo como antes', () => {
-      mockAvailability.mockReturnValue({ isLoading: false, data: [] })
+    it('sin showWaitlist la lista de espera sigue apareciendo con el dia lleno', () => {
+      mockAvailability.mockReturnValue({
+        isLoading: false,
+        data: [{ ...slots[0], staff_id: 'st-1' }]
+      })
 
       render(
         <BookingStepDateTime
@@ -351,8 +354,50 @@ describe('BookingStepDateTime', () => {
       expect(screen.getByRole('heading', { name: 'Elegí fecha y hora' })).toBeInTheDocument()
     })
 
-    it('con showWaitlist={false} no monta la lista de espera aunque no haya horarios', () => {
+    // 2026-10-14: un domingo sin horario ofrecia "Avisame si se libera un turno".
+    it('un dia sin ningun horario es un dia sin atencion y no ofrece lista de espera', () => {
       mockAvailability.mockReturnValue({ isLoading: false, data: [] })
+
+      render(
+        <BookingStepDateTime
+          storePublicId="store-1"
+          serviceId="svc-1"
+          staffId={null}
+          selectedDate={null}
+          selectedTime={null}
+          onSelect={() => undefined}
+          onBack={() => undefined}
+        />
+      )
+
+      expect(screen.getByText('Este día no hay atención.')).toBeInTheDocument()
+      expect(screen.getByText('Probá con otro día.')).toBeInTheDocument()
+      expect(screen.queryByText('No hay turnos disponibles.')).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: AVISAME })).not.toBeInTheDocument()
+    })
+
+    it('si el profesional elegido no trabaja ese dia no hay atencion aunque otro tenga horarios', () => {
+      mockAvailability.mockReturnValue({ isLoading: false, data: [slots[1]] })
+
+      render(
+        <BookingStepDateTime
+          storePublicId="store-1"
+          serviceId="svc-1"
+          staffId={null}
+          lockedStaffId="st-9"
+          selectedDate={null}
+          selectedTime={null}
+          onSelect={() => undefined}
+          onBack={() => undefined}
+        />
+      )
+
+      expect(screen.getByText('Este día no hay atención.')).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: AVISAME })).not.toBeInTheDocument()
+    })
+
+    it('con showWaitlist={false} no monta la lista de espera con el dia lleno', () => {
+      mockAvailability.mockReturnValue({ isLoading: false, data: [slots[0]] })
 
       render(
         <BookingStepDateTime
