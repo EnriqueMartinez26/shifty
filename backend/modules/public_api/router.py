@@ -11,7 +11,16 @@ from decimal import Decimal
 from typing import Annotated
 
 import structlog
-from fastapi import BackgroundTasks, Depends, Path, Query, Request, Response, status
+from fastapi import (
+    BackgroundTasks,
+    Depends,
+    Header,
+    Path,
+    Query,
+    Request,
+    Response,
+    status,
+)
 from core.router import CanonicalAPIRouter
 from redis.asyncio import Redis
 from sqlalchemy import select
@@ -34,6 +43,7 @@ from modules.appointments.availability import AvailabilityService, StoreRules
 from modules.appointments.model import Appointment
 from modules.billing.service import store_is_suspended
 from modules.notifications.tasks import enqueue_otp_email
+from modules.otp.client_token import CLIENT_TOKEN_HEADER
 from modules.otp.service import OtpService
 from modules.payments.deposit_channels import (
     deposit_channels_for,
@@ -87,6 +97,11 @@ PublicIdPath = Annotated[
 PublicIdQuery = Annotated[
     str, Query(min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)
 ]
+# Token que ``/public/otp/verify`` le devuelve a quien verifico: la
+# autogestion lo exige ademas de la verificacion en la base (2026-10-14,
+# ``modules/otp/client_token.py``). Opcional en el esquema: faltante o
+# invalido da el mismo 403 neutro ``OTP_VERIFICATION_REQUIRED``.
+ClientTokenHeader = Annotated[str | None, Header(alias=CLIENT_TOKEN_HEADER)]
 # El slug canonico es minuscula, pero la URL publica la tipean humanos:
 # "MiBarberia" tiene que resolver a "mibarberia", no dar 422.
 SlugPath = Annotated[
@@ -352,6 +367,7 @@ async def preview_public_deposit(
     starts_at: datetime,
     client_phone: Annotated[str | None, Query(min_length=6, max_length=30)] = None,
     promotion_code: Annotated[str | None, Query(min_length=3, max_length=30)] = None,
+    client_token: ClientTokenHeader = None,
     db: AsyncSession = Depends(get_db),
 ) -> PublicDepositPreviewResponse:
     """La sena real antes de confirmar: misma regla que el alta.
@@ -363,7 +379,8 @@ async def preview_public_deposit(
     que ESA ficha tiene guardado: sin esa guarda el endpoint era un oraculo
     anonimo que decia, por telefono, si era cliente y si tenia ausencias
     (2026-09-11), y con el predicado viejo bastaba pedir el codigo al email
-    propio para abrirlo igual (2026-09-20).
+    propio para abrirlo igual (2026-09-20). Y exige el token de quien verifico:
+    sin el, la verificacion de otro abria su historial (2026-10-14).
     """
     telefono = re.sub(r"[\s\-\(\)\+]", "", client_phone) if client_phone else ""
     await enforce_rate_limit(
@@ -389,8 +406,8 @@ async def preview_public_deposit(
             if quote:
                 price = quote.final_amount
         history = UNKNOWN_HISTORY
-        if telefono and await OtpService(db).is_client_contact_verified(
-            store_id=store.id, phone=telefono
+        if telefono and await OtpService(db).is_self_service_allowed(
+            store_id=store.id, phone=telefono, client_token=client_token
         ):
             history = await repo.get_client_history(store.id, telefono)
         starts_at_utc = (
@@ -520,6 +537,7 @@ async def create_public_booking(
     db: AsyncSession = Depends(get_db),
     redis: Redis = Depends(get_redis),
     availability_cache: Redis = Depends(get_availability_cache),
+    client_token: ClientTokenHeader = None,
 ) -> PublicBookingResponse:
     """Reserva desde el portal. La transaccion es de ``PublicBookingService``.
 
@@ -547,7 +565,7 @@ async def create_public_booking(
             return PublicBookingResponse.model_validate(cached)
         try:
             response = await PublicBookingService(db, availability_cache).book(
-                data, idempotency_key
+                data, idempotency_key, client_token=client_token
             )
         except Exception:
             await idempotency_release(cache_key, redis)
@@ -670,6 +688,7 @@ async def get_client_appointments(
     limit: Annotated[int, Query(ge=1, le=CLIENT_HISTORY_MAX_LIMIT)] = (
         CLIENT_HISTORY_DEFAULT_LIMIT
     ),
+    client_token: ClientTokenHeader = None,
     db: AsyncSession = Depends(get_db),
 ) -> ClientAppointmentsResponse:
     phone = re.sub(r"[\s\-\(\)\+]", "", phone)
@@ -685,7 +704,9 @@ async def get_client_appointments(
         if not store:
             raise StoreNotFoundException(identifier=store_public_id)
 
-        await _require_recent_client_otp(db, store_id=store.id, phone=phone)
+        await _require_recent_client_otp(
+            db, store_id=store.id, phone=phone, client_token=client_token
+        )
 
         client = await repo.get_client_by_phone(store.id, phone)
         if not client:
@@ -723,6 +744,7 @@ async def client_cancel_appointment(
     data: ClientCancelRequest,
     db: AsyncSession = Depends(get_db),
     availability_cache: Redis = Depends(get_availability_cache),
+    client_token: ClientTokenHeader = None,
 ) -> PublicBookingResponse:
     """El cliente cancela su turno; la transaccion es del service (B1-12)."""
     await enforce_rate_limit(
@@ -733,7 +755,7 @@ async def client_cancel_appointment(
     )
     async with tenant_bypass(db):
         return await PublicBookingService(db, availability_cache).cancel_by_client(
-            public_id, data
+            public_id, data, client_token
         )
 
 
@@ -747,6 +769,7 @@ async def client_reschedule_appointment(
     db: AsyncSession = Depends(get_db),
     redis: Redis = Depends(get_redis),
     availability_cache: Redis = Depends(get_availability_cache),
+    client_token: ClientTokenHeader = None,
 ) -> PublicBookingResponse:
     """El cliente reprograma su turno; la transaccion es del service (B1-12).
 
@@ -770,7 +793,7 @@ async def client_reschedule_appointment(
         try:
             response = await PublicBookingService(
                 db, availability_cache
-            ).reschedule_by_client(public_id, data)
+            ).reschedule_by_client(public_id, data, client_token)
         except Exception:
             await idempotency_release(cache_key, redis)
             raise

@@ -293,8 +293,13 @@ Una instrucción en lenguaje natural no es una garantía.
    de idempotencia en otro lado.
 7. **Webhooks de MP**: HMAC + ventana de antigüedad + idempotencia por
    `event_id` + verificar collector y monto (`payments/router.py`,
-   `processing.py`). Del cuerpo, la firma cubre solo `data.id`: a MP se le
-   consulta SOLO ese id, y el estado y todo lo que valida la integridad
+   `processing.py`). Una notificación que se declara de otro tema (ningún
+   `topic`/`type` es `payment` ni hay `action` `payment.*`: el IPN de
+   `merchant_order`, `topic_merchant_order_wh`) responde 200 `ignored` sin
+   firma, sin base y sin consultar a MP; una de pago, o sin tema, sin firma
+   válida sigue rechazada (`router._tema_ajeno_a_pagos`, 2026-10-14,
+   `test_webhook_ignora_lo_que_no_es_un_pago.py`). Del cuerpo, la firma
+   cubre solo `data.id`: a MP se le consulta SOLO ese id, y el estado y todo lo que valida la integridad
    salen SOLO de `GET /v1/payments/{id}`; sin respuesta de MP el evento
    queda en el inbox sin aplicar. Un `approved` sin importe falla cerrado;
    sin `collector_id` falla si la tienda tiene `oauth_user_id`, y en
@@ -583,8 +588,17 @@ Una instrucción en lenguaje natural no es una garantía.
   víctima y diez, el presupuesto de verificación del teléfono
   (`OTP_MAX_VERIFY_ATTEMPTS_PER_HOUR`), sin necesitar ninguna casilla. La
   respuesta tiene la misma forma en todos los caminos. El front respeta la
-  ventana de 30 minutos.
+  ventana de 30 minutos. Verificar devuelve un `client_token` (JWT con clave
+  y `aud` propios, atado a tienda, teléfono, email y verificación, 30 min;
+  `otp/client_token.py`, 2026-10-14) y la autogestión, la lista de espera
+  pública y el historial y el gate de la reserva lo exigen en
+  `X-Client-Token` ADEMÁS del chequeo en la base: sin él, la verificación
+  de otro abría sus turnos desde cualquier dispositivo. El front lo guarda
+  solo en memoria. Es un bearer corto: "Salir" lo olvida en el navegador,
+  pero un token copiado vale hasta su `exp` (≤30 min); el `jti` no se
+  revisa ni hay revocación.
   (`test_otp_por_email.py`, `test_otp_email_del_cliente.py`,
+  `test_autogestion_con_token_del_cliente.py`,
   `test_otp_por_la_cola.py`, `test_otp_tope_por_mail_destino.py`,
   `test_otp_no_pisa_codigo_sin_mail.py`,
   `test_otp_invalida_solo_mismo_destino.py`,

@@ -236,6 +236,7 @@ async def test_tope_no_invalida_codigo_ya_entregado(
         json={"store_public_id": tienda, "phone": f"+{telefono}", "code": codigo},
     )
     assert verificado.status_code == 200, verificado.text
+    client.headers["X-Client-Token"] = verificado.json()["client_token"]
 
 
 @pytest.mark.asyncio
@@ -431,3 +432,4 @@ async def test_el_flujo_normal_no_cambia(
         json={"store_public_id": tienda, "phone": "+5491160000777", "code": codigo},
     )
     assert verificado.status_code == 200, verificado.text
+    client.headers["X-Client-Token"] = verificado.json()["client_token"]

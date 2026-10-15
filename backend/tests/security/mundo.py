@@ -148,6 +148,9 @@ class Tienda:
     suscripcion: str = ""
     tel_verificado: str = ""
     email_verificado: str = ""
+    # El token que devolvio la verificacion: la autogestion lo exige en
+    # X-Client-Token ademas de la verificacion en la base (2026-10-14).
+    token_cliente: str = ""
     nombre_verificado: str = ""
     tel_sin_otp: str = ""
     nombre_sin_otp: str = ""
@@ -171,8 +174,11 @@ class Actor:
     email: str | None = None
     token: str | None = None
     telefono: str | None = None
+    token_cliente: str | None = None
 
     def headers(self) -> dict[str, str]:
+        if self.token_cliente:
+            return {"X-Client-Token": self.token_cliente}
         return {"Authorization": f"Bearer {self.token}"} if self.token else {}
 
 
@@ -285,7 +291,12 @@ class Mundo:
         if rol == ANON:
             return Actor(rol, tienda, telefono=self.telefono_nuevo())
         if rol == CLIENTE_OTP:
-            return Actor(rol, tienda, telefono=tienda.tel_verificado)
+            return Actor(
+                rol,
+                tienda,
+                telefono=tienda.tel_verificado,
+                token_cliente=tienda.token_cliente,
+            )
         user_id, email = await self.usuario(
             tienda, ROL_PERSISTIDO[rol], global_admin=rol == SUPERADMIN
         )
@@ -594,7 +605,7 @@ class Mundo:
             await s.commit()
         return crudo
 
-    async def otp_verificado(self, tienda: Tienda, telefono: str, email: str) -> None:
+    async def otp_verificado(self, tienda: Tienda, telefono: str, email: str) -> str:
         pedido = await self.client.post(
             "/public/otp/request",
             json={"store_public_id": tienda.id, "phone": telefono, "email": email},
@@ -606,6 +617,7 @@ class Mundo:
             json={"store_public_id": tienda.id, "phone": telefono, "code": codigo},
         )
         assert verificado.status_code == 200, verificado.text
+        return str(verificado.json()["client_token"])
 
     async def tienda_suelta(self) -> str:
         """Tienda sin datos, para operaciones de superadmin que la modifican."""
@@ -754,7 +766,7 @@ class Mundo:
             nombre=tienda.nombre_verificado,
             email=tienda.email_verificado,
         )
-        await self.otp_verificado(
+        tienda.token_cliente = await self.otp_verificado(
             tienda, tienda.tel_verificado, tienda.email_verificado
         )
         tienda.tel_sin_otp = f"+5491170{tel_base + 1:06d}"

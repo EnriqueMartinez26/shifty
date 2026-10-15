@@ -296,6 +296,7 @@ async def test_reprogramacion_del_cliente_y_bloqueo_concurrentes_no_dejan_un_tur
         },
     )
     assert verificado.status_code == 200, verificado.text
+    client.headers["X-Client-Token"] = verificado.json()["client_token"]
 
     async def reprogramar(turno: str, nuevo_inicio: datetime, i: int) -> Response:
         return await client.patch(

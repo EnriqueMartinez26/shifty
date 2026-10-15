@@ -180,9 +180,9 @@ export const usePublicClientAppointments = (
 
 export const useCancelClientAppointment = () => {
   const queryClient = useQueryClient()
-  return useMutation<void, Error, { publicId: string; phone: string }>({
-    mutationFn: ({ publicId, phone }) =>
-      publicBookingService.cancelClientAppointment(publicId, phone),
+  return useMutation<void, Error, { storePublicId: string; publicId: string; phone: string }>({
+    mutationFn: ({ storePublicId, publicId, phone }) =>
+      publicBookingService.cancelClientAppointment(storePublicId, publicId, phone),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['public-client-appointments'] })
     }
@@ -194,7 +194,13 @@ export const useRescheduleClientAppointment = () => {
   return useMutation<
     void,
     Error,
-    { publicId: string; phone: string; newStartsAt: string; idempotencyKey: string }
+    {
+      storePublicId: string
+      publicId: string
+      phone: string
+      newStartsAt: string
+      idempotencyKey: string
+    }
   >({
     mutationFn: (payload) => publicBookingService.rescheduleClientAppointment(payload),
     onSuccess: () => {

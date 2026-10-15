@@ -24,6 +24,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import modules.notifications.tasks as tasks
+from core.utils import format_ars
 from modules.notifications.model import Notification
 from modules.payments.jobs import process_outbox_batch
 from modules.payments.model import OutboxMessage
@@ -131,4 +132,5 @@ async def test_el_reembolso_registrado_avisa_al_panel_del_dueno(
     assert len(avisos) == 1, avisos
     assert avisos[0].title == "Reembolso registrado"
     assert avisos[0].appointment_id == turno
-    assert confirmado.json()["amount"] in (avisos[0].body or "")
+    # El importe sale formateado para personas ("$ 10.000"), 2026-10-14.
+    assert format_ars(confirmado.json()["amount"]) in (avisos[0].body or "")

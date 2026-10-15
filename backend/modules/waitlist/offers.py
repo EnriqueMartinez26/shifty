@@ -200,10 +200,10 @@ def _owner_notification(
     return Notification(
         store_id=store_id,
         type=NotificationType.WAITLIST_SLOT_RELEASED.value,
-        title="Se libero un hueco con gente en espera",
+        title="Se liberó un hueco con gente en espera",
         body=(
             f"El {fecha} a las {hora} con {staff_name}: {cuantos} en lista de espera. "
-            "Podes avisarles por WhatsApp o reservarles el turno desde Lista de espera."
+            "Podés avisarles por WhatsApp o reservarles el turno desde Lista de espera."
         ),
     )
 

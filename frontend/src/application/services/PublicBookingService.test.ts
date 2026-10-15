@@ -197,7 +197,7 @@ describe('PublicBookingService', () => {
   })
 
   it('cancelClientAppointment manda el telefono por PATCH', async () => {
-    await publicBookingService.cancelClientAppointment('apt-1', '1155550000')
+    await publicBookingService.cancelClientAppointment('st-1', 'apt-1', '1155550000')
 
     expect(mockPatch).toHaveBeenCalledWith('/public/client/appointments/apt-1/cancel', {
       phone: '1155550000'
@@ -206,6 +206,7 @@ describe('PublicBookingService', () => {
 
   it('rescheduleClientAppointment manda telefono, horario nuevo y clave por PATCH', async () => {
     await publicBookingService.rescheduleClientAppointment({
+      storePublicId: 'st-1',
       publicId: 'apt-1',
       phone: '1155550000',
       newStartsAt: '2026-10-02T14:00:00Z',
@@ -245,5 +246,146 @@ describe('PublicBookingService', () => {
 
     expect(mockPost).toHaveBeenCalledWith('/public/unsubscribe', { token: 't.o.k.en' })
     expect(mockGet).not.toHaveBeenCalled()
+  })
+})
+
+describe('PublicBookingService: token del cliente (2026-10-14)', () => {
+  // El backend ata la autogestion al token que devuelve /public/otp/verify
+  // (X-Client-Token). Vive solo en memoria (regla 28): nunca en
+  // localStorage ni sessionStorage.
+  const verificar = async (storePublicId = 'st-1', token = 'tok-del-cliente') => {
+    mockPost.mockResolvedValueOnce({
+      data: {
+        ok: true,
+        verified_at: '2026-10-14T12:00:00Z',
+        phone: '+5491155550000',
+        client_token: token
+      }
+    })
+    await publicBookingService.verifyOtp({
+      store_public_id: storePublicId,
+      phone: '1155550000',
+      code: '123456'
+    })
+  }
+
+  beforeEach(() => {
+    mockGet.mockReset().mockResolvedValue({ data: [] })
+    mockPost.mockReset().mockResolvedValue({ data: {} })
+    mockPatch.mockReset().mockResolvedValue({ data: {} })
+    publicBookingService.forgetClientToken()
+  })
+
+  it('verificar guarda el token y "Mis turnos" lo manda en X-Client-Token', async () => {
+    await verificar()
+
+    await publicBookingService.getClientAppointments('st-1', '5491155550000')
+    await publicBookingService.cancelClientAppointment('st-1', 'apt-1', '5491155550000')
+    await publicBookingService.rescheduleClientAppointment({
+      storePublicId: 'st-1',
+      publicId: 'apt-1',
+      phone: '5491155550000',
+      newStartsAt: '2026-10-20T14:00:00Z',
+      idempotencyKey: 'idem-3'
+    })
+
+    const headers = { 'X-Client-Token': 'tok-del-cliente' }
+    expect(mockGet).toHaveBeenCalledWith('/public/client/st-1/5491155550000/appointments', {
+      params: { limit: 200 },
+      headers
+    })
+    expect(mockPatch).toHaveBeenCalledWith(
+      '/public/client/appointments/apt-1/cancel',
+      { phone: '5491155550000' },
+      { headers }
+    )
+    expect(mockPatch).toHaveBeenCalledWith(
+      '/public/client/appointments/apt-1/reschedule',
+      {
+        phone: '5491155550000',
+        new_starts_at: '2026-10-20T14:00:00Z',
+        idempotency_key: 'idem-3'
+      },
+      { headers }
+    )
+  })
+
+  it('la reserva y el preview de la seña tambien lo mandan, solo a esa tienda', async () => {
+    await verificar('st-1')
+    const payload = {
+      store_public_id: 'st-1',
+      service_id: 'svc-1',
+      starts_at: '2026-10-01T13:00:00Z',
+      idempotency_key: 'idem-1',
+      client_name: 'Ana Diaz',
+      client_phone: '1155550000',
+      client_email: 'ana@example.com'
+    }
+
+    await publicBookingService.createBooking(payload)
+    await publicBookingService.previewDeposit({
+      storePublicId: 'st-1',
+      serviceId: 'svc-1',
+      startsAt: '2026-10-01T13:00:00Z',
+      clientPhone: '1155550000'
+    })
+    await publicBookingService.getClientAppointments('otra-tienda', '1155550000')
+
+    const headers = { 'X-Client-Token': 'tok-del-cliente' }
+    expect(mockPost).toHaveBeenCalledWith('/public/appointments', payload, { headers })
+    expect(mockGet).toHaveBeenCalledWith(
+      '/public/deposit/preview',
+      expect.objectContaining({ headers })
+    )
+    expect(mockGet).toHaveBeenLastCalledWith('/public/client/otra-tienda/1155550000/appointments', {
+      params: { limit: 200 }
+    })
+  })
+
+  it('el token no toca localStorage ni sessionStorage', async () => {
+    const setItem = jest.spyOn(Storage.prototype, 'setItem')
+    try {
+      await verificar()
+      await publicBookingService.getClientAppointments('st-1', '5491155550000')
+
+      expect(setItem).not.toHaveBeenCalled()
+      expect(JSON.stringify({ ...window.localStorage })).not.toContain('tok-del-cliente')
+      expect(JSON.stringify({ ...window.sessionStorage })).not.toContain('tok-del-cliente')
+    } finally {
+      setItem.mockRestore()
+    }
+  })
+
+  it('cancelar y reprogramar en otra tienda no mandan el token (revision del PR #183)', async () => {
+    await verificar('st-1')
+
+    await publicBookingService.cancelClientAppointment('otra-tienda', 'apt-1', '5491155550000')
+    await publicBookingService.rescheduleClientAppointment({
+      storePublicId: 'otra-tienda',
+      publicId: 'apt-1',
+      phone: '5491155550000',
+      newStartsAt: '2026-10-20T14:00:00Z',
+      idempotencyKey: 'idem-4'
+    })
+
+    expect(mockPatch).toHaveBeenCalledWith('/public/client/appointments/apt-1/cancel', {
+      phone: '5491155550000'
+    })
+    expect(mockPatch).toHaveBeenCalledWith('/public/client/appointments/apt-1/reschedule', {
+      phone: '5491155550000',
+      new_starts_at: '2026-10-20T14:00:00Z',
+      idempotency_key: 'idem-4'
+    })
+  })
+
+  it('forgetClientToken lo olvida: las llamadas siguientes salen sin token', async () => {
+    await verificar()
+    publicBookingService.forgetClientToken()
+
+    await publicBookingService.cancelClientAppointment('st-1', 'apt-1', '5491155550000')
+
+    expect(mockPatch).toHaveBeenCalledWith('/public/client/appointments/apt-1/cancel', {
+      phone: '5491155550000'
+    })
   })
 })

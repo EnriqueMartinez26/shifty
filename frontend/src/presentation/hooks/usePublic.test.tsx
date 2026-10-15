@@ -121,6 +121,7 @@ describe('useRescheduleClientAppointment', () => {
     await act(async () => {
       await expect(
         result.current.mutateAsync({
+          storePublicId: 'store-1',
           publicId: 'appt-1',
           phone: '1155550101',
           newStartsAt: '2026-09-16T19:00:00+00:00',

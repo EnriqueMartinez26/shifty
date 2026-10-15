@@ -94,6 +94,7 @@ async def test_reprogramar_pegado_al_turno_vecino_respeta_el_buffer(
         },
     )
     assert verificado.status_code == 200, verificado.text
+    client.headers["X-Client-Token"] = verificado.json()["client_token"]
 
     # Pegado al turno de A (30 de servicio, 15 de buffer): mismo 409 que el alta.
     pegado = await client.patch(

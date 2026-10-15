@@ -2,6 +2,7 @@ import apiClient from '@infrastructure/http/client'
 
 import type { BusinessType } from '@shared/types/business'
 
+import { clientTokenConfig, forgetClientToken, rememberClientToken } from './clientToken'
 import type { StoreCustomField } from './StoreSettingsService'
 
 interface PublicStoreFeatureFlags {
@@ -199,6 +200,11 @@ export interface OtpVerifyResponse {
   ok: boolean
   verified_at: string
   phone: string
+  /**
+   * Token del cliente (2026-10-14): la autogestion y el historial de la seña
+   * lo exigen en `X-Client-Token`. Null si la verificacion no registro email.
+   */
+  client_token?: string | null
 }
 
 export interface WaitlistJoinPayload {
@@ -258,6 +264,11 @@ export interface ClientAppointments {
 }
 
 class PublicBookingService {
+  /** Olvida el token del cliente ("Salir" o un 403 de verificacion). */
+  forgetClientToken(): void {
+    forgetClientToken()
+  }
+
   async previewDeposit(params: {
     storePublicId: string
     serviceId: string
@@ -278,7 +289,8 @@ class PublicBookingService {
       },
       // El backend lee `addon` repetido (`addon=a:1&addon=b:2`); el formato por
       // defecto de axios mandaria `addon[]=...` y FastAPI no lo reconoce.
-      paramsSerializer: { indexes: null }
+      paramsSerializer: { indexes: null },
+      ...clientTokenConfig(params.storePublicId)
     })
     return data
   }
@@ -339,7 +351,10 @@ class PublicBookingService {
   }
 
   async createBooking(payload: PublicBookingPayload): Promise<BookingConfirmation> {
-    const { data } = await apiClient.post<BookingConfirmation>('/public/appointments', payload)
+    const config = clientTokenConfig(payload.store_public_id)
+    const { data } = config
+      ? await apiClient.post<BookingConfirmation>('/public/appointments', payload, config)
+      : await apiClient.post<BookingConfirmation>('/public/appointments', payload)
     return data
   }
 
@@ -383,26 +398,39 @@ class PublicBookingService {
     // se piden todos los que permite para no esconder turnos viejos.
     const { data } = await apiClient.get<ClientAppointments>(
       `/public/client/${storePublicId}/${phone}/appointments`,
-      { params: { limit: 200 } }
+      { params: { limit: 200 }, ...clientTokenConfig(storePublicId) }
     )
     return data
   }
 
-  async cancelClientAppointment(publicId: string, phone: string): Promise<void> {
-    await apiClient.patch(`/public/client/appointments/${publicId}/cancel`, { phone })
+  async cancelClientAppointment(
+    storePublicId: string,
+    publicId: string,
+    phone: string
+  ): Promise<void> {
+    const url = `/public/client/appointments/${publicId}/cancel`
+    // El token solo viaja a la tienda que lo emitio.
+    const config = clientTokenConfig(storePublicId)
+    if (config) await apiClient.patch(url, { phone }, config)
+    else await apiClient.patch(url, { phone })
   }
 
   async rescheduleClientAppointment(payload: {
+    storePublicId: string
     publicId: string
     phone: string
     newStartsAt: string
     idempotencyKey: string
   }): Promise<void> {
-    await apiClient.patch(`/public/client/appointments/${payload.publicId}/reschedule`, {
+    const url = `/public/client/appointments/${payload.publicId}/reschedule`
+    const body = {
       phone: payload.phone,
       new_starts_at: payload.newStartsAt,
       idempotency_key: payload.idempotencyKey
-    })
+    }
+    const config = clientTokenConfig(payload.storePublicId)
+    if (config) await apiClient.patch(url, body, config)
+    else await apiClient.patch(url, body)
   }
 
   async requestOtp(payload: OtpRequestPayload): Promise<OtpRequestResponse> {
@@ -420,6 +448,7 @@ class PublicBookingService {
 
   async verifyOtp(payload: OtpVerifyPayload): Promise<OtpVerifyResponse> {
     const { data } = await apiClient.post<OtpVerifyResponse>('/public/otp/verify', payload)
+    rememberClientToken(payload.store_public_id, data.client_token)
     return data
   }
 }

@@ -94,6 +94,7 @@ async def test_el_motivo_llega_al_duenio_en_una_linea_y_el_asunto_no_cambia(
         },
     )
     assert verificado.status_code == 200, verificado.text
+    client.headers["X-Client-Token"] = verificado.json()["client_token"]
 
     cancelado = await client.patch(
         f"/public/client/appointments/{reserva.json()['public_id']}/cancel",
@@ -127,9 +128,9 @@ async def test_el_motivo_llega_al_duenio_en_una_linea_y_el_asunto_no_cambia(
         )
     ).scalar_one()
     assert f"Motivo: {motivo}" in (aviso.body or "")
-    assert aviso.title == "Un cliente cancelo su turno"
+    assert aviso.title == "Un cliente canceló su turno"
 
-    asunto = "Shifty - Un cliente cancelo su turno"
+    asunto = "Shifty - Un cliente canceló su turno"
     mails = [m for m in buzon.enviados[antes:] if m[1] == asunto]
     assert mails, f"el duenio no recibio el mail: {buzon.enviados[antes:]}"
     destino, _asunto, cuerpo = mails[0]

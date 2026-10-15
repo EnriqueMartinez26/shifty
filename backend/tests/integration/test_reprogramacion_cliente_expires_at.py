@@ -76,6 +76,7 @@ async def test_el_turno_reprogramado_expira_como_uno_del_alta(
         },
     )
     assert verificado.status_code == 200, verificado.text
+    client.headers["X-Client-Token"] = verificado.json()["client_token"]
 
     nuevo_inicio = base + timedelta(hours=2)
     reprogramado = await client.patch(

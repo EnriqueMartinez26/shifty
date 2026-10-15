@@ -156,6 +156,9 @@ async def test_turnos_servicio_y_profesional_en_una_consulta_sin_cascadas(
     )
     # Antes 10 (tienda + sus horarios, OTP x2, cliente, turnos, servicio,
     # profesional + sus horarios y servicios). Ahora: tienda (2 columnas) +
-    # OTP (ficha + verificacion) + cliente + turnos con JOIN.
-    assert len(sentencias) <= 5, sentencias
+    # OTP (ficha + verificacion) + cliente + turnos con JOIN. Desde el
+    # 2026-10-14, una mas: la verificacion del token del cliente (``vid``, por
+    # clave primaria), que ata la autogestion a quien verifico. Va aparte del
+    # chequeo de siempre a proposito: los dos tienen que pasar.
+    assert len(sentencias) <= 6, sentencias
     assert len(res.json()["appointments"]) == 50
