@@ -5,8 +5,11 @@ Segunda mitad de ``e2a4c6e8f0b1``. ``VALIDATE CONSTRAINT`` recorre la tabla con
 propia revision (una transaccion por revision, ``alembic/env.py``) para que el
 lock fuerte del ``ADD CONSTRAINT`` no se sostenga durante el recorrido.
 
-Toda fila previa tiene ``addons_amount`` = 0 (el default de la columna),
-asi que valida sin cambios.
+Toda fila previa tiene ``addons_amount`` = 0 (el default de la columna) y
+``price_amount`` NULL o el precio de un servicio (``ge=0``) con un descuento
+acotado a ese precio, asi que valida sin cambios. Si una fila tuviera un
+precio negativo, el VALIDATE falla con el nombre del CHECK y no se aplica
+nada: se revisa esa fila a mano.
 
 El downgrade vuelve al estado de la revision anterior: el CHECK sin validar.
 
@@ -39,5 +42,6 @@ def downgrade() -> None:
     op.execute(f"ALTER TABLE appointments DROP CONSTRAINT {CHECK_TURNO}")
     op.execute(
         f"ALTER TABLE appointments ADD CONSTRAINT {CHECK_TURNO} "
-        "CHECK (addons_amount >= 0) NOT VALID"
+        "CHECK (addons_amount >= 0 AND (price_amount IS NULL OR price_amount >= 0)) "
+        "NOT VALID"
     )

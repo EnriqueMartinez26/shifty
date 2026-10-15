@@ -775,6 +775,87 @@ async def test_el_link_del_panel_cobra_tambien_los_adicionales_congelados(
     assert (await _cobro(test_session, reserva.json()["public_id"])).amount == TOTAL
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("con_adicionales", "precio_congelado"),
+    [(True, Decimal("27000.00")), (False, Decimal("24300.00"))],
+)
+async def test_el_link_del_panel_nunca_cobra_mas_que_el_total_con_promo(
+    client: AsyncClient,
+    test_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    con_adicionales: bool,
+    precio_congelado: Decimal,
+) -> None:
+    """Re-revision de la PR #187 (dinero): un turno con promo congela el total
+    con descuento. El link del panel cobraba lista + adicionales SIN descuento
+    (30.000 en vez de 27.000) y el saldo, que no baja de cero, lo escondia.
+    Ahora se acota al precio congelado, aunque la lista haya subido despues."""
+    monkeypatch.setattr(tasks, "_send_email", Buzon())
+    _mercadopago(monkeypatch, {})
+    t = await _tienda(
+        client,
+        f"adic-link-promo-{con_adicionales}",
+        deposit_mode="none",
+        deposit_amount=None,
+        mercadopago=True,
+    )
+    await _promo(t, client, code="VERANO10", promotion_type="percent", value=10)
+    reserva = await _reservar(
+        client,
+        t,
+        _seis_strass(t) if con_adicionales else [],
+        promotion_code="VERANO10",
+    )
+    assert reserva.status_code == 201, reserva.text
+    turno = reserva.json()["public_id"]
+    assert (await _turno(test_session, turno)).price_amount == precio_congelado
+    subio = await client.patch(
+        f"/services/{t.servicio}", headers=auth_headers(t.token), json={"price": 40000}
+    )
+    assert subio.status_code == 200, subio.text
+
+    link = await client.post(
+        f"/payments/preferences/{turno}", headers=auth_headers(t.token)
+    )
+
+    assert link.status_code == 200, link.text
+    assert (await _cobro(test_session, turno)).amount == precio_congelado
+
+
+@pytest.mark.asyncio
+async def test_el_link_del_panel_sin_promo_sigue_re_tarifando_con_adicionales(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Sin promo se conserva el comportamiento deliberado: el link cobra la
+    lista de HOY + los adicionales congelados (``test_cobro_del_panel_dos_fases``
+    lo fija sin adicionales)."""
+    monkeypatch.setattr(tasks, "_send_email", Buzon())
+    _mercadopago(monkeypatch, {})
+    t = await _tienda(
+        client,
+        "adic-link-sin-promo",
+        deposit_mode="none",
+        deposit_amount=None,
+        mercadopago=True,
+    )
+    reserva = await _reservar(client, t, _seis_strass(t))
+    assert reserva.status_code == 201, reserva.text
+    subio = await client.patch(
+        f"/services/{t.servicio}", headers=auth_headers(t.token), json={"price": 40000}
+    )
+    assert subio.status_code == 200, subio.text
+
+    link = await client.post(
+        f"/payments/preferences/{reserva.json()['public_id']}",
+        headers=auth_headers(t.token),
+    )
+
+    assert link.status_code == 200, link.text
+    cobro = await _cobro(test_session, reserva.json()["public_id"])
+    assert cobro.amount == Decimal("43000.00")
+
+
 # ---------------------------------------------------------------------------
 # Agenda, busqueda y mails
 # ---------------------------------------------------------------------------

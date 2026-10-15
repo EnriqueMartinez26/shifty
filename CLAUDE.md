@@ -642,9 +642,9 @@ Una instrucción en lenguaje natural no es una garantía.
   `service_addons`, `services/addons.py::price_selection`). El turno congela
   el total (`price_amount`: servicio + adicionales, con la promo aplicada a
   esa suma), `addons_amount` (la suma SIN descuento de las líneas) y
-  `addons_snapshot`; `ck_appointments_addons_amount` solo exige
-  `addons_amount >= 0`, porque un descuento grande deja el total por debajo de
-  los adicionales. La promo (`quote_promotion` con `base_amount` = total) y la
+  `addons_snapshot`; `ck_appointments_addons_amount` exige que ninguno de los
+  dos sea negativo pero no que el total supere a los adicionales, porque un
+  descuento grande lo deja por debajo. La promo (`quote_promotion` con `base_amount` = total) y la
   seña (porcentual, fija acotada al total o `full`) salen del total con
   descuento, con la misma cotización en `/public/deposit/preview`,
   `/public/promotions/preview` (con `addon`) y el alta (decisiones de Mateo,
@@ -658,8 +658,9 @@ Una instrucción en lenguaje natural no es una garantía.
   nace nuevo, nunca se adopta. Editar el catálogo no toca un turno tomado;
   las dos reprogramaciones y `carry_manual_deposit` mudan los adicionales con
   el turno. El link del panel cobra el precio de lista de hoy más los
-  adicionales congelados (decisión de Mateo, 2026-10-15): sigue re-tarifando
-  tras un cambio de precio. Las altas del panel y de la lista de espera
+  adicionales congelados, y nunca más que el precio congelado de un turno con
+  promo (decisión de Mateo, 2026-10-15; `_payment_amount_for_appointment`):
+  sin promo sigue re-tarifando tras un cambio de precio. Las altas del panel y de la lista de espera
   todavía no eligen adicionales. (`test_adicionales_precio.py`,
   `test_adicionales_del_servicio.py`, `test_reserva_con_adicionales.py`,
   `test_pg_adicionales.py`)

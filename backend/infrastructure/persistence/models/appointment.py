@@ -91,8 +91,9 @@ class AppointmentModel(Base):
     # de ``addons_snapshot`` (``[{addon_id, name, unit_price, quantity,
     # amount}]``, importes como texto): editar o borrar un adicional no
     # cambia un turno ya tomado. ``ck_appointments_addons_amount``
-    # (migraciones e2a4c6e8f0b1 + f3b5d7f9a1c2) solo exige que no sea
-    # negativo: con un descuento grande el total puede quedar por debajo.
+    # (migraciones e2a4c6e8f0b1 + f3b5d7f9a1c2) exige que ni los adicionales
+    # ni el total sean negativos, pero NO que el total supere a los
+    # adicionales: con un descuento grande el total puede quedar por debajo.
     addons_amount: Mapped[Decimal] = mapped_column(
         Numeric(12, 2),
         nullable=False,
@@ -205,7 +206,7 @@ class AppointmentModel(Base):
             name="check_appointment_status_v3",
         ),
         CheckConstraint(
-            "addons_amount >= 0",
+            "addons_amount >= 0 AND (price_amount IS NULL OR price_amount >= 0)",
             name="ck_appointments_addons_amount",
         ),
         # Retenciones vivas para el job de vencimiento (cada minuto):

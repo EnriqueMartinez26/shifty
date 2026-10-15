@@ -367,16 +367,23 @@ async def test_la_base_rechaza_un_adicional_fuera_de_los_topes(
 
 
 @pytest.mark.asyncio
-async def test_el_turno_no_congela_adicionales_negativos(
+@pytest.mark.parametrize(
+    ("precio", "adicionales"),
+    [(Decimal("100"), Decimal("-1")), (Decimal("-0.01"), Decimal("0"))],
+)
+async def test_el_turno_no_congela_importes_negativos(
     client: AsyncClient,
     app_sessions: async_sessionmaker[AsyncSession],
     owner_engine: AsyncEngine,
+    precio: Decimal,
+    adicionales: Decimal,
 ) -> None:
-    """``ck_appointments_addons_amount`` = ``addons_amount >= 0``. Un total
-    menor que los adicionales SI vale: la promo se aplica al total (decision
-    de Mateo, 2026-10-15) y ``addons_amount`` es la suma sin descuento."""
+    """``ck_appointments_addons_amount``: ni los adicionales ni el total
+    congelado son negativos. Un total menor que los adicionales SI vale: la
+    promo se aplica al total (decision de Mateo, 2026-10-15) y
+    ``addons_amount`` es la suma sin descuento."""
     store, servicio, staff, adicional, slot = await _tienda(
-        client, app_sessions, "pg-adic-check-turno"
+        client, app_sessions, f"pg-adic-check-turno-{adicionales}"
     )
     alta = await client.post(
         "/public/appointments",
@@ -390,9 +397,7 @@ async def test_el_turno_no_congela_adicionales_negativos(
 
     with pytest.raises(IntegrityError, match="ck_appointments_addons_amount"):
         async with owner_engine.begin() as conn:
-            await conn.execute(
-                actualizar, {"p": Decimal("100"), "a": Decimal("-1"), "id": turno}
-            )
+            await conn.execute(actualizar, {"p": precio, "a": adicionales, "id": turno})
     async with owner_engine.begin() as conn:
         await conn.execute(
             actualizar, {"p": Decimal("1000"), "a": Decimal("3000"), "id": turno}
