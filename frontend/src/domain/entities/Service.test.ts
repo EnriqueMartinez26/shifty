@@ -12,7 +12,8 @@ const primitives = {
   deposit_mode: 'required' as const,
   deposit_type: 'percent' as const,
   deposit_amount: 20,
-  is_active: true
+  is_active: true,
+  addons: [{ id: 'add-1', name: 'Strass', unit_price: 500, max_quantity: 10, position: 0 }]
 }
 
 describe('Service.fromPrimitives', () => {
@@ -35,5 +36,23 @@ describe('Service.fromPrimitives', () => {
     ['id vacio', { id: '' }]
   ])('rechaza %s', (_caso, override) => {
     expect(() => Service.fromPrimitives({ ...primitives, ...override })).toThrow()
+  })
+})
+
+describe('Service: adicionales', () => {
+  it('ordena los adicionales por posicion', () => {
+    const service = Service.fromPrimitives({
+      ...primitives,
+      addons: [
+        { id: 'b', name: 'Diseño', unit_price: 1500, max_quantity: 2, position: 1 },
+        { id: 'a', name: 'Strass', unit_price: 500, max_quantity: 10, position: 0 }
+      ]
+    })
+
+    expect(service.addons.map((addon) => addon.name)).toEqual(['Strass', 'Diseño'])
+  })
+
+  it('sin la lista de adicionales queda vacia', () => {
+    expect(Service.fromPrimitives({ ...primitives, addons: undefined }).addons).toEqual([])
   })
 })

@@ -25,7 +25,8 @@ export class ServiceMapper {
       deposit_mode: dto.deposit_mode,
       deposit_type: dto.deposit_type,
       deposit_amount: dto.deposit_amount,
-      is_active: dto.is_active
+      is_active: dto.is_active,
+      addons: dto.addons ?? []
     })
   }
 
@@ -43,7 +44,8 @@ export class ServiceMapper {
       deposit_mode: primitives.deposit_mode,
       deposit_type: primitives.deposit_type,
       deposit_amount: primitives.deposit_amount,
-      is_active: primitives.is_active
+      is_active: primitives.is_active,
+      addons: primitives.addons.map((addon) => ({ ...addon, id: addon.id ?? '' }))
     }
   }
 
@@ -77,6 +79,18 @@ export class ServiceMapper {
     assignDefined(payload, 'deposit_mode', source.depositMode)
     assignDefined(payload, 'deposit_type', source.depositType)
     assignDefined(payload, 'deposit_amount', source.depositAmount)
+    // El conjunto entero o nada: la posicion es el indice. El id viaja solo
+    // en los que ya existen, para que el backend los actualice en el lugar.
+    assignDefined(
+      payload,
+      'addons',
+      source.addons?.map((addon) => ({
+        ...(addon.id ? { id: addon.id } : {}),
+        name: addon.name.trim(),
+        unit_price: addon.unitPrice,
+        max_quantity: addon.maxQuantity
+      }))
+    )
 
     return payload
   }

@@ -251,3 +251,62 @@ describe('ServiceService — imagen del servicio', () => {
     expect(mockRepository.removeImage).toHaveBeenCalledWith('svc-1')
   })
 })
+
+describe('ServiceService — adicionales', () => {
+  let mockRepository: jest.Mocked<IServiceRepository>
+  let service: ServiceService
+
+  beforeEach(() => {
+    mockRepository = {
+      findAll: jest.fn(),
+      findById: jest.fn(),
+      create: jest.fn(),
+      update: jest.fn(),
+      delete: jest.fn(),
+      uploadImage: jest.fn(),
+      removeImage: jest.fn()
+    } as jest.Mocked<IServiceRepository>
+    mockRepository.create.mockImplementation(async (created) => created)
+    service = new ServiceService(mockRepository)
+  })
+
+  it('crear con adicionales los guarda en orden, sin id', async () => {
+    const result = await service.createService({
+      ...BASE_INPUT,
+      addons: [
+        { name: 'Strass', unitPrice: 500, maxQuantity: 10 },
+        { name: 'Diseño', unitPrice: 1500, maxQuantity: 2 }
+      ]
+    })
+
+    expect(result.toPrimitives().addons).toEqual([
+      { id: null, name: 'Strass', unit_price: 500, max_quantity: 10, position: 0 },
+      { id: null, name: 'Diseño', unit_price: 1500, max_quantity: 2, position: 1 }
+    ])
+  })
+
+  it('crear con un adicional invalido no llega al repositorio', async () => {
+    const promise = service.createService({
+      ...BASE_INPUT,
+      addons: [{ name: 'Strass', unitPrice: 500, maxQuantity: 0 }]
+    })
+
+    const error: unknown = await promise.catch((caught: unknown) => caught)
+    expect((error as ValidationDetails).details).toEqual([
+      { path: 'addons.0', message: 'La cantidad máxima de un adicional va de 1 a 99' }
+    ])
+    expect(mockRepository.create).not.toHaveBeenCalled()
+  })
+
+  it('editar valida los adicionales que viajan', async () => {
+    const promise = service.updateService('svc-1', {
+      addons: [
+        { name: 'Strass', unitPrice: 500, maxQuantity: 10 },
+        { name: 'STRASS', unitPrice: 700, maxQuantity: 5 }
+      ]
+    })
+
+    await expect(promise).rejects.toThrow('Error de validación')
+    expect(mockRepository.update).not.toHaveBeenCalled()
+  })
+})

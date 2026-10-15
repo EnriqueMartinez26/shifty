@@ -454,3 +454,167 @@ describe('ServiceFormModal — imagen del servicio', () => {
     expect(screen.getByRole('button', { name: /Guardar/i })).not.toBeDisabled()
   })
 })
+
+describe('ServiceFormModal — adicionales', () => {
+  const conAdicionales = () =>
+    Service.fromPrimitives({
+      ...servicioConSena().toPrimitives(),
+      id: 'svc_1',
+      addons: [
+        { id: 'add_1', name: 'Strass', unit_price: 500, max_quantity: 10, position: 0 },
+        { id: 'add_2', name: 'Diseño', unit_price: 1500, max_quantity: 2, position: 1 }
+      ]
+    })
+  const repositorio = () =>
+    ({
+      findAll: jest.fn(),
+      findById: jest.fn(),
+      create: jest.fn().mockImplementation(async (created: Service) => created),
+      update: jest.fn().mockImplementation(async () => conAdicionales()),
+      delete: jest.fn(),
+      uploadImage: jest.fn(),
+      removeImage: jest.fn()
+    }) as jest.Mocked<IServiceRepository>
+
+  it('editar solo la descripcion no manda los adicionales', async () => {
+    // El backend reemplaza el conjunto cuando llega: mandarlo sin cambios
+    // tocaba adicionales que nadie edito.
+    const repo = repositorio()
+    const service = new ServiceService(repo)
+    render(
+      <ServiceFormModal
+        isOpen
+        onClose={jest.fn()}
+        onSubmit={async (data) => {
+          await service.updateService('svc_1', data)
+        }}
+        editingService={conAdicionales()}
+        {...sinImagen()}
+      />
+    )
+
+    fireEvent.change(screen.getByDisplayValue('Con lavado'), {
+      target: { value: 'Con lavado y secado' }
+    })
+    fireEvent.click(screen.getByRole('button', { name: /Guardar/i }))
+
+    await waitFor(() => expect(repo.update).toHaveBeenCalledTimes(1))
+    const enviado = repo.update.mock.calls[0]?.[1]
+    expect(enviado).toMatchObject({ description: 'Con lavado y secado' })
+    expect(enviado).not.toHaveProperty('addons')
+  })
+
+  it('al editar arranca con los adicionales del servicio y guardar manda el conjunto entero con sus ids', async () => {
+    const onSubmit = jest.fn().mockResolvedValue(undefined)
+    render(
+      <ServiceFormModal
+        isOpen
+        onClose={jest.fn()}
+        onSubmit={onSubmit}
+        editingService={conAdicionales()}
+        {...sinImagen()}
+      />
+    )
+
+    expect(screen.getByLabelText<HTMLInputElement>('Nombre del adicional 1').value).toBe('Strass')
+    fireEvent.click(screen.getByRole('button', { name: 'Bajar el adicional 1' }))
+    fireEvent.click(screen.getByRole('button', { name: /Guardar/i }))
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1))
+    expect(onSubmit.mock.calls[0]?.[0]).toMatchObject({
+      addons: [
+        { id: 'add_2', name: 'Diseño', unitPrice: 1500, maxQuantity: 2 },
+        { id: 'add_1', name: 'Strass', unitPrice: 500, maxQuantity: 10 }
+      ]
+    })
+  })
+
+  it('un adicional agregado al editar viaja sin id junto a los existentes', async () => {
+    const onSubmit = jest.fn().mockResolvedValue(undefined)
+    render(
+      <ServiceFormModal
+        isOpen
+        onClose={jest.fn()}
+        onSubmit={onSubmit}
+        editingService={conAdicionales()}
+        {...sinImagen()}
+      />
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /Agregar adicional/ }))
+    fireEvent.change(screen.getByLabelText('Nombre del adicional 3'), {
+      target: { value: 'Esmalte' }
+    })
+    fireEvent.click(screen.getByRole('button', { name: /Guardar/i }))
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1))
+    expect(onSubmit.mock.calls[0]?.[0].addons).toEqual([
+      expect.objectContaining({ id: 'add_1', name: 'Strass' }),
+      expect.objectContaining({ id: 'add_2', name: 'Diseño' }),
+      expect.objectContaining({ id: null, name: 'Esmalte' })
+    ])
+  })
+
+  it('un nombre repetido se rechaza en el cliente con el motivo', async () => {
+    const repo = repositorio()
+    const service = new ServiceService(repo)
+    render(
+      <ServiceFormModal
+        isOpen
+        onClose={jest.fn()}
+        onSubmit={async (data) => {
+          await service.updateService('svc_1', data)
+        }}
+        editingService={conAdicionales()}
+        {...sinImagen()}
+      />
+    )
+
+    fireEvent.change(screen.getByLabelText('Nombre del adicional 2'), {
+      target: { value: 'strass' }
+    })
+    fireEvent.click(screen.getByRole('button', { name: /Guardar/i }))
+
+    await waitFor(() =>
+      expect(screen.getByText(/El adicional "strass" está repetido/)).toBeInTheDocument()
+    )
+    expect(repo.update).not.toHaveBeenCalled()
+  })
+
+  it('un servicio nuevo arranca sin adicionales y se pueden agregar', async () => {
+    const repo = repositorio()
+    const service = new ServiceService(repo)
+    render(
+      <ServiceFormModal
+        isOpen
+        onClose={jest.fn()}
+        onSubmit={async (data) => {
+          await service.createService(data)
+        }}
+        {...sinImagen()}
+      />
+    )
+
+    expect(screen.getByText('Este servicio no tiene adicionales.')).toBeInTheDocument()
+    fireEvent.change(screen.getByPlaceholderText('Ej: Corte de Cabello Premium'), {
+      target: { value: 'Uñas esculpidas' }
+    })
+    fireEvent.click(screen.getByRole('button', { name: /Agregar adicional/ }))
+    fireEvent.change(screen.getByLabelText('Nombre del adicional 1'), {
+      target: { value: 'Strass' }
+    })
+    fireEvent.change(screen.getByLabelText('Precio por unidad del adicional 1'), {
+      target: { value: '500' }
+    })
+    fireEvent.change(screen.getByLabelText('Cantidad máxima del adicional 1'), {
+      target: { value: '10' }
+    })
+    fireEvent.click(screen.getByRole('button', { name: /Crear Servicio/i }))
+
+    await waitFor(() => expect(repo.create).toHaveBeenCalledTimes(1))
+    const creado = repo.create.mock.calls[0]?.[0] as Service
+    expect(creado.addons.map((addon) => addon.toPrimitives())).toEqual([
+      { id: null, name: 'Strass', unit_price: 500, max_quantity: 10, position: 0 }
+    ])
+  })
+})

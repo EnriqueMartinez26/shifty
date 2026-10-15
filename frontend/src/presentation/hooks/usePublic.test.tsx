@@ -10,6 +10,7 @@ import {
   useCreatePublicBooking,
   usePublicDepositPreview,
   usePublicPaymentStatus,
+  useRefreshPublicServices,
   useRescheduleClientAppointment
 } from './usePublic'
 import { PAYMENT_POLL_MAX_MS } from '../lib/paymentPolling'
@@ -18,13 +19,15 @@ const mockCreateBooking = jest.fn()
 const mockPreviewDeposit = jest.fn()
 const mockGetPaymentStatus = jest.fn()
 const mockReschedule = jest.fn()
+const mockGetServices = jest.fn()
 
 jest.mock('@application/services/PublicBookingService', () => ({
   publicBookingService: {
     createBooking: (...args: unknown[]) => mockCreateBooking(...args),
     previewDeposit: (...args: unknown[]) => mockPreviewDeposit(...args),
     getPaymentStatus: (...args: unknown[]) => mockGetPaymentStatus(...args),
-    rescheduleClientAppointment: (...args: unknown[]) => mockReschedule(...args)
+    rescheduleClientAppointment: (...args: unknown[]) => mockReschedule(...args),
+    getServices: (...args: unknown[]) => mockGetServices(...args)
   }
 }))
 
@@ -262,5 +265,42 @@ describe('usePublicPaymentStatus', () => {
 
     expect(mockGetPaymentStatus).toHaveBeenCalledTimes(1)
     expect(result.current.isError).toBe(true)
+  })
+})
+
+describe('useRefreshPublicServices', () => {
+  beforeEach(() => mockGetServices.mockReset())
+
+  it('pide el catalogo con fresh y lo deja en la clave de usePublicServices', async () => {
+    const queryClient = nuevoCliente()
+    queryClient.setQueryData(['public-services', 'store-1'], [{ public_id: 'viejo' }])
+    mockGetServices.mockResolvedValue([{ public_id: 'nuevo' }])
+    const { result } = renderHook(() => useRefreshPublicServices('store-1'), {
+      wrapper: envoltorio(queryClient)
+    })
+
+    await act(async () => {
+      await result.current()
+    })
+
+    expect(mockGetServices).toHaveBeenCalledWith('store-1', { fresh: true })
+    expect(queryClient.getQueryData(['public-services', 'store-1'])).toEqual([
+      { public_id: 'nuevo' }
+    ])
+  })
+
+  it('un fallo no se propaga y sin tienda no pide nada', async () => {
+    mockGetServices.mockRejectedValue(new Error('sin red'))
+    const { result } = renderHook(() => useRefreshPublicServices('store-1'), {
+      wrapper: envoltorio(nuevoCliente())
+    })
+    await expect(result.current()).resolves.toBeUndefined()
+
+    mockGetServices.mockReset()
+    const sinTienda = renderHook(() => useRefreshPublicServices(undefined), {
+      wrapper: envoltorio(nuevoCliente())
+    })
+    await sinTienda.result.current()
+    expect(mockGetServices).not.toHaveBeenCalled()
   })
 })

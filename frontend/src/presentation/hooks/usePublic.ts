@@ -61,6 +61,28 @@ export const usePublicStoreRef = (slug: string) => useQuery(publicStoreRefQuery(
 export const usePublicServices = (storePublicId: string | undefined) =>
   useQuery({ ...publicServicesQuery(storePublicId), enabled: Boolean(storePublicId) })
 
+/**
+ * Vuelve a pedir el catalogo salteando los caches (edge y navegador) y deja
+ * la respuesta en la misma clave que `usePublicServices`. Es lo que se usa
+ * ante un 422 ADDON_UNAVAILABLE: el catalogo cacheado puede tener hasta 30 s.
+ */
+export const useRefreshPublicServices = (storePublicId: string | undefined) => {
+  const queryClient = useQueryClient()
+  return async (): Promise<void> => {
+    if (!storePublicId) return
+    try {
+      await queryClient.fetchQuery({
+        queryKey: publicServicesQuery(storePublicId).queryKey,
+        queryFn: () => publicBookingService.getServices(storePublicId, { fresh: true }),
+        staleTime: 0
+      })
+    } catch {
+      // El error queda en la consulta (usePublicServices lo ve); el que llama
+      // no tiene nada que hacer con el.
+    }
+  }
+}
+
 export const usePublicStaff = (storePublicId: string | undefined, serviceId?: string) =>
   useQuery<PublicStaff[]>({
     queryKey: ['public-staff', storePublicId, serviceId],
@@ -109,6 +131,8 @@ export const usePublicDepositPreview = (params: {
   startsAt: string | null
   clientPhone?: string
   promotionCode?: string
+  /** `<id>:<cantidad>` de los adicionales elegidos: la seña sale sobre el total. */
+  addons?: readonly string[]
 }) =>
   useQuery<DepositPreview>({
     queryKey: [
@@ -117,11 +141,13 @@ export const usePublicDepositPreview = (params: {
       params.serviceId,
       params.startsAt,
       params.clientPhone,
-      params.promotionCode
+      params.promotionCode,
+      params.addons?.join(',') ?? ''
     ],
     enabled: Boolean(params.storePublicId && params.serviceId && params.startsAt),
     // Al completar el telefono o aplicar un codigo cambia la clave: sin la seña
-    // anterior mientras carga, el boton de Mercado Pago parpadeaba (FF-32). Solo
+    // anterior mientras carga, el boton de Mercado Pago parpadeaba (FF-32). Igual
+    // al sumar o quitar un adicional. Solo
     // para el MISMO turno: con otro horario la seña vieja pasaba por actual.
     placeholderData: (previous, previousQuery) =>
       previousQuery?.queryKey[1] === params.storePublicId &&
@@ -135,7 +161,8 @@ export const usePublicDepositPreview = (params: {
         serviceId: params.serviceId,
         startsAt: params.startsAt as string,
         clientPhone: params.clientPhone,
-        promotionCode: params.promotionCode
+        promotionCode: params.promotionCode,
+        addons: params.addons
       })
   })
 
@@ -227,9 +254,13 @@ export const usePublicPaymentStatus = (
 }
 
 export const usePreviewPublicPromotion = () =>
-  useMutation<PromotionPreview, Error, { storePublicId: string; serviceId: string; code: string }>({
-    mutationFn: ({ storePublicId, serviceId, code }) =>
-      publicBookingService.previewPromotion(storePublicId, serviceId, code)
+  useMutation<
+    PromotionPreview,
+    Error,
+    { storePublicId: string; serviceId: string; code: string; addons?: readonly string[] }
+  >({
+    mutationFn: ({ storePublicId, serviceId, code, addons }) =>
+      publicBookingService.previewPromotion(storePublicId, serviceId, code, addons)
   })
 
 export const useRequestPublicOtp = () =>

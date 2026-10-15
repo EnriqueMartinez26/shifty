@@ -80,7 +80,9 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
       notes: '',
       customFields: initialCustomFields
     },
-    promotionCode: ''
+    promotionCode: '',
+    promotionPreview: null,
+    addons: []
   })
 
   useEffect(() => {
@@ -121,7 +123,9 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
     if (jump.step === currentStep) return
     if (jump.serviceId) {
       setBookingState((prev) =>
-        prev.serviceId === jump.serviceId ? prev : { ...prev, serviceId: jump.serviceId ?? null }
+        prev.serviceId === jump.serviceId
+          ? prev
+          : { ...prev, serviceId: jump.serviceId ?? null, addons: [] }
       )
     }
     onStepChange({ to: jump.step, from: currentStep, mode: 'replace' })
@@ -334,6 +338,11 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
               trackBookingEvent('service_selected')
               updateState({
                 serviceId: id,
+                // Los adicionales y el descuento son de UN servicio: otro
+                // servicio arranca sin ellos.
+                ...(id === bookingState.serviceId
+                  ? {}
+                  : { addons: [], promotionCode: '', promotionPreview: null }),
                 requestedStaffId: null,
                 assignedStaffId: null,
                 date: null,
@@ -395,8 +404,11 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
             }
             onBack={prevStep}
             onClientChange={handleClientChange}
-            onPromotionCodeChange={(promotionCode) => updateState({ promotionCode })}
-            onConfirm={async (paymentMethod, acceptsTerms) => {
+            onPromotionCodeChange={(promotionCode, promotionPreview) =>
+              updateState({ promotionCode, promotionPreview })
+            }
+            onAddonsChange={(addons) => updateState({ addons })}
+            onConfirm={async (paymentMethod, acceptsTerms, addons) => {
               const pedido = {
                 store_public_id: store.public_id,
                 service_id: selectedServiceId,
@@ -412,10 +424,11 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
                 custom_fields: bookingState.client.customFields,
                 promotion_code: bookingState.promotionCode || undefined,
                 payment_method: paymentMethod,
-                accepts_terms: acceptsTerms
+                accepts_terms: acceptsTerms,
+                addons
               }
               // La huella es el pedido entero (servicio, profesional, horario,
-              // cliente, promo y forma de pago): la clave se reusa al recargar
+              // cliente, promo, adicionales y forma de pago): la clave se reusa al recargar
               // solo si se manda exactamente lo mismo (F4-04). Se guarda solo
               // su SHA-256, sin datos del cliente.
               const idempotencyKey = await bookingIdempotencyKey(store.slug, JSON.stringify(pedido))

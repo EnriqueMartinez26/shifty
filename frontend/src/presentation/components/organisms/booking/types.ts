@@ -1,3 +1,7 @@
+import type { SelectedAddon } from '@domain/value-objects/AddonSelection'
+
+import type { PromotionPreview } from '@application/services/PublicBookingService'
+
 export interface BookingClientData {
   name: string
   email: string
@@ -16,6 +20,17 @@ export interface BookingWizardState {
   startsAt: string | null
   client: BookingClientData
   promotionCode: string
+  /**
+   * El descuento del codigo aplicado. Vive en el wizard y no en el paso: al
+   * volver atras y avanzar, el total seguia mostrando el precio sin promo.
+   */
+  promotionPreview: PromotionPreview | null
+  /**
+   * Adicionales elegidos, con el nombre y el precio que vio el cliente (para
+   * reconocerlos si el catalogo cambia). Se vacian al cambiar de servicio:
+   * los adicionales son de UN servicio.
+   */
+  addons: SelectedAddon[]
 }
 
 export interface BookingOtpState {

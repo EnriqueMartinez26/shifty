@@ -11,6 +11,21 @@ export interface ServiceFormValues {
   depositMode: ServiceDepositMode
   depositType: ServiceDepositType
   depositAmount: number | null
+  /**
+   * Conjunto completo de adicionales; el orden es la posicion. Ausente en una
+   * edicion: no se tocan (el formulario lo omite si la lista no cambio).
+   */
+  addons?: ServiceAddonFormValue[]
+}
+
+/** Un adicional en el formulario. `key` es solo para React: no viaja. */
+export interface ServiceAddonFormValue {
+  key: string
+  /** Id del adicional guardado; null en uno nuevo. */
+  id: string | null
+  name: string
+  unitPrice: number
+  maxQuantity: number
 }
 
 export interface StaffFormValues {

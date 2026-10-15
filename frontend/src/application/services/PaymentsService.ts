@@ -88,6 +88,8 @@ export interface AppointmentSearchItem {
   remaining_amount?: string | null
   /** Resto vivo registrado aparte del cobro, o null. */
   remainder_payment?: RemainderPaymentSummary | null
+  /** Parte de `price_amount` que son adicionales (0 sin adicionales). */
+  addons_amount?: string | number | null
 }
 
 interface RemainderPaymentSummary {

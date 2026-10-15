@@ -22,9 +22,23 @@ const mockCreateBooking = jest.fn()
 
 jest.mock('../../../hooks/usePublic', () => ({
   usePublicServices: (...args: unknown[]) => mockServices(...args),
+  useRefreshPublicServices: () => jest.fn(),
   usePublicStaff: (...args: unknown[]) => mockStaff(...args),
   usePublicAvailability: (...args: unknown[]) => mockAvailability(...args),
-  usePublicDepositPreview: () => ({ data: undefined, isLoading: false }),
+  // El backend confirma el importe (sin seña): con adicionales, reservar
+  // espera a que el preview de la seña responda bien.
+  usePublicDepositPreview: () => ({
+    data: {
+      amount: 0,
+      base_amount: 0,
+      extra_percent: 0,
+      reasons: [],
+      price: 1000,
+      payments_enabled: false,
+      online_payment_mandatory: false
+    },
+    isLoading: false
+  }),
   usePreviewPublicPromotion: () => ({ mutateAsync: jest.fn(), isPending: false }),
   useJoinWaitlist: () => ({ mutateAsync: jest.fn(), isPending: false, isSuccess: false }),
   useCreatePublicBooking: () => ({ mutateAsync: mockCreateBooking, isPending: false }),
@@ -405,6 +419,8 @@ describe('BookingWizardContainer', () => {
         target: { value: 'lucia@example.com' }
       })
       fireEvent.click(screen.getByRole('checkbox'))
+      // La seña se recalcula con el telefono tipeado (400 ms de espera).
+      await waitFor(() => expect(screen.getByText('Confirmar reserva')).not.toBeDisabled())
       await enviar()
     }
     // La huella se calcula con crypto.subtle, que es asincronico: se espera al
@@ -465,6 +481,53 @@ describe('BookingWizardContainer', () => {
       render(<WizardEnRuta store={tienda(false)} />)
       await confirmarReserva('Lucia Perez')
 
+      expect(claveDelIntento(1)).not.toBe(claveDelIntento(0))
+    })
+
+    it('manda los adicionales elegidos y otros adicionales son otro pedido', async () => {
+      mockServices.mockReturnValue({
+        data: [
+          {
+            ...servicio('a'),
+            addons: [
+              { id: 'strass', name: 'Strass', unit_price: 500, max_quantity: 10, position: 0 }
+            ]
+          }
+        ],
+        isLoading: false
+      })
+      mockCreateBooking.mockRejectedValue(new NetworkError('No se pudo conectar con el servidor.'))
+      render(<WizardEnRuta store={tienda(false)} />)
+      await waitFor(() => expect(screen.getByText(HORARIO)).toBeInTheDocument())
+      fireEvent.click(screen.getByText('09:00'))
+      fireEvent.click(screen.getByRole('button', { name: 'Agregar uno de Strass' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Agregar uno de Strass' }))
+      fireEvent.change(screen.getByPlaceholderText('Ej: Juan Perez'), {
+        target: { value: 'Lucia' }
+      })
+      fireEvent.change(screen.getByPlaceholderText('PREFIJO + NUM'), {
+        target: { value: '+5491155550101' }
+      })
+      fireEvent.change(screen.getByPlaceholderText('juan@email.com'), {
+        target: { value: 'lucia@example.com' }
+      })
+      fireEvent.click(screen.getByRole('checkbox'))
+      // La seña se recalcula con los adicionales despues de una espera corta:
+      // hasta entonces no se puede reservar.
+      await waitFor(() => expect(screen.getByText('Confirmar reserva')).not.toBeDisabled())
+      await enviar()
+
+      expect(mockCreateBooking.mock.calls[0]?.[0]).toMatchObject({
+        addons: [{ addon_id: 'strass', quantity: 2 }]
+      })
+
+      fireEvent.click(screen.getByRole('button', { name: 'Quitar uno de Strass' }))
+      await waitFor(() => expect(screen.getByText('Confirmar reserva')).not.toBeDisabled())
+      await enviar()
+
+      expect(mockCreateBooking.mock.calls[1]?.[0]).toMatchObject({
+        addons: [{ addon_id: 'strass', quantity: 1 }]
+      })
       expect(claveDelIntento(1)).not.toBe(claveDelIntento(0))
     })
 

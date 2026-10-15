@@ -2,6 +2,8 @@ import React from 'react'
 
 import { Calendar, Check, Clock, ExternalLink } from 'lucide-react'
 
+import { formatAddonLabel } from '@domain/value-objects/AddonSelection'
+
 import type { BookingConfirmation } from '@application/services/PublicBookingService'
 
 import {
@@ -185,6 +187,12 @@ export const BookingSuccess: React.FC<BookingSuccessProps> = ({
                 {(confirmation.discount_amount || 0) > 0 && (
                   <p>Descuento: -{formatCurrency(Number(confirmation.discount_amount || 0))}</p>
                 )}
+                {/* Precio congelado al reservar: el de la respuesta, no el del catalogo. */}
+                {(confirmation.addons ?? []).map((addon) => (
+                  <p key={addon.addon_id}>
+                    {formatAddonLabel(addon)}: {formatCurrency(Number(addon.amount))}
+                  </p>
+                ))}
                 <p>
                   Total final:{' '}
                   {formatCurrency(

@@ -19,7 +19,11 @@ const dto: ServiceResponseDTO = {
   deposit_mode: 'required',
   deposit_type: 'fixed',
   deposit_amount: 3000,
-  is_active: true
+  is_active: true,
+  addons: [
+    { id: 'add-1', name: 'Strass', unit_price: 500, max_quantity: 10, position: 0 },
+    { id: 'add-2', name: 'Diseño', unit_price: 1500.5, max_quantity: 2, position: 1 }
+  ]
 }
 
 describe('ServiceMapper.toDomain', () => {
@@ -125,5 +129,57 @@ describe('ServiceMapper.toWritePayload', () => {
       deposit_type: 'percent',
       deposit_amount: null
     })
+  })
+})
+
+describe('ServiceMapper: adicionales', () => {
+  it('manda el conjunto entero en snake_case, sin id ni posicion y con el nombre recortado', () => {
+    expect(
+      ServiceMapper.toWritePayload({
+        addons: [
+          { name: ' Strass ', unitPrice: 500, maxQuantity: 10 },
+          { name: 'Diseño', unitPrice: 1500, maxQuantity: 2 }
+        ]
+      })
+    ).toEqual({
+      addons: [
+        { name: 'Strass', unit_price: 500, max_quantity: 10 },
+        { name: 'Diseño', unit_price: 1500, max_quantity: 2 }
+      ]
+    })
+  })
+
+  it('una lista vacia viaja (borra los adicionales); ausente no viaja', () => {
+    expect(ServiceMapper.toWritePayload({ addons: [] })).toEqual({ addons: [] })
+    expect(ServiceMapper.toWritePayload({ name: 'Corte' })).toEqual({ name: 'Corte' })
+  })
+
+  it('un DTO sin adicionales da un servicio sin adicionales', () => {
+    expect(ServiceMapper.toDomain({ ...dto, addons: undefined }).addons).toEqual([])
+  })
+})
+
+describe('ServiceMapper: id de los adicionales', () => {
+  it('manda el id de los que ya existen y omite el de los nuevos', () => {
+    expect(
+      ServiceMapper.toWritePayload({
+        addons: [
+          { id: 'add-1', name: 'Strass', unitPrice: 500, maxQuantity: 10 },
+          { id: null, name: 'Diseño', unitPrice: 1500, maxQuantity: 2 }
+        ]
+      })
+    ).toEqual({
+      addons: [
+        { id: 'add-1', name: 'Strass', unit_price: 500, max_quantity: 10 },
+        { name: 'Diseño', unit_price: 1500, max_quantity: 2 }
+      ]
+    })
+  })
+
+  it('un servicio guardado manda los ids de sus adicionales', () => {
+    expect(ServiceMapper.toWritePayload(ServiceMapper.toDomain(dto)).addons).toEqual([
+      { id: 'add-1', name: 'Strass', unit_price: 500, max_quantity: 10 },
+      { id: 'add-2', name: 'Diseño', unit_price: 1500.5, max_quantity: 2 }
+    ])
   })
 })

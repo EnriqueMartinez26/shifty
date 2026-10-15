@@ -16,6 +16,8 @@ const estado = (patch: Partial<BookingWizardState> = {}): BookingWizardState => 
   startsAt: '2026-09-25T12:00:00+00:00',
   client: { name: 'Lucia', email: '', phone: '1155550101', notes: '', customFields: {} },
   promotionCode: '',
+  promotionPreview: null,
+  addons: [],
   ...patch
 })
 
@@ -373,5 +375,27 @@ describe('BookingSuccess', () => {
 
       expect(screen.queryByRole('link', { name: MIS_TURNOS })).not.toBeInTheDocument()
     })
+  })
+})
+
+describe('BookingSuccess: adicionales', () => {
+  it('muestra cada adicional con su importe congelado y el total', () => {
+    render(
+      <BookingSuccess
+        {...props({
+          confirmation: confirmacion({
+            service_price: 27000,
+            final_price: 30000,
+            addons_amount: 3000,
+            addons: [
+              { addon_id: 'strass', name: 'Strass', unit_price: 500, quantity: 6, amount: 3000 }
+            ]
+          })
+        })}
+      />
+    )
+
+    expect(screen.getByText(/Strass x6:/)).toHaveTextContent('3.000')
+    expect(screen.getByText(/Total final:/)).toHaveTextContent('30.000')
   })
 })

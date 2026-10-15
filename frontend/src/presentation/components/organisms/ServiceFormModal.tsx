@@ -24,9 +24,11 @@ import { formatCurrency } from '@shared/utils/currency'
 import { validateServiceImage } from '@shared/utils/imageFile'
 
 import { colors2000s, buttonStyles2000s } from '../../../theme/colors'
+import { addonsChanged, toAddonFormValues } from '../../lib/serviceAddonsForm'
 import { create2000sModalInputStyle, create2000sModalSurfaceStyle } from '../../lib/surfaceStyles'
 import type { ServiceFormValues } from '../../types/forms'
 import { FormErrorAlert } from '../molecules/FormErrorAlert'
+import { ServiceAddonsEditor } from '../molecules/ServiceAddonsEditor'
 
 interface ServiceFormModalProps {
   isOpen: boolean
@@ -50,7 +52,10 @@ const SERVICE_FIELD_ERRORS: Partial<Record<string, string>> = {
   name: 'El nombre tiene que tener entre 2 y 255 caracteres.',
   description: 'La descripción es demasiado larga o tiene caracteres no permitidos.',
   duration_minutes: 'La duración tiene que ser de 1 a 480 minutos.',
-  price: 'El precio tiene que ser de 0 a 10.000.000.'
+  price: 'El precio tiene que ser de 0 a 10.000.000.',
+  addons: 'Revisá los adicionales: hasta 20, con nombre, sin repetir.',
+  unit_price: 'El precio de un adicional tiene que ser de 0 a 1.000.000.',
+  max_quantity: 'La cantidad máxima de un adicional tiene que ser de 1 a 99.'
 }
 
 const PRESET_COLORS = [
@@ -87,7 +92,8 @@ const EMPTY_FORM: ServiceFormValues = {
   // Espejo de los defaults del backend: un servicio nuevo nace sin seña.
   depositMode: 'none',
   depositType: 'percent',
-  depositAmount: null
+  depositAmount: null,
+  addons: []
 }
 
 export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
@@ -123,7 +129,10 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
         // dejaria de cobrarla sin que nadie lo pidiera.
         depositMode: p.deposit_mode,
         depositType: p.deposit_type,
-        depositAmount: p.deposit_amount
+        depositAmount: p.deposit_amount,
+        // Los adicionales que tiene, con su id: si la lista cambia se manda
+        // entera y el backend actualiza en el lugar los que traen id.
+        addons: toAddonFormValues(editingService.addons)
       })
     } else {
       setFormData(EMPTY_FORM)
@@ -145,7 +154,11 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
     setLoading(true)
     setError(null)
     try {
-      await onSubmit(formData)
+      // Sin cambios en los adicionales, la edicion no los manda: editar solo la
+      // descripcion no debe tocarlos.
+      const { addons, ...rest } = formData
+      const sendAddons = !editingService || addonsChanged(editingService.addons, addons ?? [])
+      await onSubmit(sendAddons ? formData : rest)
       onClose()
     } catch (err) {
       // D-20260930-09: si lo rechazo la validacion del cliente se dice que
@@ -425,6 +438,11 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
                 </div>
               )}
             </div>
+
+            <ServiceAddonsEditor
+              addons={formData.addons ?? []}
+              onChange={(addons) => setFormData({ ...formData, addons })}
+            />
 
             <div className="space-y-1.5">
               <label className="text-[10px] font-black uppercase tracking-widest text-gray-400 ml-1 flex items-center gap-2">

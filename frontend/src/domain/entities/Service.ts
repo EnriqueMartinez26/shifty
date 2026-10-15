@@ -1,3 +1,4 @@
+import { ServiceAddon, type ServiceAddonInput, type ServiceAddonPrimitives } from './ServiceAddon'
 import { createUuid } from '../../shared/utils/uuid'
 import { Duration } from '../value-objects/Duration'
 import { Price } from '../value-objects/Price'
@@ -34,6 +35,11 @@ export interface ServiceWriteInput {
   depositType?: ServiceDepositType
   depositAmount?: number | null
   isActive?: boolean
+  /**
+   * Conjunto COMPLETO de adicionales: si viene, el backend reemplaza los que
+   * habia (el orden es la posicion). Ausente, no se tocan.
+   */
+  addons?: readonly ServiceAddonInput[]
 }
 
 interface ServiceProps {
@@ -49,6 +55,8 @@ interface ServiceProps {
   depositType: ServiceDepositType
   depositAmount: number | null
   isActive: boolean
+  /** Ordenados por posicion. */
+  addons: readonly ServiceAddon[]
 }
 
 export class Service {
@@ -78,6 +86,8 @@ export class Service {
     deposit_type: ServiceDepositType
     deposit_amount: number | null
     is_active: boolean
+    /** Opcional: un servicio sin adicionales puede no traer la lista. */
+    addons?: readonly ServiceAddonPrimitives[]
   }): Service {
     return new Service({
       id: UserId.create(props.id),
@@ -91,7 +101,10 @@ export class Service {
       depositMode: props.deposit_mode,
       depositType: props.deposit_type,
       depositAmount: props.deposit_amount,
-      isActive: props.is_active
+      isActive: props.is_active,
+      addons: [...(props.addons ?? [])]
+        .sort((a, b) => a.position - b.position)
+        .map((addon) => ServiceAddon.fromPrimitives(addon))
     })
   }
 
@@ -131,6 +144,9 @@ export class Service {
   get isActive() {
     return this.props.isActive
   }
+  get addons() {
+    return this.props.addons
+  }
 
   toPrimitives() {
     return {
@@ -145,7 +161,8 @@ export class Service {
       deposit_mode: this.props.depositMode,
       deposit_type: this.props.depositType,
       deposit_amount: this.props.depositAmount,
-      is_active: this.props.isActive
+      is_active: this.props.isActive,
+      addons: this.props.addons.map((addon) => addon.toPrimitives())
     }
   }
 }

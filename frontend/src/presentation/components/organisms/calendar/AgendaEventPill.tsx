@@ -52,6 +52,14 @@ export const AgendaEventPill: React.FC<AgendaEventPillProps> = ({
       >
         {event.title}
       </p>
+      {event.type !== 'block' && event.addonsLabel && (
+        <p
+          className="text-[10px] font-bold break-words"
+          style={{ color: colors2000s.text.secondary }}
+        >
+          + {event.addonsLabel}
+        </p>
+      )}
       <p className="text-[10px] font-bold" style={{ color: colors2000s.text.secondary }}>
         {formatArgentinaTime(toInstantIso(event.startsAt))} -{' '}
         {formatArgentinaTime(toInstantIso(event.endsAt))} · {event.staffName}

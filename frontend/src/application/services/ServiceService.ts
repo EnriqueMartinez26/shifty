@@ -5,6 +5,7 @@ import {
   type ServiceDepositType,
   type ServiceWriteInput
 } from '../../domain/entities/Service'
+import { ServiceAddon, type ServiceAddonInput } from '../../domain/entities/ServiceAddon'
 import type { IServiceRepository } from '../../domain/repositories/IServiceRepository'
 import { Duration } from '../../domain/value-objects/Duration'
 import { Price } from '../../domain/value-objects/Price'
@@ -46,6 +47,7 @@ export class ServiceService extends BaseService<Service> {
     depositMode?: ServiceDepositMode
     depositType?: ServiceDepositType
     depositAmount?: number | null
+    addons?: readonly ServiceAddonInput[]
   }): Promise<Service> {
     return await this.execute(async () => {
       const validatorInput = {
@@ -55,7 +57,12 @@ export class ServiceService extends BaseService<Service> {
         youtube_trailer_url: data.youtubeTrailerUrl,
         deposit_mode: data.depositMode,
         deposit_type: data.depositType,
-        deposit_amount: data.depositAmount
+        deposit_amount: data.depositAmount,
+        addons: data.addons?.map((addon) => ({
+          name: addon.name,
+          unit_price: addon.unitPrice,
+          max_quantity: addon.maxQuantity
+        }))
       }
 
       const validated = this.validate(validatorInput, createServiceSchema)
@@ -71,7 +78,9 @@ export class ServiceService extends BaseService<Service> {
         depositMode: validated.deposit_mode,
         depositType: validated.deposit_type,
         depositAmount: validated.deposit_amount ?? null,
-        isActive: true
+        isActive: true,
+        // La posicion es el orden del formulario.
+        addons: (data.addons ?? []).map((addon, index) => ServiceAddon.create(addon, index))
       })
 
       return await this.repository.create(service)

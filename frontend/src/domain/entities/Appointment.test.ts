@@ -29,6 +29,7 @@ describe('Appointment.fromPrimitives', () => {
       status: 'confirmed',
       staff_name: null,
       client_phone: null,
+      addons: [],
       starts_at: '2026-09-10T12:00:00.000Z',
       ends_at: '2026-09-10T12:30:00.000Z'
     })
@@ -41,5 +42,23 @@ describe('Appointment.fromPrimitives', () => {
     ['id vacio', { public_id: '' }]
   ])('rechaza %s', (_caso, override) => {
     expect(() => Appointment.fromPrimitives({ ...props, status: 'pending', ...override })).toThrow()
+  })
+})
+
+describe('Appointment: adicionales', () => {
+  it('conserva nombre y cantidad de cada adicional', () => {
+    const appointment = Appointment.fromPrimitives({
+      ...props,
+      status: 'confirmed',
+      addons: [{ name: 'Strass', quantity: 6 }]
+    })
+
+    expect(appointment.addons).toEqual([{ name: 'Strass', quantity: 6 }])
+  })
+
+  it('null equivale a sin adicionales', () => {
+    expect(
+      Appointment.fromPrimitives({ ...props, status: 'confirmed', addons: null }).addons
+    ).toEqual([])
   })
 })
