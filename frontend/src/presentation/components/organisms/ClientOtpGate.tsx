@@ -2,6 +2,8 @@ import React, { useState } from 'react'
 
 import { ShieldCheck } from 'lucide-react'
 
+import { hasClientToken } from '@application/services/clientToken'
+
 import { getErrorCode, getErrorMessage, getRetryAfterSeconds } from '@shared/errors/getErrorMessage'
 import {
   forgetOtpVerification,
@@ -58,13 +60,17 @@ export const ClientOtpGate: React.FC<ClientOtpGateProps> = ({
   const cooldown = useResendCooldown(phoneDigits(form.phone))
   // Un telefono ya verificado no gasta un codigo: ni la espera ni el bloqueo
   // lo frenan. Con skipRemembered no hay atajo: siempre se pide un codigo.
-  const entraDirecto = !skipRemembered && isOtpStillValid(storeSlug, form.phone)
+  // Sin el token del cliente (2026-10-14) la verificacion recordada no
+  // alcanza: el backend responderia 403.
+  const recordado = (phone: string) =>
+    isOtpStillValid(storeSlug, phone) && hasClientToken(storePublicId)
+  const entraDirecto = !skipRemembered && recordado(form.phone)
   const esperando = cooldown.secondsLeft > 0 && !entraDirecto
   const bloqueado = rateLimited && !entraDirecto
   const textoEspera = `Reenviar en ${cooldown.secondsLeft} s`
 
   const continuarSiYaVerificado = (): boolean => {
-    if (!form.phone.trim() || !isOtpStillValid(storeSlug, form.phone)) return false
+    if (!form.phone.trim() || !recordado(form.phone)) return false
     onVerified(form.phone.trim())
     return true
   }

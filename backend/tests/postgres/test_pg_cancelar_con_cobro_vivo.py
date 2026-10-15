@@ -460,6 +460,7 @@ async def test_link_del_panel_contra_cancelar_nunca_deja_un_link_vivo_cancelado(
             },
         )
         assert verificado.status_code == 200, verificado.text
+        client.headers["X-Client-Token"] = verificado.json()["client_token"]
 
         def cancelar(turno: str) -> Any:
             return client.patch(
@@ -741,6 +742,7 @@ async def test_rafaga_de_cancelaciones_del_portal_una_sola_gana(
         },
     )
     assert verificado.status_code == 200, verificado.text
+    client.headers["X-Client-Token"] = verificado.json()["client_token"]
 
     respuestas: list[Response] = await asyncio.gather(
         *(

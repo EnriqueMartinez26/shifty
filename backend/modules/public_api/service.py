@@ -357,28 +357,37 @@ def client_may_leave(appointment: Appointment) -> bool:
 
 
 async def require_recent_client_otp(
-    db: AsyncSession, *, store_id: str, phone: str
+    db: AsyncSession, *, store_id: str, phone: str, client_token: str | None
 ) -> None:
-    """Autogestion: el email verificado tiene que ser el de ESA ficha.
+    """Autogestion: el email verificado tiene que ser el de ESA ficha, y quien
+    pregunta tiene que traer el token de esa verificacion.
 
     Un OTP prueba posesion del EMAIL, no del telefono, y `/public/otp/request`
     es publico: quien pedia el codigo elegia el buzon. Con el predicado viejo
     (`is_recently_verified(store_id, phone)`) saber un telefono ajeno y poner el
     email propio alcanzaba para listar, cancelar y reprogramar los turnos de esa
     persona. 2026-09-20.
+
+    2026-10-14: la verificacion tampoco estaba atada a QUIEN pregunta. Durante
+    sus 30 minutos, cualquiera con el telefono y el ``store_public_id`` entraba
+    desde otro dispositivo. Ahora se exige ademas el token que
+    ``/public/otp/verify`` le devolvio a quien verifico (``X-Client-Token``,
+    ``modules/otp/client_token.py``).
     """
     service = OtpService(db)
-    if not await service.is_client_contact_verified(store_id=store_id, phone=phone):
+    if not await service.is_self_service_allowed(
+        store_id=store_id, phone=phone, client_token=client_token
+    ):
         # El motivo se resuelve SOLO en el camino de rechazo y va al log del
         # servidor: es lo unico con lo que se atiende el ticket de un cliente
         # legitimo trabado, y antes los 403 de OTP salian sin ninguna traza
-        # (`main.py` no loguea `AppException`).
+        # (`main.py` no loguea `AppException`). Nunca el token.
         logger.warning(
             "otp_self_service_denied",
             store_id=store_id,
             phone=mask_phone(phone),
-            reason=await service.client_contact_verification_reason(
-                store_id=store_id, phone=phone
+            reason=await service.self_service_reason(
+                store_id=store_id, phone=phone, client_token=client_token
             ),
         )
         # Mensaje NEUTRO (regla 20): no dice si el telefono no es cliente, si
@@ -611,7 +620,11 @@ class PublicBookingService:
         self.repo = PublicRepository(db)
 
     async def book(
-        self, data: PublicBookingCreate, idempotency_key: str
+        self,
+        data: PublicBookingCreate,
+        idempotency_key: str,
+        *,
+        client_token: str | None = None,
     ) -> PublicBookingResponse:
         """Reserva desde el portal. El llamador maneja la idempotencia.
 
@@ -622,7 +635,7 @@ class PublicBookingService:
         # Antes de tocar la base: una version vieja no reserva (PV-09).
         check_accepted_versions(data.terms_version, data.privacy_version)
         service, store = await self._resolve_store_and_service(data)
-        request = await self._resolve_request(data, service, store)
+        request = await self._resolve_request(data, service, store, client_token)
         booking = await self._persist(data, request, idempotency_key)
 
         await self.db.commit()
@@ -670,7 +683,11 @@ class PublicBookingService:
         return service, store
 
     async def _resolve_request(
-        self, data: PublicBookingCreate, service: Service, store: Store
+        self,
+        data: PublicBookingCreate,
+        service: Service,
+        store: Store,
+        client_token: str | None,
     ) -> _BookingRequest:
         """Antelacion, OTP, campos extra, precio y sena: todo antes de escribir."""
         # Antelacion minima. El flujo admin ya la validaba, pero el booking
@@ -695,12 +712,17 @@ class PublicBookingService:
         # 2026-09-20.
         # Una instancia para el request: recuerda la ficha y el veredicto, y
         # el gate y el contacto verificado no vuelven a preguntar (F3-03).
+        # Los dos exigen ademas el token de quien verifico (2026-10-14): sin
+        # el, la verificacion de otro abria su historial para la sena.
         otp_service = OtpService(self.db)
         if is_store_feature_enabled(store.feature_flags, "otp_booking"):
-            await self._require_booking_otp(otp_service, store.id, data.client_phone)
-        contact_verified = await otp_service.is_client_contact_verified(
+            await self._require_booking_otp(
+                otp_service, store.id, data.client_phone, client_token
+            )
+        contact_verified = await otp_service.is_self_service_allowed(
             store_id=store.id,
             phone=data.client_phone,
+            client_token=client_token,
         )
 
         custom_fields = validate_custom_fields(store, data.custom_fields)
@@ -738,9 +760,11 @@ class PublicBookingService:
 
     @staticmethod
     async def _require_booking_otp(
-        otp_service: OtpService, store_id: str, phone: str
+        otp_service: OtpService, store_id: str, phone: str, client_token: str | None
     ) -> None:
-        if await otp_service.may_book_with_otp(store_id=store_id, phone=phone):
+        if await otp_service.may_book(
+            store_id=store_id, phone=phone, client_token=client_token
+        ):
             return
         # El motivo se resuelve SOLO en el camino de rechazo y va al log del
         # servidor: antes los 403 de OTP salian sin ninguna traza (`main.py`
@@ -750,7 +774,9 @@ class PublicBookingService:
             "otp_booking_denied",
             store_id=store_id,
             phone=mask_phone(phone),
-            reason=await otp_service.booking_otp_reason(store_id=store_id, phone=phone),
+            reason=await otp_service.booking_reason(
+                store_id=store_id, phone=phone, client_token=client_token
+            ),
         )
         raise OTPException(
             message="Se requiere validar OTP antes de reservar",
@@ -1102,10 +1128,12 @@ class PublicBookingService:
     # ------------------------------------------------------------------
 
     async def cancel_by_client(
-        self, public_id: str, data: ClientCancelRequest
+        self, public_id: str, data: ClientCancelRequest, client_token: str | None
     ) -> PublicBookingResponse:
         """El cliente cancela su turno: commit -> invalidacion -> respuesta."""
-        appointment, client = await self._lock_client_appointment(public_id, data.phone)
+        appointment, client = await self._lock_client_appointment(
+            public_id, data.phone, client_token
+        )
         # Ya cancelado: 409 como el panel, sin republicar el cupo ni avisar
         # otra vez al dueno (revision de perf/f4-pay, 2026-09-25).
         reject_already_cancelled(appointment)
@@ -1155,13 +1183,15 @@ class PublicBookingService:
         )
 
     async def reschedule_by_client(
-        self, public_id: str, data: ClientRescheduleRequest
+        self, public_id: str, data: ClientRescheduleRequest, client_token: str | None
     ) -> PublicBookingResponse:
         """Reprograma: cancela el original y crea el nuevo en un savepoint.
 
         El llamador maneja la idempotencia (reserva, liberacion y replay).
         """
-        original, client = await self._lock_client_appointment(public_id, data.phone)
+        original, client = await self._lock_client_appointment(
+            public_id, data.phone, client_token
+        )
         # Un turno terminal no se reprograma (ni vuelve a la vida).
         reject_inactive(original)
         # Reprogramar cancela el turno original: le corresponden los mismos
@@ -1224,7 +1254,7 @@ class PublicBookingService:
         )
 
     async def _lock_client_appointment(
-        self, public_id: str, phone: str
+        self, public_id: str, phone: str, client_token: str | None
     ) -> tuple[Appointment, User]:
         """Lock del turno (TOCTOU), titularidad y OTP, en ese orden.
 
@@ -1246,7 +1276,10 @@ class PublicBookingService:
             )
 
         await require_recent_client_otp(
-            self.db, store_id=appointment.store_id, phone=phone
+            self.db,
+            store_id=appointment.store_id,
+            phone=phone,
+            client_token=client_token,
         )
         return appointment, client
 

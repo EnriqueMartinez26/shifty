@@ -155,5 +155,5 @@ async def test_pago_aprobado_sobre_turno_pendiente_sigue_confirmando(
     assert turno.status == AppointmentStatus.CONFIRMED.value
     avisos = await _avisos(test_session, turno.id)
     assert [a.type for a in avisos] == [NotificationType.PAYMENT_APPROVED.value]
-    assert "confirmado automaticamente" in (avisos[0].body or "")
+    assert "confirmado automáticamente" in (avisos[0].body or "")
     assert confirmaciones == [turno.id]

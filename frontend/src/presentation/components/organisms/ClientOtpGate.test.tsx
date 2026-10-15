@@ -1,9 +1,22 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 
+import { forgetClientToken, rememberClientToken } from '@application/services/clientToken'
+
 import { RateLimitError } from '@shared/errors'
-import { isOtpStillValid, rememberOtpVerification } from '@shared/utils/otpSession'
+import {
+  forgetOtpVerification,
+  isOtpStillValid,
+  rememberOtpVerification
+} from '@shared/utils/otpSession'
 
 import { ClientOtpGate } from './ClientOtpGate'
+
+// La verificacion recordada solo sirve con el token del cliente en memoria
+// (2026-10-14): el atajo se simula con las dos cosas.
+const recordarConToken = (phone: string, verifiedAt: string) => {
+  rememberOtpVerification('sol', phone, verifiedAt)
+  rememberClientToken('store-1', 'tok-del-cliente')
+}
 
 const mockRequestOtp = jest.fn()
 const mockVerifyOtp = jest.fn()
@@ -21,6 +34,8 @@ describe('ClientOtpGate', () => {
     mockRequestOtp.mockReset().mockResolvedValue({ expires_at: '', debug_code: '' })
     mockVerifyOtp.mockReset()
     try {
+      forgetOtpVerification('sol')
+      forgetClientToken()
       window.sessionStorage.clear()
     } catch {
       // sin storage: la puerta igual funciona
@@ -44,7 +59,7 @@ describe('ClientOtpGate', () => {
     // FF-05 (2026-09-30): el backend rechazo con 403 OTP_VERIFICATION_REQUIRED
     // una verificacion que el dispositivo daba por vigente; entrar por el
     // atajo repetia el 403 sin mandar ningun codigo.
-    rememberOtpVerification('sol', '1155550101', new Date().toISOString())
+    recordarConToken('1155550101', new Date().toISOString())
 
     render(
       <ClientOtpGate
@@ -70,7 +85,7 @@ describe('ClientOtpGate', () => {
   })
 
   it('sin skipRemembered y con la verificacion vigente entra directo', async () => {
-    rememberOtpVerification('sol', '1155550101', new Date().toISOString())
+    recordarConToken('1155550101', new Date().toISOString())
 
     render(<ClientOtpGate storePublicId="store-1" storeSlug="sol" onVerified={onVerified} />)
     fireEvent.change(screen.getByLabelText('Teléfono'), { target: { value: '1155550101' } })
@@ -79,6 +94,20 @@ describe('ClientOtpGate', () => {
     await waitFor(() => expect(onVerified).toHaveBeenCalledWith('1155550101'))
     expect(mockRequestOtp).not.toHaveBeenCalled()
     expect(isOtpStillValid('sol', '1155550101')).toBe(true)
+  })
+
+  it('sin el token del cliente la verificacion recordada no entra directo (2026-10-14)', async () => {
+    // El backend exige el token: entrar por el atajo sin el daba un 403.
+    rememberOtpVerification('sol', '1155550101', new Date().toISOString())
+
+    render(<ClientOtpGate storePublicId="store-1" storeSlug="sol" onVerified={onVerified} />)
+    fireEvent.change(screen.getByLabelText('Teléfono'), { target: { value: '1155550101' } })
+    fireEvent.change(screen.getByLabelText('Tu email'), { target: { value: 'yo@example.com' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Enviarme el código' }))
+
+    expect(await screen.findByLabelText('Código')).toBeInTheDocument()
+    expect(mockRequestOtp).toHaveBeenCalledTimes(1)
+    expect(onVerified).not.toHaveBeenCalled()
   })
 })
 
@@ -106,6 +135,8 @@ describe('ClientOtpGate en el celular (F4-11, J7)', () => {
     jest.useFakeTimers()
     mockRequestOtp.mockReset().mockResolvedValue({ ok: true, expires_at: '' })
     mockVerifyOtp.mockReset()
+    forgetOtpVerification('sol')
+    forgetClientToken()
     window.sessionStorage.clear()
   })
   afterEach(() => jest.useRealTimers())
@@ -140,7 +171,7 @@ describe('ClientOtpGate en el celular (F4-11, J7)', () => {
     const onVerified = renderGate()
     await pedirCodigo('1155550101')
     fireEvent.click(screen.getByRole('button', { name: 'Cambiar teléfono o email' }))
-    rememberOtpVerification('sol', '1155550202', new Date().toISOString())
+    recordarConToken('1155550202', new Date().toISOString())
     fireEvent.change(screen.getByLabelText('Teléfono'), { target: { value: '1155550202' } })
 
     fireEvent.click(screen.getByRole('button', { name: PEDIR }))
@@ -232,7 +263,7 @@ describe('ClientOtpGate en el celular (F4-11, J7)', () => {
       fireEvent.click(screen.getByRole('button', { name: PEDIR }))
     })
 
-    rememberOtpVerification('sol', '1155550101', new Date().toISOString())
+    recordarConToken('1155550101', new Date().toISOString())
     act(() => {
       jest.advanceTimersByTime(60_000)
     })

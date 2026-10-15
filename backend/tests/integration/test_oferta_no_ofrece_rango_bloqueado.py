@@ -135,7 +135,7 @@ async def test_un_bloqueo_sobre_el_cupo_no_dispara_la_oferta(
     assert fila.status == "waiting"
     assert fila.lapsed_offers == 0
     assert fila.offer_expires_at is None
-    assert [e for e in buzon.enviados[mails_antes:] if "Se libero" in e[1]] == []
+    assert [e for e in buzon.enviados[mails_antes:] if "Se liberó" in e[1]] == []
 
 
 @pytest.mark.asyncio
@@ -165,4 +165,4 @@ async def test_un_bloqueo_que_no_solapa_no_frena_la_oferta(
 
     assert resultado["failed"] == 0
     assert (await _entrada(test_session, entrada)).status == "offered"
-    assert any("Se libero un turno" in e[1] for e in buzon.enviados)
+    assert any("Se liberó un turno" in e[1] for e in buzon.enviados)

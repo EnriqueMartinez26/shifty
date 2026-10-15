@@ -309,6 +309,7 @@ async def test_portal_publico_con_la_tienda_suspendida(
         },
     )
     assert verificado.status_code == 200, verificado.text
+    client.headers["X-Client-Token"] = verificado.json()["client_token"]
 
     await _suspender(test_session, store)
 

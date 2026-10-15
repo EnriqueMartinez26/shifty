@@ -978,6 +978,12 @@ Responses:
 - Summary: Create Public Booking
 - operationId: `create_public_booking_public_appointments_post`
 
+Parameters:
+
+| in | name | required | type | constraints |
+|---|---|---|---|---|
+| header | `X-Client-Token` | no | string \| null |  |
+
 Request body (required):
 
 - `application/json`: `PublicBookingCreate`
@@ -1016,6 +1022,7 @@ Parameters:
 | in | name | required | type | constraints |
 |---|---|---|---|---|
 | path | `public_id` | yes | string | minLength=1, maxLength=64, pattern="^[A-Za-z0-9_-]{1,64}$" |
+| header | `X-Client-Token` | no | string \| null |  |
 
 Request body (required):
 
@@ -1036,6 +1043,7 @@ Parameters:
 | in | name | required | type | constraints |
 |---|---|---|---|---|
 | path | `public_id` | yes | string | minLength=1, maxLength=64, pattern="^[A-Za-z0-9_-]{1,64}$" |
+| header | `X-Client-Token` | no | string \| null |  |
 
 Request body (required):
 
@@ -1058,6 +1066,7 @@ Parameters:
 | path | `store_public_id` | yes | string | minLength=1, maxLength=64, pattern="^[A-Za-z0-9_-]{1,64}$" |
 | path | `phone` | yes | string | minLength=6, maxLength=30 |
 | query | `limit` | no | integer | minimum=1, maximum=200, default=50 |
+| header | `X-Client-Token` | no | string \| null |  |
 
 Responses:
 
@@ -1079,6 +1088,7 @@ Parameters:
 | query | `client_phone` | no | string \| null | minLength=6, maxLength=30 |
 | query | `promotion_code` | no | string \| null | minLength=3, maxLength=30 |
 | query | `addon` | no | array<string> | maxItems=20, default=[] |
+| header | `X-Client-Token` | no | string \| null |  |
 
 Responses:
 
@@ -1276,6 +1286,12 @@ Responses:
 - Summary: My Waitlist Entries
 - operationId: `my_waitlist_entries_public_waitlist_mine_post`
 
+Parameters:
+
+| in | name | required | type | constraints |
+|---|---|---|---|---|
+| header | `X-Client-Token` | no | string \| null |  |
+
 Request body (required):
 
 - `application/json`: `WaitlistClientQuery`
@@ -1295,6 +1311,7 @@ Parameters:
 | in | name | required | type | constraints |
 |---|---|---|---|---|
 | path | `entry_id` | yes | string | minLength=1, maxLength=64, pattern="^[A-Za-z0-9_-]{1,64}$" |
+| header | `X-Client-Token` | no | string \| null |  |
 
 Request body (required):
 
@@ -4913,4 +4930,4 @@ Type: `enum("admin", "staff", "receptionist", "client")`
 | `terms_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 | `privacy_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 
-Generado desde app.openapi() el 2026-10-15, commit c43e4239
+Generado desde app.openapi() el 2026-10-15, commit fecbb98c

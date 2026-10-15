@@ -60,6 +60,7 @@ async def _verificar(client: AsyncClient, t: _Tienda) -> None:
         },
     )
     assert verificado.status_code == 200, verificado.text
+    client.headers["X-Client-Token"] = verificado.json()["client_token"]
 
 
 async def _con_turno(

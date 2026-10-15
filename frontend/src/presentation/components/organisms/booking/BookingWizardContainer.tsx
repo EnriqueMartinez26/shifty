@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useState } from 'react'
 
 import { Check } from 'lucide-react'
 
+import { hasClientToken } from '@application/services/clientToken'
+
 import { trackBookingCreated, trackBookingEvent } from '@infrastructure/analytics/bookingAnalytics'
 
 import { getErrorCode, getErrorMessage, getRetryAfterSeconds } from '@shared/errors/getErrorMessage'
@@ -157,7 +159,13 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
       // Comparar las cadenas crudas des-verificaba ante cualquier edicion
       // cuando no habia sessionStorage que lo rescatara (F11a-08).
       if (phoneDigits(client.phone) === phoneDigits(prev.verifiedPhone)) return { ...prev, email }
-      if (client.phone.trim() && isOtpStillValid(store.slug, client.phone)) {
+      // Con el token del cliente (2026-10-14): sin el, el backend rechaza la
+      // reserva con otp_booking aunque la verificacion siga recordada.
+      if (
+        client.phone.trim() &&
+        isOtpStillValid(store.slug, client.phone) &&
+        hasClientToken(store.public_id)
+      ) {
         return { ...prev, email, verified: true, verifiedPhone: client.phone, error: '' }
       }
       return prev.verified

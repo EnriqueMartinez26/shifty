@@ -82,6 +82,7 @@ async def _verificar_cliente(
         },
     )
     assert verificado.status_code == 200, verificado.text
+    client.headers["X-Client-Token"] = verificado.json()["client_token"]
 
 
 async def _sena_por_whatsapp(

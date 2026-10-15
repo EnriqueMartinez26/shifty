@@ -9,7 +9,7 @@ Revision de e5579b6..3b977a9 (2026-09-25, #6):
   (``panel_link_orphan_discard_failed``) y sale el error ORIGINAL, como en
   ``_drop_unsealed_link_or_log``.
 - El aviso de pago duplicado decia "ya estaba pagado" tambien para un cobro
-  devuelto; ahora dice "ya tenia un pago registrado".
+  devuelto; ahora dice "ya tenía un pago registrado".
 """
 
 from __future__ import annotations
@@ -83,4 +83,4 @@ def test_el_aviso_de_duplicado_no_dice_que_estaba_pagado(duplicado: bool) -> Non
     # Un cobro devuelto tambien es "duplicado": no estaba pagado.
     assert "ya estaba pagado" not in cuerpo
     if duplicado:
-        assert "ya tenia un pago registrado" in cuerpo, cuerpo
+        assert "ya tenía un pago registrado" in cuerpo, cuerpo

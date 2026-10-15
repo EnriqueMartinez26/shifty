@@ -61,7 +61,7 @@ async def test_el_codigo_llega_por_email_y_verifica(
     assert len(cola.enviados) == 1
     destino, asunto, cuerpo = cola.enviados[0]
     assert destino == "cliente@example.com"
-    assert "codigo" in asunto.lower()
+    assert "código" in asunto.lower()
     codigo = pedido.json()["data"]["debug_code"]  # solo en tests/desarrollo
     assert codigo in cuerpo
 
@@ -70,6 +70,7 @@ async def test_el_codigo_llega_por_email_y_verifica(
         json={"store_public_id": store, "phone": "+5491155550042", "code": codigo},
     )
     assert verificado.status_code == 200, verificado.text
+    client.headers["X-Client-Token"] = verificado.json()["client_token"]
     assert verificado.json()["ok"] is True
 
 

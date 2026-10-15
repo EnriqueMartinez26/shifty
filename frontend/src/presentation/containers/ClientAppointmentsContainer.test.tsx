@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { format } from 'date-fns'
 
+import { forgetClientToken, rememberClientToken } from '@application/services/clientToken'
 import type { PublicStore } from '@application/services/PublicBookingService'
 
 import { ConflictError, ValidationError } from '@shared/errors'
@@ -9,9 +10,20 @@ import { InternalServerError } from '@shared/errors/InternalServerError'
 import { NotFoundError } from '@shared/errors/NotFoundError'
 import { RateLimitError } from '@shared/errors/RateLimitError'
 import { ServiceUnavailableError } from '@shared/errors/ServiceUnavailableError'
-import { isOtpStillValid, rememberOtpVerification } from '@shared/utils/otpSession'
+import {
+  forgetOtpVerification,
+  isOtpStillValid,
+  rememberOtpVerification
+} from '@shared/utils/otpSession'
 
 import { ClientAppointmentsContainer } from './ClientAppointmentsContainer'
+
+// La verificacion recordada solo sirve con el token del cliente en memoria
+// (2026-10-14): el atajo se simula con las dos cosas.
+const recordarConToken = (phone: string, verifiedAt: string) => {
+  rememberOtpVerification('sol', phone, verifiedAt)
+  rememberClientToken('store-1', 'tok-del-cliente')
+}
 
 const mockAppointments = jest.fn()
 const mockRefetch = jest.fn()
@@ -93,6 +105,8 @@ describe('ClientAppointmentsContainer', () => {
       error: null,
       refetch: mockRefetch
     })
+    forgetOtpVerification('sol')
+    forgetClientToken()
     try {
       window.sessionStorage.clear()
     } catch {
@@ -150,7 +164,11 @@ describe('ClientAppointmentsContainer', () => {
       fireEvent.click(within(dialogo).getByRole('button', { name: 'Sí, cancelar turno' }))
 
       await waitFor(() =>
-        expect(mockCancel).toHaveBeenCalledWith({ publicId: 'appt-1', phone: '1155550101' })
+        expect(mockCancel).toHaveBeenCalledWith({
+          storePublicId: 'store-1',
+          publicId: 'appt-1',
+          phone: '1155550101'
+        })
       )
       expect(await screen.findByText(/le avisamos a la tienda/)).toBeInTheDocument()
       expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
@@ -426,7 +444,7 @@ describe('ClientAppointmentsContainer', () => {
 
     // El wizard dejo el telefono verificado; "Mis turnos" entra sin codigo.
     const entrarPorElAtajo = () => {
-      rememberOtpVerification('sol', '1155550101', new Date().toISOString())
+      recordarConToken('1155550101', new Date().toISOString())
       fireEvent.change(screen.getByLabelText('Teléfono'), { target: { value: '1155550101' } })
       fireEvent.click(screen.getByRole('button', { name: 'Enviarme el código' }))
     }
@@ -444,7 +462,7 @@ describe('ClientAppointmentsContainer', () => {
 
       // Aunque la marca del dispositivo siga vigente, pedir el codigo no entra
       // por el atajo: la olvida y manda uno nuevo.
-      rememberOtpVerification('sol', '1155550101', new Date().toISOString())
+      recordarConToken('1155550101', new Date().toISOString())
       fireEvent.change(screen.getByLabelText('Tu email'), { target: { value: 'yo@example.com' } })
       fireEvent.click(screen.getByRole('button', { name: 'Enviarme el código' }))
 
@@ -554,5 +572,74 @@ describe('ClientAppointmentsContainer', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Reintentar' }))
       expect(mockRefetch).toHaveBeenCalledTimes(1)
     })
+  })
+})
+
+describe('ClientAppointmentsContainer: el token del cliente vencio (2026-10-14)', () => {
+  // El backend ata cancelar y reprogramar al token que devolvio la
+  // verificacion (X-Client-Token, en memoria). Si vence o se pierde, la
+  // accion rebota con 403 OTP_VERIFICATION_REQUIRED: se vuelve a la puerta
+  // del codigo en vez de mostrar un error sin salida.
+  const rechazo = new ForbiddenError('Se requiere validar OTP antes de autogestionar turnos', {
+    errorCode: 'OTP_VERIFICATION_REQUIRED',
+    statusCode: 403
+  })
+  const aviso =
+    'Para ver tus turnos verificá el email que tenés registrado en Peluqueria Sol. Pedí un código nuevo.'
+
+  beforeEach(() => {
+    forgetOtpVerification('sol')
+    forgetClientToken()
+    mockCancel.mockReset()
+    mockRefetch.mockReset()
+    mockRequestOtp.mockReset().mockResolvedValue({ expires_at: '', debug_code: '' })
+    mockVerifyOtp
+      .mockReset()
+      .mockResolvedValue({ ok: true, phone: '1155550101', verified_at: new Date().toISOString() })
+    mockAppointments.mockReset().mockReturnValue({
+      data: { client_name: 'Yo', client_phone: '1155550101', appointments: [turno] },
+      isLoading: false,
+      isError: false,
+      refetch: mockRefetch
+    })
+  })
+
+  it('"Salir" olvida la verificacion: volver a entrar pide un codigo nuevo', async () => {
+    render(<ClientAppointmentsContainer store={store} />)
+    await entrar()
+    expect(isOtpStillValid('sol', '1155550101')).toBe(true)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Salir' }))
+
+    expect(isOtpStillValid('sol', '1155550101')).toBe(false)
+    fireEvent.change(screen.getByLabelText('Teléfono'), { target: { value: '1155550101' } })
+    fireEvent.change(screen.getByLabelText('Tu email'), { target: { value: 'yo@example.com' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Enviarme el código' }))
+    expect(await screen.findByLabelText('Código')).toBeInTheDocument()
+    expect(mockRequestOtp).toHaveBeenCalledTimes(2)
+  })
+
+  it('un 403 al cancelar vuelve a pedir el codigo y, verificado, recarga la lista', async () => {
+    mockCancel.mockRejectedValue(rechazo)
+    render(<ClientAppointmentsContainer store={store} />)
+    await entrar()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancelar' }))
+    const dialogo = await screen.findByRole('alertdialog')
+    fireEvent.click(within(dialogo).getByRole('button', { name: 'Sí, cancelar turno' }))
+
+    expect(await screen.findByText(aviso)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Salir' })).not.toBeInTheDocument()
+    expect(isOtpStillValid('sol', '1155550101')).toBe(true)
+
+    // Pedir el codigo no entra por el atajo: manda uno nuevo de verdad.
+    fireEvent.change(screen.getByLabelText('Tu email'), { target: { value: 'yo@example.com' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Enviarme el código' }))
+    fireEvent.change(await screen.findByLabelText('Código'), { target: { value: '654321' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Ver mis turnos' }))
+
+    await screen.findByRole('button', { name: 'Salir' })
+    expect(mockRequestOtp).toHaveBeenCalledTimes(2)
+    expect(mockRefetch).toHaveBeenCalledTimes(1)
   })
 })

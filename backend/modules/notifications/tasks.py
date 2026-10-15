@@ -477,7 +477,7 @@ def _contacto(details: dict[str, Any]) -> str:
     if telefono:
         partes.append(f"por WhatsApp al {telefono}")
     if link:
-        partes.append(f"o entra en {link}")
+        partes.append(f"o entrá en {link}")
     return " ".join(partes) + "."
 
 
@@ -498,9 +498,9 @@ def client_mail_footer(store_name: str | None, reason: str) -> str:
     """
     tienda = (store_name or "").strip() or "la tienda"
     return (
-        f"Te escribimos en nombre de {tienda} a traves de Shifty, la plataforma "
-        f"de turnos que usa {tienda}. Recibis este mail porque {reason}.\n"
-        f"Politica de privacidad: {privacy_url()}"
+        f"Te escribimos en nombre de {tienda} a través de Shifty, la plataforma "
+        f"de turnos que usa {tienda}. Recibís este mail porque {reason}.\n"
+        f"Política de privacidad: {privacy_url()}"
     )
 
 
@@ -552,9 +552,9 @@ def _confirmation_body(details: dict[str, Any]) -> str:
     return (
         f"{_saludo(details)}\n\n"
         f'Tu turno para "{details.get("service")}" {_con_quien(details)} '
-        f"esta confirmado para el {_cuando(details)}.\n\n"
+        f"está confirmado para el {_cuando(details)}.\n\n"
         f"{_adicionales(details)}"
-        f"{_contacto(details)}\n\n" + _pie(details, "tenes un turno en {tienda}")
+        f"{_contacto(details)}\n\n" + _pie(details, "tenés un turno en {tienda}")
     )
 
 
@@ -565,10 +565,10 @@ def _rescheduled_subject(details: dict[str, Any]) -> str:
 def _rescheduled_body(details: dict[str, Any]) -> str:
     return (
         f"{_saludo(details)}\n\n"
-        f'La tienda movio tu turno de "{details.get("service")}" '
+        f'La tienda movió tu turno de "{details.get("service")}" '
         f"{_con_quien(details)}: ahora es el {_cuando(details)}.\n\n"
         "Si ese horario no te sirve, avisanos.\n\n"
-        f"{_contacto(details)}\n\n" + _pie(details, "tenes un turno en {tienda}")
+        f"{_contacto(details)}\n\n" + _pie(details, "tenés un turno en {tienda}")
     )
 
 
@@ -616,8 +616,8 @@ def _cancellation_body(details: dict[str, Any]) -> str:
         f'Lamentamos avisarte que tu turno para "{details.get("service")}" '
         f"{_con_quien(details)} del {_cuando(details)} fue cancelado por la "
         f"tienda.{linea_motivo}\n\n"
-        "Podes elegir otro horario cuando quieras.\n\n"
-        f"{_contacto(details)}\n\n" + _pie(details, "tenias un turno en {tienda}")
+        "Podés elegir otro horario cuando quieras.\n\n"
+        f"{_contacto(details)}\n\n" + _pie(details, "tenías un turno en {tienda}")
     )
 
 
@@ -634,16 +634,16 @@ def _reminder_body(details: dict[str, Any]) -> str:
     if details.get("stage") == "2h":
         _, hora = format_local_datetime(details.get("starts_at") or details.get("date"))
         aviso = (
-            f"Te recordamos que en un rato, a las {hora} hs, tenes turno para "
+            f"Te recordamos que en un rato, a las {hora} hs, tenés turno para "
             f'"{details.get("service")}" {_con_quien(details)}.'
         )
     else:
         aviso = (
-            f'Te recordamos que tenes turno para "{details.get("service")}" '
+            f'Te recordamos que tenés turno para "{details.get("service")}" '
             f"{_con_quien(details)}, el {_cuando(details)}."
         )
     return f"{_saludo(details)}\n\n{aviso}\n\n{_contacto(details)}\n\n" + _pie(
-        details, "tenes un turno en {tienda}"
+        details, "tenés un turno en {tienda}"
     )
 
 
@@ -655,12 +655,12 @@ def _rebook_subject(details: dict[str, Any]) -> str:
 def _rebook_body(details: dict[str, Any]) -> str:
     link = details.get("rebook_url") or details.get("booking_url") or ""
     tienda = details.get("store_name") or "la tienda"
-    linea_link = f"\n\nReserva tu proximo turno en un toque: {link}" if link else ""
+    linea_link = f"\n\nReservá tu próximo turno en un toque: {link}" if link else ""
     baja = details.get("unsubscribe_url")
     # Art. 27 Ley 25.326: el derecho a pedir el retiro, expreso y destacado.
     linea_baja = (
-        f"\n\nSi no queres recibir mas estas invitaciones de {tienda}, podes "
-        f"darte de baja aca: {baja}"
+        f"\n\nSi no querés recibir más estas invitaciones de {tienda}, podés "
+        f"darte de baja acá: {baja}"
         if baja
         else ""
     )
@@ -823,18 +823,18 @@ async def send_rebook_email(
 
 def _waitlist_offer_subject(details: dict[str, Any]) -> str:
     fecha, hora = format_local_datetime(details.get("starts_at"))
-    return f"Se libero un turno el {fecha} a las {hora} - {details.get('service', '')}"
+    return f"Se liberó un turno el {fecha} a las {hora} - {details.get('service', '')}"
 
 
 def _waitlist_offer_body(details: dict[str, Any]) -> str:
     minutos = details.get("offer_minutes") or 10
     link = details.get("offer_url") or details.get("booking_url") or ""
-    linea_link = f"\n\nReservalo aca: {link}" if link else ""
+    linea_link = f"\n\nReservalo acá: {link}" if link else ""
     return (
         f"{_saludo(details)}\n\n"
-        f'Se libero un turno para "{details.get("service")}" {_con_quien(details)} '
+        f'Se liberó un turno para "{details.get("service")}" {_con_quien(details)} '
         f"el {_cuando(details)}, como pediste en la lista de espera.{linea_link}\n\n"
-        f"Te lo reservamos durante {minutos} minutos; despues se lo ofrecemos a la "
+        f"Te lo reservamos durante {minutos} minutos; después se lo ofrecemos a la "
         "siguiente persona de la lista.\n\n"
         f"{_contacto(details)}\n\n"
         + _pie(details, "te anotaste en la lista de espera de {tienda}")

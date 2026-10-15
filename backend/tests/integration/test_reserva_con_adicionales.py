@@ -566,6 +566,8 @@ async def _verificar_cliente(
         },
     )
     assert verificado.status_code == 200, verificado.text
+    # La autogestion exige el token de quien verifico (PR #183).
+    client.headers["X-Client-Token"] = verificado.json()["client_token"]
 
 
 @pytest.mark.asyncio

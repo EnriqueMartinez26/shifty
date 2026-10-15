@@ -237,6 +237,45 @@ def _resolve_webhook_data_id(payload: dict[str, Any], query_data_id: str | None)
     return str(candidate or "").strip()
 
 
+_TEMA_DE_PAGO = "payment"
+_TEMA_LOGUEABLE_RE = re.compile(r"[a-z0-9_.\-]{1,64}")
+
+
+def _tema_ajeno_a_pagos(query_params: Any, payload: Any) -> str | None:
+    """El tema declarado si la notificacion NO es de un pago; None si lo es.
+
+    2026-10-14 (produccion): al ``notification_url`` de la preferencia MP
+    manda, ademas del webhook firmado del pago, el IPN/feed (``?topic=...&id=...``
+    sin ``x-signature``) y los avisos de ``merchant_order``. Respondian 400 y MP
+    los reintentaba. Ningun camino del webhook lee esos eventos (la consulta es
+    siempre ``GET /v1/payments/{id}``), asi que se ignoran sin tocar nada.
+
+    Es conservador a proposito: alcanza con que UN indicador (``topic``/``type``
+    de la query o del cuerpo, o una ``action`` ``payment.*``) diga pago, o con
+    que no haya ninguno, para que siga el camino firmado de siempre. Un error
+    hacia "ignorar" perderia un pago; hacia "validar" solo es el 400 de antes.
+    El resultado no aplica nada, asi que no necesita firma (regla 7).
+    """
+    cuerpo: dict[str, Any] = payload if isinstance(payload, dict) else {}
+    valores: list[Any] = [
+        *query_params.getlist("topic"),
+        *query_params.getlist("type"),
+        cuerpo.get("topic"),
+        cuerpo.get("type"),
+    ]
+    temas = {
+        valor.strip().lower()
+        for valor in valores
+        if isinstance(valor, str) and valor.strip()
+    }
+    if not temas or _TEMA_DE_PAGO in temas:
+        return None
+    accion = cuerpo.get("action")
+    if isinstance(accion, str) and accion.strip().lower().startswith(_TEMA_DE_PAGO):
+        return None
+    return min(temas)
+
+
 def _webhook_event_id(payload: dict[str, Any]) -> str:
     event_id = str(
         payload.get("id")
@@ -1042,12 +1081,21 @@ async def mercadopago_webhook(
     db: AsyncSession = Depends(get_db),
     redis: Redis = Depends(get_redis),
 ) -> dict[str, Any]:
+    # Un body invalido no puede tirar un 500: es trafico externo no confiable.
+    payload: Any
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = None
+    tema = _tema_ajeno_a_pagos(request.query_params, payload)
+    if tema is not None:
+        # Solo el tema, y solo con forma conocida: ni el cuerpo ni los ids.
+        logger.info(
+            "mercadopago_webhook_ignored",
+            topic=tema if _TEMA_LOGUEABLE_RE.fullmatch(tema) else "otro",
+        )
+        return {"success": True, "data": {"received": True, "ignored": True}}
     async with tenant_bypass(db):
-        # Un body invalido no puede tirar un 500: es trafico externo no confiable.
-        try:
-            payload = await request.json()
-        except Exception as exc:
-            raise WebhookException(message="Body de webhook invalido") from exc
         if not isinstance(payload, dict):
             raise WebhookException(message="Body de webhook invalido")
         resolved_store_id, id_firmado = await _validate_mercadopago_signature(
