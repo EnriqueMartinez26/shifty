@@ -48,7 +48,7 @@ export const ServiceAddonsEditor: React.FC<ServiceAddonsEditorProps> = ({
     onChange(addons.map((addon, i) => (i === index ? { ...addon, ...patch } : addon)))
 
   const add = () =>
-    onChange([...addons, { key: createUuid(), name: '', unitPrice: 0, maxQuantity: 1 }])
+    onChange([...addons, { key: createUuid(), id: null, name: '', unitPrice: 0, maxQuantity: 1 }])
 
   const atLimit = addons.length >= MAX_ADDONS_PER_SERVICE
 

@@ -476,9 +476,35 @@ describe('ServiceFormModal — adicionales', () => {
       removeImage: jest.fn()
     }) as jest.Mocked<IServiceRepository>
 
-  it('al editar arranca con los adicionales del servicio y guardar manda el conjunto entero', async () => {
-    // Guardar reemplaza el conjunto: si el formulario no los cargara, editar
-    // el nombre del servicio borraria sus adicionales.
+  it('editar solo la descripcion no manda los adicionales', async () => {
+    // El backend reemplaza el conjunto cuando llega: mandarlo sin cambios
+    // tocaba adicionales que nadie edito.
+    const repo = repositorio()
+    const service = new ServiceService(repo)
+    render(
+      <ServiceFormModal
+        isOpen
+        onClose={jest.fn()}
+        onSubmit={async (data) => {
+          await service.updateService('svc_1', data)
+        }}
+        editingService={conAdicionales()}
+        {...sinImagen()}
+      />
+    )
+
+    fireEvent.change(screen.getByDisplayValue('Con lavado'), {
+      target: { value: 'Con lavado y secado' }
+    })
+    fireEvent.click(screen.getByRole('button', { name: /Guardar/i }))
+
+    await waitFor(() => expect(repo.update).toHaveBeenCalledTimes(1))
+    const enviado = repo.update.mock.calls[0]?.[1]
+    expect(enviado).toMatchObject({ description: 'Con lavado y secado' })
+    expect(enviado).not.toHaveProperty('addons')
+  })
+
+  it('al editar arranca con los adicionales del servicio y guardar manda el conjunto entero con sus ids', async () => {
     const onSubmit = jest.fn().mockResolvedValue(undefined)
     render(
       <ServiceFormModal
@@ -497,10 +523,36 @@ describe('ServiceFormModal — adicionales', () => {
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1))
     expect(onSubmit.mock.calls[0]?.[0]).toMatchObject({
       addons: [
-        { name: 'Diseño', unitPrice: 1500, maxQuantity: 2 },
-        { name: 'Strass', unitPrice: 500, maxQuantity: 10 }
+        { id: 'add_2', name: 'Diseño', unitPrice: 1500, maxQuantity: 2 },
+        { id: 'add_1', name: 'Strass', unitPrice: 500, maxQuantity: 10 }
       ]
     })
+  })
+
+  it('un adicional agregado al editar viaja sin id junto a los existentes', async () => {
+    const onSubmit = jest.fn().mockResolvedValue(undefined)
+    render(
+      <ServiceFormModal
+        isOpen
+        onClose={jest.fn()}
+        onSubmit={onSubmit}
+        editingService={conAdicionales()}
+        {...sinImagen()}
+      />
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /Agregar adicional/ }))
+    fireEvent.change(screen.getByLabelText('Nombre del adicional 3'), {
+      target: { value: 'Esmalte' }
+    })
+    fireEvent.click(screen.getByRole('button', { name: /Guardar/i }))
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1))
+    expect(onSubmit.mock.calls[0]?.[0].addons).toEqual([
+      expect.objectContaining({ id: 'add_1', name: 'Strass' }),
+      expect.objectContaining({ id: 'add_2', name: 'Diseño' }),
+      expect.objectContaining({ id: null, name: 'Esmalte' })
+    ])
   })
 
   it('un nombre repetido se rechaza en el cliente con el motivo', async () => {

@@ -22,9 +22,9 @@ import { getClientValidationMessages } from '@application/validators/service.val
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
 import { formatCurrency } from '@shared/utils/currency'
 import { validateServiceImage } from '@shared/utils/imageFile'
-import { createUuid } from '@shared/utils/uuid'
 
 import { colors2000s, buttonStyles2000s } from '../../../theme/colors'
+import { addonsChanged, toAddonFormValues } from '../../lib/serviceAddonsForm'
 import { create2000sModalInputStyle, create2000sModalSurfaceStyle } from '../../lib/surfaceStyles'
 import type { ServiceFormValues } from '../../types/forms'
 import { FormErrorAlert } from '../molecules/FormErrorAlert'
@@ -130,14 +130,9 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
         depositMode: p.deposit_mode,
         depositType: p.deposit_type,
         depositAmount: p.deposit_amount,
-        // Los adicionales que tiene: guardar manda el conjunto entero y uno
-        // que no se cargara aca se borraria.
-        addons: editingService.addons.map((addon) => ({
-          key: addon.id ?? createUuid(),
-          name: addon.name,
-          unitPrice: addon.unitPrice,
-          maxQuantity: addon.maxQuantity
-        }))
+        // Los adicionales que tiene, con su id: si la lista cambia se manda
+        // entera y el backend actualiza en el lugar los que traen id.
+        addons: toAddonFormValues(editingService.addons)
       })
     } else {
       setFormData(EMPTY_FORM)
@@ -159,7 +154,11 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
     setLoading(true)
     setError(null)
     try {
-      await onSubmit(formData)
+      // Sin cambios en los adicionales, la edicion no los manda: editar solo la
+      // descripcion no debe tocarlos.
+      const { addons, ...rest } = formData
+      const sendAddons = !editingService || addonsChanged(editingService.addons, addons ?? [])
+      await onSubmit(sendAddons ? formData : rest)
       onClose()
     } catch (err) {
       // D-20260930-09: si lo rechazo la validacion del cliente se dice que
@@ -441,7 +440,7 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
             </div>
 
             <ServiceAddonsEditor
-              addons={formData.addons}
+              addons={formData.addons ?? []}
               onChange={(addons) => setFormData({ ...formData, addons })}
             />
 

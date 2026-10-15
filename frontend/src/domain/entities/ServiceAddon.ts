@@ -12,8 +12,13 @@ export const ADDON_MIN_QUANTITY = 1
 export const ADDON_MAX_QUANTITY = 99
 export const MAX_ADDONS_PER_SERVICE = 20
 
-/** Forma de escritura de un adicional: el backend reemplaza el conjunto entero. */
+/**
+ * Forma de escritura de un adicional. El backend recibe el conjunto entero y
+ * actualiza en el lugar los que traen `id` (salvo que cambie el precio: ahi
+ * rota el id); los que no lo traen son nuevos.
+ */
 export interface ServiceAddonInput {
+  id?: string | null
   name: string
   unitPrice: number
   maxQuantity: number

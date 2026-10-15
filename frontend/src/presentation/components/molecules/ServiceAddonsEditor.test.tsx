@@ -3,8 +3,20 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import { ServiceAddonsEditor } from './ServiceAddonsEditor'
 import type { ServiceAddonFormValue } from '../../types/forms'
 
-const strass: ServiceAddonFormValue = { key: 'a', name: 'Strass', unitPrice: 500, maxQuantity: 10 }
-const diseno: ServiceAddonFormValue = { key: 'b', name: 'Diseño', unitPrice: 1500, maxQuantity: 2 }
+const strass: ServiceAddonFormValue = {
+  key: 'a',
+  id: 'add-a',
+  name: 'Strass',
+  unitPrice: 500,
+  maxQuantity: 10
+}
+const diseno: ServiceAddonFormValue = {
+  key: 'b',
+  id: null,
+  name: 'Diseño',
+  unitPrice: 1500,
+  maxQuantity: 2
+}
 
 describe('ServiceAddonsEditor', () => {
   it('agrega un adicional vacio al final', () => {
@@ -15,7 +27,7 @@ describe('ServiceAddonsEditor', () => {
 
     expect(onChange).toHaveBeenCalledWith([
       strass,
-      { key: expect.any(String), name: '', unitPrice: 0, maxQuantity: 1 }
+      { key: expect.any(String), id: null, name: '', unitPrice: 0, maxQuantity: 1 }
     ])
   })
 

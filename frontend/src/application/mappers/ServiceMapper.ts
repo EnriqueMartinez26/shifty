@@ -79,12 +79,13 @@ export class ServiceMapper {
     assignDefined(payload, 'deposit_mode', source.depositMode)
     assignDefined(payload, 'deposit_type', source.depositType)
     assignDefined(payload, 'deposit_amount', source.depositAmount)
-    // El conjunto entero o nada: la posicion es el indice y el id no viaja
-    // (el backend reemplaza los adicionales del servicio).
+    // El conjunto entero o nada: la posicion es el indice. El id viaja solo
+    // en los que ya existen, para que el backend los actualice en el lugar.
     assignDefined(
       payload,
       'addons',
       source.addons?.map((addon) => ({
+        ...(addon.id ? { id: addon.id } : {}),
         name: addon.name.trim(),
         unit_price: addon.unitPrice,
         max_quantity: addon.maxQuantity

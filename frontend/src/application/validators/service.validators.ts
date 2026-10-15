@@ -44,6 +44,7 @@ const depositAmountSchema = z
 const addonsSchema = z
   .array(
     z.object({
+      id: z.string().optional(),
       name: z.string(),
       unit_price: z.number(),
       max_quantity: z.number()
