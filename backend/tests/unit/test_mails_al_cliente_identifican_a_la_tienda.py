@@ -3,7 +3,7 @@
 2026-09-25, L3-05 y L1 (O-7). Los mails al cliente salian firmados "El
 equipo de Shifty", sin decir que la responsable del dato es la tienda, por
 que llegan ni donde esta la politica de privacidad. Ahora todos cierran con
-un pie comun: "Te escribimos en nombre de <tienda> a traves de Shifty", el
+un pie comun: "Te escribimos en nombre de <tienda> a través de Shifty", el
 motivo y el link a la politica (``PUBLIC_PRIVACY_URL``; por defecto
 ``{FRONTEND_URL}/legal/privacidad``, la ruta real del front: ``/legal``
 redirige a los terminos y la pagina no tiene anclas).
@@ -41,10 +41,10 @@ DETALLES: dict[str, Any] = {
 # (cuerpo, motivo que tiene que aparecer)
 CUERPOS: list[tuple[str, Callable[[dict[str, Any]], str], str]] = [
     ("registro", tasks._registration_body, "reservaste un turno en Barberia Sol"),
-    ("confirmacion", tasks._confirmation_body, "tenes un turno en Barberia Sol"),
-    ("reprogramacion", tasks._rescheduled_body, "tenes un turno en Barberia Sol"),
-    ("cancelacion", tasks._cancellation_body, "tenias un turno en Barberia Sol"),
-    ("recordatorio", tasks._reminder_body, "tenes un turno en Barberia Sol"),
+    ("confirmacion", tasks._confirmation_body, "tenés un turno en Barberia Sol"),
+    ("reprogramacion", tasks._rescheduled_body, "tenés un turno en Barberia Sol"),
+    ("cancelacion", tasks._cancellation_body, "tenías un turno en Barberia Sol"),
+    ("recordatorio", tasks._reminder_body, "tenés un turno en Barberia Sol"),
     ("volver", tasks._rebook_body, "tuviste un turno en Barberia Sol"),
     (
         "lista de espera",
@@ -63,8 +63,8 @@ def test_el_mail_dice_en_nombre_de_quien_por_que_y_donde_esta_la_privacidad(
     nombre: str, cuerpo: Callable[[dict[str, Any]], str], motivo: str
 ) -> None:
     texto = cuerpo(DETALLES)
-    assert "Te escribimos en nombre de Barberia Sol a traves de Shifty" in texto
-    assert f"Recibis este mail porque {motivo}" in texto
+    assert "Te escribimos en nombre de Barberia Sol a través de Shifty" in texto
+    assert f"Recibís este mail porque {motivo}" in texto
     assert _privacidad_por_defecto() in texto
     assert "El equipo de Shifty" not in texto
 
@@ -80,7 +80,7 @@ def test_el_link_de_privacidad_sale_de_settings(
 
 def test_sin_nombre_de_tienda_no_queda_un_hueco() -> None:
     texto = tasks._confirmation_body({**DETALLES, "store_name": ""})
-    assert "Te escribimos en nombre de la tienda a traves de Shifty" in texto
+    assert "Te escribimos en nombre de la tienda a través de Shifty" in texto
 
 
 def test_el_mail_del_codigo_tambien_identifica_a_la_tienda() -> None:
@@ -88,8 +88,8 @@ def test_el_mail_del_codigo_tambien_identifica_a_la_tienda() -> None:
         otp._code_body("123456", "Barberia Sol"),
         otp._notice_body("Barberia Sol"),
     ):
-        assert "Te escribimos en nombre de Barberia Sol a traves de Shifty" in texto
-        assert "Recibis este mail porque se pidio un codigo" in texto
+        assert "Te escribimos en nombre de Barberia Sol a través de Shifty" in texto
+        assert "Recibís este mail porque se pidió un código" in texto
         assert _privacidad_por_defecto() in texto
         assert "El equipo de Shifty" not in texto
 
@@ -106,7 +106,7 @@ def test_los_asuntos_no_suman_datos_personales() -> None:
     assert tasks._rebook_subject(DETALLES) == "Gracias por tu visita - Barberia Sol"
     assert (
         tasks._waitlist_offer_subject(DETALLES)
-        == "Se libero un turno el 01/10/2026 a las 10:00 - Corte"
+        == "Se liberó un turno el 01/10/2026 a las 10:00 - Corte"
     )
     for asunto in (
         tasks._registration_subject(DETALLES),

@@ -975,15 +975,15 @@ def _replaced_link_notification(message: OutboxMessage) -> Notification | None:
         # "Duplicado" incluye un cobro devuelto o con contracargo: no se dice
         # "ya estaba pagado" (revision de e5579b6..3b977a9, #6).
         cuerpo = (
-            f"Entro un pago{amount_label} por un link viejo de un turno que ya "
-            "tenia un pago registrado: no se aplico. Revisalo en Mercado Pago y "
+            f"Entró un pago{amount_label} por un link viejo de un turno que ya "
+            "tenía un pago registrado: no se aplicó. Revisalo en Mercado Pago y "
             "devolvelo."
         )
     else:
-        titulo = "Se recibio un pago sobre un link reemplazado"
+        titulo = "Se recibió un pago sobre un link reemplazado"
         cuerpo = (
-            f"Entro un pago{amount_label} por un link de pago que ya habias "
-            "reemplazado: no se aplico al turno. Revisalo en Mercado Pago y, si "
+            f"Entró un pago{amount_label} por un link de pago que ya habías "
+            "reemplazado: no se aplicó al turno. Revisalo en Mercado Pago y, si "
             "corresponde, devolvelo."
         )
     return Notification(
@@ -1157,11 +1157,11 @@ def _build_store_notification(message: OutboxMessage) -> Notification | None:
         return Notification(
             store_id=message.store_id,
             type=message.event_type,
-            title="Un cliente cancelo su turno",
+            title="Un cliente canceló su turno",
             body=(
-                f"{client_name} cancelo {service_name}"
+                f"{client_name} canceló {service_name}"
                 + (f" del {fecha} a las {hora}" if fecha else "")
-                + ". El horario volvio a estar disponible."
+                + ". El horario volvió a estar disponible."
                 + (f" Motivo: {motivo}" if motivo else "")
             ),
             appointment_id=str(appointment_id) if appointment_id else None,
@@ -1173,42 +1173,42 @@ def _build_store_notification(message: OutboxMessage) -> Notification | None:
         cuando = (
             "hoy"
             if dias == 0
-            else f"en {dias} dia" + ("s" if isinstance(dias, int) and dias != 1 else "")
+            else f"en {dias} día" + ("s" if isinstance(dias, int) and dias != 1 else "")
         )
         return Notification(
             store_id=message.store_id,
             type=message.event_type,
-            title="Tu suscripcion vence pronto",
+            title="Tu suscripción vence pronto",
             body=(
-                f"{plan} vence {cuando}. Renovala para que tu pagina de reservas "
+                f"{plan} vence {cuando}. Renovala para que tu página de reservas "
                 "siga funcionando."
             ),
         )
 
     if message.event_type == NotificationType.PAYMENT_APPROVED.value:
         amount = payload.get("amount")
-        amount_label = f" de ${amount}" if amount else ""
+        amount_label = f" de {format_ars(amount)}" if amount else ""
         return Notification(
             store_id=message.store_id,
             type=message.event_type,
             title="Seña acreditada",
             body=(
-                f"{client_name} pago la seña{amount_label} de {service_name}. "
-                "El turno quedo confirmado automaticamente."
+                f"{client_name} pagó la seña{amount_label} de {service_name}. "
+                "El turno quedó confirmado automáticamente."
             ),
             appointment_id=str(appointment_id) if appointment_id else None,
         )
 
     if message.event_type == NotificationType.PAYMENT_REFUNDED.value:
         amount = payload.get("amount")
-        amount_label = f" de ${amount}" if amount else ""
+        amount_label = f" de {format_ars(amount)}" if amount else ""
         return Notification(
             store_id=message.store_id,
             type=message.event_type,
             title="Reembolso registrado",
             body=(
-                f"Se registro un reembolso{amount_label}. Shifty no mueve la plata: "
-                "la devolucion se hace desde Mercado Pago o en efectivo."
+                f"Se registró un reembolso{amount_label}. Shifty no mueve la plata: "
+                "la devolución se hace desde Mercado Pago o en efectivo."
             ),
             appointment_id=str(appointment_id) if appointment_id else None,
         )
@@ -1216,14 +1216,14 @@ def _build_store_notification(message: OutboxMessage) -> Notification | None:
     if message.event_type == NotificationType.PAYMENT_CHARGED_BACK.value:
         # AUD2-B2-04: el contracargo no es un reembolso que hizo la tienda.
         amount = payload.get("amount")
-        amount_label = f" de ${amount}" if amount else ""
+        amount_label = f" de {format_ars(amount)}" if amount else ""
         return Notification(
             store_id=message.store_id,
             type=message.event_type,
             title="Contracargo en Mercado Pago",
             body=(
-                f"Mercado Pago devolvio el pago{amount_label} de {client_name} "
-                f"por {service_name}: esa plata ya no esta en tu cuenta. El "
+                f"Mercado Pago devolvió el pago{amount_label} de {client_name} "
+                f"por {service_name}: esa plata ya no está en tu cuenta. El "
                 "turno sigue confirmado; si no lo vas a atender, cancelalo."
             ),
             appointment_id=str(appointment_id) if appointment_id else None,
@@ -1232,13 +1232,13 @@ def _build_store_notification(message: OutboxMessage) -> Notification | None:
     if message.event_type == NotificationType.PAYMENT_IN_MEDIATION.value:
         # V-diff de AUD2-B2-04: el cobro sigue acreditado, la plata retenida.
         amount = payload.get("amount")
-        amount_label = f" de ${amount}" if amount else ""
+        amount_label = f" de {format_ars(amount)}" if amount else ""
         return Notification(
             store_id=message.store_id,
             type=message.event_type,
             title="Disputa abierta en Mercado Pago",
             body=(
-                f"Mercado Pago abrio una disputa sobre el cobro{amount_label} de "
+                f"Mercado Pago abrió una disputa sobre el cobro{amount_label} de "
                 f"{client_name} por {service_name}: la plata queda retenida hasta "
                 "que se resuelva. El turno sigue confirmado."
             ),
@@ -1249,15 +1249,15 @@ def _build_store_notification(message: OutboxMessage) -> Notification | None:
         # S-16: pago acreditado de un turno que ya se habia liberado. No se
         # confirma nada ni se avisa al cliente: el dueno decide.
         amount = payload.get("amount")
-        amount_label = f" de ${amount}" if amount else ""
+        amount_label = f" de {format_ars(amount)}" if amount else ""
         return Notification(
             store_id=message.store_id,
             type=message.event_type,
             title="Pago recibido de un turno ya liberado",
             body=(
-                f"{client_name} pago la seña{amount_label} de {service_name}, "
-                "pero el turno ya se habia liberado. Devolvele la plata "
-                "(registra el reembolso) o reasignale un turno."
+                f"{client_name} pagó la seña{amount_label} de {service_name}, "
+                "pero el turno ya se había liberado. Devolvele la plata "
+                "(registrá el reembolso) o reasignale un turno."
             ),
             appointment_id=str(appointment_id) if appointment_id else None,
         )

@@ -60,7 +60,7 @@ def normalize_phone(raw_phone: str) -> str:
     if not cleaned.startswith("+"):
         cleaned = f"+{cleaned}"
     if len(cleaned) < 8 or len(cleaned) > 20:
-        raise ValidationException("Telefono invalido")
+        raise ValidationException("Teléfono inválido")
     return cleaned
 
 
@@ -193,22 +193,22 @@ async def _recipients_within_cap(
 
 # Mismo motivo en el codigo y en el aviso sin codigo: el cuerpo no puede
 # decir mas de lo que ya dice (AUD2-B4-05).
-_OTP_REASON = "se pidio un codigo de verificacion con esta direccion"
+_OTP_REASON = "se pidió un código de verificación con esta dirección"
 
 
 def _otp_subject(store_name: str) -> str:
     """Mismo asunto para el codigo y para el aviso sin codigo: el asunto
     tampoco puede discriminar (AUD2-B4-05)."""
-    return f"Tu codigo de verificacion - {store_name or 'Shifty'}"
+    return f"Tu código de verificación - {store_name or 'Shifty'}"
 
 
 def _code_body(code: str, store_name: str) -> str:
     tienda = store_name or "Shifty"
     return (
         "Hola,\n\n"
-        f"Tu codigo para {tienda} es: {code}\n\n"
+        f"Tu código para {tienda} es: {code}\n\n"
         f"Vence en {settings.OTP_CODE_EXPIRE_MINUTES} minutos. "
-        "Si no pediste este codigo, ignora este mensaje.\n\n"
+        "Si no pediste este código, ignorá este mensaje.\n\n"
         f"{client_mail_footer(store_name, _OTP_REASON)}"
     )
 
@@ -234,9 +234,9 @@ def _notice_body(store_name: str) -> str:
     tienda = store_name or "Shifty"
     return (
         "Hola,\n\n"
-        f"Recibimos un pedido de codigo de verificacion para {tienda}.\n\n"
-        "Si el telefono es tuyo, el codigo fue a la direccion de correo que "
-        "tenes registrada. Si no reconoces este pedido, ignora este mensaje: "
+        f"Recibimos un pedido de código de verificación para {tienda}.\n\n"
+        "Si el teléfono es tuyo, el código fue a la dirección de correo que "
+        "tenés registrada. Si no reconocés este pedido, ignorá este mensaje: "
         "no hace falta que hagas nada.\n\n"
         f"{client_mail_footer(store_name, _OTP_REASON)}"
     )
@@ -326,16 +326,16 @@ async def _hand_off_code_mail(
 
 def _check_channel(channel: str, email: str | None) -> None:
     if channel not in {"email", "whatsapp", "sms"}:
-        raise ValidationException("Canal invalido")
+        raise ValidationException("Canal inválido")
     # Hasta 2026-09-10 NINGUN canal despachaba el codigo (solo se exponia en
     # la respuesta en desarrollo). Email es el unico con envio real;
     # whatsapp/sms quedan como canales de desarrollo con el codigo visible.
     if channel != "email" and settings.OTP_PROVIDER != "console":
         raise ValidationException(
-            "Ese canal no esta disponible; pedi el codigo por email"
+            "Ese canal no está disponible; pedí el código por email"
         )
     if channel == "email" and not email:
-        raise ValidationException("Falta el email para enviar el codigo")
+        raise ValidationException("Falta el email para enviar el código")
 
 
 def _otp_response(expires_at: datetime) -> dict[str, object]:

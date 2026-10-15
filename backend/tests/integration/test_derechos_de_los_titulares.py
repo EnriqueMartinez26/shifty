@@ -246,7 +246,7 @@ async def test_anonimizar_borra_los_datos_y_conserva_importes_fechas_y_estados(
             Notification(
                 store_id=antes.store_id,
                 type="appointment.cancelled",
-                title="Un cliente cancelo su turno",
+                title="Un cliente canceló su turno",
                 body=f"{NOMBRE} cancelo su turno de Corte.",
                 appointment_id=antes.id,
             ),

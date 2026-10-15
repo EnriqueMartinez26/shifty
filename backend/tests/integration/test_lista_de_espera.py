@@ -219,7 +219,7 @@ async def test_el_cupo_se_ofrece_a_una_sola_persona_y_pasa_a_la_siguiente(
     assert ofrecida.offer_expires_at is not None
     assert (await _entrada(test_session, id_segunda)).status == "waiting"
     nuevos = buzon.enviados[mails_antes:]
-    oferta = next(e for e in nuevos if e[1].startswith("Se libero un turno"))
+    oferta = next(e for e in nuevos if e[1].startswith("Se liberó un turno"))
     assert oferta[0] == "lucia@example.com"
     assert f"/b/oferta?service={service}&staff={staff}&date=" in oferta[2]
     assert all(e[0] != "marta@example.com" for e in nuevos)
@@ -299,7 +299,7 @@ async def test_un_cupo_dentro_de_la_antelacion_minima_no_se_mailea(
     assert resultado.owner_notified is True
     assert resultado.offered_entry_id is None
     assert (await _entrada(test_session, entry_id)).status == "waiting"
-    assert not any(e[1].startswith("Se libero un turno") for e in buzon.enviados)
+    assert not any(e[1].startswith("Se liberó un turno") for e in buzon.enviados)
     aviso = (
         await test_session.execute(
             select(Notification).where(Notification.type == "waitlist.slot_released")
@@ -442,7 +442,7 @@ async def test_el_cupo_se_ofrece_solo_a_quien_tiene_email_entregable(
     ofrecida = await _entrada(test_session, con_email)
     assert ofrecida.status == "offered"
     nuevos = buzon.enviados[mails_antes:]
-    ofertas = [e for e in nuevos if e[1].startswith("Se libero un turno")]
+    ofertas = [e for e in nuevos if e[1].startswith("Se liberó un turno")]
     assert [e[0] for e in ofertas] == ["con-email@example.com"]
 
     # El duenio ve a los tres, tambien a los que no dejaron email.
@@ -489,7 +489,7 @@ async def test_sin_ninguna_entrada_con_email_no_hay_oferta_y_avisa_al_duenio(
     assert entrada.lapsed_offers == 0
     assert entrada.offer_expires_at is None
     assert not any(
-        e[1].startswith("Se libero un turno") for e in buzon.enviados[mails_antes:]
+        e[1].startswith("Se liberó un turno") for e in buzon.enviados[mails_antes:]
     )
     aviso = (
         await test_session.execute(
