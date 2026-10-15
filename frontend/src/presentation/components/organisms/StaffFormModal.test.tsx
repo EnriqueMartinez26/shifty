@@ -1,12 +1,29 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import type { ReactElement } from 'react'
+
+import { fireEvent, render as rtlRender, screen, waitFor } from '@testing-library/react'
+import { MemoryRouter } from 'react-router'
 
 import { Staff } from '@domain/entities/Staff'
 
+import { createStaffSchema } from '@application/validators/staff.validators'
+
+import { ValidationError } from '@shared/errors'
+
 import { StaffFormModal } from './StaffFormModal'
 
+const SERVICIO = { id: 'svc-1', name: 'Corte', duration: { getValue: () => 30 } }
+let mockServices: unknown[] | undefined = [SERVICIO]
+
 jest.mock('@presentation/hooks/useManagedServices', () => ({
-  useManagedServices: () => ({ data: [] })
+  useManagedServices: () => ({ data: mockServices })
 }))
+
+// El aviso de "sin servicios" lleva un <Link> al panel de Servicios.
+const render = (ui: ReactElement) => rtlRender(<MemoryRouter>{ui}</MemoryRouter>)
+
+beforeEach(() => {
+  mockServices = [SERVICIO]
+})
 
 const montar = (readOnlyReason?: string | null) =>
   render(
@@ -99,5 +116,100 @@ describe('StaffFormModal: agregarme como profesional', () => {
     expect(email).toHaveAttribute('readonly')
     const hint = document.getElementById(email.getAttribute('aria-describedby') ?? '')
     expect(hint).toHaveTextContent('Es el email con el que entrás: acá no se cambia.')
+  })
+})
+
+// 2026-10-14, produccion (primera tienda real): sin servicios cargados el alta
+// de un profesional fallaba con "No se pudo guardar" y la lista de
+// especialidades vacia no decia que hacer.
+describe('StaffFormModal: tienda sin servicios', () => {
+  const AVISO =
+    'Primero creá al menos un servicio en Servicios: cada profesional tiene que tener uno asignado.'
+
+  it('avisa, enlaza a Servicios y deshabilita guardar con el motivo', () => {
+    mockServices = []
+    montar()
+
+    expect(screen.getByText(AVISO)).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Ir a Servicios' })).toHaveAttribute(
+      'href',
+      '/dashboard/services'
+    )
+    const guardar = screen.getByRole('button', { name: 'Dar de Alta Profesional' })
+    expect(guardar).toBeDisabled()
+    expect(guardar).toHaveAttribute('title', AVISO)
+  })
+
+  it('mientras el catalogo carga no avisa ni bloquea', () => {
+    mockServices = undefined
+    montar()
+
+    expect(screen.queryByText(AVISO)).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Dar de Alta Profesional' })).not.toBeDisabled()
+  })
+
+  it('con servicios no hay aviso y se elige entre ellos', () => {
+    montar()
+
+    expect(screen.queryByText(AVISO)).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Ir a Servicios' })).not.toBeInTheDocument()
+    expect(screen.getByText('Corte')).toBeInTheDocument()
+  })
+
+  it('"Agregarme como profesional" muestra el mismo aviso y no deja guardar', () => {
+    mockServices = []
+    render(
+      <StaffFormModal
+        isOpen
+        onClose={jest.fn()}
+        onSubmit={jest.fn()}
+        selfName="Enrique Martinez"
+        selfEmail="duenio@example.com"
+      />
+    )
+
+    expect(screen.getByText(AVISO)).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Ir a Servicios' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Agregarme' })).toBeDisabled()
+  })
+})
+
+describe('StaffFormModal: errores por campo', () => {
+  const guardarConError = async (error: unknown) => {
+    render(
+      <StaffFormModal
+        isOpen
+        onClose={jest.fn()}
+        onSubmit={jest.fn().mockRejectedValue(error)}
+        selfName="Enrique Martinez"
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Agregarme' }))
+    return await screen.findByRole('alert')
+  }
+
+  it('la validacion del cliente sobre service_ids dice que falta un servicio', async () => {
+    const zod = createStaffSchema.safeParse({ display_name: 'Enrique', service_ids: [] })
+    if (zod.success) throw new Error('el esquema deberia rechazar service_ids vacio')
+    // BaseService.handleError deja el ZodError en originalError de un Error plano.
+    const envuelto = Object.assign(new Error('Error de validación'), { originalError: zod.error })
+
+    const alerta = await guardarConError(envuelto)
+
+    expect(alerta).toHaveTextContent('Debe tener al menos un servicio asignado')
+    expect(alerta).not.toHaveTextContent('No se pudo guardar')
+  })
+
+  it('un 422 del servidor en service_ids dice que elegir, sin texto crudo', async () => {
+    const alerta = await guardarConError(
+      new ValidationError('body -> service_ids: List should have at least 1 item', {
+        errorCode: 'VALIDATION_ERROR',
+        statusCode: 422,
+        detail: ['service_ids: List should have at least 1 item']
+      })
+    )
+
+    expect(alerta).toHaveTextContent('Elegí al menos un servicio')
+    expect(alerta).not.toHaveTextContent('List should')
   })
 })
