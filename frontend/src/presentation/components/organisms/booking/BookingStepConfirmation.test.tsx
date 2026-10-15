@@ -153,7 +153,7 @@ describe('BookingStepConfirmation', () => {
       expect(screen.getByPlaceholderText('PREFIJO + NUM')).toBeInTheDocument()
     })
 
-    it('reservar queda deshabilitado hasta tener nombre, telefono, email y terminos', async () => {
+    it('reservar queda deshabilitado hasta tener nombre, telefono, email y terminos', () => {
       const { rerender } = render(<BookingStepConfirmation {...props()} />)
       aceptarTerminos()
       expect(botonReservar()).toBeDisabled()
@@ -165,10 +165,9 @@ describe('BookingStepConfirmation', () => {
           })}
         />
       )
-      // Con el telefono nuevo la seña se recalcula (400 ms de espera): hasta
-      // entonces no se reserva con la seña vieja.
-      expect(botonReservar()).toBeDisabled()
-      await waitFor(() => expect(botonReservar()).not.toBeDisabled())
+      // Sin seña, promo ni adicionales el importe no depende del backend: el
+      // telefono nuevo no frena la reserva.
+      expect(botonReservar()).not.toBeDisabled()
     })
 
     // 2026-10-02, QA en navegador (S\05): con el telefono "123" el boton
@@ -920,7 +919,8 @@ describe('BookingStepConfirmation: adicionales', () => {
     mockServices.mockReset()
     mockRefreshServices.mockReset()
     mockRefreshServices.mockResolvedValue(undefined)
-    mockDepositPreview.mockReturnValue({ data: undefined, isLoading: false })
+    // Por defecto el backend confirma el importe; los casos de error lo pisan.
+    mockDepositPreview.mockReturnValue(conSena())
     mockServices.mockReturnValue({ data: [servicioConAdicionales], isLoading: false })
   })
 
@@ -936,6 +936,7 @@ describe('BookingStepConfirmation: adicionales', () => {
   })
 
   it('sumar adicionales actualiza el total y la seña se pide con ellos tras la espera', async () => {
+    mockDepositPreview.mockReturnValue({ data: undefined, isLoading: false })
     render(<ConEstado base={completo()} />)
 
     expect(screen.getByTestId('booking-price-summary')).toHaveTextContent(/Total\s*\$\s*27\.000/)
@@ -1064,12 +1065,21 @@ describe('BookingStepConfirmation: adicionales', () => {
     expect(screen.queryByText(/El horario podria haberse ocupado/)).not.toBeInTheDocument()
   })
 
-  it('si el preview de la seña rechaza un adicional, avisa y ofrece actualizar', () => {
-    mockDepositPreview.mockReturnValue({ data: undefined, isLoading: false, error: error422() })
+  it('si el preview de la seña rechaza un adicional, avisa, no deja reservar y actualizar vuelve a pedir el importe', async () => {
+    const refetch = jest.fn().mockResolvedValue(undefined)
+    mockDepositPreview.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      error: error422(),
+      refetch
+    })
     render(<BookingStepConfirmation {...completo({ addons: strassX6 })} />)
+    aceptarTerminos()
 
+    expect(screen.getByRole('button', { name: RESERVAR_CON_SENA })).toBeDisabled()
     fireEvent.click(screen.getByRole('button', { name: 'Actualizar adicionales' }))
     expect(mockRefreshServices).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(refetch).toHaveBeenCalledTimes(1))
   })
 })
 describe('BookingStepConfirmation: promo sobre el total', () => {
@@ -1221,6 +1231,21 @@ describe('BookingStepConfirmation: la promo se revalida con los adicionales', ()
     mockDepositPreview.mock.calls[mockDepositPreview.mock.calls.length - 1]?.[0] as {
       addons?: string[]
     }
+  const importeConfirmado = (patch: Record<string, unknown> = {}) => ({
+    isLoading: false,
+    refetch: jest.fn(),
+    data: {
+      amount: 0,
+      base_amount: 0,
+      extra_percent: 0,
+      reasons: [],
+      price: 5400,
+      addons_amount: 1000,
+      payments_enabled: false,
+      online_payment_mandatory: false
+    },
+    ...patch
+  })
   const quitarUno = () =>
     fireEvent.click(screen.getByRole('button', { name: 'Quitar uno de Strass' }))
 
@@ -1228,7 +1253,7 @@ describe('BookingStepConfirmation: la promo se revalida con los adicionales', ()
     mockDepositPreview.mockReset()
     mockServices.mockReset()
     mockPreviewPromotion.mockReset()
-    mockDepositPreview.mockReturnValue({ data: undefined, isLoading: false })
+    mockDepositPreview.mockReturnValue(importeConfirmado())
     mockServices.mockReturnValue({ data: [servicio], isLoading: false })
   })
 
@@ -1345,5 +1370,139 @@ describe('BookingStepConfirmation: adicionales de un servicio que no esta en el 
 
     expect(screen.queryByText(/Los adicionales del servicio cambiaron/)).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: RESERVAR })).toBeDisabled()
+  })
+})
+
+describe('BookingStepConfirmation: reservar solo con el importe confirmado', () => {
+  const servicio = (patch: Record<string, unknown> = {}) => ({
+    public_id: 'svc-1',
+    price: 5000,
+    deposit_mode: 'none',
+    deposit_type: 'percent',
+    deposit_amount: null,
+    addons: [{ id: 'strass', name: 'Strass', unit_price: 500, max_quantity: 10, position: 0 }],
+    ...patch
+  })
+  const promo: PromotionPreview = {
+    code: 'BIENVENIDA10',
+    title: 'Bienvenida',
+    promotion_type: 'percent',
+    base_amount: 6000,
+    discount_amount: 600,
+    final_amount: 5400
+  }
+  const confirmado = {
+    isLoading: false,
+    data: {
+      amount: 0,
+      base_amount: 0,
+      extra_percent: 0,
+      reasons: [],
+      price: 5400,
+      addons_amount: 1000,
+      payments_enabled: false,
+      online_payment_mandatory: false
+    }
+  }
+  const conError = (refetch: jest.Mock) => ({
+    data: undefined,
+    isLoading: false,
+    error: new Error('sin red'),
+    refetch
+  })
+  const estadoCompleto = (patch: Partial<BookingWizardState> = {}) =>
+    estado({ client: cliente({ name: 'Lucia', phone: '1155550101' }), ...patch })
+  const conPromoYAdicionales = () =>
+    props({
+      bookingState: estadoCompleto({
+        promotionCode: 'BIENVENIDA10',
+        promotionPreview: promo,
+        addons: [{ addonId: 'strass', name: 'Strass', unitPrice: 500, quantity: 2 }]
+      })
+    })
+
+  beforeEach(() => {
+    mockDepositPreview.mockReset()
+    mockServices.mockReset()
+    mockPreviewPromotion.mockReset()
+    mockServices.mockReturnValue({ data: [servicio()], isLoading: false })
+  })
+
+  it('con promo y adicionales, si el preview falla no deja reservar, lo dice y reintentar lo vuelve a pedir', () => {
+    // Revision de Enrique en #186: con el preview en error la pantalla decia
+    // "Calculando…" pero volvia a habilitar Reservar.
+    let preview: unknown = undefined
+    const refetch = jest.fn(() => {
+      preview = confirmado
+      return Promise.resolve()
+    })
+    preview = conError(refetch)
+    mockDepositPreview.mockImplementation(() => preview)
+    const base = conPromoYAdicionales()
+    const { rerender } = render(<BookingStepConfirmation {...base} />)
+    aceptarTerminos()
+
+    expect(screen.getByRole('button', { name: RESERVAR })).toBeDisabled()
+    expect(screen.getByText(/No pudimos confirmar el importe/)).toBeInTheDocument()
+    expect(screen.getByTestId('booking-price-summary')).toHaveTextContent(/Total\s*Sin confirmar/)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reintentar' }))
+    expect(refetch).toHaveBeenCalledTimes(1)
+    rerender(<BookingStepConfirmation {...base} />)
+
+    expect(screen.queryByText(/No pudimos confirmar el importe/)).not.toBeInTheDocument()
+    expect(screen.getByTestId('booking-price-summary')).toHaveTextContent(/Total\s*\$\s*5\.400/)
+    expect(screen.getByRole('button', { name: RESERVAR })).not.toBeDisabled()
+  })
+
+  it('con seña y el preview en error tampoco deja reservar ni pagar', () => {
+    mockServices.mockReturnValue({
+      data: [servicio({ deposit_mode: 'required', deposit_amount: 30, addons: [] })],
+      isLoading: false
+    })
+    mockDepositPreview.mockReturnValue(conError(jest.fn()))
+    render(
+      <BookingStepConfirmation {...props({ bookingState: estadoCompleto() })} paymentsEnabled />
+    )
+    aceptarTerminos()
+
+    expect(screen.getByRole('button', { name: RESERVAR_CON_SENA })).toBeDisabled()
+    expect(screen.getByRole('button', { name: PAGAR_MP })).toBeDisabled()
+    expect(screen.getByText(/No pudimos confirmar el importe/)).toBeInTheDocument()
+  })
+
+  it('sin seña, promo ni adicionales un preview en error no cambia nada', () => {
+    mockDepositPreview.mockReturnValue(conError(jest.fn()))
+    render(<BookingStepConfirmation {...props({ bookingState: estadoCompleto() })} />)
+    aceptarTerminos()
+
+    expect(screen.getByRole('button', { name: RESERVAR })).not.toBeDisabled()
+    expect(screen.queryByText(/No pudimos confirmar el importe/)).not.toBeInTheDocument()
+  })
+
+  it('si la revalidacion de la promo falla por la red, no deja reservar hasta que un reintento sale bien', async () => {
+    mockDepositPreview.mockReturnValue(confirmado)
+    mockPreviewPromotion.mockRejectedValueOnce(new Error('sin red')).mockResolvedValueOnce({
+      ...promo,
+      base_amount: 5500,
+      discount_amount: 550,
+      final_amount: 4950
+    })
+    render(<ConEstado base={conPromoYAdicionales()} />)
+    aceptarTerminos()
+    fireEvent.click(screen.getByRole('button', { name: 'Quitar uno de Strass' }))
+
+    await waitFor(() =>
+      expect(screen.getByText(/No pudimos volver a validar el código/)).toBeInTheDocument()
+    )
+    // Pasada la espera de la seña, sigue frenado: la promo no esta confirmada.
+    await new Promise((resolve) => setTimeout(resolve, 450))
+    expect(screen.getByRole('button', { name: RESERVAR })).toBeDisabled()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reintentar' }))
+
+    await waitFor(() => expect(screen.getByRole('button', { name: RESERVAR })).not.toBeDisabled())
+    expect(mockPreviewPromotion).toHaveBeenCalledTimes(2)
+    expect(screen.queryByText(/No pudimos volver a validar el código/)).not.toBeInTheDocument()
   })
 })

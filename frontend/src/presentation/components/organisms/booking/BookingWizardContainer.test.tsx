@@ -22,7 +22,20 @@ jest.mock('../../../hooks/usePublic', () => ({
   useRefreshPublicServices: () => jest.fn(),
   usePublicStaff: (...args: unknown[]) => mockStaff(...args),
   usePublicAvailability: (...args: unknown[]) => mockAvailability(...args),
-  usePublicDepositPreview: () => ({ data: undefined, isLoading: false }),
+  // El backend confirma el importe (sin seña): con adicionales, reservar
+  // espera a que el preview de la seña responda bien.
+  usePublicDepositPreview: () => ({
+    data: {
+      amount: 0,
+      base_amount: 0,
+      extra_percent: 0,
+      reasons: [],
+      price: 1000,
+      payments_enabled: false,
+      online_payment_mandatory: false
+    },
+    isLoading: false
+  }),
   usePreviewPublicPromotion: () => ({ mutateAsync: jest.fn(), isPending: false }),
   useJoinWaitlist: () => ({ mutateAsync: jest.fn(), isPending: false, isSuccess: false }),
   useCreatePublicBooking: () => ({ mutateAsync: mockCreateBooking, isPending: false }),

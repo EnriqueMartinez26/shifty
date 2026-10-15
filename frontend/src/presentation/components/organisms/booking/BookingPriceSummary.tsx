@@ -13,8 +13,10 @@ interface BookingPriceSummaryProps {
   /** Descuento del codigo sobre el total (servicio y adicionales), o null. */
   discount: number | null
   promotionCode?: string
-  /** Total a cobrar; null mientras el backend lo calcula. */
+  /** Total a cobrar; null mientras el backend no lo confirma. */
   total: number | null
+  /** Que decir sin total: "Calculando…" por defecto, "Sin confirmar" ante un error. */
+  pendingLabel?: string
 }
 
 const rowClass = 'flex justify-between gap-3 text-sm font-bold text-slate-700'
@@ -25,7 +27,8 @@ export const BookingPriceSummary: React.FC<BookingPriceSummaryProps> = ({
   addons,
   discount,
   promotionCode,
-  total
+  total,
+  pendingLabel = 'Calculando…'
 }) => (
   <div
     className="p-4 border space-y-2"
@@ -53,7 +56,7 @@ export const BookingPriceSummary: React.FC<BookingPriceSummaryProps> = ({
       style={{ borderColor: '#cbd5e1' }}
     >
       <span>Total</span>
-      <span>{total === null ? 'Calculando…' : formatCurrency(total)}</span>
+      <span>{total === null ? pendingLabel : formatCurrency(total)}</span>
     </div>
   </div>
 )

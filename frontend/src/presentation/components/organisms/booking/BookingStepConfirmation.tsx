@@ -259,6 +259,9 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
   // dice, en vez de dejar que la reserva rebote con 422.
   const [promotionNotice, setPromotionNotice] = useState('')
   const [promotionChecking, setPromotionChecking] = useState(false)
+  // La ultima revalidacion fallo sin respuesta del backend (red, 5xx): el
+  // codigo sigue, pero no se reserva hasta que una revalidacion salga bien.
+  const [promotionCheckFailed, setPromotionCheckFailed] = useState(false)
   const promotionCheck = useRef<{ timer?: number; seq: number }>({ seq: 0 })
   // Sincroniza con el temporizador (sistema externo): no queda uno vivo al
   // desmontar.
@@ -270,6 +273,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
     window.clearTimeout(promotionCheck.current.timer)
     promotionCheck.current.seq += 1
     setPromotionChecking(false)
+    setPromotionCheckFailed(false)
   }
   const revalidatePromotion = (addons: string[]) => {
     const code = bookingState.promotionCode
@@ -282,7 +286,9 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
       previewPromotion
         .mutateAsync({ storePublicId, serviceId, code, addons })
         .then((preview) => {
-          if (isCurrent()) applyPromotion(code, preview)
+          if (!isCurrent()) return
+          applyPromotion(code, preview)
+          setPromotionNotice('')
         })
         .catch((error: unknown) => {
           if (!isCurrent()) return
@@ -294,8 +300,9 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
               `Quitamos el código ${code}: ${getErrorMessage(error, 'ya no aplica con los adicionales elegidos')}`
             )
           } else {
+            setPromotionCheckFailed(true)
             setPromotionNotice(
-              `No pudimos volver a validar el código ${code} con los adicionales elegidos.`
+              `No pudimos volver a validar el código ${code} con los adicionales elegidos. Reintentá para continuar.`
             )
           }
         })
@@ -359,13 +366,24 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
   // telefono no quedo verificado (create_public_booking, public_api/router.py).
   // No se debilita: el boton final queda deshabilitado hasta otpState.verified.
   const otpVerifiedGate = !requiresOtp || otpState.verified
+  // Un solo criterio, derivado en el render, para ofrecer reservar o pagar
+  // (pedido de Enrique en la revision de #186): si el importe depende del
+  // backend (codigo aplicado, adicionales o una seña) tiene que estar
+  // confirmado por el preview de la seña para los datos ACTUALES (codigo,
+  // adicionales y telefono: misma clave, sin espera pendiente ni dato viejo)
+  // y, con codigo, por la ultima revalidacion de la promo. Un error no
+  // confirma nada: se ofrece reintentar.
+  const depositPreviewConfirmed =
+    Boolean(depositQuery.data) && !depositUpdating && !depositQuery.error
+  const promotionConfirmed =
+    !bookingState.promotionCode || (!promotionChecking && !promotionCheckFailed)
+  const amountDependsOnServer =
+    Boolean(bookingState.promotionCode) || !addonSelection.isEmpty() || hasDeposit
+  const amountConfirmed = !amountDependsOnServer || (depositPreviewConfirmed && promotionConfirmed)
+  // El 422 ADDON_UNAVAILABLE tiene su propio aviso (actualizar el catalogo).
+  const amountFailed = amountDependsOnServer && Boolean(depositQuery.error) && !addonsOutdated
   const canSubmit =
-    acceptsTerms &&
-    clientValid &&
-    otpVerifiedGate &&
-    !addonsBlocked &&
-    !depositUpdating &&
-    !promotionChecking
+    acceptsTerms && clientValid && otpVerifiedGate && !addonsBlocked && amountConfirmed
   const showOtpSection = requiresOtp && client.phone.trim().length >= 6
 
   const handleApplyPromotion = async () => {
@@ -761,17 +779,26 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
             </button>
           </div>
           {promotionNotice && (
-            <p
+            <div
               role="status"
-              className="p-3 text-xs font-bold"
+              className="p-3 text-xs font-bold flex flex-wrap items-center gap-2"
               style={createBookingAccentBoxStyle(
                 colors2000s.status.warning.bg,
                 colors2000s.status.warning.border,
                 colors2000s.status.warning.text
               )}
             >
-              {promotionNotice}
-            </p>
+              <span className="flex-1">{promotionNotice}</span>
+              {promotionCheckFailed && (
+                <button
+                  type="button"
+                  onClick={() => revalidatePromotion(addonSelection.toQueryParams())}
+                  className="underline font-black"
+                >
+                  Reintentar
+                </button>
+              )}
+            </div>
           )}
           {promotionChecking && (
             <p className="text-[11px] font-bold text-gray-500">
@@ -856,7 +883,10 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
                 <button
                   type="button"
                   onClick={() => {
-                    void refreshServices()
+                    // Con el catalogo nuevo se vuelve a pedir el importe: si la
+                    // seleccion no cambio, la clave del preview tampoco, y el
+                    // error quedaba hasta recargar.
+                    void refreshServices().then(() => depositQuery.refetch())
                   }}
                   className="underline font-black"
                 >
@@ -870,6 +900,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
               discount={discount}
               promotionCode={promotionApplied ? bookingState.promotionCode : undefined}
               total={totalPrice}
+              pendingLabel={amountFailed ? 'Sin confirmar' : undefined}
             />
           </>
         )}
@@ -892,6 +923,32 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
           </div>
         )}
 
+        {amountFailed && (
+          <div
+            role="alert"
+            className="p-3 text-xs font-bold flex flex-wrap items-center gap-2"
+            style={createBookingAccentBoxStyle(
+              colors2000s.status.danger.bg,
+              colors2000s.status.danger.border,
+              colors2000s.status.danger.text
+            )}
+          >
+            <TriangleAlert className="w-4 h-4 flex-shrink-0" />
+            <span className="flex-1">
+              No pudimos confirmar el importe de tu reserva. Reintentá para continuar.
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                void depositQuery.refetch()
+              }}
+              className="underline font-black"
+            >
+              Reintentar
+            </button>
+          </div>
+        )}
+
         {depositPreview && depositPreview.amount > 0 && (
           <div
             className="rounded-2xl p-4 text-xs"
@@ -900,9 +957,13 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
           >
             <p className="font-black uppercase tracking-widest text-[10px] mb-1">Seña</p>
             <p className="text-sm font-black">
-              {depositUpdating ? 'Calculando…' : formatCurrency(depositPreview.amount)}
+              {depositQuery.error
+                ? 'Sin confirmar'
+                : depositUpdating
+                  ? 'Calculando…'
+                  : formatCurrency(depositPreview.amount)}
             </p>
-            {!depositUpdating && depositPreview.extra_percent > 0 && (
+            {depositPreviewConfirmed && depositPreview.extra_percent > 0 && (
               <p className="font-medium mt-1">
                 {depositBreakdownText(depositPreview, (n) => formatCurrency(n))}
               </p>
