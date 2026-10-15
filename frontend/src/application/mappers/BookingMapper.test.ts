@@ -20,7 +20,8 @@ const sinOpcionales: AppointmentResponseDTO = {
 const dto: AppointmentResponseDTO = {
   ...sinOpcionales,
   staff_name: 'Ana Perez',
-  client_phone: '+5491100000000'
+  client_phone: '+5491100000000',
+  addons: [{ name: 'Strass', quantity: 6 }]
 }
 
 describe('BookingMapper.toDomain', () => {

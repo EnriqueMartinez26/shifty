@@ -1,3 +1,4 @@
+import type { AddonQuantity } from '../value-objects/AddonSelection'
 import { BookingTimeSpan } from '../value-objects/BookingTimeSpan'
 import { UserId } from '../value-objects/UserId'
 
@@ -17,6 +18,8 @@ interface AppointmentProps {
    */
   status: string
   notes: string | null
+  /** Adicionales del turno (nombre y cantidad; la agenda no ve importes). */
+  addons: readonly AddonQuantity[]
 }
 
 export class Appointment {
@@ -38,6 +41,7 @@ export class Appointment {
     ends_at: string
     status: string
     notes: string | null
+    addons?: readonly AddonQuantity[] | null
   }): Appointment {
     return new Appointment({
       id: UserId.create(props.public_id),
@@ -49,7 +53,11 @@ export class Appointment {
       clientPhone: props.client_phone ?? null,
       timeSpan: BookingTimeSpan.create(props.starts_at, props.ends_at),
       status: props.status,
-      notes: props.notes
+      notes: props.notes,
+      addons: (props.addons ?? []).map((addon) => ({
+        name: addon.name,
+        quantity: addon.quantity
+      }))
     })
   }
 
@@ -84,6 +92,9 @@ export class Appointment {
   get notes() {
     return this.props.notes
   }
+  get addons() {
+    return this.props.addons
+  }
 
   // Los mutadores confirm() / markAbsent() / complete() / reschedule() se
   // eliminaron a proposito: mutaban el estado a mano (reschedule() forzaba
@@ -105,7 +116,8 @@ export class Appointment {
       starts_at: this.props.timeSpan.getStartsAt().toISOString(),
       ends_at: this.props.timeSpan.getEndsAt().toISOString(),
       status: this.props.status,
-      notes: this.props.notes
+      notes: this.props.notes,
+      addons: this.props.addons.map((addon) => ({ ...addon }))
     }
   }
 }

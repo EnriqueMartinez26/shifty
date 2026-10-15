@@ -40,8 +40,24 @@ describe('PublicBookingService', () => {
         service_id: 'svc-1',
         starts_at: '2026-10-01T13:00:00Z',
         client_phone: '1155550000',
-        promotion_code: 'OFF10'
-      }
+        promotion_code: 'OFF10',
+        addon: undefined
+      },
+      paramsSerializer: { indexes: null }
+    })
+  })
+
+  it('previewDeposit manda cada adicional como addon=<id>:<cantidad> repetido', async () => {
+    await publicBookingService.previewDeposit({
+      storePublicId: 'st-1',
+      serviceId: 'svc-1',
+      startsAt: '2026-10-01T13:00:00Z',
+      addons: ['strass:6', 'diseno:1']
+    })
+
+    expect(mockGet).toHaveBeenCalledWith('/public/deposit/preview', {
+      params: expect.objectContaining({ addon: ['strass:6', 'diseno:1'] }),
+      paramsSerializer: { indexes: null }
     })
   })
 
@@ -60,8 +76,10 @@ describe('PublicBookingService', () => {
         service_id: 'svc-1',
         starts_at: '2026-10-01T13:00:00Z',
         client_phone: undefined,
-        promotion_code: undefined
-      }
+        promotion_code: undefined,
+        addon: undefined
+      },
+      paramsSerializer: { indexes: null }
     })
   })
 

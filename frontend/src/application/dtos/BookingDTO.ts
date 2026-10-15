@@ -13,4 +13,6 @@ export interface AppointmentResponseDTO {
   ends_at: string
   status: string
   notes: string | null
+  /** Adicionales del turno: solo nombre y cantidad (recepcion no ve importes). */
+  addons?: { name: string; quantity: number }[] | null
 }

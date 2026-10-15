@@ -51,6 +51,32 @@ export interface PublicService {
   deposit_amount: number | null
   color: string | null
   image_url: string | null
+  /** Adicionales del servicio, ordenados por `position`. */
+  addons?: PublicServiceAddon[]
+}
+
+/** Un adicional suma precio por unidad, nunca tiempo. */
+interface PublicServiceAddon {
+  id: string
+  name: string
+  unit_price: number
+  max_quantity: number
+  position: number
+}
+
+/** Un adicional elegido, en el cuerpo de la reserva. */
+export interface PublicBookingAddon {
+  addon_id: string
+  quantity: number
+}
+
+/** Un adicional ya cobrado en el turno (precio congelado al reservar). */
+interface BookedAddon {
+  addon_id: string
+  name: string
+  unit_price: number
+  quantity: number
+  amount: number
 }
 
 export interface PublicStaff {
@@ -88,6 +114,8 @@ export interface PublicBookingPayload {
   promotion_code?: string
   payment_method?: 'manual' | 'mercadopago'
   accepts_terms?: boolean
+  /** Sin los adicionales en 0; vacio si no se eligio ninguno. */
+  addons?: PublicBookingAddon[]
 }
 
 export interface BookingConfirmation {
@@ -115,7 +143,10 @@ export interface BookingConfirmation {
   promotion_code?: string | null
   service_price?: number | null
   discount_amount?: number | null
+  /** Total del turno: servicio (con promo) mas adicionales. */
   final_price?: number | null
+  addons?: BookedAddon[]
+  addons_amount?: number | null
 }
 
 export interface PromotionPreview {
@@ -196,7 +227,9 @@ export interface DepositPreview {
   base_amount: number
   extra_percent: number
   reasons: string[]
+  /** Total sobre el que se calcula la seña: servicio mas adicionales. */
   price: number
+  addons_amount?: number
   payments_enabled: boolean
   online_payment_mandatory: boolean
 }
@@ -231,6 +264,8 @@ class PublicBookingService {
     startsAt: string
     clientPhone?: string
     promotionCode?: string
+    /** `<id>:<cantidad>` por adicional elegido (`AddonSelection.toQueryParams`). */
+    addons?: readonly string[]
   }): Promise<DepositPreview> {
     const { data } = await apiClient.get<DepositPreview>('/public/deposit/preview', {
       params: {
@@ -238,8 +273,12 @@ class PublicBookingService {
         service_id: params.serviceId,
         starts_at: params.startsAt,
         client_phone: params.clientPhone || undefined,
-        promotion_code: params.promotionCode || undefined
-      }
+        promotion_code: params.promotionCode || undefined,
+        addon: params.addons?.length ? [...params.addons] : undefined
+      },
+      // El backend lee `addon` repetido (`addon=a:1&addon=b:2`); el formato por
+      // defecto de axios mandaria `addon[]=...` y FastAPI no lo reconoce.
+      paramsSerializer: { indexes: null }
     })
     return data
   }

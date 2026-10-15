@@ -281,3 +281,51 @@ describe('updateServiceSchema: el PATCH con los mismos topes (D-20260930-09)', (
     }
   )
 })
+
+describe('adicionales en el alta y la edicion', () => {
+  const strass = { name: 'Strass', unit_price: 500, max_quantity: 10 }
+
+  it('el alta sin adicionales nace con la lista vacia', () => {
+    expect(createServiceSchema.parse(minimo).addons).toEqual([])
+  })
+
+  it('un adicional valido pasa en el alta y en el PATCH', () => {
+    expect(issuesDe({ ...minimo, addons: [strass] })).toEqual([])
+    expect(updateServiceSchema.safeParse({ addons: [strass] }).success).toBe(true)
+  })
+
+  it('el PATCH sin adicionales no los valida', () => {
+    expect(updateServiceSchema.parse({ name: 'Corte' }).addons).toBeUndefined()
+  })
+
+  it.each([
+    ['sin nombre', { name: ' ' }, 'addons.0', 'Cada adicional necesita un nombre'],
+    [
+      'precio negativo',
+      { unit_price: -1 },
+      'addons.0',
+      'El precio de un adicional va de 0 a 1.000.000'
+    ],
+    [
+      'maximo 100',
+      { max_quantity: 100 },
+      'addons.0',
+      'La cantidad máxima de un adicional va de 1 a 99'
+    ]
+  ])('rechaza un adicional %s', (_caso, override, path, message) => {
+    expect(issuesDe({ ...minimo, addons: [{ ...strass, ...override }] })).toEqual([[path, message]])
+  })
+
+  it('rechaza nombres repetidos sin importar mayusculas ni espacios', () => {
+    expect(issuesDe({ ...minimo, addons: [strass, { ...strass, name: ' strass' }] })).toEqual([
+      ['addons.1.name', 'El adicional "strass" está repetido']
+    ])
+  })
+
+  it('rechaza mas de 20 adicionales', () => {
+    const addons = Array.from({ length: 21 }, (_, i) => ({ ...strass, name: `Extra ${i}` }))
+    expect(issuesDe({ ...minimo, addons })).toEqual([
+      ['addons', 'Un servicio puede tener hasta 20 adicionales']
+    ])
+  })
+})

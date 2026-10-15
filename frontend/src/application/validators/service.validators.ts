@@ -1,5 +1,7 @@
 import { z } from 'zod'
 
+import { MAX_ADDONS_PER_SERVICE, serviceAddonIssue } from '../../domain/entities/ServiceAddon'
+
 // Los valores espejan los `pattern` de `ServiceBase` y los CHECK
 // `ck_services_deposit_mode` / `ck_services_deposit_type` de la base. Un valor
 // fuera de estas listas lo rechaza Postgres, no solo Pydantic.
@@ -33,6 +35,47 @@ const depositAmountSchema = z
   .max(10_000_000, 'El monto de la seña es demasiado alto')
   .nullable()
   .optional()
+
+/**
+ * Adicionales en la forma que viaja (`ServiceMapper.toWritePayload`). Cada uno
+ * con la regla de la entidad (`serviceAddonIssue`) y, en conjunto, a lo sumo
+ * `MAX_ADDONS_PER_SERVICE` y sin nombres repetidos, como el backend.
+ */
+const addonsSchema = z
+  .array(
+    z.object({
+      name: z.string(),
+      unit_price: z.number(),
+      max_quantity: z.number()
+    })
+  )
+  .max(
+    MAX_ADDONS_PER_SERVICE,
+    `Un servicio puede tener hasta ${MAX_ADDONS_PER_SERVICE} adicionales`
+  )
+  .superRefine((addons, ctx) => {
+    const seen = new Set<string>()
+    addons.forEach((addon, index) => {
+      const issue = serviceAddonIssue({
+        name: addon.name,
+        unitPrice: addon.unit_price,
+        maxQuantity: addon.max_quantity
+      })
+      if (issue) {
+        ctx.addIssue({ code: 'custom', path: [index], message: issue })
+        return
+      }
+      const key = addon.name.trim().toLocaleLowerCase('es')
+      if (seen.has(key)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: [index, 'name'],
+          message: `El adicional "${addon.name.trim()}" está repetido`
+        })
+      }
+      seen.add(key)
+    })
+  })
 
 interface DepositFields {
   deposit_mode?: (typeof DEPOSIT_MODES)[number]
@@ -89,7 +132,8 @@ export const createServiceSchema = z
     // nace en "none" y se comporta igual que antes de exponer la politica.
     deposit_mode: z.enum(DEPOSIT_MODES).default('none'),
     deposit_type: z.enum(DEPOSIT_TYPES).default('percent'),
-    deposit_amount: depositAmountSchema
+    deposit_amount: depositAmountSchema,
+    addons: addonsSchema.default([])
   })
   .superRefine((data, ctx) => {
     const message = depositPolicyIssue(data, true)
@@ -116,7 +160,8 @@ export const updateServiceSchema = z
     deposit_mode: z.enum(DEPOSIT_MODES).optional(),
     deposit_type: z.enum(DEPOSIT_TYPES).optional(),
     deposit_amount: depositAmountSchema,
-    is_active: z.boolean().optional()
+    is_active: z.boolean().optional(),
+    addons: addonsSchema.optional()
   })
   .superRefine((data, ctx) => {
     const message = depositPolicyIssue(data, false)

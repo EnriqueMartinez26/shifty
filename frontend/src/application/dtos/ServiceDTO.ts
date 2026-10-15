@@ -16,4 +16,14 @@ export interface ServiceResponseDTO {
   deposit_type: ServiceDepositType
   deposit_amount: number | null
   is_active: boolean
+  /** Ordenados por `position`. Opcional: se tolera un payload que no los traiga. */
+  addons?: ServiceAddonDTO[]
+}
+
+interface ServiceAddonDTO {
+  id: string
+  name: string
+  unit_price: number
+  max_quantity: number
+  position: number
 }
