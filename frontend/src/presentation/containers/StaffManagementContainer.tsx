@@ -251,7 +251,10 @@ export const StaffManagementContainer: React.FC = () => {
         onClose={() => setIsModalOpen(false)}
         editingStaff={editingStaff}
         readOnlyReason={readOnlyReason}
-        selfName={addingSelf ? myName || (user?.email ?? '') : null}
+        // Nunca el email como respaldo: el nombre visible es publico (2026-10-14,
+        // el email del dueno quedo publicado en el portal de reservas). '' abre
+        // el modal en modo propio y obliga a escribir un nombre.
+        selfName={addingSelf ? myName : null}
         selfEmail={addingSelf ? (user?.email ?? null) : null}
         isOwnAccount={editingStaff !== null && editingStaff.id === myId}
         onSubmit={async (data) => {

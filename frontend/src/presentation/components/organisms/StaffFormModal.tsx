@@ -50,6 +50,8 @@ interface StaffFormModalProps {
   isOwnAccount?: boolean
 }
 
+const DISPLAY_NAME_EMAIL_ERROR = 'El nombre visible es público: no uses un email.'
+
 export const StaffFormModal: React.FC<StaffFormModalProps> = ({
   isOpen,
   onClose,
@@ -104,6 +106,10 @@ export const StaffFormModal: React.FC<StaffFormModalProps> = ({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (formData.display_name.includes('@')) {
+      setError(DISPLAY_NAME_EMAIL_ERROR)
+      return
+    }
     setLoading(true)
     setError(null)
     try {
@@ -214,9 +220,8 @@ export const StaffFormModal: React.FC<StaffFormModalProps> = ({
                   className="rounded-xl px-4 py-3 text-xs font-bold"
                   style={{ background: colors2000s.bg.disabled, color: colors2000s.text.primary }}
                 >
-                  Vas a figurar con tu cuenta ({selfName}
-                  {selfEmail ? `, ${selfEmail}` : ''}): no se crea otro usuario ni otra clave, y
-                  seguís siendo administrador.
+                  Vas a figurar con tu cuenta ({[selfName, selfEmail].filter(Boolean).join(', ')}):
+                  no se crea otro usuario ni otra clave, y seguís siendo administrador.
                 </p>
               )}
 

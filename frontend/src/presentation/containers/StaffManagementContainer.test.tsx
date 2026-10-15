@@ -217,6 +217,18 @@ describe('StaffManagementContainer: agregarme como profesional', () => {
     )
   })
 
+  // 2026-10-14: sin nombre en la cuenta el modal proponia el email, que se
+  // publicaba como nombre del profesional.
+  it('sin nombre en la cuenta el modal abre en modo propio con el nombre vacio, nunca el email', () => {
+    mockUser = { ...mockUser, first_name: undefined, last_name: undefined }
+    const { getByRole, getByTestId } = render(<StaffManagementContainer />)
+
+    fireEvent.click(getByRole('button', { name: /agregarme como profesional/i }))
+
+    expect(getByTestId('modal-self').textContent).toBe('')
+    expect(getByTestId('modal-self')).not.toHaveTextContent('duenio@example.com')
+  })
+
   it('si ya figura, no hay boton y su tarjeta se marca como propia', () => {
     mockUser = { ...mockUser, public_id: 'st-1' }
     const { queryByRole, getByTestId } = render(<StaffManagementContainer />)

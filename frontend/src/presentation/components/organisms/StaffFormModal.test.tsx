@@ -91,6 +91,45 @@ describe('StaffFormModal: agregarme como profesional', () => {
     )
   })
 
+  // 2026-10-14: el email del dueno quedo publicado como nombre del profesional.
+  it('sin nombre en la cuenta abre en modo propio con el nombre vacio y no lo rellena con el email', () => {
+    render(
+      <StaffFormModal
+        isOpen
+        onClose={jest.fn()}
+        onSubmit={jest.fn()}
+        selfName=""
+        selfEmail="duenio@example.com"
+      />
+    )
+
+    expect(screen.getByText('Agregarme como profesional')).toBeInTheDocument()
+    expect((screen.getByPlaceholderText('Ej: Marce R.') as HTMLInputElement).value).toBe('')
+  })
+
+  it('un nombre visible con arroba no se guarda y avisa que es publico', async () => {
+    const onSubmit = jest.fn().mockResolvedValue(undefined)
+    render(
+      <StaffFormModal
+        isOpen
+        onClose={jest.fn()}
+        onSubmit={onSubmit}
+        selfName=""
+        selfEmail="a@b.com"
+      />
+    )
+
+    fireEvent.change(screen.getByPlaceholderText('Ej: Marce R.'), {
+      target: { value: 'duenio@example.com' }
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Agregarme' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'El nombre visible es público: no uses un email.'
+    )
+    expect(onSubmit).not.toHaveBeenCalled()
+  })
+
   it('editando la ficha propia el email de login no se cambia', () => {
     const propia = Staff.fromPrimitives({
       public_id: 'usr-duenio',
