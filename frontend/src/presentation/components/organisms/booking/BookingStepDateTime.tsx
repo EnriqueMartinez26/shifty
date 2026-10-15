@@ -371,7 +371,9 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
                       color: isSelected ? colors2000s.text.onOrangeSelection : badgeColor
                     }}
                   >
-                    {selectedStaffId ? slotStatusLabel(slot.status) : slot.staff_name}
+                    {selectedStaffId || !isAvailable
+                      ? slotStatusLabel(slot.status)
+                      : slot.staff_name}
                   </div>
                 </button>
               )

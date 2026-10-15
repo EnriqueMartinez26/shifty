@@ -118,6 +118,39 @@ describe('BookingStepDateTime', () => {
     expect(screen.queryByText('Ana')).not.toBeInTheDocument()
   })
 
+  // 2026-10-14: con "Cualquiera" un horario ocupado mostraba el nombre del
+  // profesional en vez del estado y el cliente no entendia por que no podia elegirlo.
+  it('con "cualquier profesional" un horario no disponible muestra su estado y no el nombre', () => {
+    mockAvailability.mockReturnValue({
+      isLoading: false,
+      data: [
+        {
+          staff_id: 'st-1',
+          staff_name: 'Ana',
+          starts_at: '2026-09-15T12:00:00+00:00',
+          ends_at: '2026-09-15T12:30:00+00:00',
+          status: 'booked',
+          reason: null
+        }
+      ]
+    })
+
+    render(
+      <BookingStepDateTime
+        storePublicId="store-1"
+        serviceId="svc-1"
+        staffId={null}
+        selectedDate={null}
+        selectedTime={null}
+        onSelect={() => undefined}
+        onBack={() => undefined}
+      />
+    )
+
+    expect(screen.getByText('Ocupado')).toBeInTheDocument()
+    expect(screen.queryByText('Ana')).not.toBeInTheDocument()
+  })
+
   it('con recursos (cancha, sala) no habla de "profesional"', () => {
     mockAvailability.mockReturnValue({ isLoading: false, data: [] })
     mockStaff.mockReturnValue({
