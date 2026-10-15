@@ -569,13 +569,16 @@ class PublicRepository:
         expires_at: datetime | None = None,
         terms_accepted_at: datetime | None = None,
         accepted_versions: AcceptedVersions | None = None,
+        addons_amount: Decimal = Decimal("0.00"),
+        addons_snapshot: list[dict[str, str | int]] | None = None,
     ) -> tuple[Appointment, Service, Staff]:
         """Alta del turno: lock del profesional, relectura bajo lock e INSERT.
 
         ``service``: el servicio que el llamador ya resolvio (F3-03, la reserva
         publica lo leia dos veces). Se valida contra la tienda, el public_id y
         que siga activo; sin el, se lee aca. ``expires_at`` y
-        ``terms_accepted_at`` van en el INSERT (antes un UPDATE aparte).
+        ``terms_accepted_at`` van en el INSERT (antes un UPDATE aparte), igual
+        que los adicionales congelados (``price_amount`` ya los incluye).
         """
         service = await self._service_for_booking(store_id, service_public_id, service)
         ends_at = starts_at + timedelta(minutes=service.duration_minutes)
@@ -613,6 +616,8 @@ class PublicRepository:
                 if price_amount is not None
                 else Decimal(str(service.price or 0))
             ),
+            addons_amount=addons_amount,
+            addons_snapshot=addons_snapshot,
             expires_at=expires_at,
             terms_accepted_at=terms_accepted_at,
             terms_version=(accepted_versions or AcceptedVersions()).terms_version,

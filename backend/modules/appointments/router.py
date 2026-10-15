@@ -37,6 +37,7 @@ from modules.appointments.availability import AvailabilityService
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.appointments.repository import AppointmentSearchRow, SearchCharge
 from modules.appointments.schemas import (
+    AppointmentAddonItem,
     AppointmentCreate,
     AppointmentFilterParams,
     AppointmentListItem,
@@ -57,6 +58,7 @@ from modules.auth.dependencies import (
 # NOTA: use public_api as the stable runtime import path for public booking data access.
 from modules.public_api.repository import PublicRepository
 from modules.public_api.service import require_public_availability_day
+from modules.services.addons import lines_from_snapshot
 from modules.users.model import User, UserRole
 
 router = CanonicalAPIRouter(prefix="/appointments", tags=["Appointments"])
@@ -110,6 +112,16 @@ def _to_appointment_response(appointment: Appointment) -> AppointmentResponse:
     )
 
 
+def _addon_items(snapshot: object) -> list[AppointmentAddonItem]:
+    """Los adicionales congelados del turno, sin importes (agenda)."""
+    return [
+        AppointmentAddonItem(
+            name=str(line.get("name", "")), quantity=int(line.get("quantity", 0))
+        )
+        for line in lines_from_snapshot(snapshot)
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Agenda diaria
 # ---------------------------------------------------------------------------
@@ -142,6 +154,7 @@ async def list_appointments_by_date(
             status=AppointmentStatus(appointment.status),
             notes=appointment.notes,
             intake_answers=appointment.intake_answers or {},
+            addons=_addon_items(appointment.addons_snapshot),
         )
         for appointment, service, staff, client in rows
     ]
@@ -624,6 +637,7 @@ class _SearchChargeFields(TypedDict):
     payment_amount: Decimal | None
     remaining_amount: Decimal | None
     remainder_payment: AppointmentRemainderPayment | None
+    addons_amount: Decimal | None
 
 
 # La recepcion busca turnos pero no opera cobros: no ve importes (2026-10-08).
@@ -633,6 +647,7 @@ _SIN_COBRO = _SearchChargeFields(
     payment_amount=None,
     remaining_amount=None,
     remainder_payment=None,
+    addons_amount=None,
 )
 
 
@@ -653,4 +668,5 @@ def _search_charge_fields(
         payment_amount=cobro.payment_amount,
         remaining_amount=cobro.remaining_amount,
         remainder_payment=resto,
+        addons_amount=appointment.addons_amount,
     )

@@ -41,6 +41,8 @@ from infrastructure.persistence.models.user import UserModel
 from modules.appointments.schemas import AppointmentCreate, AppointmentReschedule
 from modules.billing.model import Plan, SaaSCoupon, StoreSubscription
 from modules.public_api.schemas import ClientRescheduleRequest, PublicBookingCreate
+from modules.services.model import ServiceAddon
+from modules.services.schemas import ServiceAddonInput
 from modules.staff.schemas import StaffCreate, StaffUpdate
 from modules.stores.model import Store
 from modules.stores.schemas import StoreUpdate
@@ -132,6 +134,8 @@ CAMPOS_MAPEADOS: tuple[tuple[type[BaseModel], str, type[Any], str], ...] = (
     (PublicBookingCreate, "client_email", AppointmentModel, "client_email"),
     (PublicBookingCreate, "idempotency_key", AppointmentModel, "idempotency_key"),
     (ClientRescheduleRequest, "idempotency_key", AppointmentModel, "idempotency_key"),
+    # services: adicionales (2026-10-14)
+    (ServiceAddonInput, "name", ServiceAddon, "name"),
     # waitlist
     (WaitlistJoinRequest, "client_name", WaitlistEntry, "client_name"),
     (WaitlistJoinRequest, "client_phone", WaitlistEntry, "client_phone"),

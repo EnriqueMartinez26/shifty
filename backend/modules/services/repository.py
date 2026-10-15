@@ -1,9 +1,11 @@
-from typing import Any
+from collections import defaultdict
+from decimal import Decimal
+from typing import Any, Sequence
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modules.services.model import Service
+from modules.services.model import Service, ServiceAddon
 
 
 class ServiceRepository:
@@ -72,3 +74,62 @@ class ServiceRepository:
     async def soft_delete(self, service: Service) -> None:
         service.is_active = False
         await self.db.flush()
+
+    async def lock(self, public_id: str, store_id: str) -> Service | None:
+        """El servicio con ``FOR UPDATE`` (regla 4): dos reemplazos de sus
+        adicionales a la vez se serializan aca."""
+        result = await self.db.execute(
+            select(Service)
+            .where(Service.public_id == public_id, Service.store_id == store_id)
+            .with_for_update()
+        )
+        return result.scalar_one_or_none()
+
+    async def addons_for(
+        self, store_id: str, service_ids: Sequence[str]
+    ) -> dict[str, list[ServiceAddon]]:
+        """Adicionales de varios servicios en UNA consulta (``in_()``, regla
+        12), agrupados por ``services.id`` y en orden de ``position``."""
+        por_servicio: dict[str, list[ServiceAddon]] = defaultdict(list)
+        if not service_ids:
+            return por_servicio
+        result = await self.db.execute(
+            select(ServiceAddon)
+            .where(
+                ServiceAddon.store_id == store_id,
+                ServiceAddon.service_id.in_(list(service_ids)),
+            )
+            .order_by(ServiceAddon.service_id, ServiceAddon.position)
+        )
+        for addon in result.scalars().all():
+            por_servicio[addon.service_id].append(addon)
+        return por_servicio
+
+    async def replace_addons(
+        self, service: Service, addons: Sequence[dict[str, Any]]
+    ) -> list[ServiceAddon]:
+        """Reemplaza el conjunto de adicionales del servicio (borrado fisico).
+
+        El llamador ya tomo el lock del servicio. Los turnos que eligieron un
+        adicional borrado guardan su snapshot: no dependen de la fila.
+        """
+        await self.db.execute(
+            delete(ServiceAddon).where(
+                ServiceAddon.store_id == service.store_id,
+                ServiceAddon.service_id == service.id,
+            )
+        )
+        nuevos = [
+            ServiceAddon(
+                store_id=service.store_id,
+                service_id=service.id,
+                name=addon["name"],
+                unit_price=Decimal(str(addon["unit_price"])),
+                max_quantity=addon["max_quantity"],
+                position=position,
+            )
+            for position, addon in enumerate(addons)
+        ]
+        self.db.add_all(nuevos)
+        await self.db.flush()
+        return nuevos

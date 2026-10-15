@@ -1198,6 +1198,10 @@ def _rescheduled_copy(
             if original.price_amount is not None
             else Decimal(str(service.price or 0))
         ),
+        # Los adicionales congelados viajan con el turno: el total de arriba
+        # ya los incluye (decision de Mateo, 2026-10-14).
+        addons_amount=original.addons_amount or Decimal("0.00"),
+        addons_snapshot=original.addons_snapshot,
         client_name=original.client_name,
         client_email=original.client_email,
         client_phone=original.client_phone,

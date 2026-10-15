@@ -13,6 +13,8 @@ from core.validation import (
     reject_control_chars,
     reject_payload_control_chars,
 )
+from modules.services.model import ADDON_MAX_QUANTITY, ADDONS_PER_SERVICE
+from modules.services.schemas import ServiceAddonResponse
 from modules.stores.schemas import StoreCustomField
 
 
@@ -63,6 +65,9 @@ class PublicServiceResponse(BaseModel):
     deposit_amount: float | None = None
     color: Optional[str] = None
     image_url: Optional[str] = None
+    # Adicionales del servicio, en orden de ``position``: suman precio, nunca
+    # tiempo (decision de Mateo, 2026-10-14). Aditivo.
+    addons: list[ServiceAddonResponse] = Field(default_factory=list)
 
     class Config:
         from_attributes = True
@@ -103,6 +108,13 @@ def require_client_email(data: Any, message: str) -> Any:
     return data
 
 
+class PublicAddonChoice(BaseModel):
+    """Un adicional elegido en la reserva y cuantos."""
+
+    addon_id: str = Field(..., min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)
+    quantity: int = Field(..., ge=1, le=ADDON_MAX_QUANTITY)
+
+
 class PublicBookingCreate(BaseModel):
     store_public_id: Optional[str] = Field(
         None, min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN
@@ -133,6 +145,12 @@ class PublicBookingCreate(BaseModel):
     # vienen tienen que ser las vigentes (409 LEGAL_VERSION_MISMATCH).
     terms_version: LegalVersion | None = None
     privacy_version: LegalVersion | None = None
+    # Adicionales del servicio (decision de Mateo, 2026-10-14). Aditivo: sin
+    # el campo la reserva es la de siempre. Un id que no es del servicio, uno
+    # repetido o una cantidad mayor al maximo es 422 ``ADDON_UNAVAILABLE``.
+    addons: list[PublicAddonChoice] = Field(
+        default_factory=list, max_length=ADDONS_PER_SERVICE
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -179,6 +197,16 @@ class PublicBookingCreate(BaseModel):
         return self
 
 
+class PublicBookingAddonLine(BaseModel):
+    """Una linea congelada del turno (``appointments.addons_snapshot``)."""
+
+    addon_id: str
+    name: str
+    unit_price: float
+    quantity: int
+    amount: float
+
+
 class PublicBookingResponse(BaseModel):
     public_id: str
     service_id: str
@@ -207,7 +235,12 @@ class PublicBookingResponse(BaseModel):
     promotion_code: str | None = None
     service_price: float | None = None
     discount_amount: float | None = None
+    # El total del turno: servicio (con la promo, si la hubo) + adicionales.
     final_price: float | None = None
+    # Aditivos (2026-10-14): lo elegido y su importe, ya incluido en
+    # ``final_price``.
+    addons: list[PublicBookingAddonLine] = Field(default_factory=list)
+    addons_amount: float = 0.0
 
     class Config:
         from_attributes = True
@@ -228,9 +261,13 @@ class PublicDepositPreviewResponse(BaseModel):
     base_amount: float
     extra_percent: int
     reasons: list[str] = Field(default_factory=list)
+    # El total sobre el que se calcula la sena: servicio (con promo) +
+    # adicionales.
     price: float
     payments_enabled: bool
     online_payment_mandatory: bool
+    # Aditivo (2026-10-14): la parte de ``price`` que son adicionales.
+    addons_amount: float = 0.0
 
 
 class PublicPromotionPreviewResponse(BaseModel):

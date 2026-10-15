@@ -20,6 +20,7 @@ from core.enqueue import enqueue
 from core.worker_loop import run_in_worker_loop
 from core.config import settings
 from core.utils import ARGENTINA_TZ, format_ars
+from modules.services.addons import lines_from_snapshot
 from core.database import (
     AsyncSessionFactory,
     _apply_tenant_context,
@@ -409,7 +410,34 @@ def build_client_details(
         "booking_url": f"{base}/b/{slug}" if slug else "",
         # Deep-link "reserva de nuevo": mismo servicio y mismo profesional.
         "rebook_url": rebook_url(base, slug, service, staff),
+        # Linea de adicionales (2026-10-14); vacia si el turno no los tiene.
+        "addons_line": addons_line(appointment),
     }
+
+
+def addons_line(appointment: Any) -> str:
+    """``Adicionales: Strass x6 ($ 3.000) · Total $ 30.000``, o vacio.
+
+    Sale solo con el snapshot congelado del turno: lo que el cliente eligio,
+    no el catalogo de hoy. El total es ``price_amount``, que ya incluye los
+    adicionales.
+    """
+    lineas = lines_from_snapshot(getattr(appointment, "addons_snapshot", None))
+    if not lineas:
+        return ""
+    detalle = ", ".join(
+        f"{linea.get('name', '')} x{linea.get('quantity', '')} "
+        f"({format_ars(linea.get('amount', '0'))})"
+        for linea in lineas
+    )
+    total = getattr(appointment, "price_amount", None)
+    sufijo = f" · Total {format_ars(total)}" if total is not None else ""
+    return f"Adicionales: {detalle}{sufijo}"
+
+
+def _adicionales(details: dict[str, Any]) -> str:
+    linea = str(details.get("addons_line") or "")
+    return f"{linea}\n\n" if linea else ""
 
 
 def rebook_url(base: str, slug: str | None, service: Any, staff: Any) -> str:
@@ -510,6 +538,7 @@ def _registration_body(details: dict[str, Any]) -> str:
         f"{_saludo(details)}\n\n"
         f'Tu reserva para "{details.get("service")}" {_con_quien(details)} '
         f"quedó registrada para el {_cuando(details)}.\n\n"
+        f"{_adicionales(details)}"
         f"{_registration_next_step(details)}\n\n"
         f"{_contacto(details)}\n\n" + _pie(details, "reservaste un turno en {tienda}")
     )
@@ -524,6 +553,7 @@ def _confirmation_body(details: dict[str, Any]) -> str:
         f"{_saludo(details)}\n\n"
         f'Tu turno para "{details.get("service")}" {_con_quien(details)} '
         f"esta confirmado para el {_cuando(details)}.\n\n"
+        f"{_adicionales(details)}"
         f"{_contacto(details)}\n\n" + _pie(details, "tenes un turno en {tienda}")
     )
 

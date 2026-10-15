@@ -146,12 +146,22 @@ def _payment_response(payment: Payment) -> PaymentResponse:
     )
 
 
-def _payment_amount_for_service(
-    service: Service, requested_amount: Decimal | None = None
+def _payment_amount_for_appointment(
+    appointment: Appointment, service: Service
 ) -> Decimal:
-    if requested_amount is not None:
-        return requested_amount
-    return calculate_service_payment_amount(service) or Decimal(str(service.price))
+    """Importe del link del panel: la sena del servicio sobre el precio de
+    lista MAS los adicionales congelados del turno, o esa suma entera si el
+    servicio no pide sena.
+
+    Los adicionales suman precio (decision de Mateo, 2026-10-14): sin ellos el
+    link dejaba afuera lo que el cliente eligio. El servicio se sigue cobrando
+    al precio de lista de hoy, como antes: regenerar el link despues de un
+    cambio de precio lo re-tarifa (``test_cobro_del_panel_dos_fases``). Cobrar
+    sobre ``price_amount`` entero (decision (c) del coordinador) cambiaria eso
+    para todos los turnos y queda pendiente de OK de Mateo y Enrique.
+    """
+    price = Decimal(str(service.price)) + (appointment.addons_amount or Decimal("0"))
+    return calculate_service_payment_amount(service, base_price=price) or price
 
 
 def _require_payment_manager(user: User) -> None:
@@ -706,7 +716,7 @@ async def create_payment_preference(
             appointment=appointment,
             service=service,
             store_id=user.store_id,
-            amount_override=_payment_amount_for_service(service),
+            amount_override=_payment_amount_for_appointment(appointment, service),
         )
     # SEG-04: mensajes fijos; el texto de la excepcion puede traer el detalle
     # de Mercado Pago y no sale al cliente. Al log va solo el tipo.
