@@ -298,9 +298,21 @@ class PublicBookingService {
     return data
   }
 
-  async getServices(storePublicId: string): Promise<PublicService[]> {
+  /**
+   * `fresh`: saltea el cache del edge y del navegador. El edge cachea el
+   * catalogo por URL completa (`proxy_cache_key $scheme$request_uri` en
+   * nginx/nginx.prod.conf, s-maxage del backend) y no respeta un
+   * `Cache-Control: no-cache` del pedido: un parametro que cambia en cada
+   * pedido es lo que lo saltea. El backend ignora el parametro.
+   */
+  async getServices(
+    storePublicId: string,
+    options: { fresh?: boolean } = {}
+  ): Promise<PublicService[]> {
     const { data } = await apiClient.get<PublicService[]>('/public/services', {
-      params: { store_public_id: storePublicId }
+      params: options.fresh
+        ? { store_public_id: storePublicId, fresh: Date.now() }
+        : { store_public_id: storePublicId }
     })
     return data
   }

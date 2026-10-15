@@ -15,6 +15,35 @@ jest.mock('@infrastructure/http/client', () => ({
 
 import { publicBookingService } from './PublicBookingService'
 
+describe('PublicBookingService.getServices', () => {
+  beforeEach(() => {
+    mockGet.mockReset()
+    mockGet.mockResolvedValue({ data: [] })
+  })
+
+  it('por defecto pide solo la tienda (la URL que cachea el edge)', async () => {
+    await publicBookingService.getServices('st-1')
+
+    expect(mockGet).toHaveBeenCalledWith('/public/services', {
+      params: { store_public_id: 'st-1' }
+    })
+  })
+
+  it('fresh agrega un parametro distinto en cada pedido para saltear los caches', async () => {
+    const now = jest.spyOn(Date, 'now').mockReturnValueOnce(1).mockReturnValueOnce(2)
+    await publicBookingService.getServices('st-1', { fresh: true })
+    await publicBookingService.getServices('st-1', { fresh: true })
+    now.mockRestore()
+
+    expect(mockGet).toHaveBeenNthCalledWith(1, '/public/services', {
+      params: { store_public_id: 'st-1', fresh: 1 }
+    })
+    expect(mockGet).toHaveBeenNthCalledWith(2, '/public/services', {
+      params: { store_public_id: 'st-1', fresh: 2 }
+    })
+  })
+})
+
 describe('PublicBookingService', () => {
   beforeEach(() => {
     mockGet.mockReset()

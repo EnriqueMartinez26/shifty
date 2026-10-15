@@ -61,6 +61,28 @@ export const usePublicStoreRef = (slug: string) => useQuery(publicStoreRefQuery(
 export const usePublicServices = (storePublicId: string | undefined) =>
   useQuery({ ...publicServicesQuery(storePublicId), enabled: Boolean(storePublicId) })
 
+/**
+ * Vuelve a pedir el catalogo salteando los caches (edge y navegador) y deja
+ * la respuesta en la misma clave que `usePublicServices`. Es lo que se usa
+ * ante un 422 ADDON_UNAVAILABLE: el catalogo cacheado puede tener hasta 30 s.
+ */
+export const useRefreshPublicServices = (storePublicId: string | undefined) => {
+  const queryClient = useQueryClient()
+  return async (): Promise<void> => {
+    if (!storePublicId) return
+    try {
+      await queryClient.fetchQuery({
+        queryKey: publicServicesQuery(storePublicId).queryKey,
+        queryFn: () => publicBookingService.getServices(storePublicId, { fresh: true }),
+        staleTime: 0
+      })
+    } catch {
+      // El error queda en la consulta (usePublicServices lo ve); el que llama
+      // no tiene nada que hacer con el.
+    }
+  }
+}
+
 export const usePublicStaff = (storePublicId: string | undefined, serviceId?: string) =>
   useQuery<PublicStaff[]>({
     queryKey: ['public-staff', storePublicId, serviceId],

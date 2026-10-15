@@ -19,6 +19,7 @@ const mockCreateBooking = jest.fn()
 
 jest.mock('../../../hooks/usePublic', () => ({
   usePublicServices: (...args: unknown[]) => mockServices(...args),
+  useRefreshPublicServices: () => jest.fn(),
   usePublicStaff: (...args: unknown[]) => mockStaff(...args),
   usePublicAvailability: (...args: unknown[]) => mockAvailability(...args),
   usePublicDepositPreview: () => ({ data: undefined, isLoading: false }),
@@ -476,6 +477,9 @@ describe('BookingWizardContainer', () => {
         target: { value: 'lucia@example.com' }
       })
       fireEvent.click(screen.getByRole('checkbox'))
+      // La seña se recalcula con los adicionales despues de una espera corta:
+      // hasta entonces no se puede reservar.
+      await waitFor(() => expect(screen.getByText('Confirmar reserva')).not.toBeDisabled())
       await enviar()
 
       expect(mockCreateBooking.mock.calls[0]?.[0]).toMatchObject({
@@ -483,6 +487,7 @@ describe('BookingWizardContainer', () => {
       })
 
       fireEvent.click(screen.getByRole('button', { name: 'Quitar uno de Strass' }))
+      await waitFor(() => expect(screen.getByText('Confirmar reserva')).not.toBeDisabled())
       await enviar()
 
       expect(mockCreateBooking.mock.calls[1]?.[0]).toMatchObject({

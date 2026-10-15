@@ -62,17 +62,87 @@ describe('AddonSelection.create', () => {
   })
 })
 
-describe('AddonSelection.sanitize', () => {
-  it('descarta lo que el catalogo ya no tiene y acota al maximo', () => {
-    const selection = AddonSelection.sanitize(catalog, { strass: 50, diseno: -3, borrado: 4 })
-
-    expect(selection.toQuantities()).toEqual({ strass: 10 })
+describe('AddonSelection.reconcile', () => {
+  const elegido = (addonId: string, name: string, unitPrice: number, quantity: number) => ({
+    addonId,
+    name,
+    unitPrice,
+    quantity
   })
 
-  it('redondea hacia abajo una cantidad fraccionaria y anula lo que no es numero', () => {
-    const selection = AddonSelection.sanitize(catalog, { strass: 2.7, diseno: Number.NaN })
+  it('con el mismo catalogo conserva todo y no marca cambios', () => {
+    const { selection, changed } = AddonSelection.reconcile(catalog, [
+      elegido('strass', 'Strass', 500, 6),
+      elegido('diseno', 'Diseño', 1500.1, 1)
+    ])
 
+    expect(changed).toBe(false)
+    expect(selection.toQuantities()).toEqual({ strass: 6, diseno: 1 })
+  })
+
+  it('remapea por nombre si el id cambio y el precio es identico, sin marcar cambios', () => {
+    const { selection, changed } = AddonSelection.reconcile(catalog, [
+      elegido('strass-viejo', ' strass ', 500, 3)
+    ])
+
+    expect(changed).toBe(false)
+    expect(selection.toPayload()).toEqual([{ addon_id: 'strass', quantity: 3 }])
+  })
+
+  it('con otro precio no remapea: queda en 0 y marca el cambio', () => {
+    const { selection, changed } = AddonSelection.reconcile(catalog, [
+      elegido('strass-viejo', 'Strass', 400, 3)
+    ])
+
+    expect(changed).toBe(true)
+    expect(selection.isEmpty()).toBe(true)
+  })
+
+  it('el mismo id con otro precio tampoco se conserva', () => {
+    const { selection, changed } = AddonSelection.reconcile(catalog, [
+      elegido('strass', 'Strass', 400, 3)
+    ])
+
+    expect(changed).toBe(true)
+    expect(selection.isEmpty()).toBe(true)
+  })
+
+  it('un adicional borrado marca el cambio y conserva el resto', () => {
+    const { selection, changed } = AddonSelection.reconcile(catalog, [
+      elegido('borrado', 'Esmalte', 900, 1),
+      elegido('strass', 'Strass', 500, 2)
+    ])
+
+    expect(changed).toBe(true)
     expect(selection.toQuantities()).toEqual({ strass: 2 })
+  })
+
+  it('una cantidad mayor al maximo nuevo se acota y marca el cambio', () => {
+    const { selection, changed } = AddonSelection.reconcile(catalog, [
+      elegido('diseno', 'Diseño', 1500.1, 5)
+    ])
+
+    expect(changed).toBe(true)
+    expect(selection.toQuantities()).toEqual({ diseno: 2 })
+  })
+
+  it('dos elegidos que caen en el mismo adicional cuentan una vez y marcan el cambio', () => {
+    const { selection, changed } = AddonSelection.reconcile(catalog, [
+      elegido('strass', 'Strass', 500, 2),
+      elegido('otro-id', 'Strass', 500, 4)
+    ])
+
+    expect(changed).toBe(true)
+    expect(selection.toQuantities()).toEqual({ strass: 2 })
+  })
+
+  it('ignora los elegidos en 0', () => {
+    const { selection, changed } = AddonSelection.reconcile(catalog, [
+      elegido('borrado', 'Esmalte', 900, 0)
+    ])
+
+    expect(changed).toBe(false)
+    expect(selection.isEmpty()).toBe(true)
   })
 })
 

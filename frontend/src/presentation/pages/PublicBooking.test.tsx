@@ -38,6 +38,7 @@ jest.mock('../hooks/usePublic', () => ({
     refetch: mockRefetch
   }),
   usePublicServices: () => ({ data: undefined, isLoading: false }),
+  useRefreshPublicServices: () => jest.fn(),
   usePublicStaff: () => ({ data: undefined, isLoading: false })
 }))
 

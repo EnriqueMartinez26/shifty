@@ -16,7 +16,8 @@ const estado = (patch: Partial<BookingWizardState> = {}): BookingWizardState => 
   startsAt: '2026-09-25T12:00:00+00:00',
   client: { name: 'Lucia', email: '', phone: '1155550101', notes: '', customFields: {} },
   promotionCode: '',
-  addons: {},
+  promotionPreview: null,
+  addons: [],
   ...patch
 })
 

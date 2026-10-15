@@ -22,7 +22,23 @@ export interface AddonQuantity {
   quantity: number
 }
 
+/**
+ * Lo que el cliente eligio, con el nombre y el precio que vio: permite
+ * reconocerlo si el catalogo cambia mientras reserva.
+ */
+export interface SelectedAddon {
+  addonId: string
+  name: string
+  unitPrice: number
+  quantity: number
+}
+
 const toCents = (value: number): number => Math.round(value * 100)
+
+const samePrice = (a: number, b: number): boolean => toCents(a) === toCents(b)
+
+const sameName = (a: string, b: string): boolean =>
+  a.trim().toLocaleLowerCase('es') === b.trim().toLocaleLowerCase('es')
 
 const isValidQuantity = (quantity: number, max: number): boolean =>
   Number.isInteger(quantity) && quantity >= 0 && quantity <= max
@@ -66,20 +82,41 @@ export class AddonSelection {
   }
 
   /**
-   * Tolerante: descarta lo que el catalogo ya no tiene y acota cada cantidad
-   * al rango valido. Es la que se usa despues de volver a pedir el catalogo
-   * (un adicional borrado o con un maximo menor no debe trabar la reserva).
+   * Lo elegido contra el catalogo VIGENTE (por ejemplo, despues de volver a
+   * pedirlo). Un adicional se conserva si su id sigue con el mismo precio, o
+   * si otro adicional tiene el mismo nombre y el MISMO precio (el backend
+   * rota el id cuando cambia el precio). Lo demas se pone en 0 y una
+   * cantidad mayor al maximo nuevo se acota; en esos casos `changed` es true
+   * y quien lo usa tiene que avisarle al cliente: nunca se descarta en
+   * silencio.
    */
-  static sanitize(
+  static reconcile(
     catalog: readonly AddonOption[],
-    quantities: Readonly<Record<string, number>>
-  ): AddonSelection {
-    const clamped: Record<string, number> = {}
-    for (const option of catalog) {
-      const raw = Math.floor(Number(quantities[option.id] ?? 0))
-      clamped[option.id] = Number.isFinite(raw) ? Math.min(Math.max(raw, 0), option.maxQuantity) : 0
+    selected: readonly SelectedAddon[]
+  ): { selection: AddonSelection; changed: boolean } {
+    const quantities: Record<string, number> = {}
+    let changed = false
+    for (const previous of selected) {
+      if (previous.quantity <= 0) continue
+      const option =
+        catalog.find(
+          (candidate) =>
+            candidate.id === previous.addonId && samePrice(candidate.unitPrice, previous.unitPrice)
+        ) ??
+        catalog.find(
+          (candidate) =>
+            sameName(candidate.name, previous.name) &&
+            samePrice(candidate.unitPrice, previous.unitPrice)
+        )
+      if (!option || quantities[option.id] !== undefined) {
+        changed = true
+        continue
+      }
+      const quantity = Math.min(previous.quantity, option.maxQuantity)
+      if (quantity !== previous.quantity) changed = true
+      quantities[option.id] = quantity
     }
-    return AddonSelection.build(catalog, clamped)
+    return { selection: AddonSelection.build(catalog, quantities), changed }
   }
 
   static empty(): AddonSelection {

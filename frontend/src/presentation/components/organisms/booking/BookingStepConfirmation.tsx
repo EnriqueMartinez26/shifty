@@ -13,7 +13,7 @@ import {
   WalletCards
 } from 'lucide-react'
 
-import { AddonSelection } from '@domain/value-objects/AddonSelection'
+import { AddonSelection, type SelectedAddon } from '@domain/value-objects/AddonSelection'
 import { Email } from '@domain/value-objects/Email'
 
 import { publicAddonOptions } from '@application/mappers/PublicAddonMapper'
@@ -28,7 +28,8 @@ import { useDebouncedValue } from '@presentation/hooks/useDebouncedValue'
 import {
   usePreviewPublicPromotion,
   usePublicDepositPreview,
-  usePublicServices
+  usePublicServices,
+  useRefreshPublicServices
 } from '@presentation/hooks/usePublic'
 
 import { getErrorCode, getErrorMessage } from '@shared/errors/getErrorMessage'
@@ -72,6 +73,11 @@ const ADDON_UNAVAILABLE_MESSAGE =
 const BOOKING_CODE_MESSAGES: Partial<Record<string, string>> = {
   [ADDON_UNAVAILABLE]: ADDON_UNAVAILABLE_MESSAGE
 }
+const ADDONS_CHANGED_MESSAGE =
+  'Los adicionales del servicio cambiaron. Revisá tu selección antes de confirmar.'
+// Espera antes de pedir la seña con otros adicionales: cada toque del
+// contador era una request.
+const ADDONS_PREVIEW_DEBOUNCE_MS = 300
 
 const sumAmounts = (a: number, b: number): number => Math.round((a + b) * 100) / 100
 
@@ -99,9 +105,10 @@ interface BookingStepConfirmationProps {
   onOtpCodeChange: (code: string) => void
   onBack: () => void
   onClientChange: (client: BookingClientData) => void
-  onPromotionCodeChange: (promotionCode: string) => void
-  /** Cantidades de adicionales elegidas (por id). */
-  onAddonsChange: (addons: Record<string, number>) => void
+  /** Codigo aplicado y su descuento (null: sin codigo). */
+  onPromotionCodeChange: (promotionCode: string, preview: PromotionPreview | null) => void
+  /** Adicionales elegidos, con el nombre y el precio que vio el cliente. */
+  onAddonsChange: (addons: SelectedAddon[]) => void
   onConfirm: (
     paymentMethod: 'manual' | 'mercadopago',
     acceptsTerms: boolean,
@@ -164,15 +171,29 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
   // (bookingState.promotionCode). Se siembra una vez y no se resincroniza:
   // un efecto que copiaba uno sobre otro borraba el campo al editarlo (F11a-04).
   const [promotionCode, setPromotionCode] = useState(bookingState.promotionCode || '')
-  const [promotionPreview, setPromotionPreview] = useState<PromotionPreview | null>(null)
+  // El descuento aplicado vive en el wizard: al volver un paso y avanzar, el
+  // total lo seguia mostrando sin la promo que el backend si cobra.
+  const [promotionPreview, setPromotionPreview] = useState<PromotionPreview | null>(
+    bookingState.promotionCode ? bookingState.promotionPreview : null
+  )
+  const applyPromotion = (code: string, preview: PromotionPreview | null) => {
+    setPromotionPreview(preview)
+    onPromotionCodeChange(code, preview)
+  }
   const previewPromotion = usePreviewPublicPromotion()
   const servicesQuery = usePublicServices(storePublicId)
+  const refreshServices = useRefreshPublicServices(storePublicId)
   const selectedService = servicesQuery.data?.find((service) => service.public_id === serviceId)
-  // Tolerante: tras volver a pedir el catalogo, lo que ya no existe se
-  // descarta y cada cantidad se acota a su maximo nuevo.
+  // Lo elegido contra el catalogo vigente. Si cambio (un adicional borrado,
+  // otro precio, un maximo menor) se avisa y hay que revisarlo antes de
+  // confirmar: nunca se descarta en silencio.
   const addonOptions = publicAddonOptions(selectedService)
-  const addonSelection = AddonSelection.sanitize(addonOptions, bookingState.addons)
+  const { selection: addonSelection, changed: addonsChanged } = selectedService
+    ? AddonSelection.reconcile(addonOptions, bookingState.addons)
+    : { selection: AddonSelection.empty(), changed: false }
   const addonLines = addonSelection.lines()
+  const addonsKey = addonSelection.toQueryParams().join(',')
+  const debouncedAddonsKey = useDebouncedValue(addonsKey, ADDONS_PREVIEW_DEBOUNCE_MS)
   // El total que se muestra es el mismo calculo del backend (promo solo sobre
   // el servicio, adicionales aparte); la seña sale del preview, sobre el total.
   const basePrice = promotionPreview
@@ -197,12 +218,23 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
     startsAt: bookingState.startsAt,
     clientPhone: debouncedDepositPhone,
     promotionCode: bookingState.promotionCode || undefined,
-    addons: addonSelection.toQueryParams()
+    addons: debouncedAddonsKey ? debouncedAddonsKey.split(',') : []
   })
   const addonsOutdated = getErrorCode(depositQuery.error) === ADDON_UNAVAILABLE
+  // Mientras la seña se recalcula (otros adicionales, otro telefono) la que
+  // se ve es la anterior: no se ofrece pagar ni reservar con ese importe.
+  const depositUpdating =
+    addonsKey !== debouncedAddonsKey ||
+    Boolean(depositQuery.isPlaceholderData) ||
+    Boolean(depositQuery.isFetching)
 
   const handleAddonChange = (addonId: string, quantity: number) => {
-    onAddonsChange({ ...addonSelection.toQuantities(), [addonId]: quantity })
+    onAddonsChange(
+      AddonSelection.create(addonOptions, {
+        ...addonSelection.toQuantities(),
+        [addonId]: quantity
+      }).lines()
+    )
   }
   const inferredDeposit = Boolean(
     selectedService &&
@@ -247,15 +279,15 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
   // telefono no quedo verificado (create_public_booking, public_api/router.py).
   // No se debilita: el boton final queda deshabilitado hasta otpState.verified.
   const otpVerifiedGate = !requiresOtp || otpState.verified
-  const canSubmit = acceptsTerms && clientValid && otpVerifiedGate
+  const canSubmit =
+    acceptsTerms && clientValid && otpVerifiedGate && !addonsChanged && !depositUpdating
   const showOtpSection = requiresOtp && client.phone.trim().length >= 6
 
   const handleApplyPromotion = async () => {
     const normalizedCode = promotionCode.trim().toUpperCase()
     if (!normalizedCode) {
-      setPromotionPreview(null)
+      applyPromotion('', null)
       setErrorMessage('')
-      onPromotionCodeChange('')
       return
     }
 
@@ -265,13 +297,11 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
         serviceId,
         code: normalizedCode
       })
-      setPromotionPreview(preview)
-      onPromotionCodeChange(normalizedCode)
+      applyPromotion(normalizedCode, preview)
       setPromotionCode(normalizedCode)
       setErrorMessage('')
     } catch (error: unknown) {
-      setPromotionPreview(null)
-      onPromotionCodeChange('')
+      applyPromotion('', null)
       setErrorMessage(getErrorMessage(error, 'No pudimos validar ese código'))
     }
   }
@@ -303,7 +333,9 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
       // un adicional que ya no existe (422 ADDON_UNAVAILABLE) el horario no
       // tiene nada que ver: no se sugiere elegir otro.
       const code = getErrorCode(error)
-      if (code === ADDON_UNAVAILABLE) void servicesQuery.refetch()
+      // El catalogo cacheado (edge y navegador) puede ser el viejo: se pide
+      // salteando los caches y lo elegido se revisa contra el nuevo.
+      if (code === ADDON_UNAVAILABLE) void refreshServices()
       dispatchSubmission({
         type: 'fail',
         slotMayBeTaken: code !== 'DEPOSIT_CHANNEL_UNAVAILABLE' && code !== ADDON_UNAVAILABLE
@@ -614,8 +646,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
               value={promotionCode}
               onChange={(event) => {
                 setPromotionCode(event.target.value)
-                setPromotionPreview(null)
-                onPromotionCodeChange('')
+                applyPromotion('', null)
                 setErrorMessage('')
               }}
               className="w-full px-4 py-3 font-bold outline-none"
@@ -685,11 +716,32 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
                 <button
                   type="button"
                   onClick={() => {
-                    void servicesQuery.refetch()
+                    void refreshServices()
                   }}
                   className="underline font-black"
                 >
                   Actualizar adicionales
+                </button>
+              </div>
+            )}
+            {addonsChanged && (
+              <div
+                role="alert"
+                className="p-3 text-xs font-bold flex flex-wrap items-center gap-2"
+                style={createBookingAccentBoxStyle(
+                  colors2000s.status.warning.bg,
+                  colors2000s.status.warning.border,
+                  colors2000s.status.warning.text
+                )}
+              >
+                <TriangleAlert className="w-4 h-4 flex-shrink-0" />
+                <span className="flex-1">{ADDONS_CHANGED_MESSAGE}</span>
+                <button
+                  type="button"
+                  onClick={() => onAddonsChange(addonLines)}
+                  className="underline font-black"
+                >
+                  Revisé mi selección
                 </button>
               </div>
             )}
@@ -722,8 +774,10 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
             data-testid="deposit-preview"
           >
             <p className="font-black uppercase tracking-widest text-[10px] mb-1">Seña</p>
-            <p className="text-sm font-black">{formatCurrency(depositPreview.amount)}</p>
-            {depositPreview.extra_percent > 0 && (
+            <p className="text-sm font-black">
+              {depositUpdating ? 'Calculando…' : formatCurrency(depositPreview.amount)}
+            </p>
+            {!depositUpdating && depositPreview.extra_percent > 0 && (
               <p className="font-medium mt-1">
                 {depositBreakdownText(depositPreview, (n) => formatCurrency(n))}
               </p>

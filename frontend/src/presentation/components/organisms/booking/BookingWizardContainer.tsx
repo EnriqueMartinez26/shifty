@@ -79,7 +79,8 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
       customFields: initialCustomFields
     },
     promotionCode: '',
-    addons: {}
+    promotionPreview: null,
+    addons: []
   })
 
   useEffect(() => {
@@ -122,7 +123,7 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
       setBookingState((prev) =>
         prev.serviceId === jump.serviceId
           ? prev
-          : { ...prev, serviceId: jump.serviceId ?? null, addons: {} }
+          : { ...prev, serviceId: jump.serviceId ?? null, addons: [] }
       )
     }
     onStepChange({ to: jump.step, from: currentStep, mode: 'replace' })
@@ -329,8 +330,11 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
               trackBookingEvent('service_selected')
               updateState({
                 serviceId: id,
-                // Los adicionales son de UN servicio: otro servicio arranca sin.
-                addons: id === bookingState.serviceId ? bookingState.addons : {},
+                // Los adicionales y el descuento son de UN servicio: otro
+                // servicio arranca sin ellos.
+                ...(id === bookingState.serviceId
+                  ? {}
+                  : { addons: [], promotionCode: '', promotionPreview: null }),
                 requestedStaffId: null,
                 assignedStaffId: null,
                 date: null,
@@ -392,7 +396,9 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
             }
             onBack={prevStep}
             onClientChange={handleClientChange}
-            onPromotionCodeChange={(promotionCode) => updateState({ promotionCode })}
+            onPromotionCodeChange={(promotionCode, promotionPreview) =>
+              updateState({ promotionCode, promotionPreview })
+            }
             onAddonsChange={(addons) => updateState({ addons })}
             onConfirm={async (paymentMethod, acceptsTerms, addons) => {
               const pedido = {
