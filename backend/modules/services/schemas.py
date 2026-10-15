@@ -5,7 +5,11 @@ from typing import Annotated, Self
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from core.validation import reject_control_chars, reject_unsafe_url
+from core.validation import (
+    PUBLIC_ID_PATTERN,
+    reject_control_chars,
+    reject_unsafe_url,
+)
 from modules.services.model import (
     ADDON_MAX_QUANTITY,
     ADDON_MAX_UNIT_PRICE,
@@ -48,11 +52,14 @@ def reject_sub_cent(value: float | None) -> float | None:
 class ServiceAddonInput(BaseModel):
     """Un adicional del servicio tal como lo carga el panel.
 
-    Suma precio, nunca tiempo (decision de Mateo, 2026-10-14). Un ``id`` que
-    venga del formulario se ignora: el conjunto se reemplaza entero y la
-    posicion es el indice en la lista.
+    Suma precio, nunca tiempo (decision de Mateo, 2026-10-14). La lista es
+    el conjunto completo y la posicion es el indice. ``id`` (opcional) es el
+    de un adicional que ya existe: si es de ESTE servicio y el precio no
+    cambio, conserva el id (``ServiceRepository.replace_addons``); si no, nace
+    uno nuevo.
     """
 
+    id: str | None = Field(None, min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)
     name: str = Field(..., min_length=1, max_length=100)
     unit_price: float = Field(..., ge=0, le=ADDON_MAX_UNIT_PRICE)
     max_quantity: int = Field(1, ge=1, le=ADDON_MAX_QUANTITY)
@@ -80,12 +87,16 @@ def reject_duplicated_addon_names(
     addons: list[ServiceAddonInput] | None,
 ) -> list[ServiceAddonInput] | None:
     """Dos adicionales con el mismo nombre (sin distinguir mayusculas) son
-    indistinguibles para el cliente y en el snapshot del turno."""
+    indistinguibles para el cliente y en el snapshot del turno; dos con el
+    mismo ``id`` serian el mismo adicional dos veces."""
     if addons is None:
         return None
     names = [addon.name.casefold() for addon in addons]
     if len(names) != len(set(names)):
         raise ValueError("addons: hay dos adicionales con el mismo nombre")
+    ids = [addon.id for addon in addons if addon.id is not None]
+    if len(ids) != len(set(ids)):
+        raise ValueError("addons: hay dos adicionales con el mismo id")
     return addons
 
 

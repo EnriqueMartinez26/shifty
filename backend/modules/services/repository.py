@@ -108,28 +108,65 @@ class ServiceRepository:
     async def replace_addons(
         self, service: Service, addons: Sequence[dict[str, Any]]
     ) -> list[ServiceAddon]:
-        """Reemplaza el conjunto de adicionales del servicio (borrado fisico).
+        """Deja el conjunto de adicionales del servicio igual a ``addons``.
 
-        El llamador ya tomo el lock del servicio. Los turnos que eligieron un
-        adicional borrado guardan su snapshot: no dependen de la fila.
+        El llamador ya tomo el lock del servicio y es su transaccion. Upsert
+        por id (revision de la PR #187): el panel manda siempre la lista
+        entera, y rotar todos los ids en cada edicion del servicio dejaba con
+        422 ``ADDON_UNAVAILABLE`` a la reserva en vuelo y al catalogo cacheado
+        en el borde (hasta ~60 s).
+
+        - Un ``id`` de un adicional de ESTE servicio y tienda con el MISMO
+          precio se actualiza en el lugar (nombre, maximo, posicion).
+        - Si el precio cambio, el id rota (borrado + alta): un catalogo
+          cacheado nunca cotiza otro precio bajo el mismo id. Regla de dinero.
+        - Un ``id`` ausente, desconocido o de otro servicio o tienda es un
+          adicional NUEVO: nunca se adopta ni se mueve una fila ajena.
+        - Los que no vienen se borran (fisico). Los turnos que los eligieron
+          guardan su snapshot: no dependen de la fila.
         """
-        await self.db.execute(
-            delete(ServiceAddon).where(
+        existentes = {a.id: a for a in (await self._addons_of(service))}
+        resultado: list[ServiceAddon] = []
+        for position, addon in enumerate(addons):
+            precio = _money(addon["unit_price"])
+            actual = existentes.get(str(addon.get("id") or ""))
+            if actual is not None and _money(actual.unit_price) == precio:
+                del existentes[actual.id]
+                actual.name = addon["name"]
+                actual.max_quantity = addon["max_quantity"]
+                actual.position = position
+                resultado.append(actual)
+                continue
+            nuevo = ServiceAddon(
+                store_id=service.store_id,
+                service_id=service.id,
+                name=addon["name"],
+                unit_price=precio,
+                max_quantity=addon["max_quantity"],
+                position=position,
+            )
+            self.db.add(nuevo)
+            resultado.append(nuevo)
+        if existentes:
+            await self.db.execute(
+                delete(ServiceAddon).where(
+                    ServiceAddon.store_id == service.store_id,
+                    ServiceAddon.service_id == service.id,
+                    ServiceAddon.id.in_(list(existentes)),
+                )
+            )
+        await self.db.flush()
+        return resultado
+
+    async def _addons_of(self, service: Service) -> list[ServiceAddon]:
+        result = await self.db.execute(
+            select(ServiceAddon).where(
                 ServiceAddon.store_id == service.store_id,
                 ServiceAddon.service_id == service.id,
             )
         )
-        nuevos = [
-            ServiceAddon(
-                store_id=service.store_id,
-                service_id=service.id,
-                name=addon["name"],
-                unit_price=Decimal(str(addon["unit_price"])),
-                max_quantity=addon["max_quantity"],
-                position=position,
-            )
-            for position, addon in enumerate(addons)
-        ]
-        self.db.add_all(nuevos)
-        await self.db.flush()
-        return nuevos
+        return list(result.scalars().all())
+
+
+def _money(value: object) -> Decimal:
+    return Decimal(str(value)).quantize(Decimal("0.01"))

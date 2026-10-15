@@ -752,3 +752,75 @@ async def test_el_mail_de_reserva_lista_los_adicionales(
     (cuerpo_con, cuerpo_sin) = (cuerpo for _para, _asunto, cuerpo in buzon.enviados)
     assert "Adicionales: Strass x6 ($ 3.000) · Total $ 30.000" in cuerpo_con
     assert "Adicionales:" not in cuerpo_sin
+
+
+@pytest.mark.asyncio
+async def test_editar_el_servicio_no_invalida_los_ids_de_una_reserva_en_vuelo(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Revision de la PR #187: el panel manda la lista entera en cada edicion.
+    Con el mismo precio el id se conserva y el cliente que tenia el catalogo
+    abierto (o cacheado en el borde) reserva igual."""
+    monkeypatch.setattr(tasks, "_send_email", Buzon())
+    t = await _tienda(client, "adic-en-vuelo")
+    catalogo = await client.get(
+        f"/services/{t.servicio}", headers=auth_headers(t.token)
+    )
+    formulario = [
+        {k: a[k] for k in ("id", "name", "unit_price", "max_quantity")}
+        for a in catalogo.json()["addons"]
+    ]
+    editado = await client.patch(
+        f"/services/{t.servicio}",
+        headers=auth_headers(t.token),
+        json={"description": "Con descripcion nueva", "addons": formulario},
+    )
+    assert editado.status_code == 200, editado.text
+
+    res = await _reservar(client, t, _seis_strass(t))
+
+    assert res.status_code == 201, res.text
+    assert Decimal(str(res.json()["final_price"])) == TOTAL
+
+
+@pytest.mark.asyncio
+async def test_cambiar_el_precio_de_un_adicional_invalida_su_id_viejo(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regla de dinero: con otro precio el id rota, y el id viejo (el de un
+    catalogo cacheado) es 422 en vez de cotizar el precio nuevo."""
+    monkeypatch.setattr(tasks, "_send_email", Buzon())
+    t = await _tienda(client, "adic-precio-nuevo")
+    editado = await client.patch(
+        f"/services/{t.servicio}",
+        headers=auth_headers(t.token),
+        json={
+            "addons": [
+                {
+                    "id": t.strass,
+                    "name": "Strass",
+                    "unit_price": 900,
+                    "max_quantity": 10,
+                },
+                {"id": t.diseno, "name": "Diseno", "unit_price": 1500},
+            ]
+        },
+    )
+    assert editado.status_code == 200, editado.text
+    nuevo_strass = editado.json()["addons"][0]["id"]
+    assert nuevo_strass != t.strass
+    assert editado.json()["addons"][1]["id"] == t.diseno
+
+    viejo = await _reservar(client, t, _seis_strass(t))
+    nuevo = await _reservar(
+        client, t, [{"addon_id": nuevo_strass, "quantity": 6}], hora=15
+    )
+
+    assert viejo.status_code == 422, viejo.text
+    assert viejo.json()["error_code"] == "ADDON_UNAVAILABLE"
+    assert nuevo.status_code == 201, nuevo.text
+    turno = await _turno(test_session, nuevo.json()["public_id"])
+    assert (turno.price_amount, turno.addons_amount) == (
+        Decimal("32400.00"),
+        Decimal("5400.00"),
+    )

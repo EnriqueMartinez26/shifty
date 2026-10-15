@@ -6,9 +6,12 @@ y en el PATCH del servicio (``addons`` reemplaza el conjunto entero, la
 posicion es el indice) y ``/public/services`` los muestra.
 
 Se fija: topes de cada campo (regla 9: ``ge`` Y ``le``; sin sub-centavos),
-texto sin caracteres de control (regla 19), nombres unicos, reemplazo del
-conjunto, y aislamiento entre tiendas (el adicional de otra tienda no se ve ni
-se puede elegir).
+texto sin caracteres de control (regla 19), nombres e ids unicos, reemplazo del
+conjunto con upsert por id (revision de la PR #187: el panel manda la lista
+entera en cada edicion y rotar los ids dejaba con 422 a la reserva en vuelo),
+rotacion del id cuando cambia el precio (un catalogo cacheado nunca cotiza otro
+precio bajo el mismo id), y aislamiento entre tiendas (el adicional de otra
+tienda no se ve, no se puede elegir y su id nunca se adopta).
 """
 
 from __future__ import annotations
@@ -112,8 +115,8 @@ async def test_el_patch_reemplaza_el_conjunto_y_sin_el_campo_no_lo_toca(
         assert res.status_code == 200, res.text
         assert {a["id"] for a in res.json()["addons"]} == viejos
 
-    # Con ``addons`` se reemplaza entero: ids nuevos, posicion = indice, y un
-    # ``id`` que venga del formulario se ignora.
+    # Con ``addons`` se reemplaza entero: posicion = indice; sin id, o con
+    # el id de uno que cambio de precio, nace un adicional nuevo.
     res = await client.patch(
         f"/services/{servicio}",
         headers=auth_headers(token),
@@ -260,3 +263,129 @@ async def test_no_se_puede_elegir_el_adicional_de_otra_tienda(
     assert res.status_code == 422, res.text
     assert res.json()["error_code"] == "ADDON_UNAVAILABLE"
     assert (await test_session.execute(select(Appointment))).scalars().all() == []
+
+
+def _como_formulario(addons: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Lo que manda el panel: la lista entera, con el id de cada uno."""
+    return [
+        {k: a[k] for k in ("id", "name", "unit_price", "max_quantity")} for a in addons
+    ]
+
+
+@pytest.mark.asyncio
+async def test_editar_el_servicio_con_los_mismos_adicionales_conserva_los_ids(
+    client: AsyncClient,
+) -> None:
+    _store, token = await _tienda(client, "adic-upsert")
+    creado = (await _crear_servicio(client, token)).json()
+    strass, diseno = creado["addons"]
+    formulario = _como_formulario([diseno, strass])
+    # Mismo precio: renombrar, cambiar el maximo o reordenar no rota el id.
+    formulario[1] |= {"name": "Strass grande", "max_quantity": 5}
+
+    res = await client.patch(
+        f"/services/{creado['public_id']}",
+        headers=auth_headers(token),
+        json={"description": "Nueva descripcion", "addons": formulario},
+    )
+
+    assert res.status_code == 200, res.text
+    assert [
+        (a["id"], a["name"], a["max_quantity"], a["position"])
+        for a in res.json()["addons"]
+    ] == [
+        (diseno["id"], "Diseño", 1, 0),
+        (strass["id"], "Strass grande", 5, 1),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_cambiar_el_precio_rota_el_id_de_ese_adicional(
+    client: AsyncClient, test_session: AsyncSession
+) -> None:
+    _store, token = await _tienda(client, "adic-rota")
+    creado = (await _crear_servicio(client, token)).json()
+    strass, diseno = creado["addons"]
+    formulario = _como_formulario([strass, diseno])
+    formulario[0]["unit_price"] = 600
+
+    res = await client.patch(
+        f"/services/{creado['public_id']}",
+        headers=auth_headers(token),
+        json={"addons": formulario},
+    )
+
+    assert res.status_code == 200, res.text
+    nuevo_strass, mismo_diseno = res.json()["addons"]
+    assert nuevo_strass["id"] != strass["id"]
+    assert (nuevo_strass["name"], nuevo_strass["unit_price"]) == ("Strass", 600.0)
+    assert mismo_diseno["id"] == diseno["id"]
+    test_session.expire_all()
+    ids = {f.id for f in (await test_session.execute(select(ServiceAddon))).scalars()}
+    assert ids == {nuevo_strass["id"], diseno["id"]}
+
+
+@pytest.mark.asyncio
+async def test_el_id_de_otro_servicio_o_tienda_es_un_adicional_nuevo(
+    client: AsyncClient, test_session: AsyncSession
+) -> None:
+    _store, token = await _tienda(client, "adic-ajeno-id")
+    _store_b, token_b = await _tienda(client, "adic-ajeno-id-b")
+    uno = (await _crear_servicio(client, token)).json()
+    otro = (await _crear_servicio(client, token)).json()
+    de_otra_tienda = (await _crear_servicio(client, token_b)).json()
+    prestados = [otro["addons"][0], de_otra_tienda["addons"][1]]
+
+    res = await client.patch(
+        f"/services/{uno['public_id']}",
+        headers=auth_headers(token),
+        json={"addons": _como_formulario(prestados)},
+    )
+
+    assert res.status_code == 200, res.text
+    nuevos = res.json()["addons"]
+    assert not ({a["id"] for a in nuevos} & {a["id"] for a in prestados})
+    assert [a["name"] for a in nuevos] == ["Strass", "Diseño"]
+    # Las filas ajenas siguen en su servicio y su tienda, sin cambios.
+    otro_res = await client.get(
+        f"/services/{otro['public_id']}", headers=auth_headers(token)
+    )
+    assert otro_res.json()["addons"] == otro["addons"]
+    ajena = await client.get(
+        f"/services/{de_otra_tienda['public_id']}", headers=auth_headers(token_b)
+    )
+    assert ajena.json()["addons"] == de_otra_tienda["addons"]
+    test_session.expire_all()
+    assert len((await test_session.execute(select(ServiceAddon))).scalars().all()) == 6
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("id_malo", ["", "no valido!", "x" * 65])
+async def test_un_id_mal_formado_es_422(client: AsyncClient, id_malo: str) -> None:
+    _store, token = await _tienda(client, "adic-id-malo")
+
+    res = await _crear_servicio(
+        client, token, addons=[{"id": id_malo, "name": "X", "unit_price": 1}]
+    )
+
+    assert res.status_code == 422, res.text
+
+
+@pytest.mark.asyncio
+async def test_dos_adicionales_con_el_mismo_id_es_422(client: AsyncClient) -> None:
+    _store, token = await _tienda(client, "adic-id-doble")
+    creado = (await _crear_servicio(client, token)).json()
+    strass = creado["addons"][0]
+
+    res = await client.patch(
+        f"/services/{creado['public_id']}",
+        headers=auth_headers(token),
+        json={
+            "addons": [
+                {"id": strass["id"], "name": "A", "unit_price": 500},
+                {"id": strass["id"], "name": "B", "unit_price": 500},
+            ]
+        },
+    )
+
+    assert res.status_code == 422, res.text

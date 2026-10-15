@@ -166,6 +166,69 @@ async def test_rafaga_sobre_el_mismo_horario_con_adicionales(
     _congelado_ok(fila)
 
 
+@pytest.mark.asyncio
+async def test_rafaga_de_ediciones_conserva_los_ids_y_no_suma_conjuntos(
+    client: AsyncClient,
+    app_sessions: async_sessionmaker[AsyncSession],
+    owner_engine: AsyncEngine,
+) -> None:
+    """Revision de la PR #187: N PATCH a la vez con la lista entera (lo que
+    manda el panel) se serializan en el lock del servicio. Con el mismo
+    precio los ids se conservan, el conjunto final es el pedido (sin union de
+    dos reemplazos) y no hay 5xx."""
+    _store, token = await register_and_login(
+        client, app_sessions, slug="pg-adic-upsert", email="pg-adic-upsert@demo.com"
+    )
+    creado = await client.post(
+        "/services/",
+        headers=auth_headers(token),
+        json={
+            "name": "Unas",
+            "duration_minutes": 60,
+            "price": 27000,
+            "addons": [
+                {"name": "Strass", "unit_price": 500, "max_quantity": 10},
+                {"name": "Diseno", "unit_price": 1500},
+            ],
+        },
+    )
+    assert creado.status_code == 201, creado.text
+    servicio = creado.json()["public_id"]
+    ids = [a["id"] for a in creado.json()["addons"]]
+    formulario = [
+        {k: a[k] for k in ("id", "name", "unit_price", "max_quantity")}
+        for a in creado.json()["addons"]
+    ]
+
+    respuestas = await asyncio.gather(
+        *(
+            client.patch(
+                f"/services/{servicio}",
+                headers=auth_headers(token),
+                json={"description": f"Edicion {i}", "addons": formulario},
+            )
+            for i in range(RAFAGA)
+        )
+    )
+
+    codigos = sorted(r.status_code for r in respuestas)
+    assert all(c < 500 for c in codigos), [
+        r.text for r in respuestas if r.status_code >= 500
+    ]
+    assert codigos.count(200) >= 1, codigos
+    async with owner_engine.connect() as conn:
+        filas = (
+            await conn.execute(
+                text(
+                    "select a.id from service_addons a join services s "
+                    "on s.id = a.service_id where s.public_id = :p order by a.position"
+                ),
+                {"p": servicio},
+            )
+        ).all()
+    assert [f[0] for f in filas] == ids
+
+
 # ---------------------------------------------------------------------------
 # RLS
 # ---------------------------------------------------------------------------

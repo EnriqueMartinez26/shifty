@@ -4289,6 +4289,7 @@ Type: `enum("efectivo", "transferencia", "mercadopago", "otro")`
 
 | field | type | required | constraints |
 |---|---|---|---|
+| `id` | string \| null | no | minLength=1, maxLength=64, pattern="^[A-Za-z0-9_-]{1,64}$" |
 | `name` | string | yes | minLength=1, maxLength=100 |
 | `unit_price` | number | yes | minimum=0.0, maximum=1000000.0 |
 | `max_quantity` | integer | no | minimum=1.0, maximum=99.0, default=1 |
@@ -4911,4 +4912,4 @@ Type: `enum("admin", "staff", "receptionist", "client")`
 | `terms_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 | `privacy_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 
-Generado desde app.openapi() el 2026-10-15, commit ac135e8e
+Generado desde app.openapi() el 2026-10-15, commit bf3f8012

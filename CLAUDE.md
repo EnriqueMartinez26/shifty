@@ -645,7 +645,13 @@ Una instrucción en lenguaje natural no es una garantía.
   menor que los adicionales); la seña porcentual se calcula sobre el total,
   con la misma cotización en `/public/deposit/preview` y en el alta. Un
   adicional que no es del catálogo vigente del servicio es 422
-  `ADDON_UNAVAILABLE` antes de escribir nada. Editar el catálogo no toca un
+  `ADDON_UNAVAILABLE` antes de escribir nada. El PATCH del servicio reemplaza
+  el conjunto con upsert por id bajo el lock del servicio
+  (`ServiceRepository.replace_addons`): con el mismo precio el id se conserva
+  (la reserva en vuelo y el catálogo cacheado en el borde siguen valiendo);
+  si cambia el precio el id rota, para que un catálogo cacheado nunca cotice
+  otro precio bajo el mismo id; un id ajeno (otro servicio u otra tienda)
+  nace nuevo, nunca se adopta. Editar el catálogo no toca un
   turno tomado; las dos reprogramaciones y `carry_manual_deposit` mudan los
   adicionales con el turno; el link del panel cobra el precio de lista más
   los adicionales congelados. Propuestas del coordinador, pendientes de OK de
