@@ -191,6 +191,26 @@ describe('usePublicDepositPreview', () => {
 
     expect(result.current.data).toBeUndefined()
   })
+
+  // Varios servicios en un turno (2026-10-16): otra combinacion es otro turno.
+  it('manda los servicios sumados y con otra combinacion no muestra la seña anterior', async () => {
+    mockPreviewDeposit.mockImplementation(({ extraServiceIds }: { extraServiceIds?: string[] }) =>
+      extraServiceIds?.length ? new Promise(() => undefined) : Promise.resolve({ amount: 1000 })
+    )
+    const { result, rerender } = renderHook(
+      (props: { extraServiceIds: string[] }) =>
+        usePublicDepositPreview({ ...turno, startsAt: '2026-10-01T12:00:00Z', ...props }),
+      { wrapper: envoltorio(nuevoCliente()), initialProps: { extraServiceIds: [] as string[] } }
+    )
+    await waitFor(() => expect(result.current.data).toEqual({ amount: 1000 }))
+
+    rerender({ extraServiceIds: ['svc-2'] })
+
+    expect(result.current.data).toBeUndefined()
+    expect(mockPreviewDeposit).toHaveBeenLastCalledWith(
+      expect.objectContaining({ extraServiceIds: ['svc-2'] })
+    )
+  })
 })
 
 describe('usePublicPaymentStatus', () => {

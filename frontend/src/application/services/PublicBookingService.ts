@@ -11,6 +11,11 @@ interface PublicStoreFeatureFlags {
   advanced_reports: boolean
   new_calendar: boolean
   otp_booking: boolean
+  /**
+   * Varios servicios en un turno, con el mismo profesional. Opcional: una
+   * respuesta sin la clave (backend anterior) es apagado.
+   */
+  multi_service_booking?: boolean
 }
 
 export interface PublicStore {
@@ -71,6 +76,21 @@ export interface PublicBookingAddon {
   quantity: number
 }
 
+/** Un servicio sumado al principal en el mismo turno. */
+interface BookedExtraService {
+  public_id: string
+  name: string
+  duration_minutes: number
+}
+
+/**
+ * Query repetida sin corchetes (`extra_service_id=a&extra_service_id=b`): el
+ * formato por defecto de axios mandaria `extra_service_id[]=` y FastAPI no lo
+ * reconoce. Vacio no viaja.
+ */
+const extraServiceParam = (ids: readonly string[] | undefined): string[] | undefined =>
+  ids?.length ? [...ids] : undefined
+
 /** Un adicional ya cobrado en el turno (precio congelado al reservar). */
 interface BookedAddon {
   addon_id: string
@@ -103,6 +123,8 @@ export interface AvailabilitySlot {
 export interface PublicBookingPayload {
   store_public_id: string
   service_id: string
+  /** Servicios sumados al principal, en el orden elegido; ausente si no hay. */
+  extra_service_ids?: string[]
   staff_id?: string
   starts_at: string
   notes?: string
@@ -148,6 +170,10 @@ export interface BookingConfirmation {
   final_price?: number | null
   addons?: BookedAddon[]
   addons_amount?: number | null
+  /** Servicios sumados al principal (vacio si no hay). */
+  extra_services?: BookedExtraService[]
+  /** "Corte + Barba"; ausente en una respuesta vieja. */
+  services_label?: string | null
 }
 
 export interface PromotionPreview {
@@ -233,9 +259,11 @@ export interface DepositPreview {
   base_amount: number
   extra_percent: number
   reasons: string[]
-  /** Total sobre el que se calcula la seña: servicio mas adicionales. */
+  /** Total sobre el que se calcula la seña: servicios mas adicionales, con la promo. */
   price: number
   addons_amount?: number
+  /** Parte de `price` que son los servicios sumados al principal. */
+  extra_services_amount?: number
   payments_enabled: boolean
   online_payment_mandatory: boolean
 }
@@ -255,6 +283,10 @@ export interface ClientAppointmentItem {
   custom_fields: Record<string, string>
   can_cancel: boolean
   can_reschedule: boolean
+  /** Servicios sumados al principal: la grilla para reprogramar los incluye. */
+  extra_services?: BookedExtraService[]
+  /** "Corte + Barba"; ausente en una respuesta vieja. */
+  services_label?: string | null
 }
 
 export interface ClientAppointments {
@@ -277,6 +309,8 @@ class PublicBookingService {
     promotionCode?: string
     /** `<id>:<cantidad>` por adicional elegido (`AddonSelection.toQueryParams`). */
     addons?: readonly string[]
+    /** Servicios sumados al principal: la seña sale sobre el total del turno. */
+    extraServiceIds?: readonly string[]
   }): Promise<DepositPreview> {
     const { data } = await apiClient.get<DepositPreview>('/public/deposit/preview', {
       params: {
@@ -285,7 +319,8 @@ class PublicBookingService {
         starts_at: params.startsAt,
         client_phone: params.clientPhone || undefined,
         promotion_code: params.promotionCode || undefined,
-        addon: params.addons?.length ? [...params.addons] : undefined
+        addon: params.addons?.length ? [...params.addons] : undefined,
+        extra_service_id: extraServiceParam(params.extraServiceIds)
       },
       // El backend lee `addon` repetido (`addon=a:1&addon=b:2`); el formato por
       // defecto de axios mandaria `addon[]=...` y FastAPI no lo reconoce.
@@ -341,10 +376,19 @@ class PublicBookingService {
     serviceId: string,
     date: string,
     forceAll = false,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    /** Servicios sumados al principal: la grilla mide el turno entero. */
+    extraServiceIds: readonly string[] = []
   ): Promise<AvailabilitySlot[]> {
     const { data } = await apiClient.get<AvailabilitySlot[]>('/public/availability', {
-      params: { store_public_id: storePublicId, service_id: serviceId, date, force_all: forceAll },
+      params: {
+        store_public_id: storePublicId,
+        service_id: serviceId,
+        date,
+        force_all: forceAll,
+        extra_service_id: extraServiceParam(extraServiceIds)
+      },
+      paramsSerializer: { indexes: null },
       signal
     })
     return data
@@ -378,14 +422,17 @@ class PublicBookingService {
     storePublicId: string,
     serviceId: string,
     code: string,
-    addons: readonly string[] = []
+    addons: readonly string[] = [],
+    /** Servicios sumados al principal: la promo se mide contra el total. */
+    extraServiceIds: readonly string[] = []
   ): Promise<PromotionPreview> {
     const { data } = await apiClient.get<PromotionPreview>('/public/promotions/preview', {
       params: {
         store_public_id: storePublicId,
         service_id: serviceId,
         code,
-        addon: addons.length ? [...addons] : undefined
+        addon: addons.length ? [...addons] : undefined,
+        extra_service_id: extraServiceParam(extraServiceIds)
       },
       // `addon` repetido, sin corchetes (igual que el preview de la seña).
       paramsSerializer: { indexes: null }

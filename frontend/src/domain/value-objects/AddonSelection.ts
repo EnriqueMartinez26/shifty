@@ -31,6 +31,11 @@ export interface SelectedAddon {
   name: string
   unitPrice: number
   quantity: number
+  /**
+   * Servicio al que pertenece, con varios servicios en un turno. Ausente: del
+   * servicio principal (lo elegido antes de que hubiera varios).
+   */
+  serviceId?: string
 }
 
 const toCents = (value: number): number => Math.round(value * 100)

@@ -83,21 +83,32 @@ export const useRefreshPublicServices = (storePublicId: string | undefined) => {
   }
 }
 
-export const usePublicStaff = (storePublicId: string | undefined, serviceId?: string) =>
+/**
+ * Profesionales de la tienda (o de un servicio, con `serviceId`). `enabled`
+ * en false no pide nada: la lista completa solo hace falta para elegir varios
+ * servicios.
+ */
+export const usePublicStaff = (
+  storePublicId: string | undefined,
+  serviceId?: string,
+  enabled = true
+) =>
   useQuery<PublicStaff[]>({
     queryKey: ['public-staff', storePublicId, serviceId],
     queryFn: () => publicBookingService.getStaff(storePublicId as string, serviceId),
-    enabled: Boolean(storePublicId)
+    enabled: Boolean(storePublicId) && enabled
   })
 
 export const usePublicAvailability = (
   storePublicId: string | undefined,
   serviceId: string | undefined,
   date: string | undefined,
-  forceAll = false
+  forceAll = false,
+  /** Servicios sumados al principal: la grilla mide el turno entero. */
+  extraServiceIds: readonly string[] = []
 ) =>
   useQuery<AvailabilitySlot[]>({
-    queryKey: ['public-availability', storePublicId, serviceId, date, forceAll],
+    queryKey: ['public-availability', storePublicId, serviceId, date, forceAll, ...extraServiceIds],
     // Con el signal, cambiar de dia cancela la grilla del dia anterior (F4-04).
     queryFn: ({ signal }) =>
       publicBookingService.getAvailability(
@@ -105,7 +116,8 @@ export const usePublicAvailability = (
         serviceId as string,
         date as string,
         forceAll,
-        signal
+        signal,
+        extraServiceIds
       ),
     enabled: Boolean(storePublicId) && Boolean(serviceId) && Boolean(date),
     staleTime: 1000 * 30
@@ -133,6 +145,8 @@ export const usePublicDepositPreview = (params: {
   promotionCode?: string
   /** `<id>:<cantidad>` de los adicionales elegidos: la seña sale sobre el total. */
   addons?: readonly string[]
+  /** Servicios sumados al principal: la seña sale sobre el total del turno. */
+  extraServiceIds?: readonly string[]
 }) =>
   useQuery<DepositPreview>({
     queryKey: [
@@ -142,7 +156,8 @@ export const usePublicDepositPreview = (params: {
       params.startsAt,
       params.clientPhone,
       params.promotionCode,
-      params.addons?.join(',') ?? ''
+      params.addons?.join(',') ?? '',
+      params.extraServiceIds?.join(',') ?? ''
     ],
     enabled: Boolean(params.storePublicId && params.serviceId && params.startsAt),
     // Al completar el telefono o aplicar un codigo cambia la clave: sin la seña
@@ -152,7 +167,8 @@ export const usePublicDepositPreview = (params: {
     placeholderData: (previous, previousQuery) =>
       previousQuery?.queryKey[1] === params.storePublicId &&
       previousQuery.queryKey[2] === params.serviceId &&
-      previousQuery.queryKey[3] === params.startsAt
+      previousQuery.queryKey[3] === params.startsAt &&
+      previousQuery.queryKey[7] === (params.extraServiceIds?.join(',') ?? '')
         ? previous
         : undefined,
     queryFn: () =>
@@ -162,7 +178,8 @@ export const usePublicDepositPreview = (params: {
         startsAt: params.startsAt as string,
         clientPhone: params.clientPhone,
         promotionCode: params.promotionCode,
-        addons: params.addons
+        addons: params.addons,
+        extraServiceIds: params.extraServiceIds
       })
   })
 
@@ -257,10 +274,17 @@ export const usePreviewPublicPromotion = () =>
   useMutation<
     PromotionPreview,
     Error,
-    { storePublicId: string; serviceId: string; code: string; addons?: readonly string[] }
+    {
+      storePublicId: string
+      serviceId: string
+      code: string
+      addons?: readonly string[]
+      /** Servicios sumados al principal: la promo se mide contra el total. */
+      extraServiceIds?: readonly string[]
+    }
   >({
-    mutationFn: ({ storePublicId, serviceId, code, addons }) =>
-      publicBookingService.previewPromotion(storePublicId, serviceId, code, addons)
+    mutationFn: ({ storePublicId, serviceId, code, addons, extraServiceIds }) =>
+      publicBookingService.previewPromotion(storePublicId, serviceId, code, addons, extraServiceIds)
   })
 
 export const useRequestPublicOtp = () =>
