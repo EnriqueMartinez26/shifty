@@ -8,9 +8,12 @@ a quien no quiere dejarlo; ahora el front le dice que pierde y le da el
 calendario y el WhatsApp de la tienda.
 
 - Tienda SIN ``otp_booking``: sin email (ausente, nulo, vacio o en blanco) la
-  reserva entra como antes de #181: ficha con el tecnico
-  ``{tel}@store{id}.noreply``, sin adoptar el contacto de nadie y sin encolar
-  ningun mail.
+  reserva entra: un telefono nuevo crea la ficha con el tecnico
+  ``{tel}@store{id}.noreply``, no se adopta el contacto de nadie y no se
+  encola ningun mail. El turno guarda SIEMPRE el tecnico como email de esa
+  reserva, aunque el telefono ya tenga una ficha con un email real: antes de
+  #181 caia al email de la ficha y un telefono sin OTP le mandaba avisos al
+  cliente real (revision de #191). La ficha no se toca.
 - Tienda CON ``otp_booking``: el codigo sale solo por email, asi que sin email
   no hay forma de verificar. 422 ``CLIENT_EMAIL_REQUIRED`` con el mensaje de
   siempre, ANTES del gate de OTP (no un 403) y antes de escribir nada.
@@ -378,3 +381,114 @@ async def test_la_agenda_y_el_bloqueo_dicen_que_turno_no_tiene_email(
         item["public_id"]: item["client_has_email"]
         for item in preview.json()["affected"]
     } == esperado
+
+
+# --- Sin email, el turno nunca toma el email de una ficha existente ---------
+
+
+async def _primera_reserva_con_email(
+    client: AsyncClient, store: str, service: str, staff: str, slot: datetime
+) -> None:
+    primera = await client.post(
+        "/public/appointments",
+        json={
+            **_reserva(store, service, staff, slot),
+            "client_email": "duenia@example.com",
+            "idempotency_key": "email-en-el-portal-ficha-1",
+        },
+    )
+    assert primera.status_code == 201, primera.text
+
+
+@pytest.mark.asyncio
+async def test_sin_email_no_avisa_al_email_de_la_ficha_del_telefono(
+    client: AsyncClient,
+    test_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Revision de #191 (2026-10-16): un telefono sin OTP no es de nadie.
+
+    El telefono ya tiene una ficha con email real. Una reserva SIN email con
+    ese telefono la puede hacer cualquiera: si el turno tomara el email de la
+    ficha, "reserva registrada", la confirmacion y los recordatorios le
+    llegarian al cliente real. El turno guarda el tecnico ``.noreply``, no se
+    encola nada, la ficha no cambia y el panel ve ``client_has_email=false``.
+    """
+    monkeypatch.setattr(tasks, "_send_email", Buzon())
+    cola = usar_cola_de_reservas(monkeypatch, test_session)
+    store, token, service, staff, slot = await _tienda_con_token(
+        client, "ficha-sin-email"
+    )
+    await _primera_reserva_con_email(client, store, service, staff, slot)
+    cola.encolados.clear()
+
+    segunda = await client.post(
+        "/public/appointments",
+        json={
+            **_reserva(store, service, staff, slot + timedelta(hours=1)),
+            "client_name": "Otra persona",
+            "idempotency_key": "email-en-el-portal-ficha-2",
+        },
+    )
+
+    assert segunda.status_code == 201, segunda.text
+    assert cola.encolados == [], "sin email no se avisa al email de la ficha"
+    test_session.expire_all()
+    turno = (
+        await test_session.execute(
+            select(Appointment).where(Appointment.id == segunda.json()["public_id"])
+        )
+    ).scalar_one()
+    assert (turno.client_email or "").endswith(".noreply")
+    assert turno.client_email != "duenia@example.com"
+    assert (await _ficha(test_session)).email == "duenia@example.com"
+
+    busqueda = await client.get(
+        "/appointments/search?page=1&page_size=10", headers=auth_headers(token)
+    )
+    assert busqueda.status_code == 200, busqueda.text
+    banderas = {
+        item["public_id"]: item["client_has_email"]
+        for item in busqueda.json()["results"]
+    }
+    assert banderas[segunda.json()["public_id"]] is False
+
+
+@pytest.mark.asyncio
+async def test_con_email_tipeado_sobre_una_ficha_existente_avisa_a_ese_email(
+    client: AsyncClient,
+    test_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Lo de siempre: el mail de ESTA reserva va al email que dejaron, sin
+    pisar el de la ficha (``test_secuestro_de_contacto.py``)."""
+    buzon = Buzon()
+    monkeypatch.setattr(tasks, "_send_email", buzon)
+    cola = usar_cola_de_reservas(monkeypatch, test_session)
+    store, _token, service, staff, slot = await _tienda_con_token(
+        client, "ficha-con-email"
+    )
+    await _primera_reserva_con_email(client, store, service, staff, slot)
+    cola.encolados.clear()
+
+    segunda = await client.post(
+        "/public/appointments",
+        json={
+            **_reserva(store, service, staff, slot + timedelta(hours=1)),
+            "client_email": "otra@example.com",
+            "idempotency_key": "email-en-el-portal-ficha-3",
+        },
+    )
+
+    assert segunda.status_code == 201, segunda.text
+    test_session.expire_all()
+    turno = (
+        await test_session.execute(
+            select(Appointment).where(Appointment.id == segunda.json()["public_id"])
+        )
+    ).scalar_one()
+    assert turno.client_email == "otra@example.com"
+    assert (await _ficha(test_session)).email == "duenia@example.com"
+    assert len(cola.encolados) == 1
+    await cola.entregar()
+    assert [destino for destino, _a, _c in buzon.enviados] == ["otra@example.com"]

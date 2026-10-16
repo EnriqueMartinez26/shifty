@@ -565,12 +565,18 @@ Una instrucción en lenguaje natural no es una garantía.
   encolar de verdad (`test_enqueue_encola_de_verdad.py`).
 - **El email de la reserva pública es opcional, salvo con `otp_booking`**
   (propuesta por Mateo, 2026-10-16, pendiente de OK del dueño; reemplaza el
-  email obligatorio de #181). Sin email la reserva entra como siempre: ficha
-  con el técnico `{tel}@store{id}.noreply`, sin adoptar contacto, con
-  `UNKNOWN_HISTORY`, sin ningún mail encolado y sin "Mis turnos" (el código
-  no tiene adónde ir; la autogestión responde 403). En una tienda con
-  `otp_booking` el código sale solo por email, así que sin email es 422
-  `CLIENT_EMAIL_REQUIRED` en `PublicBookingService._resolve_request`, antes
+  email obligatorio de #181). Sin email la reserva entra: un teléfono nuevo
+  crea la ficha con el técnico `{tel}@store{id}.noreply` (sin "Mis turnos":
+  el código no tiene adónde ir y la autogestión responde 403), sin adoptar
+  contacto, con `UNKNOWN_HISTORY` y sin ningún mail encolado. El turno guarda
+  SIEMPRE el técnico como email de esa reserva
+  (`public_api/service.py::_booking_contact_email`), aunque el teléfono ya
+  tenga una ficha con email real: caer al de la ficha le mandaba "reserva
+  registrada", confirmaciones y recordatorios al cliente real por una reserva
+  que pudo hacer cualquiera ("Un teléfono sin OTP no es de nadie"). La ficha
+  no se toca y el panel ve ese turno con `client_has_email` falso. En una
+  tienda con `otp_booking` el código sale solo por email, así que sin email
+  es 422 `CLIENT_EMAIL_REQUIRED` en `PublicBookingService._resolve_request`, antes
   del gate de OTP y antes de escribir nada. La lista de espera pública sigue
   exigiendo email: el cupo liberado solo se ofrece por email (D-20260930-11).
   El front, sin email, muestra el turno con "Agregar al calendario" (`.ics`
