@@ -4,8 +4,11 @@ import { addDays, format, parseISO } from 'date-fns'
 import { es } from 'date-fns/locale'
 import { Calendar as CalendarIcon, Clock, Loader2, Sparkles, Users } from 'lucide-react'
 
+import { staffForAllServices } from '@application/mappers/PublicServiceOptionMapper'
+
 import { usePublicAvailability, usePublicStaff } from '@presentation/hooks/usePublic'
 
+import { getErrorMessage } from '@shared/errors/getErrorMessage'
 import { formatArgentinaTime } from '@shared/utils/argentinaTime'
 
 import { BookingBackButton } from './BookingBackButton'
@@ -17,6 +20,11 @@ import { createBookingSurfaceStyle } from '../../../lib/surfaceStyles'
 interface BookingStepDateTimeProps {
   storePublicId: string
   serviceId: string
+  /**
+   * Servicios sumados al principal en el mismo turno: la grilla mide el turno
+   * entero y solo ofrece a quien hace todos.
+   */
+  extraServiceIds?: readonly string[]
   staffId: string | null
   selectedDate: string | null
   selectedTime: string | null
@@ -41,9 +49,22 @@ interface BookingStepDateTimeProps {
   onEmptyAvailability?: () => void
 }
 
+const NO_EXTRA_SERVICES: readonly string[] = []
+
+// Un 422 de la grilla con varios servicios (revision de #194): se dice por
+// que en vez de mostrar una grilla vacia como si no hubiera lugar.
+const AVAILABILITY_ERROR_MESSAGES: Partial<Record<string, string>> = {
+  MULTI_SERVICE_DISABLED:
+    'La tienda ya no toma varios servicios en un mismo turno. Para cambiarlo, escribile a la tienda.',
+  SERVICES_TOO_LONG: 'Los servicios elegidos no entran en un solo turno.',
+  TOO_MANY_SERVICES: 'Elegiste más servicios de los que entran en un turno.',
+  STAFF_CANNOT_PERFORM_SELECTION: 'Ningún profesional hace todos los servicios elegidos.'
+}
+
 export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
   storePublicId,
   serviceId,
+  extraServiceIds = NO_EXTRA_SERVICES,
   staffId,
   selectedDate,
   selectedTime,
@@ -77,7 +98,14 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
   }, [selectedDate])
   const dateStr = format(activeDate, 'yyyy-MM-dd')
 
-  const { data: staffList, isLoading: isStaffLoading } = usePublicStaff(storePublicId, serviceId)
+  const { data: serviceStaff, isLoading: isStaffLoading } = usePublicStaff(storePublicId, serviceId)
+  // Con varios servicios, solo quien los hace todos (la grilla ya viene asi).
+  const staffList = useMemo(
+    () => serviceStaff && staffForAllServices(serviceStaff, extraServiceIds),
+    [serviceStaff, extraServiceIds]
+  )
+  // La lista de espera es de UN servicio: con varios no se ofrece.
+  const waitlistAvailable = showWaitlist && extraServiceIds.length === 0
   // Copy por tipo: una cancha o sala no es "un profesional".
   const resourceIds = new Set(
     (staffList || []).filter((staff) => staff.kind === 'resource').map((staff) => staff.public_id)
@@ -100,12 +128,15 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
     data: availability,
     isLoading,
     isError,
-    isFetching
+    isFetching,
+    error: availabilityError,
+    refetch: refetchAvailability
   } = usePublicAvailability(
     storePublicId,
     serviceId,
     /^\d{4}-\d{2}-\d{2}$/.test(dateStr) ? dateStr : undefined,
-    forceAll
+    forceAll,
+    extraServiceIds
   )
 
   const visibleSlots = useMemo(() => {
@@ -151,7 +182,7 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
     ) {
       return
     }
-    const key = `${storePublicId}:${serviceId}:${dateStr}:${staffFilterId ?? ''}:${forceAll}`
+    const key = `${storePublicId}:${[serviceId, ...extraServiceIds].join('+')}:${dateStr}:${staffFilterId ?? ''}:${forceAll}`
     // availability_empty sigue midiendo todo dia sin horarios libres, tambien el
     // que no tiene atencion: es el contrato de la metrica del embudo.
     if (visibleSlots.length > 0) {
@@ -169,6 +200,7 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
     visibleSlots,
     storePublicId,
     serviceId,
+    extraServiceIds,
     dateStr,
     staffFilterId,
     forceAll,
@@ -335,6 +367,30 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
           <div className="flex flex-col items-center justify-center py-10">
             <Loader2 className="w-8 h-8 animate-spin text-orange-500 mb-4" />
           </div>
+        ) : isError ? (
+          <div
+            role="alert"
+            className="text-center py-8 px-4 border space-y-3"
+            style={createBookingSurfaceStyle()}
+          >
+            <p className="text-xs font-bold" style={{ color: colors2000s.text.primary }}>
+              {getErrorMessage(
+                availabilityError,
+                'No pudimos cargar los horarios. Probá de nuevo en unos minutos.',
+                AVAILABILITY_ERROR_MESSAGES
+              )}
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                void refetchAvailability()
+              }}
+              className="text-xs font-black underline"
+              style={{ color: colors2000s.orange.accent }}
+            >
+              Reintentar
+            </button>
+          </div>
         ) : visibleSlots.length === 0 ? (
           <div className="text-center py-10 border" style={createBookingSurfaceStyle()}>
             <p className="font-black text-gray-400 uppercase tracking-widest text-xs">
@@ -343,7 +399,7 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
             <p className="text-xs text-gray-400 mt-2 font-medium">
               {diaSinAtencion ? 'Probá con otro día.' : 'Probá seleccionando otro día.'}
             </p>
-            {showWaitlist && !diaSinAtencion && (
+            {waitlistAvailable && !diaSinAtencion && (
               <div className="px-4 text-left">
                 <WaitlistJoinForm
                   key={dateStr}

@@ -37,6 +37,7 @@ const cliente = (patch: Partial<BookingClientData> = {}): BookingClientData => (
 
 const estado = (patch: Partial<BookingWizardState> = {}): BookingWizardState => ({
   serviceId: 'svc-1',
+  extraServiceIds: [],
   requestedStaffId: null,
   assignedStaffId: 'st-1',
   assignedStaff: { name: 'Ana', isResource: false },
@@ -585,7 +586,8 @@ describe('BookingStepConfirmation', () => {
         startsAt: '2026-09-25T12:00:00+00:00',
         clientPhone: '1155550101',
         promotionCode: 'BIENVENIDA10',
-        addons: []
+        addons: [],
+        extraServiceIds: []
       })
     })
 
@@ -679,7 +681,8 @@ describe('BookingStepConfirmation', () => {
         storePublicId: 'store-1',
         serviceId: 'svc-1',
         code: 'BIENVENIDA10',
-        addons: []
+        addons: [],
+        extraServiceIds: []
       })
       expect(onPromotionCodeChange).toHaveBeenLastCalledWith(
         'BIENVENIDA10',
@@ -1490,7 +1493,8 @@ describe('BookingStepConfirmation: la promo se revalida con los adicionales', ()
         storePublicId: 'store-1',
         serviceId: 'svc-1',
         code: 'MIN6000',
-        addons: ['strass:1']
+        addons: ['strass:1'],
+        extraServiceIds: []
       })
     )
   })
@@ -1508,7 +1512,8 @@ describe('BookingStepConfirmation: la promo se revalida con los adicionales', ()
         storePublicId: 'store-1',
         serviceId: 'svc-1',
         code: 'MIN6000',
-        addons: ['strass:1']
+        addons: ['strass:1'],
+        extraServiceIds: []
       })
     )
     await waitFor(() => expect(screen.getByRole('button', { name: RESERVAR })).not.toBeDisabled())

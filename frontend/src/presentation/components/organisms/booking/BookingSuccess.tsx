@@ -1,6 +1,6 @@
 import React from 'react'
 
-import { Calendar, Check, Clock, ExternalLink } from 'lucide-react'
+import { Briefcase, Calendar, Check, Clock, ExternalLink } from 'lucide-react'
 
 import { formatAddonLabel } from '@domain/value-objects/AddonSelection'
 
@@ -38,6 +38,52 @@ const deadlineLabel = (deadline: string | null | undefined): string | null => {
   const day = formatArgentinaDayHeading(deadline)
   const time = formatArgentinaTime(deadline)
   return day && time ? `${day} a las ${time}` : null
+}
+
+interface ServicePriceLine {
+  key: string
+  label: string
+  amount: number
+}
+
+const toCents = (value: number): number => Math.round(value * 100)
+
+/**
+ * Las lineas de servicios del resumen comercial, para que con el descuento y
+ * los adicionales sumen el total (revision de #194). `service_price` es solo
+ * el principal: con varios servicios va una linea por servicio si la
+ * respuesta trae el precio de cada uno, o una sola con la suma si trae
+ * `extra_services_amount`. Sin ninguno de los dos (backend anterior) no se
+ * muestra un importe que no cierre: queda solo el total.
+ */
+const servicePriceLines = (confirmation: BookingConfirmation): ServicePriceLine[] => {
+  const principal = Number(confirmation.service_price || 0)
+  const extras = confirmation.extra_services ?? []
+  if (extras.length === 0) return [{ key: 'servicio', label: 'Servicio', amount: principal }]
+  if (extras.every((extra) => extra.price !== undefined && extra.price !== null)) {
+    return [
+      { key: confirmation.service_id, label: confirmation.service_name, amount: principal },
+      ...extras.map((extra) => ({
+        key: extra.public_id,
+        label: extra.name,
+        amount: Number(extra.price)
+      }))
+    ]
+  }
+  if (
+    confirmation.extra_services_amount !== undefined &&
+    confirmation.extra_services_amount !== null
+  ) {
+    const label = confirmation.services_label || confirmation.service_name
+    return [
+      {
+        key: 'servicios',
+        label: `Servicios (${label})`,
+        amount: (toCents(principal) + toCents(Number(confirmation.extra_services_amount))) / 100
+      }
+    ]
+  }
+  return []
 }
 
 interface BookingSuccessProps {
@@ -189,6 +235,29 @@ export const BookingSuccess: React.FC<BookingSuccessProps> = ({
             </div>
           </div>
 
+          {/* "Corte + Barba" con varios servicios; una respuesta vieja trae solo el principal. */}
+          {(confirmation.services_label || confirmation.service_name) && (
+            <div className="flex items-center gap-3">
+              <div
+                className="p-2.5 rounded-md text-orange-500"
+                style={{
+                  background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
+                  boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`
+                }}
+              >
+                <Briefcase size={18} className="stroke-[2.5px]" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-[9px] font-black uppercase tracking-wider text-gray-400">
+                  {confirmation.extra_services?.length ? 'Servicios' : 'Servicio'}
+                </p>
+                <p className="font-black text-gray-700 text-lg leading-tight break-words">
+                  {confirmation.services_label || confirmation.service_name}
+                </p>
+              </div>
+            </div>
+          )}
+
           {(confirmation.service_price || confirmation.final_price) && (
             <div
               className="rounded-md p-4 border"
@@ -198,7 +267,11 @@ export const BookingSuccess: React.FC<BookingSuccessProps> = ({
                 Resumen comercial
               </p>
               <div className="space-y-1 text-sm font-black text-slate-900">
-                <p>Servicio: {formatCurrency(Number(confirmation.service_price || 0))}</p>
+                {servicePriceLines(confirmation).map((line) => (
+                  <p key={line.key}>
+                    {line.label}: {formatCurrency(line.amount)}
+                  </p>
+                ))}
                 {(confirmation.discount_amount || 0) > 0 && (
                   <p>Descuento: -{formatCurrency(Number(confirmation.discount_amount || 0))}</p>
                 )}

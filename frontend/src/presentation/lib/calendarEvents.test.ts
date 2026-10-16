@@ -162,6 +162,24 @@ describe('buildUnifiedEvents', () => {
     })
   })
 
+  // Varios servicios en un turno (2026-10-16): la agenda muestra la etiqueta.
+  it('el subtitulo es "Corte + Barba" con varios servicios y el servicio sin ellos', () => {
+    const multi = Appointment.fromPrimitives({
+      ...appointmentOf('appt-multi', 'A', START, END).toPrimitives(),
+      services_label: 'Corte + Barba'
+    })
+    const events = buildUnifiedEvents({
+      appointments: [multi, appointmentOf('appt-uno', 'B', START, END)],
+      blocks: [],
+      staffMembers
+    })
+
+    expect(Object.fromEntries(events.map((event) => [event.id, event.subtitle]))).toEqual({
+      'appt-multi': 'Corte + Barba',
+      'appt-uno': 'Corte'
+    })
+  })
+
   it('reporta un estado desconocido sin dejar de mostrar el turno (F8-03)', () => {
     const reporter = jest.fn()
     setUnreadableInstantReporter(reporter)

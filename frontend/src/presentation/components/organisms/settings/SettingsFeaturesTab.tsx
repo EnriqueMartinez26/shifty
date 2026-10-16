@@ -1,5 +1,7 @@
 import React from 'react'
 
+import { MAX_SERVICES_PER_BOOKING } from '@domain/value-objects/ServiceSelection'
+
 import type { StoreFeatureFlags } from '@application/services/StoreSettingsService'
 
 import { colors2000s } from '../../../../theme/colors'
@@ -25,6 +27,11 @@ const FEATURE_LABELS = [
     key: 'otp_booking',
     title: 'Código por email en la reserva pública',
     description: 'Pide un código de verificación, enviado por email, antes de confirmar la reserva.'
+  },
+  {
+    key: 'multi_service_booking',
+    title: 'Varios servicios en un turno',
+    description: `El cliente puede elegir hasta ${MAX_SERVICES_PER_BOOKING} servicios que hace el mismo profesional, uno detrás de otro. El turno dura la suma y la seña sale sobre el total.`
   }
 ] as const
 

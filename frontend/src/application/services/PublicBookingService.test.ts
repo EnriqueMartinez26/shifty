@@ -165,8 +165,51 @@ describe('PublicBookingService', () => {
         service_id: 'svc-1',
         date: '2026-10-01',
         force_all: sent
-      }
+      },
+      paramsSerializer: { indexes: null }
     })
+  })
+
+  // Varios servicios en un turno (2026-10-16): la grilla mide el turno entero.
+  it('getAvailability manda cada servicio sumado como extra_service_id repetido', async () => {
+    await publicBookingService.getAvailability('st-1', 'svc-1', '2026-10-01', false, undefined, [
+      'svc-2',
+      'svc-3'
+    ])
+
+    expect(mockGet).toHaveBeenCalledWith('/public/availability', {
+      params: expect.objectContaining({
+        service_id: 'svc-1',
+        extra_service_id: ['svc-2', 'svc-3']
+      }),
+      paramsSerializer: { indexes: null }
+    })
+  })
+
+  it('previewDeposit manda los servicios sumados: la seña sale sobre el total', async () => {
+    await publicBookingService.previewDeposit({
+      storePublicId: 'st-1',
+      serviceId: 'svc-1',
+      startsAt: '2026-10-01T13:00:00Z',
+      extraServiceIds: ['svc-2']
+    })
+
+    expect(mockGet).toHaveBeenCalledWith('/public/deposit/preview', {
+      params: expect.objectContaining({ extra_service_id: ['svc-2'] }),
+      paramsSerializer: { indexes: null }
+    })
+  })
+
+  it('previewPromotion manda los servicios sumados y sin ellos no manda la clave', async () => {
+    await publicBookingService.previewPromotion('st-1', 'svc-1', 'OFF10', [], ['svc-2'])
+    await publicBookingService.previewPromotion('st-1', 'svc-1', 'OFF10')
+
+    expect(mockGet).toHaveBeenNthCalledWith(1, '/public/promotions/preview', {
+      params: expect.objectContaining({ extra_service_id: ['svc-2'] }),
+      paramsSerializer: { indexes: null }
+    })
+    const [, segundo] = mockGet.mock.calls[1] as [string, { params: Record<string, unknown> }]
+    expect(segundo.params.extra_service_id).toBeUndefined()
   })
 
   it('createBooking manda el payload por POST y devuelve la confirmacion', async () => {

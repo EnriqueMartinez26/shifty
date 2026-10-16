@@ -25,6 +25,8 @@ interface AppointmentProps {
   notes: string | null
   /** Adicionales del turno (nombre y cantidad; la agenda no ve importes). */
   addons: readonly AddonQuantity[]
+  /** "Corte + Barba" con varios servicios; si no, el nombre del servicio. */
+  servicesLabel: string
 }
 
 export class Appointment {
@@ -48,6 +50,7 @@ export class Appointment {
     status: string
     notes: string | null
     addons?: readonly AddonQuantity[] | null
+    services_label?: string | null
   }): Appointment {
     return new Appointment({
       id: UserId.create(props.public_id),
@@ -65,7 +68,9 @@ export class Appointment {
       addons: (props.addons ?? []).map((addon) => ({
         name: addon.name,
         quantity: addon.quantity
-      }))
+      })),
+      // Una respuesta vieja no lo trae: el turno es de un solo servicio.
+      servicesLabel: props.services_label || props.service_name
     })
   }
 
@@ -106,6 +111,9 @@ export class Appointment {
   get addons() {
     return this.props.addons
   }
+  get servicesLabel(): string {
+    return this.props.servicesLabel
+  }
 
   // Los mutadores confirm() / markAbsent() / complete() / reschedule() se
   // eliminaron a proposito: mutaban el estado a mano (reschedule() forzaba
@@ -129,7 +137,8 @@ export class Appointment {
       ends_at: this.props.timeSpan.getEndsAt().toISOString(),
       status: this.props.status,
       notes: this.props.notes,
-      addons: this.props.addons.map((addon) => ({ ...addon }))
+      addons: this.props.addons.map((addon) => ({ ...addon })),
+      services_label: this.props.servicesLabel
     }
   }
 }

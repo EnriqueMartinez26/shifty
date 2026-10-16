@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 import { act, renderHook, waitFor } from '@testing-library/react'
 
-import { ConflictError, RateLimitError } from '@shared/errors'
+import { ConflictError, RateLimitError, ValidationError } from '@shared/errors'
 
 import {
   useCreatePublicBooking,
@@ -80,6 +80,30 @@ describe('useCreatePublicBooking', () => {
       refetchType: 'all'
     })
     await waitFor(() => expect(refetchGrilla).toHaveBeenCalledTimes(1))
+  })
+
+  // Revision de #194 (L1): el horario sigue libre; no se trata como tomado.
+  it('un rechazo por el profesional o la combinacion de servicios no vuelve a pedir la grilla', async () => {
+    mockCreateBooking.mockRejectedValue(
+      new ValidationError('rechazado', {
+        errorCode: 'STAFF_CANNOT_PERFORM_SELECTION',
+        statusCode: 422
+      })
+    )
+    const { queryClient, refetchGrilla } = clienteConGrillaDelPaso2()
+    const invalidate = jest.spyOn(queryClient, 'invalidateQueries')
+
+    const { result } = renderHook(() => useCreatePublicBooking(), {
+      wrapper: envoltorio(queryClient)
+    })
+    await act(async () => {
+      await expect(
+        result.current.mutateAsync({} as Parameters<typeof result.current.mutateAsync>[0])
+      ).rejects.toThrow('rechazado')
+    })
+
+    expect(invalidate).not.toHaveBeenCalled()
+    expect(refetchGrilla).not.toHaveBeenCalled()
   })
 
   it('una reserva exitosa tambien vuelve a pedir la grilla (FF-33)', async () => {
@@ -190,6 +214,26 @@ describe('usePublicDepositPreview', () => {
     rerender({ startsAt: '2026-10-02T12:00:00Z' })
 
     expect(result.current.data).toBeUndefined()
+  })
+
+  // Varios servicios en un turno (2026-10-16): otra combinacion es otro turno.
+  it('manda los servicios sumados y con otra combinacion no muestra la seña anterior', async () => {
+    mockPreviewDeposit.mockImplementation(({ extraServiceIds }: { extraServiceIds?: string[] }) =>
+      extraServiceIds?.length ? new Promise(() => undefined) : Promise.resolve({ amount: 1000 })
+    )
+    const { result, rerender } = renderHook(
+      (props: { extraServiceIds: string[] }) =>
+        usePublicDepositPreview({ ...turno, startsAt: '2026-10-01T12:00:00Z', ...props }),
+      { wrapper: envoltorio(nuevoCliente()), initialProps: { extraServiceIds: [] as string[] } }
+    )
+    await waitFor(() => expect(result.current.data).toEqual({ amount: 1000 }))
+
+    rerender({ extraServiceIds: ['svc-2'] })
+
+    expect(result.current.data).toBeUndefined()
+    expect(mockPreviewDeposit).toHaveBeenLastCalledWith(
+      expect.objectContaining({ extraServiceIds: ['svc-2'] })
+    )
   })
 })
 

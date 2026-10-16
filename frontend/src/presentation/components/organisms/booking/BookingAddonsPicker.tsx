@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useId } from 'react'
 
 import { Minus, Plus, Sparkles } from 'lucide-react'
 
@@ -15,6 +15,8 @@ interface BookingAddonsPickerProps {
   quantities: Readonly<Record<string, number>>
   onChange: (addonId: string, quantity: number) => void
   disabled?: boolean
+  /** Encabezado; con varios servicios nombra el servicio ("Adicionales de Corte"). */
+  title?: string
 }
 
 const stepperButtonStyle: React.CSSProperties = {
@@ -33,22 +35,22 @@ export const BookingAddonsPicker: React.FC<BookingAddonsPickerProps> = ({
   addons,
   quantities,
   onChange,
-  disabled = false
+  disabled = false,
+  title = 'Adicionales'
 }) => {
+  // Un id por bloque: con varios servicios hay un picker por servicio.
+  const titleId = useId()
   if (addons.length === 0) return null
   return (
     <section
       className="p-4 border space-y-3"
       style={createBookingAccentBoxStyle('#ffffff', '#e5e7eb')}
-      aria-labelledby="booking-addons-title"
+      aria-labelledby={titleId}
     >
       <div className="flex items-center gap-2">
         <Sparkles className="w-4 h-4 text-orange-500" />
-        <h3
-          id="booking-addons-title"
-          className="text-[10px] font-black uppercase tracking-widest text-gray-400"
-        >
-          Adicionales
+        <h3 id={titleId} className="text-[10px] font-black uppercase tracking-widest text-gray-400">
+          {title}
         </h3>
       </div>
       <p className="text-xs font-bold text-gray-500">

@@ -30,10 +30,14 @@ export const bookedSummary = (confirmation: BookingConfirmation): string => {
   return `Turno reservado${when ? ` para el ${when}` : ''}${staff ? ` con ${staff}` : ''}.`
 }
 
+/** "Corte + Barba" con varios servicios en el turno; si no, el servicio. */
+const servicesOf = (confirmation: BookingConfirmation): string =>
+  confirmation.services_label || confirmation.service_name
+
 const selfShareText = (confirmation: BookingConfirmation, storeName: string): string =>
   [
     bookedSummary(confirmation),
-    ...(confirmation.service_name ? [`Servicio: ${confirmation.service_name}`] : []),
+    ...(servicesOf(confirmation) ? [`Servicio: ${servicesOf(confirmation)}`] : []),
     `Lugar: ${storeName}`
   ].join('\n')
 
@@ -48,8 +52,8 @@ const inviteFor = (confirmation: BookingConfirmation, storeName: string) => {
     uid: confirmation.public_id,
     startsAt: confirmation.starts_at,
     endsAt: confirmation.ends_at,
-    summary: confirmation.service_name
-      ? `${confirmation.service_name} en ${storeName}`
+    summary: servicesOf(confirmation)
+      ? `${servicesOf(confirmation)} en ${storeName}`
       : `Turno en ${storeName}`,
     description: `Turno ${confirmation.public_id}${staff ? ` con ${staff}` : ''}. Para cambiarlo o cancelarlo, comunicate con ${storeName}.`
   }

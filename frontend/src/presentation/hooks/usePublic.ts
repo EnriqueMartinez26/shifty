@@ -23,7 +23,7 @@ import {
   type WaitlistJoinPayload
 } from '@application/services/PublicBookingService'
 
-import { getRetryAfterSeconds } from '@shared/errors/getErrorMessage'
+import { getErrorCode, getRetryAfterSeconds } from '@shared/errors/getErrorMessage'
 
 import { PAYMENT_POLL_MAX_MS, paymentPollDelayMs } from '../lib/paymentPolling'
 
@@ -32,6 +32,21 @@ export type { PublicStore }
 // Clave, queryFn y retry de la tienda y sus servicios viven en un solo lugar:
 // el prefetch del portal (lib/portalPrefetch.ts, F4-14) usa las mismas y una
 // clave distinta repetiria la request al montar la pagina.
+/**
+ * Rechazos de la combinacion de servicios o del profesional elegido (varios
+ * servicios en un turno, 2026-10-16): el horario sigue libre, asi que no se
+ * vuelve a pedir la grilla como si alguien lo hubiera tomado.
+ */
+const SELECTION_REJECTION_CODES: ReadonlySet<string> = new Set([
+  'STAFF_CANNOT_PERFORM_SELECTION',
+  'TOO_MANY_SERVICES',
+  'SERVICES_TOO_LONG',
+  'MULTI_SERVICE_DISABLED'
+])
+
+const isSelectionRejection = (error: unknown): boolean =>
+  SELECTION_REJECTION_CODES.has(getErrorCode(error) ?? '')
+
 export const publicStoreQuery = (slug: string) =>
   queryOptions<PublicStore>({
     queryKey: ['public-store', slug],
@@ -83,21 +98,32 @@ export const useRefreshPublicServices = (storePublicId: string | undefined) => {
   }
 }
 
-export const usePublicStaff = (storePublicId: string | undefined, serviceId?: string) =>
+/**
+ * Profesionales de la tienda (o de un servicio, con `serviceId`). `enabled`
+ * en false no pide nada: la lista completa solo hace falta para elegir varios
+ * servicios.
+ */
+export const usePublicStaff = (
+  storePublicId: string | undefined,
+  serviceId?: string,
+  enabled = true
+) =>
   useQuery<PublicStaff[]>({
     queryKey: ['public-staff', storePublicId, serviceId],
     queryFn: () => publicBookingService.getStaff(storePublicId as string, serviceId),
-    enabled: Boolean(storePublicId)
+    enabled: Boolean(storePublicId) && enabled
   })
 
 export const usePublicAvailability = (
   storePublicId: string | undefined,
   serviceId: string | undefined,
   date: string | undefined,
-  forceAll = false
+  forceAll = false,
+  /** Servicios sumados al principal: la grilla mide el turno entero. */
+  extraServiceIds: readonly string[] = []
 ) =>
   useQuery<AvailabilitySlot[]>({
-    queryKey: ['public-availability', storePublicId, serviceId, date, forceAll],
+    queryKey: ['public-availability', storePublicId, serviceId, date, forceAll, ...extraServiceIds],
     // Con el signal, cambiar de dia cancela la grilla del dia anterior (F4-04).
     queryFn: ({ signal }) =>
       publicBookingService.getAvailability(
@@ -105,7 +131,8 @@ export const usePublicAvailability = (
         serviceId as string,
         date as string,
         forceAll,
-        signal
+        signal,
+        extraServiceIds
       ),
     enabled: Boolean(storePublicId) && Boolean(serviceId) && Boolean(date),
     staleTime: 1000 * 30
@@ -118,7 +145,8 @@ export const useCreatePublicBooking = () => {
     // Con o sin exito la grilla quedo vieja: con staleTime de 30 s el horario
     // tomado seguia libre al volver al paso 2 (FF-33). El paso 2 esta
     // desmontado y su consulta inactiva: sin `refetchType: 'all'` no se pedia.
-    onSettled: () => {
+    onSettled: (_data, error) => {
+      if (isSelectionRejection(error)) return
       void queryClient.invalidateQueries({ queryKey: ['public-availability'], refetchType: 'all' })
     }
   })
@@ -133,6 +161,8 @@ export const usePublicDepositPreview = (params: {
   promotionCode?: string
   /** `<id>:<cantidad>` de los adicionales elegidos: la seña sale sobre el total. */
   addons?: readonly string[]
+  /** Servicios sumados al principal: la seña sale sobre el total del turno. */
+  extraServiceIds?: readonly string[]
 }) =>
   useQuery<DepositPreview>({
     queryKey: [
@@ -142,7 +172,8 @@ export const usePublicDepositPreview = (params: {
       params.startsAt,
       params.clientPhone,
       params.promotionCode,
-      params.addons?.join(',') ?? ''
+      params.addons?.join(',') ?? '',
+      params.extraServiceIds?.join(',') ?? ''
     ],
     enabled: Boolean(params.storePublicId && params.serviceId && params.startsAt),
     // Al completar el telefono o aplicar un codigo cambia la clave: sin la seña
@@ -152,7 +183,8 @@ export const usePublicDepositPreview = (params: {
     placeholderData: (previous, previousQuery) =>
       previousQuery?.queryKey[1] === params.storePublicId &&
       previousQuery.queryKey[2] === params.serviceId &&
-      previousQuery.queryKey[3] === params.startsAt
+      previousQuery.queryKey[3] === params.startsAt &&
+      previousQuery.queryKey[7] === (params.extraServiceIds?.join(',') ?? '')
         ? previous
         : undefined,
     queryFn: () =>
@@ -162,7 +194,8 @@ export const usePublicDepositPreview = (params: {
         startsAt: params.startsAt as string,
         clientPhone: params.clientPhone,
         promotionCode: params.promotionCode,
-        addons: params.addons
+        addons: params.addons,
+        extraServiceIds: params.extraServiceIds
       })
   })
 
@@ -210,7 +243,8 @@ export const useRescheduleClientAppointment = () => {
     // Un 409 (horario tomado, bloqueado) deja la grilla vieja: se vuelve a
     // pedir para no seguir ofreciendo ese horario (FF-06, mismo patron que
     // FF-33 en useCreatePublicBooking).
-    onError: () => {
+    onError: (error) => {
+      if (isSelectionRejection(error)) return
       void queryClient.invalidateQueries({ queryKey: ['public-availability'], refetchType: 'all' })
     }
   })
@@ -257,10 +291,17 @@ export const usePreviewPublicPromotion = () =>
   useMutation<
     PromotionPreview,
     Error,
-    { storePublicId: string; serviceId: string; code: string; addons?: readonly string[] }
+    {
+      storePublicId: string
+      serviceId: string
+      code: string
+      addons?: readonly string[]
+      /** Servicios sumados al principal: la promo se mide contra el total. */
+      extraServiceIds?: readonly string[]
+    }
   >({
-    mutationFn: ({ storePublicId, serviceId, code, addons }) =>
-      publicBookingService.previewPromotion(storePublicId, serviceId, code, addons)
+    mutationFn: ({ storePublicId, serviceId, code, addons, extraServiceIds }) =>
+      publicBookingService.previewPromotion(storePublicId, serviceId, code, addons, extraServiceIds)
   })
 
 export const useRequestPublicOtp = () =>

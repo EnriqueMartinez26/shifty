@@ -68,4 +68,33 @@ describe('BookingPriceSummary', () => {
     )
     expect(resumen()).toHaveTextContent(/^Total\s*Sin confirmar$/)
   })
+
+  // Varios servicios en un turno (2026-10-16): una linea por servicio, cada
+  // una con sus adicionales; el total sigue siendo el que se le pasa.
+  it('con varios servicios detalla cada uno con sus adicionales', () => {
+    render(
+      <BookingPriceSummary
+        basePrice={15000}
+        addons={[]}
+        serviceLines={[
+          { serviceId: 'corte', name: 'Corte', price: 10000, addons: [] },
+          {
+            serviceId: 'barba',
+            name: 'Barba',
+            price: 5000,
+            addons: [
+              { addonId: 'toalla', name: 'Toalla', unitPrice: 500, quantity: 2, amount: 1000 }
+            ]
+          }
+        ]}
+        discount={null}
+        total={16000}
+      />
+    )
+
+    expect(resumen()).toHaveTextContent(
+      /^Corte\s*\$\s*10\.000Barba\s*\$\s*5\.000Toalla x2\s*\$\s*1\.000Total\s*\$\s*16\.000$/
+    )
+    expect(screen.queryByText('Servicio')).not.toBeInTheDocument()
+  })
 })
