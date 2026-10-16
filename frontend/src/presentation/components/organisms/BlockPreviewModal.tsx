@@ -48,6 +48,11 @@ const AffectedRow: React.FC<{ item: AffectedAppointment; reason: string }> = ({ 
           {formatArgentinaTime(item.starts_at)} hs
         </p>
         {nota && <p className="text-[11px] font-bold text-amber-700 mt-1">{nota}</p>}
+        {item.cancellable && item.client_has_email === false && (
+          <p className="text-[11px] font-bold text-emerald-700 mt-1">
+            Este turno no recibe avisos por email.
+          </p>
+        )}
       </div>
       <span className="text-[9px] font-black uppercase tracking-widest text-gray-500">
         {bookingStatusLabel(item.status)}

@@ -215,6 +215,9 @@ async def test_busqueda_de_turnos_items_y_paginado(
         "client_name": "Cliente Caracterizado",
         "client_id": item["client_id"],
         "client_phone": "5491155558001",
+        # Aditivo (2026-10-16): el turno tiene email entregable
+        # (``test_email_en_el_portal.py``).
+        "client_has_email": True,
         # Aditivo (2026-10-08): precio congelado y cobro del turno para Cobros
         # (``test_busqueda_trae_el_cobro.py``). La reserva no tiene cobro.
         "price_amount": "10000.00",

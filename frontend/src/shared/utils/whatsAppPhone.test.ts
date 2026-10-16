@@ -1,4 +1,4 @@
-import { buildWaMeUrl, normalizePhoneForWhatsApp } from './whatsAppPhone'
+import { buildWaMeUrl, buildWaShareUrl, normalizePhoneForWhatsApp } from './whatsAppPhone'
 import casos from './whatsAppPhone.cases.json'
 
 // 2026-10-02, QA en navegador: un telefono de la lista de espera cargado como
@@ -42,5 +42,13 @@ describe('buildWaMeUrl', () => {
 
   it('sin un numero confiable no arma link', () => {
     expect(buildWaMeUrl('123', 'Hola')).toBeNull()
+  })
+})
+
+describe('buildWaShareUrl', () => {
+  it('comparte el texto sin destinatario: WhatsApp deja elegir el chat', () => {
+    expect(buildWaShareUrl('Turno: jueves 23/10 a las 15:00 & más')).toBe(
+      'https://wa.me/?text=Turno%3A%20jueves%2023%2F10%20a%20las%2015%3A00%20%26%20m%C3%A1s'
+    )
   })
 })

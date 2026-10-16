@@ -21,6 +21,7 @@ const dto: AppointmentResponseDTO = {
   ...sinOpcionales,
   staff_name: 'Ana Perez',
   client_phone: '+5491100000000',
+  client_has_email: true,
   addons: [{ name: 'Strass', quantity: 6 }]
 }
 

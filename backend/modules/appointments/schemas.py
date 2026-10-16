@@ -273,6 +273,11 @@ class AppointmentSearchResult(BaseModel):
     client_name: str
     client_id: str
     client_phone: Optional[str] = None
+    # Aditivo (propuesta por Mateo, 2026-10-16): el turno tiene un email
+    # entregable (no el tecnico ``.noreply`` de una reserva sin email). Sin el,
+    # el cliente no recibe ningun aviso y la agenda, al cancelar, sugiere
+    # avisarle por WhatsApp. Un booleano, no el email: no expone el dato.
+    client_has_email: bool = False
     # Aditivo (2026-10-08, decision de Mateo): Cobros precarga el importe y
     # muestra lo pagado. ``price_amount`` es el precio congelado del turno;
     # ``payment_*`` es su cobro (``None`` si no tiene).

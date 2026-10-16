@@ -366,9 +366,14 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
   // El telefono con el criterio del backend: con menos de 6 digitos era un 422
   // que se leia como horario ocupado (QA 2026-10-02).
   const phoneValid = isValidClientPhone(client.phone)
-  // Obligatorio (decision de Mateo, 2026-10-14): "Mis turnos" se abre con un
-  // codigo que sale solo por email; sin email el cliente no podia volver.
-  const emailValid = Email.isValid(client.email)
+  // Opcional, salvo con OTP (propuesta por Mateo, 2026-10-16): el codigo sale
+  // solo por email y sin email no hay forma de verificar. Si se escribe, tiene
+  // que ser valido. Sin email no hay avisos ni "Mis turnos"; la pantalla de
+  // exito ofrece calendario y el WhatsApp de la tienda.
+  const emailRequired = requiresOtp
+  const emailTyped = Boolean(client.email.trim())
+  const emailFormatValid = Email.isValid(client.email)
+  const emailValid = emailTyped ? emailFormatValid : !emailRequired
   const clientValid = Boolean(client.name.trim()) && phoneValid && emailValid && customFieldsValid
   // Gate duro: el backend rechaza la reserva si la tienda exige OTP y el
   // telefono no quedo verificado (create_public_booking, public_api/router.py).
@@ -579,31 +584,33 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
             htmlFor={`${fieldId}-email`}
             className="text-[10px] font-black uppercase tracking-widest text-gray-400 ml-1 block mb-1"
           >
-            Email
+            {emailRequired ? 'Email' : 'Email (opcional)'}
           </label>
           <div className="relative">
             <Mail size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
             <input
               id={`${fieldId}-email`}
               type="email"
-              required
+              required={emailRequired}
               autoComplete="email"
               value={client.email}
               onChange={(e) => updateClient({ email: e.target.value })}
               className="w-full pl-12 pr-4 py-3.5 font-bold"
               style={clientInputStyle}
               placeholder="juan@email.com"
-              aria-invalid={Boolean(client.email.trim()) && !emailValid}
+              aria-invalid={emailTyped && !emailFormatValid}
               aria-describedby="booking-email-hint"
             />
           </div>
-          {client.email.trim() && !emailValid ? (
+          {emailTyped && !emailFormatValid ? (
             <p id="booking-email-hint" className="mt-1 ml-1 text-[11px] font-bold text-red-600">
               {BOOKING_FIELD_MESSAGES.client_email}
             </p>
           ) : (
             <p id="booking-email-hint" className="mt-1 ml-1 text-[11px] font-bold text-gray-500">
-              Te enviamos la confirmación y el acceso a tus turnos.
+              {emailRequired
+                ? 'Te enviamos la confirmación y el acceso a tus turnos.'
+                : 'Opcional. Si no lo dejás, no vas a poder gestionar tu turno desde acá ni recibir avisos; para cambiarlo o cancelarlo escribile a la tienda por WhatsApp.'}
             </p>
           )}
         </div>

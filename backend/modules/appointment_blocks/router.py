@@ -34,6 +34,7 @@ from modules.appointment_blocks.service import (
 )
 from modules.appointments.repository import AppointmentRepository
 from modules.auth.dependencies import get_current_user
+from modules.notifications.tasks import is_deliverable_email
 from modules.staff.model import StaffBlock
 from modules.users.model import User, UserRole
 
@@ -104,6 +105,7 @@ def _to_affected(item: AffectedAppointment, user: User) -> AffectedAppointmentRe
         status=appointment.status,
         blocker=item.reason,
         cancellable=item.cancellable,
+        client_has_email=is_deliverable_email(appointment.client_email),
     )
 
 

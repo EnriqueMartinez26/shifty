@@ -9,6 +9,11 @@ export interface AppointmentResponseDTO {
   client_name: string
   // Solo lo manda el backend a administradores; el resto recibe null.
   client_phone?: string | null
+  /**
+   * El turno tiene un email entregable (no el tecnico .noreply de una reserva
+   * sin email). Ausente en respuestas viejas: se asume que si.
+   */
+  client_has_email?: boolean | null
   starts_at: string
   ends_at: string
   status: string

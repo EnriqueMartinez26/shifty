@@ -46,19 +46,30 @@ async def _tienda_reservable(
 
 
 def _reserva(
-    store: str, service: str, staff: str, slot: datetime, i: int, key: str
+    store: str,
+    service: str,
+    staff: str,
+    slot: datetime,
+    i: int,
+    key: str,
+    *,
+    con_email: bool = True,
 ) -> dict[str, Any]:
-    return {
+    cuerpo: dict[str, Any] = {
         "store_public_id": store,
         "service_id": service,
         "staff_id": staff,
         "starts_at": slot.isoformat(),
         "client_name": f"Cliente {i}",
         "client_phone": f"+54911555{i:05d}",
-        "client_email": f"c54911555{i:05d}@example.com",
         "accepts_terms": True,
         "idempotency_key": key,
     }
+    # Sin email (opcional en una tienda sin ``otp_booking``, propuesta por
+    # Mateo del 2026-10-16): la ficha nace con el tecnico ``.noreply``.
+    if con_email:
+        cuerpo["client_email"] = f"c54911555{i:05d}@example.com"
+    return cuerpo
 
 
 async def _turnos_activos(owner_engine: AsyncEngine, staff: str) -> int:
@@ -152,6 +163,123 @@ async def test_slots_distintos_no_se_bloquean_entre_si(
         (c, r.text[:120]) for c, r in zip(codigos, respuestas)
     ]
     assert await _turnos_activos(owner_engine, staff) == len(slots)
+
+
+@pytest.mark.asyncio
+async def test_rafaga_sin_email_mismo_slot_deja_pasar_una_sola_reserva(
+    client: AsyncClient,
+    app_sessions: async_sessionmaker[AsyncSession],
+    owner_engine: AsyncEngine,
+) -> None:
+    store, service, staff, slot = await _tienda_reservable(
+        client, app_sessions, "rafaga-sin-email"
+    )
+
+    respuestas = await asyncio.gather(
+        *(
+            client.post(
+                "/public/appointments",
+                json=_reserva(
+                    store,
+                    service,
+                    staff,
+                    slot,
+                    i,
+                    f"pg-sin-email-{i:02d}",
+                    con_email=False,
+                ),
+            )
+            for i in range(RAFAGA)
+        )
+    )
+    codigos = sorted(r.status_code for r in respuestas)
+
+    assert all(c < 500 for c in codigos), codigos
+    assert codigos.count(201) == 1, codigos
+    assert codigos.count(409) == RAFAGA - 1, codigos
+    assert await _turnos_activos(owner_engine, staff) == 1
+
+
+@pytest.mark.asyncio
+async def test_rafaga_sin_email_con_la_misma_clave_crea_un_solo_turno(
+    client: AsyncClient,
+    app_sessions: async_sessionmaker[AsyncSession],
+    owner_engine: AsyncEngine,
+) -> None:
+    store, service, staff, slot = await _tienda_reservable(
+        client, app_sessions, "idem-sin-email"
+    )
+    cuerpo = _reserva(
+        store, service, staff, slot, 1, "idem-sin-email-clave", con_email=False
+    )
+
+    respuestas = await asyncio.gather(
+        *(client.post("/public/appointments", json=cuerpo) for _ in range(30))
+    )
+    codigos = sorted(r.status_code for r in respuestas)
+
+    assert all(c < 500 for c in codigos), codigos
+    assert set(codigos) <= {201, 409}, codigos
+    creados = {r.json()["public_id"] for r in respuestas if r.status_code == 201}
+    assert len(creados) <= 1, creados
+    assert await _turnos_activos(owner_engine, staff) == 1
+
+
+@pytest.mark.asyncio
+async def test_el_mismo_telefono_nuevo_sin_email_en_paralelo_nunca_es_500(
+    client: AsyncClient,
+    app_sessions: async_sessionmaker[AsyncSession],
+    owner_engine: AsyncEngine,
+) -> None:
+    """Un telefono sin ficha reserva N slots distintos a la vez, sin email.
+
+    Todas las altas intentan crear la MISMA ficha: mismo telefono
+    (``uq_users_client_phone_per_store``) y mismo email tecnico
+    ``{tel}@store{id}.noreply`` (``uq_users_client_email_per_store``). La
+    carrera la corta la base: 201 o 409 neutro, nunca un 500 (regla 20), y
+    queda una sola ficha.
+    """
+    store, service, staff, slot = await _tienda_reservable(
+        client, app_sessions, "mismo-tel-sin-email"
+    )
+    slots = [slot + timedelta(minutes=30 * i) for i in range(6)]
+
+    respuestas = await asyncio.gather(
+        *(
+            client.post(
+                "/public/appointments",
+                json=_reserva(
+                    store,
+                    service,
+                    staff,
+                    s,
+                    7,
+                    f"pg-mismo-tel-{n:02d}",
+                    con_email=False,
+                ),
+            )
+            for n, s in enumerate(slots)
+        )
+    )
+    codigos = sorted(r.status_code for r in respuestas)
+
+    assert all(c < 500 for c in codigos), [
+        (r.status_code, r.text[:160]) for r in respuestas
+    ]
+    assert set(codigos) <= {201, 409}, codigos
+    assert codigos.count(201) >= 1, codigos
+    assert await _turnos_activos(owner_engine, staff) == codigos.count(201)
+    async with owner_engine.connect() as conn:
+        fichas = (
+            await conn.execute(
+                text(
+                    "select email from users where role = 'client' and phone = :phone"
+                ),
+                {"phone": "5491155500007"},
+            )
+        ).all()
+    assert len(fichas) == 1, fichas
+    assert fichas[0][0].endswith(".noreply"), fichas
 
 
 @pytest.mark.asyncio
