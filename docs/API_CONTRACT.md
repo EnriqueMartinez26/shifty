@@ -180,6 +180,7 @@ Parameters:
 |---|---|---|---|---|
 | query | `service_id` | yes | string | minLength=1, maxLength=64, pattern="^[A-Za-z0-9_-]{1,64}$" |
 | query | `date` | yes | string | format="date" |
+| query | `extra_service_id` | no | array<string> | maxItems=9, default=[] |
 
 Responses:
 
@@ -1006,6 +1007,7 @@ Parameters:
 | query | `service_id` | yes | string | minLength=1, maxLength=64, pattern="^[A-Za-z0-9_-]{1,64}$" |
 | query | `date` | yes | string | pattern="^\\d{4}-\\d{2}-\\d{2}$" |
 | query | `force_all` | no | boolean | default=false |
+| query | `extra_service_id` | no | array<string> | maxItems=9, default=[] |
 
 Responses:
 
@@ -1088,6 +1090,7 @@ Parameters:
 | query | `client_phone` | no | string \| null | minLength=6, maxLength=30 |
 | query | `promotion_code` | no | string \| null | minLength=3, maxLength=30 |
 | query | `addon` | no | array<string> | maxItems=20, default=[] |
+| query | `extra_service_id` | no | array<string> | maxItems=9, default=[] |
 | header | `X-Client-Token` | no | string \| null |  |
 
 Responses:
@@ -1153,6 +1156,7 @@ Parameters:
 | query | `service_id` | yes | string | minLength=1, maxLength=64, pattern="^[A-Za-z0-9_-]{1,64}$" |
 | query | `code` | yes | string | minLength=3, maxLength=30 |
 | query | `addon` | no | array<string> | maxItems=20, default=[] |
+| query | `extra_service_id` | no | array<string> | maxItems=9, default=[] |
 
 Responses:
 
@@ -3140,6 +3144,14 @@ Responses:
 | `client_email` | string \| null | no | maxLength=255, format="email" |
 | `allow_outside_schedule` | boolean | no | default=false |
 
+### AppointmentExtraServiceItem
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `public_id` | string | yes |  |
+| `name` | string | yes |  |
+| `duration_minutes` | integer | yes |  |
+
 ### AppointmentListItem
 
 | field | type | required | constraints |
@@ -3158,6 +3170,8 @@ Responses:
 | `notes_staff` | string \| null | no |  |
 | `intake_answers` | object<string, string> | no |  |
 | `addons` | array<AppointmentAddonItem> | no |  |
+| `extra_services` | array<AppointmentExtraServiceItem> | no |  |
+| `services_label` | string | no | default="" |
 
 ### AppointmentNotesStaffUpdate
 
@@ -3222,6 +3236,8 @@ Responses:
 | `completed_at` | string \| null | no | format="date-time" |
 | `service_name` | string | yes |  |
 | `service_id` | string | yes |  |
+| `extra_services` | array<AppointmentExtraServiceItem> | no |  |
+| `services_label` | string | no | default="" |
 | `staff_name` | string | yes |  |
 | `staff_id` | string | yes |  |
 | `client_name` | string | yes |  |
@@ -3344,6 +3360,8 @@ Type: `enum("efectivo", "transferencia", "mercadopago", "otro")`
 | `custom_fields` | object<string, string> | no |  |
 | `can_cancel` | boolean | yes |  |
 | `can_reschedule` | boolean | yes |  |
+| `extra_services` | array<PublicBookingExtraService> | no |  |
+| `services_label` | string | no | default="" |
 
 ### ClientAppointmentsResponse
 
@@ -3960,6 +3978,15 @@ Type: `enum("efectivo", "transferencia", "mercadopago", "otro")`
 | `terms_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 | `privacy_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 | `addons` | array<PublicAddonChoice> | no | maxItems=20 |
+| `extra_service_ids` | array<string> | no | maxItems=9 |
+
+### PublicBookingExtraService
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `public_id` | string | yes |  |
+| `name` | string | yes |  |
+| `duration_minutes` | integer | yes |  |
 
 ### PublicBookingResponse
 
@@ -3990,6 +4017,8 @@ Type: `enum("efectivo", "transferencia", "mercadopago", "otro")`
 | `final_price` | number \| null | no |  |
 | `addons` | array<PublicBookingAddonLine> | no |  |
 | `addons_amount` | number | no | default=0.0 |
+| `extra_services` | array<PublicBookingExtraService> | no |  |
+| `services_label` | string | no | default="" |
 
 ### PublicDepositPreviewResponse
 
@@ -4003,6 +4032,7 @@ Type: `enum("efectivo", "transferencia", "mercadopago", "otro")`
 | `payments_enabled` | boolean | yes |  |
 | `online_payment_mandatory` | boolean | yes |  |
 | `addons_amount` | number | no | default=0.0 |
+| `extra_services_amount` | number | no | default=0.0 |
 
 ### PublicPaymentStatusResponse
 
@@ -4506,6 +4536,7 @@ Type: `enum("efectivo", "transferencia", "mercadopago", "otro")`
 | `advanced_reports` | boolean | no | default=false |
 | `new_calendar` | boolean | no | default=false |
 | `otp_booking` | boolean | no | default=false |
+| `multi_service_booking` | boolean | no | default=false |
 
 ### StoreFeatureFlagsResponse
 
@@ -4522,6 +4553,7 @@ Type: `enum("efectivo", "transferencia", "mercadopago", "otro")`
 | `advanced_reports` | boolean \| null | no |  |
 | `new_calendar` | boolean \| null | no |  |
 | `otp_booking` | boolean \| null | no |  |
+| `multi_service_booking` | boolean \| null | no |  |
 
 ### StoreGlobalResponse
 
@@ -4930,4 +4962,4 @@ Type: `enum("admin", "staff", "receptionist", "client")`
 | `terms_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 | `privacy_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 
-Generado desde app.openapi() el 2026-10-15, commit fecbb98c
+Generado desde app.openapi() el 2026-10-16, commit b53df5b0

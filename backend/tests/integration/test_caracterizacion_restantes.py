@@ -226,4 +226,7 @@ async def test_busqueda_de_turnos_items_y_paginado(
         "remainder_payment": None,
         # Aditivo (2026-10-14): la parte del precio que son adicionales.
         "addons_amount": "0.00",
+        # Aditivo (2026-10-16, decision de Mateo): servicios extra del turno.
+        "extra_services": [],
+        "services_label": "Consulta",
     }

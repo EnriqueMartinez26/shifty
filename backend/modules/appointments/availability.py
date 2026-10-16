@@ -10,6 +10,7 @@ un slot es libre solo si:
 """
 
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from typing import TypedDict, cast
@@ -32,6 +33,8 @@ from core.utils import ARGENTINA_TZ, ensure_utc_aware, local_to_utc
 from modules.appointments.model import Appointment
 from modules.payments.service import ACTIVE_APPOINTMENT_STATUSES
 from modules.services.model import Service
+from modules.services.selection import cache_segment, has_duplicates, too_long
+from modules.services.selection_errors import services_too_long
 from modules.appointments.working_hours import load_effective_hours
 from modules.staff.model import Staff, StaffBlock, StaffServiceModel
 from modules.stores.model import Store
@@ -108,8 +111,15 @@ def leaves_unsellable_gap(
     free_from: datetime,
     free_until: datetime,
     grid_origin: datetime,
+    gap_duration: timedelta | None = None,
 ) -> bool:
     """El slot deja un hueco que ningun turno del servicio puede ocupar.
+
+    ``gap_duration``: el turno que tiene que entrar a cada lado. Por defecto
+    ``duration`` (el mismo servicio, como siempre). Con varios servicios en un
+    turno es el servicio mas corto de la seleccion (decision tecnica del
+    coordinador, 2026-10-16): el hueco que queda lo puede tomar cualquiera de
+    ellos solo, y medirlo con la suma escondia casi todo el dia.
 
     Criterio de "strict gap filtering" (B1-01/B6-03, decision del brief:
     no ofrecer huecos irreservables, no esconder todo). La adyacencia se mide
@@ -125,14 +135,15 @@ def leaves_unsellable_gap(
     con duraciones que no son multiplo de 15 (40, 50, 70 minutos) nunca
     pasaba y del dia solo quedaban el primer y el ultimo slot.
     """
+    otro = duration if gap_duration is None else gap_duration
     primer_inicio = _first_grid_start(grid_origin, free_from)
     pegado_al_inicio = start == primer_inicio
     pegado_al_fin = start + SLOT_STEP + duration > free_until
     if pegado_al_inicio or pegado_al_fin:
         return False
-    entra_antes = primer_inicio + duration <= start
+    entra_antes = primer_inicio + otro <= start
     entra_despues = (
-        _first_grid_start(grid_origin, start + duration) + duration <= free_until
+        _first_grid_start(grid_origin, start + duration) + otro <= free_until
     )
     return not (entra_antes and entra_despues)
 
@@ -271,6 +282,7 @@ class AvailabilityService:
         force_all: bool = False,
         hide_private_reasons: bool = False,
         store_rules: StoreRules | None = None,
+        extra_service_public_ids: Sequence[str] = (),
     ) -> list[AvailabilitySlot]:
         """
         Calcula los slots disponibles para un servicio en una fecha dada,
@@ -280,34 +292,29 @@ class AvailabilityService:
         slots del servicio y, debajo, la agenda cruda del dia de la tienda.
         La salida es la de siempre
         (``tests/integration/test_caracterizacion_disponibilidad.py``).
+
+        ``extra_service_public_ids`` (2026-10-16): los demas servicios del
+        turno (``_selection_and_staff``); sin extras, todo es lo de siempre.
         """
-        # 1. Claves vigentes: generacion de la tienda (B6-08) + version del
-        # dia (B7-09), en un pipeline (F3-09). Un Redis caido o lleno es un
-        # MISS (F1-10): se calcula desde la base y no se escribe el cache
-        # (``keys`` queda en None).
-        keys: AvailabilityKeys | None
-        try:
-            keys = await resolve_availability_keys(
-                self.redis,
-                store_id,
-                search_date,
-                service_public_id,
-                force_all=force_all,
-                hide_private_reasons=hide_private_reasons,
-            )
-            cached = await self.redis.get(keys.slots)
-        except REDIS_UNAVAILABLE_ERRORS as exc:
-            _log_cache_unavailable("read", exc)
-            keys, cached = None, None
+        # 1. Claves vigentes y lectura del nivel 1 (``_read_slots``).
+        keys, cached = await self._read_slots(
+            store_id,
+            search_date,
+            cache_segment(service_public_id, extra_service_public_ids),
+            force_all=force_all,
+            hide_private_reasons=hide_private_reasons,
+        )
         if cached:
             return cast(list[AvailabilitySlot], json.loads(cached))
 
         # 2. Servicio activo de la tienda y sus profesionales, una consulta
         # (sin servicio no se cachea nada).
-        found = await self._service_and_staff(store_id, service_public_id)
+        found = await self._selection_and_staff(
+            store_id, service_public_id, extra_service_public_ids
+        )
         if found is None:
             return []
-        duration, staff_members = found
+        duration, staff_members, gap_duration = found
         if not staff_members:
             await self._write_cache(keys, slots="[]")
             return []
@@ -331,6 +338,7 @@ class AvailabilityService:
             agenda,
             force_all=force_all,
             hide_private_reasons=hide_private_reasons,
+            gap_duration=gap_duration,
         )
 
         # 5. Cache: los slots viven lo que le queda a la agenda (5 minutos si
@@ -342,6 +350,36 @@ class AvailabilityService:
             slots_ttl=agenda.remaining_ttl(now),
         )
         return all_slots
+
+    async def _read_slots(
+        self,
+        store_id: str,
+        search_date: date,
+        segmento: str,
+        *,
+        force_all: bool,
+        hide_private_reasons: bool,
+    ) -> tuple[AvailabilityKeys | None, str | bytes | None]:
+        """Claves vigentes y los slots cacheados, si hay.
+
+        Generacion de la tienda (B6-08) + version del dia (B7-09), en un
+        pipeline (F3-09). Un Redis caido o lleno es un MISS (F1-10): se
+        calcula desde la base y no se escribe el cache (``keys`` en None).
+        ``segmento`` es el del servicio o la seleccion (``cache_segment``).
+        """
+        try:
+            keys = await resolve_availability_keys(
+                self.redis,
+                store_id,
+                search_date,
+                segmento,
+                force_all=force_all,
+                hide_private_reasons=hide_private_reasons,
+            )
+            return keys, await self.redis.get(keys.slots)
+        except REDIS_UNAVAILABLE_ERRORS as exc:
+            _log_cache_unavailable("read", exc)
+            return None, None
 
     async def _write_cache(
         self,
@@ -366,6 +404,95 @@ class AvailabilityService:
             await pipe.execute()
         except REDIS_UNAVAILABLE_ERRORS as exc:
             _log_cache_unavailable("write", exc)
+
+    async def _selection_and_staff(
+        self,
+        store_id: str,
+        service_public_id: str,
+        extra_service_public_ids: Sequence[str],
+    ) -> tuple[timedelta, list[_StaffRef], timedelta] | None:
+        """(duracion del slot, profesionales, turno minimo del filtro de huecos).
+
+        Sin extras es ``_service_and_staff`` tal cual (la misma sentencia). Con
+        extras (decision de Mateo, 2026-10-16), ``_services_and_common_staff``:
+        el slot dura la suma, lo ofrecen los profesionales que hacen TODOS y el
+        filtro de huecos mide con el mas corto (decision tecnica del
+        coordinador). 422 ``SERVICES_TOO_LONG`` si la suma pasa el tope. El
+        llamador ya valido el flag y el tope de cantidad
+        (``selection_errors.require_selection_allowed``).
+        """
+        if not extra_service_public_ids:
+            found = await self._service_and_staff(store_id, service_public_id)
+            if found is None:
+                return None
+            duration, staff = found
+            return duration, staff, duration
+        ids = [service_public_id, *extra_service_public_ids]
+        if has_duplicates(service_public_id, extra_service_public_ids):
+            return None
+        return await self._services_and_common_staff(store_id, ids)
+
+    async def _services_and_common_staff(
+        self, store_id: str, public_ids: list[str]
+    ) -> tuple[timedelta, list[_StaffRef], timedelta] | None:
+        """Varios servicios del mismo turno y quien los hace TODOS, en UNA
+        consulta (``in_()``, regla 12): la misma forma que
+        ``_service_and_staff`` con el ``public_id`` en una lista.
+
+        ``None`` si alguno no existe, es de otra tienda o esta inactivo (la
+        misma respuesta vacia que un servicio invalido solo).
+        """
+        rows = (
+            await self.db.execute(
+                select(
+                    Service.public_id,
+                    Service.duration_minutes,
+                    Staff.id,
+                    Staff.display_name,
+                )
+                .select_from(Service)
+                .outerjoin(
+                    StaffServiceModel, StaffServiceModel.service_id == Service.id
+                )
+                .outerjoin(
+                    Staff,
+                    and_(
+                        Staff.id == StaffServiceModel.staff_id,
+                        Staff.store_id == store_id,
+                        Staff.is_active.is_(True),
+                    ),
+                )
+                .where(
+                    Service.public_id.in_(public_ids),
+                    Service.store_id == store_id,
+                    Service.is_active.is_(True),
+                )
+                .order_by(Staff.id)
+            )
+        ).all()
+        minutos = {row.public_id: int(row.duration_minutes) for row in rows}
+        if set(minutos) != set(public_ids):
+            return None
+        if too_long(sum(minutos.values())):
+            raise services_too_long()
+        quienes: dict[str, set[str]] = {pid: set() for pid in public_ids}
+        nombres: dict[str, str] = {}
+        for row in rows:
+            if row.id is not None:
+                quienes[row.public_id].add(row.id)
+                nombres[row.id] = row.display_name
+        comunes = set.intersection(*quienes.values())
+        # En el orden de la consulta (``Staff.id``), como un servicio solo.
+        staff = [
+            _StaffRef(id=staff_id, display_name=nombre)
+            for staff_id, nombre in nombres.items()
+            if staff_id in comunes
+        ]
+        return (
+            timedelta(minutes=sum(minutos.values())),
+            staff,
+            timedelta(minutes=min(minutos.values())),
+        )
 
     async def _service_and_staff(
         self, store_id: str, service_public_id: str
@@ -584,6 +711,7 @@ def _grid_slots(
     *,
     force_all: bool,
     hide_private_reasons: bool,
+    gap_duration: timedelta | None = None,
 ) -> list[AvailabilitySlot]:
     """Slots del dia de todos los profesionales, franja por franja (B1-12).
 
@@ -602,6 +730,7 @@ def _grid_slots(
                     agenda,
                     force_all=force_all,
                     hide_private_reasons=hide_private_reasons,
+                    gap_duration=gap_duration,
                 )
             )
     return all_slots
@@ -616,6 +745,7 @@ def _schedule_slots(
     *,
     force_all: bool,
     hide_private_reasons: bool,
+    gap_duration: timedelta | None = None,
 ) -> list[AvailabilitySlot]:
     """Slots (granularidad SLOT_STEP) de una franja horaria de un profesional."""
     booked = agenda.booked.get(staff.id, [])
@@ -665,6 +795,7 @@ def _schedule_slots(
                 free_from=free_from,
                 free_until=free_until,
                 grid_origin=grid_origin,
+                gap_duration=gap_duration,
             ):
                 current += SLOT_STEP
                 continue

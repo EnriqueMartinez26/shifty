@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
-from typing import Iterable, Protocol
+from typing import Iterable, Protocol, Sequence
 
 _CENT = Decimal("0.01")
 
@@ -48,17 +48,24 @@ class AddonLine:
     unit_price: Decimal
     quantity: int
     amount: Decimal
+    # De que servicio es (``services.id``), solo en un turno de varios
+    # servicios (decision de Mateo, 2026-10-16). Una linea sin la clave es del
+    # principal: la de un turno de un servicio queda como siempre.
+    service_id: str | None = None
 
     def snapshot(self) -> dict[str, str | int]:
         # Importes como texto, igual que ``DepositDecision.snapshot``: el JSON
         # de la base no tiene decimales exactos.
-        return {
+        linea: dict[str, str | int] = {
             "addon_id": self.addon_id,
             "name": self.name,
             "unit_price": str(self.unit_price),
             "quantity": self.quantity,
             "amount": str(self.amount),
         }
+        if self.service_id is not None:
+            linea["service_id"] = self.service_id
+        return linea
 
 
 @dataclass(frozen=True)
@@ -92,12 +99,38 @@ def price_selection(
     service_id: str,
 ) -> AddonsQuote:
     """Cotiza lo elegido contra el catalogo del servicio ``service_id``."""
+    return _price(catalog, selection, service_ids=(service_id,), tag_service=False)
+
+
+def price_selection_for_services(
+    catalog: Iterable[CatalogAddon],
+    selection: Iterable[AddonChoice],
+    *,
+    service_ids: Sequence[str],
+) -> AddonsQuote:
+    """Cotiza lo elegido contra el catalogo de VARIOS servicios del turno.
+
+    Cada adicional tiene que ser de alguno de los servicios elegidos
+    (``services.id``) y su linea guarda de cual (decision de Mateo,
+    2026-10-16). Las mismas reglas que ``price_selection``.
+    """
+    return _price(catalog, selection, service_ids=service_ids, tag_service=True)
+
+
+def _price(
+    catalog: Iterable[CatalogAddon],
+    selection: Iterable[AddonChoice],
+    *,
+    service_ids: Sequence[str],
+    tag_service: bool,
+) -> AddonsQuote:
+    permitidos = set(service_ids)
     by_id = {addon.id: addon for addon in catalog}
     seen: set[str] = set()
     lines: list[AddonLine] = []
     for choice in selection:
         addon = by_id.get(choice.addon_id)
-        if addon is None or addon.service_id != service_id:
+        if addon is None or addon.service_id not in permitidos:
             raise AddonSelectionError(f"adicional desconocido: {choice.addon_id}")
         if choice.addon_id in seen:
             raise AddonSelectionError(f"adicional repetido: {choice.addon_id}")
@@ -112,6 +145,7 @@ def price_selection(
                 unit_price=unit_price,
                 quantity=choice.quantity,
                 amount=_money(unit_price * choice.quantity),
+                service_id=addon.service_id if tag_service else None,
             )
         )
     return AddonsQuote(tuple(lines))

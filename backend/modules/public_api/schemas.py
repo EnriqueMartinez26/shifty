@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from typing import Any, Literal, Optional
+from typing import Annotated, Any, Literal, Optional
 import re
 
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
@@ -14,8 +14,15 @@ from core.validation import (
     reject_payload_control_chars,
 )
 from modules.services.model import ADDON_MAX_QUANTITY, ADDONS_PER_SERVICE
+from modules.services.selection import EXTRA_SERVICES_INPUT_MAX
 from modules.services.schemas import ServiceAddonResponse
 from modules.stores.schemas import StoreCustomField
+
+
+# Id publico de un servicio extra de la reserva (2026-10-16).
+ExtraServiceId = Annotated[
+    str, Field(min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)
+]
 
 
 class PublicStoreRefResponse(BaseModel):
@@ -151,6 +158,14 @@ class PublicBookingCreate(BaseModel):
     addons: list[PublicAddonChoice] = Field(
         default_factory=list, max_length=ADDONS_PER_SERVICE
     )
+    # Varios servicios del mismo profesional en un turno (decision de Mateo,
+    # 2026-10-16). Aditivo: vacio es la reserva de siempre. ``service_id`` es
+    # el principal y estos los demas, en el orden elegido. Tope duro de la
+    # entrada (regla 9); el de producto (3 servicios en total) sale con 422
+    # ``TOO_MANY_SERVICES`` y el flag apagado con 422 ``MULTI_SERVICE_DISABLED``.
+    extra_service_ids: list[ExtraServiceId] = Field(
+        default_factory=list, max_length=EXTRA_SERVICES_INPUT_MAX
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -197,6 +212,14 @@ class PublicBookingCreate(BaseModel):
         return self
 
 
+class PublicBookingExtraService(BaseModel):
+    """Un servicio extra congelado del turno (``extra_services_snapshot``)."""
+
+    public_id: str
+    name: str
+    duration_minutes: int
+
+
 class PublicBookingAddonLine(BaseModel):
     """Una linea congelada del turno (``appointments.addons_snapshot``)."""
 
@@ -241,6 +264,10 @@ class PublicBookingResponse(BaseModel):
     # ``final_price``.
     addons: list[PublicBookingAddonLine] = Field(default_factory=list)
     addons_amount: float = 0.0
+    # Aditivos (2026-10-16): los servicios extra del turno (vacio si no hay) y
+    # la etiqueta de todos ("Corte + Barba"; el nombre solo sin extras).
+    extra_services: list[PublicBookingExtraService] = Field(default_factory=list)
+    services_label: str = ""
 
     class Config:
         from_attributes = True
@@ -268,6 +295,9 @@ class PublicDepositPreviewResponse(BaseModel):
     online_payment_mandatory: bool
     # Aditivo (2026-10-14): la parte de ``price`` que son adicionales.
     addons_amount: float = 0.0
+    # Aditivo (2026-10-16): la parte de ``price`` que son servicios extra (su
+    # precio de lista, sin descuento).
+    extra_services_amount: float = 0.0
 
 
 class PublicPromotionPreviewResponse(BaseModel):
@@ -295,6 +325,9 @@ class ClientAppointmentItem(BaseModel):
     custom_fields: dict[str, str] = Field(default_factory=dict)
     can_cancel: bool
     can_reschedule: bool
+    # Aditivos (2026-10-16): los servicios extra y la etiqueta del turno.
+    extra_services: list[PublicBookingExtraService] = Field(default_factory=list)
+    services_label: str = ""
 
 
 class ClientAppointmentsResponse(BaseModel):

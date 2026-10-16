@@ -73,7 +73,6 @@ from modules.payments.deposit_channels import (
     DepositChannels,
     DepositChannelUnavailableError,
     deposit_channels_for,
-    deposit_mode_of,
     provider_for,
     report_deposit_channel_unavailable,
     resolve_deposit_channel,
@@ -84,7 +83,10 @@ from modules.payments.deposit_rules import (
     ClientHistory,
     DepositDecision,
     DepositRules,
+    SelectionDeposit,
     decide_deposit,
+    decide_selection_deposit,
+    selection_deposit_mode,
 )
 from modules.payments.model import (
     PAYMENT_PROVIDER_MANUAL,
@@ -105,13 +107,18 @@ from modules.payments.service import (
 )
 from modules.promotions.model import PromotionRedemption
 from modules.promotions.service import PromotionQuote, quote_promotion, redeem_promotion
-from modules.public_api.repository import PublicRepository, RangeRejection
+from modules.public_api.repository import (
+    ExtraServicesForBooking,
+    PublicRepository,
+    RangeRejection,
+)
 from modules.public_api.schemas import (
     ClientCancelRequest,
     ClientRescheduleRequest,
     PublicAddonChoice,
     PublicBookingAddonLine,
     PublicBookingCreate,
+    PublicBookingExtraService,
     PublicBookingResponse,
 )
 from modules.services.addons import (
@@ -121,7 +128,22 @@ from modules.services.addons import (
     AddonsQuote,
     lines_from_snapshot,
     price_selection,
+    price_selection_for_services,
     snapshot_label,
+)
+from modules.services.selection import (
+    NO_EXTRA_SERVICES,
+    ExtraServices,
+    has_duplicates,
+    price_extra_services,
+    rescheduled_duration,
+    services_label,
+    snapshot_items,
+    too_long,
+)
+from modules.services.selection_errors import (
+    require_selection_allowed,
+    services_too_long,
 )
 from modules.services.model import Service
 from modules.services.repository import ServiceRepository
@@ -424,6 +446,66 @@ def decide(
     )
 
 
+def decide_selection(
+    services: Sequence[Service],
+    store: Store,
+    *,
+    price: Decimal,
+    starts_at: datetime,
+    history: ClientHistory,
+    now: datetime | None = None,
+) -> SelectionDeposit:
+    """La sena de un turno de uno o varios servicios: la regla mas alta sobre
+    el TOTAL (``deposit_rules.decide_selection_deposit``, decision de Mateo
+    2026-10-16). Con un servicio es ``decide``."""
+    now = now or datetime.now(timezone.utc)
+    return decide_selection_deposit(
+        services,
+        price=price,
+        notice=starts_at - now,
+        rules=DepositRules.from_store(store),
+        history=history,
+    )
+
+
+async def resolve_extra_services(
+    repo: PublicRepository,
+    store: Store,
+    principal: Service,
+    extra_public_ids: Sequence[str],
+) -> tuple[Service, ...]:
+    """Los servicios extra elegidos, validados ANTES de escribir nada.
+
+    Flag de la tienda y tope de cantidad (``require_selection_allowed``), 404
+    neutro (el de un servicio invalido) si uno se repite, es el principal, es
+    de otra tienda, esta inactivo o no existe, y 422 ``SERVICES_TOO_LONG`` si la
+    suma de duraciones pasa el tope. Sin extras no consulta la base.
+    """
+    require_selection_allowed(store.feature_flags, extra_public_ids)
+    if not extra_public_ids:
+        return ()
+    if has_duplicates(principal.public_id, extra_public_ids):
+        raise ServiceNotFoundException(identifier=principal.public_id)
+    extras = await repo.get_services_by_public_ids(store.id, extra_public_ids)
+    if len(extras) != len(extra_public_ids):
+        encontrados = {extra.public_id for extra in extras}
+        faltante = next(pid for pid in extra_public_ids if pid not in encontrados)
+        raise ServiceNotFoundException(identifier=faltante)
+    minutos = principal.duration_minutes + sum(e.duration_minutes for e in extras)
+    if too_long(minutos):
+        raise services_too_long()
+    return tuple(extras)
+
+
+def gross_total(
+    base_price: Decimal, extras: ExtraServices, addons: AddonsQuote
+) -> Decimal:
+    """Servicio principal + servicios extra + adicionales, antes de la promo.
+    Sin extras, la suma de siempre (servicio + adicionales)."""
+    total = base_price + addons.total
+    return total + extras.amount if extras.lines else total
+
+
 def addon_unavailable() -> AppException:
     """422 neutro: el adicional no existe, es de otro servicio, se repitio o
     pide mas que el maximo. El front vuelve a pedir el catalogo."""
@@ -435,24 +517,34 @@ def addon_unavailable() -> AppException:
 
 
 async def quote_addons(
-    db: AsyncSession, service: Service, choices: Sequence[AddonChoice]
+    db: AsyncSession,
+    service: Service,
+    choices: Sequence[AddonChoice],
+    extra_services: Sequence[Service] = (),
 ) -> AddonsQuote:
     """Cotiza los adicionales elegidos contra el catalogo VIGENTE del servicio.
 
     La misma funcion pura (``services.addons.price_selection``) para el
     preview y el alta: lo que se muestra es lo que se cobra. Sin elegidos no
-    consulta la base.
+    consulta la base. Con ``extra_services`` (2026-10-16) cada adicional
+    tiene que ser de alguno de los servicios elegidos y su linea dice de cual
+    (``price_selection_for_services``), con la misma consulta.
     """
     if not choices:
         return NO_ADDONS
-    catalog = await ServiceRepository(db).addons_for(
-        str(service.store_id), [service.id]
-    )
+    ids = [service.id, *(extra.id for extra in extra_services)]
+    catalog = await ServiceRepository(db).addons_for(str(service.store_id), ids)
     try:
-        return price_selection(
-            catalog.get(service.id, []),
+        if not extra_services:
+            return price_selection(
+                catalog.get(service.id, []),
+                choices,
+                service_id=service.id,
+            )
+        return price_selection_for_services(
+            [addon for sid in ids for addon in catalog.get(sid, [])],
             choices,
-            service_id=service.id,
+            service_ids=ids,
         )
     except AddonSelectionError:
         raise addon_unavailable() from None
@@ -462,11 +554,24 @@ def _addon_choices(addons: list[PublicAddonChoice]) -> list[AddonChoice]:
     return [AddonChoice(addon.addon_id, addon.quantity) for addon in addons]
 
 
-def service_label(service_name: str, snapshot: object) -> str:
+def service_label(
+    service_name: str, snapshot: object, extra_services_snapshot: object = None
+) -> str:
     """``Unas (+ Strass x6)`` para el aviso al dueno; el nombre solo sin
-    adicionales."""
+    adicionales. Con servicios extra, ``Corte + Barba (+ Strass x6)``."""
+    nombre = services_label(service_name, extra_services_snapshot)
     extras = snapshot_label(snapshot)
-    return f"{service_name} (+ {extras})" if extras else service_name
+    return f"{nombre} (+ {extras})" if extras else nombre
+
+
+def extra_service_items(snapshot: object) -> list[PublicBookingExtraService]:
+    """Los servicios extra congelados del turno para la respuesta."""
+    return [
+        PublicBookingExtraService(
+            public_id=public_id, name=name, duration_minutes=minutes
+        )
+        for public_id, name, minutes in snapshot_items(snapshot)
+    ]
 
 
 def addon_lines(snapshot: object) -> list[PublicBookingAddonLine]:
@@ -587,11 +692,22 @@ class _BookingRequest:
     deposit_channel: DepositChannel | None
     # Adicionales cotizados contra el catalogo vigente (suman precio).
     addons: AddonsQuote = NO_ADDONS
+    # Los demas servicios del turno (decision de Mateo, 2026-10-16) y lo que
+    # congela de ellos; vacios en la reserva de siempre.
+    extra_services: tuple[Service, ...] = ()
+    extras: ExtraServices = NO_EXTRA_SERVICES
+    # El servicio cuya regla de sena dio el maximo (None: ninguno pide).
+    deposit_rule_service: Service | None = None
 
     @property
     def gross_price(self) -> Decimal:
-        """Servicio + adicionales, antes de la promo."""
-        return self.base_price + self.addons.total
+        """Servicios + adicionales, antes de la promo."""
+        return gross_total(self.base_price, self.extras, self.addons)
+
+    @property
+    def services(self) -> tuple[Service, ...]:
+        """El principal y los extras, en el orden elegido."""
+        return (self.service, *self.extra_services)
 
     @property
     def payment_required(self) -> bool:
@@ -635,7 +751,14 @@ class PublicBookingService:
         # Antes de tocar la base: una version vieja no reserva (PV-09).
         check_accepted_versions(data.terms_version, data.privacy_version)
         service, store = await self._resolve_store_and_service(data)
-        request = await self._resolve_request(data, service, store, client_token)
+        # Varios servicios en un turno (2026-10-16): flag, tope, 404 neutro y
+        # duracion, antes de cualquier otra lectura. Sin extras, nada.
+        extra_services = await resolve_extra_services(
+            self.repo, store, service, data.extra_service_ids
+        )
+        request = await self._resolve_request(
+            data, service, store, client_token, extra_services
+        )
         booking = await self._persist(data, request, idempotency_key)
 
         await self.db.commit()
@@ -682,17 +805,14 @@ class PublicBookingService:
         await reject_new_public_business_when_suspended(self.db, store)
         return service, store
 
-    async def _resolve_request(
-        self,
-        data: PublicBookingCreate,
-        service: Service,
-        store: Store,
-        client_token: str | None,
-    ) -> _BookingRequest:
-        """Antelacion, OTP, campos extra, precio y sena: todo antes de escribir."""
-        # Antelacion minima. El flujo admin ya la validaba, pero el booking
-        # publico solo la aplicaba al *mostrar* slots, no al crearlos: un POST
-        # directo podia agendar en el pasado o dentro de la ventana bloqueada.
+    @staticmethod
+    def _require_notice(data: PublicBookingCreate, store: Store) -> datetime:
+        """El inicio en UTC, o 409 si cae dentro de la antelacion minima.
+
+        El flujo admin ya la validaba, pero el booking publico solo la
+        aplicaba al *mostrar* slots, no al crearlos: un POST directo podia
+        agendar en el pasado o dentro de la ventana bloqueada.
+        """
         notice_hours = getattr(store, "min_booking_notice_hours", 2) or 0
         starts_at_utc = (
             data.starts_at
@@ -701,61 +821,97 @@ class PublicBookingService:
         )
         if starts_at_utc < datetime.now(timezone.utc) + timedelta(hours=notice_hours):
             raise BookingNoticeException(notice_hours)
+        return starts_at_utc
 
-        # Un OTP prueba posesion de un EMAIL, no del telefono. El gate de
-        # reserva NO recibe ningun email del request: `client_email` es
-        # opcional y en el wizard publico es un campo distinto del email del
-        # codigo, asi que exigir que coincidan trababa reservas legitimas sin
-        # aportar seguridad (quien ataca controla los dos campos). La garantia
-        # esta en el despacho: si el telefono tiene ficha con email entregable,
-        # el codigo va a ESE buzon. La ramificacion vive en el servicio.
-        # 2026-09-20.
-        # Una instancia para el request: recuerda la ficha y el veredicto, y
-        # el gate y el contacto verificado no vuelven a preguntar (F3-03).
-        # Los dos exigen ademas el token de quien verifico (2026-10-14): sin
-        # el, la verificacion de otro abria su historial para la sena.
-        otp_service = OtpService(self.db)
-        if is_store_feature_enabled(store.feature_flags, "otp_booking"):
-            await self._require_booking_otp(
-                otp_service, store.id, data.client_phone, client_token
-            )
-        contact_verified = await otp_service.is_self_service_allowed(
-            store_id=store.id,
-            phone=data.client_phone,
-            client_token=client_token,
-        )
-
+    async def _resolve_request(
+        self,
+        data: PublicBookingCreate,
+        service: Service,
+        store: Store,
+        client_token: str | None,
+        extra_services: tuple[Service, ...] = (),
+    ) -> _BookingRequest:
+        """Antelacion, OTP, campos extra, precio y sena: todo antes de escribir."""
+        starts_at_utc = self._require_notice(data, store)
+        contact_verified = await self._contact_verified(data, store, client_token)
         custom_fields = validate_custom_fields(store, data.custom_fields)
         base_price = Decimal(str(service.price or 0))
-        addons = await quote_addons(self.db, service, _addon_choices(data.addons))
-        total_price = await self._discounted_total(
-            data, service, store, base_price + addons.total
+        extras = price_extra_services(extra_services)
+        addons = await quote_addons(
+            self.db, service, _addon_choices(data.addons), extra_services
         )
+        total_price = await self._discounted_total(
+            data, service, store, gross_total(base_price, extras, addons)
+        )
+        services = (service, *extra_services)
         # Los canales solo se consultan para una sena obligatoria.
         channels = await deposit_channels_for(
-            self.db, store, deposit_mode=deposit_mode_of(service)
+            self.db, store, deposit_mode=selection_deposit_mode(services)
         )
-        return self._decide_deposit(
+        # Mismo criterio que el preview: un telefono sin CONTACTO verificado
+        # no trae el historial de nadie, ni para mostrar ni para cobrar. Si
+        # no, quien tipea el telefono de otro hereda (o le carga) sus
+        # recargos. Una sola consulta agregada, antes del lock.
+        history = (
+            await self.repo.get_client_history(store.id, data.client_phone)
+            if contact_verified
+            else UNKNOWN_HISTORY
+        )
+        deposit, deposit_channel = self._decide_deposit(
             data,
             store=store,
-            service=service,
+            services=services,
             channels=channels,
+            starts_at_utc=starts_at_utc,
+            total_price=total_price,
+            history=history,
+        )
+        return _BookingRequest(
+            store=store,
+            store_id=store.id,
+            service=service,
             starts_at_utc=starts_at_utc,
             contact_verified=contact_verified,
             custom_fields=custom_fields,
             base_price=base_price,
             total_price=total_price,
+            history=history,
+            deposit=deposit.decision,
+            deposit_channel=deposit_channel,
             addons=addons,
-            history=(
-                # Mismo criterio que el preview: un telefono sin CONTACTO
-                # verificado no trae el historial de nadie, ni para mostrar ni
-                # para cobrar. Si no, quien tipea el telefono de otro hereda
-                # (o le carga) sus recargos. Una sola consulta agregada, antes
-                # del lock.
-                await self.repo.get_client_history(store.id, data.client_phone)
-                if contact_verified
-                else UNKNOWN_HISTORY
-            ),
+            extra_services=extra_services,
+            extras=extras,
+            deposit_rule_service=deposit.rule_service,
+        )
+
+    async def _contact_verified(
+        self, data: PublicBookingCreate, store: Store, client_token: str | None
+    ) -> bool:
+        """Gate de OTP de la tienda (``otp_booking``) y si el contacto esta
+        verificado (para traer el historial de la sena).
+
+        Un OTP prueba posesion de un EMAIL, no del telefono. El gate de
+        reserva NO recibe ningun email del request: `client_email` es
+        opcional y en el wizard publico es un campo distinto del email del
+        codigo, asi que exigir que coincidan trababa reservas legitimas sin
+        aportar seguridad (quien ataca controla los dos campos). La garantia
+        esta en el despacho: si el telefono tiene ficha con email entregable,
+        el codigo va a ESE buzon. La ramificacion vive en el servicio.
+        2026-09-20.
+        Una instancia para el request: recuerda la ficha y el veredicto, y
+        el gate y el contacto verificado no vuelven a preguntar (F3-03).
+        Los dos exigen ademas el token de quien verifico (2026-10-14): sin
+        el, la verificacion de otro abria su historial para la sena.
+        """
+        otp_service = OtpService(self.db)
+        if is_store_feature_enabled(store.feature_flags, "otp_booking"):
+            await self._require_booking_otp(
+                otp_service, store.id, data.client_phone, client_token
+            )
+        return await otp_service.is_self_service_allowed(
+            store_id=store.id,
+            phone=data.client_phone,
+            client_token=client_token,
         )
 
     @staticmethod
@@ -811,22 +967,19 @@ class PublicBookingService:
         data: PublicBookingCreate,
         *,
         store: Store,
-        service: Service,
+        services: tuple[Service, ...],
         channels: DepositChannels,
         starts_at_utc: datetime,
-        contact_verified: bool,
-        custom_fields: dict[str, str],
-        base_price: Decimal,
         total_price: Decimal,
-        addons: AddonsQuote,
         history: ClientHistory,
-    ) -> _BookingRequest:
+    ) -> tuple[SelectionDeposit, DepositChannel | None]:
         # La regla de sena se evalua UNA vez (misma antelacion, mismo
         # historial) y el resultado viaja hasta el pago y la respuesta. Antes
         # se recalculaba tres veces con `now` distinto. Sobre el TOTAL con la
-        # promo (servicio + adicionales, decision de Mateo 2026-10-15).
-        deposit = decide(
-            service,
+        # promo (servicio + adicionales, decision de Mateo 2026-10-15), con la
+        # regla mas alta entre los servicios del turno (2026-10-16).
+        deposit = decide_selection(
+            services,
             store,
             price=total_price,
             starts_at=starts_at_utc,
@@ -836,28 +989,17 @@ class PublicBookingService:
             deposit_channel = resolve_deposit_channel(
                 data.payment_method,
                 channels=channels,
-                deposit_amount=deposit.amount,
-                deposit_mode=deposit_mode_of(service),
+                deposit_amount=deposit.decision.amount,
+                deposit_mode=selection_deposit_mode(services),
                 allow_manual_coordination=store.allow_manual_coordination,
             )
         except DepositChannelUnavailableError:
             # El 409 es neutro y el dueno no lo ve: queda rastro con ids.
-            report_deposit_channel_unavailable(store_id=store.id, service_id=service.id)
+            report_deposit_channel_unavailable(
+                store_id=store.id, service_id=services[0].id
+            )
             raise
-        return _BookingRequest(
-            store=store,
-            store_id=store.id,
-            service=service,
-            starts_at_utc=starts_at_utc,
-            contact_verified=contact_verified,
-            custom_fields=custom_fields,
-            base_price=base_price,
-            total_price=total_price,
-            history=history,
-            deposit=deposit,
-            deposit_channel=deposit_channel,
-            addons=addons,
-        )
+        return deposit, deposit_channel
 
     async def _persist(
         self,
@@ -932,6 +1074,9 @@ class PublicBookingService:
             ),
             addons_amount=request.addons.total,
             addons_snapshot=request.addons.snapshot(),
+            extra_services=ExtraServicesForBooking(
+                request.extra_services, request.extras
+            ),
         )
         promotion_quote = await self._redeem_promotion_code(
             data, store_id, appointment, client, service, request.gross_price
@@ -946,7 +1091,9 @@ class PublicBookingService:
                     booking.appointment,
                     client_name=data.client_name,
                     service_name=service_label(
-                        booking.service.name, booking.appointment.addons_snapshot
+                        booking.service.name,
+                        booking.appointment.addons_snapshot,
+                        booking.appointment.extra_services_snapshot,
                     ),
                     deposit=booking.payment,
                 )
@@ -988,30 +1135,34 @@ class PublicBookingService:
         # de Mateo, 2026-10-15).
         service, quote = booking.service, booking.promotion_quote
         addons_total = request.addons.total
-        payable_before_discount = decide(
-            service,
+        payable_before_discount = decide_selection(
+            request.services,
             request.store,
             price=request.gross_price,
             starts_at=request.starts_at_utc,
             history=request.history,
-        ).amount
+        ).decision.amount
         final_decision = (
-            decide(
-                service,
+            decide_selection(
+                request.services,
                 request.store,
                 price=quote.final_amount,
                 starts_at=request.starts_at_utc,
                 history=request.history,
-            )
+            ).decision
             if quote
             else request.deposit
         )
         payable_after_discount = final_decision.amount
         # El snapshot dice sobre que total se calculo la sena.
-        deposit_rule = final_decision.snapshot() | {
-            "price": str(booking.appointment.price_amount),
-            "addons_amount": str(addons_total),
-        }
+        deposit_rule = (
+            final_decision.snapshot()
+            | {
+                "price": str(booking.appointment.price_amount),
+                "addons_amount": str(addons_total),
+            }
+            | _selection_rule_snapshot(request)
+        )
         # Dentro de la transaccion (que sostiene el lock FOR UPDATE del staff)
         # solo se crea el Payment PENDING con link placeholder: la llamada HTTP
         # a Mercado Pago se hace DESPUES del commit, con el lock ya soltado,
@@ -1210,7 +1361,11 @@ class PublicBookingService:
         if denial is not None:
             raise denial
         service, staff = await self._service_and_staff(original)
-        new_ends_at = data.new_starts_at + timedelta(minutes=service.duration_minutes)
+        # Duracion del principal de hoy + la de los extras congelados (decision
+        # de Mateo, 2026-10-16): el turno movido conserva sus servicios.
+        new_ends_at = data.new_starts_at + timedelta(
+            minutes=rescheduled_duration(service, original)
+        )
         await self._check_new_slot(original, staff, data.new_starts_at, new_ends_at)
         # Una sena por WhatsApp pendiente se muda con el turno: lockeada
         # despues del turno (regla 7) y con el plazo recalculado.
@@ -1316,7 +1471,9 @@ class PublicBookingService:
                 new_appointment,
                 client_name=client.full_name or "Un cliente",
                 service_name=service_label(
-                    service.name, new_appointment.addons_snapshot
+                    service.name,
+                    new_appointment.addons_snapshot,
+                    new_appointment.extra_services_snapshot,
                 ),
                 deposit=nueva,
             )
@@ -1338,7 +1495,9 @@ class PublicBookingService:
         aviso: dict[str, JsonValue] = {
             "appointment_id": appointment.id,
             "client_name": client.full_name or "Un cliente",
-            "service_name": getattr(service, "name", ""),
+            "service_name": services_label(
+                getattr(service, "name", ""), appointment.extra_services_snapshot
+            ),
             "starts_at": appointment.starts_at.isoformat(),
         }
         # El motivo que dejo el cliente viaja al aviso del duenio en una sola
@@ -1418,6 +1577,31 @@ class PublicBookingService:
             raise AppointmentConflictException()
 
 
+def _selection_rule_snapshot(request: _BookingRequest) -> dict[str, JsonValue]:
+    """Que servicio aporto la regla de la sena y el desglose de lineas, solo
+    en un turno de varios servicios (decision de Mateo, 2026-10-16). Vacio en
+    la reserva de siempre: su ``deposit_rule`` no cambia."""
+    if not request.extra_services:
+        return {}
+    regla = request.deposit_rule_service
+    lineas: list[JsonValue] = [
+        {
+            "public_id": request.service.public_id,
+            "name": request.service.name,
+            "price": str(request.base_price),
+        }
+    ]
+    lineas += [
+        {"public_id": line.public_id, "name": line.name, "price": str(line.price)}
+        for line in request.extras.lines
+    ]
+    return {
+        "extra_services_amount": str(request.extras.amount),
+        "rule_service_id": regla.public_id if regla is not None else None,
+        "lines": lineas,
+    }
+
+
 def _rescheduled_copy(
     original: Appointment,
     client: User,
@@ -1455,12 +1639,14 @@ def _rescheduled_copy(
         client_id=original.client_id,
         starts_at=data.new_starts_at,
         ends_at=new_ends_at,
-        duration_minutes=service.duration_minutes,
+        duration_minutes=rescheduled_duration(service, original),
         # Preservar el precio congelado del turno original, con sus
-        # adicionales (el total ya los incluye).
+        # adicionales y sus servicios extra (el total ya los incluye).
         price_amount=original.price_amount,
         addons_amount=original.addons_amount or Decimal("0.00"),
         addons_snapshot=original.addons_snapshot,
+        extra_services_amount=original.extra_services_amount or Decimal("0.00"),
+        extra_services_snapshot=original.extra_services_snapshot,
         client_name=client.full_name or client.email,
         client_email=client.email,
         client_phone=client.phone,
@@ -1542,6 +1728,10 @@ def _self_service_response(
         deposit_deadline=_deposit_deadline(appointment),
         addons=addon_lines(appointment.addons_snapshot),
         addons_amount=float(appointment.addons_amount or 0),
+        extra_services=extra_service_items(appointment.extra_services_snapshot),
+        services_label=services_label(
+            service.name if service else "", appointment.extra_services_snapshot
+        ),
     )
 
 
@@ -1587,4 +1777,8 @@ def _booking_response(
         final_price=float(quote.final_amount if quote else request.gross_price),
         addons=addon_lines(appointment.addons_snapshot),
         addons_amount=float(request.addons.total),
+        extra_services=extra_service_items(appointment.extra_services_snapshot),
+        services_label=services_label(
+            service.name, appointment.extra_services_snapshot
+        ),
     )

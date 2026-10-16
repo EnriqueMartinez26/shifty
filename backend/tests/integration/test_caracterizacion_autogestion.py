@@ -143,6 +143,9 @@ async def test_cancelar_cuerpo_filas_outbox_y_cache(
         # Aditivo (2026-10-14, decision de Mateo): adicionales del turno.
         "addons": [],
         "addons_amount": 0.0,
+        # Aditivo (2026-10-16, decision de Mateo): servicios extra del turno.
+        "extra_services": [],
+        "services_label": "Consulta",
     }
     assert orden == ["commit", "cache"], orden
     fila = await _turno(test_session, turno)
@@ -271,6 +274,9 @@ async def test_reprogramar_cuerpo_filas_outbox_cache_y_replay(
         # Aditivo (2026-10-14, decision de Mateo): adicionales del turno.
         "addons": [],
         "addons_amount": 0.0,
+        # Aditivo (2026-10-16, decision de Mateo): servicios extra del turno.
+        "extra_services": [],
+        "services_label": "Consulta",
     }
     assert ensure_utc_aware(datetime.fromisoformat(cuerpo["starts_at"])) == (
         nuevo_inicio
