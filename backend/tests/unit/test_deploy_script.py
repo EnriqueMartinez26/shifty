@@ -42,6 +42,10 @@ def _preparar_deploy(host: Host, actual: str = "v1") -> None:
     (host.fake / "backend_ids").write_text(
         "old1\nold2\n", encoding="utf-8", newline="\n"
     )
+    # La SPA corre una sola replica.
+    (host.fake / "frontend_ids").write_text(
+        "front-old1\n", encoding="utf-8", newline="\n"
+    )
     _backup_fresco(host)
     # El .env del servidor: compose lo lee del directorio del proyecto.
     (host.repo / ".env").write_text(
@@ -138,14 +142,17 @@ def test_deploy_migra_con_el_codigo_viejo_sirviendo_y_despues_recrea(
     backend = _indice(
         llamadas, r"compose up -d --no-deps --no-build .*--scale backend=4 backend"
     )
+    frontend = _indice(
+        llamadas, r"compose up -d --no-deps --no-build .*--scale frontend=2 frontend$"
+    )
     # El borde NO se recrea en un deploy normal (solo `make deploy-edge`).
     resto = _indice(
         llamadas,
         r"compose up -d --no-deps --no-build --remove-orphans "
-        r"celery_worker celery_worker_interactive celery_beat frontend$",
+        r"celery_worker celery_worker_interactive celery_beat$",
     )
     reload = _ultimo_indice(llamadas, r"compose exec -T nginx nginx -s reload")
-    assert pull < verifica < migra < backend < resto < reload
+    assert pull < verifica < migra < backend < frontend < resto < reload
     assert not _hay(llamadas, r"compose (pull|up) .*\bnginx\b")
     # Rolling: las viejas se bajan despues de que las nuevas estan sanas.
     assert _indice(llamadas, r"docker stop .*old1") > backend
@@ -516,6 +523,147 @@ def test_rollback_sin_la_imagen_previa_falla_con_alerta_y_no_toca_nada(
     assert "shifty-backend:v1" in resultado.stderr
     assert not _hay(host.llamadas(), r"compose up")
     assert (host.repo / ".deploy" / "current").read_text().strip() == "v2"
+
+
+# --- frontend sin corte (2026-10-15, produccion) -----------------------------
+#
+# El frontend tenia container_name y el deploy lo RECREABA: entre que bajaba
+# el contenedor viejo y nginx aprendia la IP del nuevo, la home daba 502. Log
+# del deploy de 2026-10-15 23:49 UTC:
+#   ✔ shifty_frontend Started
+#   curl: (22) The requested URL returned error: 502
+#   compuerta: https://shifty-ar.tech/ no respondio bien (1/12)
+# Ahora se renueva como el backend: la replica nueva al lado de la vieja, sana
+# antes de bajar la vieja, con el tiempo de DNS de nginx en el medio.
+
+
+def _llamadas_de_un_deploy_ok(host: Host, **extra: str) -> list[str]:
+    resultado = host.correr(
+        "deploy.sh", "deploy", APP_VERSION="v2", **{**_BASE_DEPLOY, **extra}
+    )
+    assert resultado.returncode == 0, resultado.stderr
+    return host.llamadas()
+
+
+def test_el_frontend_nuevo_esta_sano_antes_de_bajar_el_viejo(host: Host) -> None:
+    _preparar_deploy(host, actual="v1")
+
+    llamadas = _llamadas_de_un_deploy_ok(host)
+
+    # Las replicas viejas del backend ya se bajaron: en el pico de memoria no
+    # se suman las dos tandas.
+    backend_viejo_fuera = _indice(llamadas, r"docker rm old1 old2$")
+    front_nuevo = _indice(
+        llamadas,
+        r"compose up -d --no-deps --no-build --remove-orphans --no-recreate "
+        r"--wait --wait-timeout 180 --scale frontend=2 frontend$",
+    )
+    # nginx re-resuelve `frontend` (resolve, valid=5s) antes de bajar la vieja.
+    para_viejo = _indice(llamadas, r"docker stop -t 35 front-old1$")
+    dns = _ultimo_indice(llamadas[:para_viejo], r"^sleep 6$")
+    borra_viejo = _indice(llamadas, r"docker rm front-old1$")
+    reload = _ultimo_indice(llamadas, r"compose exec -T nginx nginx -s reload")
+    assert backend_viejo_fuera < front_nuevo < dns < para_viejo < borra_viejo < reload
+    # El frontend nunca se recrea en el lugar: ningun `up` lo nombra sin
+    # --no-recreate --scale (eso bajaba el viejo antes de tener el nuevo).
+    for llamada in llamadas:
+        if re.search(r"compose up .*\bfrontend\b", llamada):
+            assert "--no-recreate" in llamada, llamada
+            assert "--scale frontend=" in llamada, llamada
+    ids = (host.fake / "frontend_ids").read_text().split()
+    assert ids == ["front-new2-v2"], ids
+
+
+def test_el_frontend_corre_una_sola_replica_despues_de_cada_deploy(
+    host: Host,
+) -> None:
+    """Dos replicas solo durante el cambio: en estado estable alcanza una."""
+    _preparar_deploy(host, actual="v1")
+
+    _llamadas_de_un_deploy_ok(host)
+    segundo = host.correr("deploy.sh", "deploy", APP_VERSION="v3", **_BASE_DEPLOY)
+
+    assert segundo.returncode == 0, segundo.stderr
+    assert _hay(host.llamadas(), r"docker stop -t 35 front-new2-v2$")
+    ids = (host.fake / "frontend_ids").read_text().split()
+    assert ids == ["front-new2-v3"], ids
+
+
+def test_un_frontend_nuevo_que_no_queda_sano_se_descarta_y_hace_rollback(
+    host: Host,
+) -> None:
+    """La SPA vieja nunca se baja sin una nueva sana. El backend ya es el
+    nuevo: el rollback deja las dos piezas en la version anterior, tambien sin
+    corte."""
+    _preparar_deploy(host, actual="v1")
+
+    resultado = host.correr(
+        "deploy.sh",
+        "deploy",
+        APP_VERSION="v2",
+        FAKE_UP_FRONTEND_FALLA_EN="v2",
+        **_BASE_DEPLOY,
+    )
+
+    assert resultado.returncode == 1, resultado.stderr
+    assert "rollback" in resultado.stderr.lower()
+    llamadas = host.llamadas()
+    descarta = _indice(llamadas, r"docker rm -f front-new2-v2$")
+    rondas = [
+        i
+        for i, ll in enumerate(llamadas)
+        if re.search(r"compose up .*--scale frontend=2 frontend$", ll)
+    ]
+    assert len(rondas) == 2, rondas
+    # La vieja (v1) sigue sirviendo hasta que la del rollback esta sana.
+    para_viejo = _indice(llamadas, r"docker stop -t 35 front-old1$")
+    assert rondas[0] < descarta < rondas[1] < para_viejo
+    assert sum(bool(re.search(r"alembic upgrade", ll)) for ll in llamadas) == 1
+    assert (host.fake / "frontend_ids").read_text().split() == ["front-new2-v1"]
+    ids = (host.fake / "backend_ids").read_text().split()
+    assert ids and all(i.endswith("-v1") for i in ids), ids
+    assert (host.repo / ".deploy" / "current").read_text().strip() == "v1"
+
+
+def test_rollback_renueva_el_frontend_sin_corte(host: Host) -> None:
+    _preparar_deploy(host, actual="v2")
+    (host.repo / ".deploy" / "previous").write_text("v1\n", encoding="utf-8")
+
+    resultado = host.correr("deploy.sh", "rollback", **_BASE_DEPLOY)
+
+    assert resultado.returncode == 0, resultado.stderr
+    llamadas = host.llamadas()
+    nuevo = _indice(
+        llamadas, r"compose up .*--no-recreate .*--scale frontend=2 frontend$"
+    )
+    assert nuevo < _indice(llamadas, r"docker stop -t 35 front-old1$")
+    assert (host.fake / "frontend_ids").read_text().split() == ["front-new2-v1"]
+
+
+def test_sin_rolling_el_frontend_se_recrea_directo(host: Host) -> None:
+    """DEPLOY_ROLLING=0 es la salida de emergencia si escalar falla: `up`
+    directo, con el corte de antes."""
+    _preparar_deploy(host, actual="v1")
+
+    llamadas = _llamadas_de_un_deploy_ok(host, DEPLOY_ROLLING="0")
+
+    assert _hay(
+        llamadas,
+        r"compose up -d --no-deps --no-build --remove-orphans --wait "
+        r"--wait-timeout 180 frontend$",
+    )
+    assert not _hay(llamadas, r"--scale")
+
+
+def test_un_deploy_sin_frontend_en_la_lista_no_lo_toca(host: Host) -> None:
+    _preparar_deploy(host, actual="v1")
+
+    llamadas = _llamadas_de_un_deploy_ok(
+        host,
+        DEPLOY_SERVICES="backend celery_worker celery_worker_interactive celery_beat",
+    )
+
+    assert not _hay(llamadas, r"\bfrontend\b")
 
 
 # --- make deploy-edge: el borde se recrea solo si cambio --------------------

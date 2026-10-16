@@ -802,7 +802,9 @@ Una instrucción en lenguaje natural no es una garantía.
   APP_VERSION=<sha>` corre `scripts/deploy.sh`: preflight (`COMPOSE_FILE` con
   `docker-compose.prod.yml`, Compose >= 2.24, disco, backup de menos de
   24 h, Quality verde en `main` para el sha), imágenes verificadas con `docker image inspect`, migración con el
-  código viejo sirviendo, backend nuevo al lado del viejo, `up -d --no-deps
+  código viejo sirviendo, backend y después frontend nuevos al lado de los
+  viejos (los dos detrás del borde; recrear el frontend en el lugar dejaba la
+  home en 502 en cada deploy, 2026-10-15), `up -d --no-deps
   --remove-orphans` con lista explícita (nunca recrea db, redis, rabbitmq ni el borde),
   compuerta de 60 s y rollback automático sin migrar. En un deploy normal el
   borde (nginx) solo se RECARGA (`nginx -t && nginx -s reload`); se recrea
@@ -925,11 +927,13 @@ Una instrucción en lenguaje natural no es una garantía.
   conjunto (2026-09-16: 24.16.0) el hook bloquea todos los commits y `npm ci`
   necesita `--engine-strict=false`: el toolchain se alinea antes de
   activarlo.
-- Nombres de contenedor: las réplicas del backend son
-  `<proyecto>-backend-N` (sin `container_name`, F0-04); el resto,
-  `${COMPOSE_PROJECT_NAME:-shifty}_<servicio>`. Scripts, docs y comandos usan
-  `docker compose exec backend ...`, nunca `shifty_backend`: ese nombre ya no
-  existe y con un segundo proyecto (staging) apuntaría al equivocado.
+- Nombres de contenedor: las réplicas del backend y del frontend son
+  `<proyecto>-backend-N` y `<proyecto>-frontend-N` (sin `container_name`,
+  F0-04 y 2026-10-15: el deploy levanta la réplica nueva al lado de la
+  vieja); el resto, `${COMPOSE_PROJECT_NAME:-shifty}_<servicio>`. Scripts,
+  docs y comandos usan `docker compose exec backend ...`, nunca
+  `shifty_backend` ni `shifty_frontend`: esos nombres ya no existen y con un
+  segundo proyecto (staging) apuntarían al equivocado.
 - El E2E con Playwright (`frontend/e2e/`, `npm run e2e`, workflow manual
   `e2e.yml`) corrió por primera vez el 2026-09-16 contra el stack local
   detrás de nginx (`E2E_BASE_URL=http://localhost`,

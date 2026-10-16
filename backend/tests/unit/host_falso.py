@@ -60,6 +60,8 @@ printf '%s\n' "docker $*" >> "$FAKE_DIR/calls"
 # `docker` lo hereda en el entorno.
 [ -z "${DEPLOY_GITHUB_TOKEN:-}" ] || printf '%s\n' "docker $1 $2" >> "$FAKE_DIR/docker_ve_el_token"
 ids_backend="$FAKE_DIR/backend_ids"
+# El frontend tambien se renueva por replicas (2026-10-15): sus ids aparte.
+ids_frontend="$FAKE_DIR/frontend_ids"
 if [ "$1" = compose ]; then
   # docker-compose.prod.yml interpola ${APP_VERSION:?...}: sin la variable,
   # TODO comando de compose falla, no solo `up`.
@@ -91,9 +93,10 @@ if [ "$1" = compose ]; then
     ps)
       case "$*" in
         *" backend"*) cat "$ids_backend" 2>/dev/null; exit 0 ;;
+        *" frontend"*) cat "$ids_frontend" 2>/dev/null; exit 0 ;;
         *" db"*) [ -n "${FAKE_DB_DOWN:-}" ] || echo dbid; exit 0 ;;
         *" nginx"*) echo nginxid; exit 0 ;;
-        *) echo dbid; cat "$ids_backend" 2>/dev/null; echo nginxid; exit 0 ;;
+        *) echo dbid; cat "$ids_backend" "$ids_frontend" 2>/dev/null; echo nginxid; exit 0 ;;
       esac ;;
     pull) exit "${FAKE_PULL_EXIT:-0}" ;;
     run) exit "${FAKE_MIGRATE_EXIT:-0}" ;;
@@ -106,6 +109,19 @@ if [ "$1" = compose ]; then
           n=$((n + 1)); echo "new$n-$APP_VERSION" >> "$ids_backend"
         done
         exit "${FAKE_UP_BACKEND_EXIT:-0}"
+      fi
+      # Frontend: las replicas nuevas se llaman front-new<n>-<version>.
+      # FAKE_UP_FRONTEND_FALLA_EN=<version>: el `up` de esa version no queda
+      # sano (las crea igual, como compose cuando --wait vence).
+      escala=$(printf '%s\n' "$*" | sed -n 's/.*--scale frontend=\([0-9]*\).*/\1/p')
+      if [ -n "$escala" ]; then
+        actuales=$(grep -c . "$ids_frontend" 2>/dev/null || true)
+        n=${actuales:-0}
+        while [ "$n" -lt "$escala" ]; do
+          n=$((n + 1)); echo "front-new$n-$APP_VERSION" >> "$ids_frontend"
+        done
+        [ "${FAKE_UP_FRONTEND_FALLA_EN:-}" != "$APP_VERSION" ] || exit 1
+        exit 0
       fi
       exit "${FAKE_UP_EXIT:-0}" ;;
     exec)
@@ -169,8 +185,11 @@ case "$1" in
     shift
     for id in "$@"; do
       [ "$id" = -f ] && continue
-      grep -v -x "$id" "$ids_backend" > "$ids_backend.tmp" 2>/dev/null || true
-      mv "$ids_backend.tmp" "$ids_backend"
+      for ids in "$ids_backend" "$ids_frontend"; do
+        [ -f "$ids" ] || continue
+        grep -v -x "$id" "$ids" > "$ids.tmp" 2>/dev/null || true
+        mv "$ids.tmp" "$ids"
+      done
     done ;;
   restart) exit "${FAKE_RESTART_EXIT:-0}" ;;
   stats) printf 'shifty-backend-1\t1.5%%\t120MiB / 512MiB\t%s\t1kB / 2kB\t0B / 0B\t12\n' "${FAKE_MEM_PERC:-23.4%}" ;;
