@@ -1,8 +1,8 @@
 import apiClient, { refreshSession as refreshCoordinated } from '@infrastructure/http/client'
 import type { RefreshResult } from '@infrastructure/http/sessionSync'
 
-import type { CurrentUserDTO } from '../dtos/CurrentUserDTO'
-import { toAuthenticatedUser, type AuthenticatedUser } from '../mappers/CurrentUserMapper'
+import type { AuthenticatedUser, CurrentUserDTO } from '../dtos/CurrentUserDTO'
+import { toSessionUser } from '../mappers/CurrentUserMapper'
 
 export type { AuthenticatedUser }
 
@@ -45,7 +45,7 @@ class AuthService {
 
   async fetchCurrentUser(): Promise<AuthenticatedUser> {
     const { data } = await apiClient.get<CurrentUserDTO>('/me')
-    return toAuthenticatedUser(data)
+    return toSessionUser(data)
   }
 
   /**

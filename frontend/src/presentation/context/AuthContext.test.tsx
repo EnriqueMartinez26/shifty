@@ -56,6 +56,9 @@ const Sonda = () => {
             ? 'sin-conexion'
             : (auth.user?.public_id ?? 'anonimo')}
       </output>
+      <output data-testid="nombre">
+        {[auth.user?.first_name, auth.user?.last_name].filter(Boolean).join(' ')}
+      </output>
       <button type="button" onClick={auth.logout}>
         salir
       </button>
@@ -122,7 +125,9 @@ describe('AuthProvider', () => {
 
   // 2026-10-14: /me no traia el nombre y la sesion quedaba sin first_name ni
   // last_name ("Agregarme como profesional" abria con el nombre vacio).
-  it('la sesion conserva el nombre y el apellido que devuelve /me', async () => {
+  // 2026-10-16 (CodeQL js/clear-text-storage-of-sensitive-data): el nombre
+  // vive solo en memoria; localStorage guarda la misma forma que antes.
+  it('la sesion tiene el nombre de /me en memoria y no lo guarda en localStorage', async () => {
     conSesion()
     mockGet.mockResolvedValue({
       data: { ...usuarioA, is_global_admin: false, first_name: 'Ana', last_name: 'Gomez' }
@@ -130,12 +135,14 @@ describe('AuthProvider', () => {
     montar()
 
     await waitFor(() => expect(estado()).toBe('usr-a'))
-    const guardado = JSON.parse(localStorage.getItem('shifty_user') ?? '{}') as {
-      first_name?: string
-      last_name?: string
-    }
-    expect(guardado.first_name).toBe('Ana')
-    expect(guardado.last_name).toBe('Gomez')
+    expect(screen.getByTestId('nombre').textContent).toBe('Ana Gomez')
+    const guardado = JSON.parse(localStorage.getItem('shifty_user') ?? '{}') as Record<
+      string,
+      unknown
+    >
+    expect(guardado.public_id).toBe('usr-a')
+    expect(guardado).not.toHaveProperty('first_name')
+    expect(guardado).not.toHaveProperty('last_name')
   })
 
   it('el logout limpia TODO el cache y revoca en el servidor', async () => {

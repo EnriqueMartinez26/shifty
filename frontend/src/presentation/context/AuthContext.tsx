@@ -91,9 +91,23 @@ const initialState = (): SessionState => ({
   reconnecting: false
 })
 
+/**
+ * Lo que se guarda para el pintado optimista: solo lo que hace falta para
+ * elegir pantallas. Nombre y apellido viven en memoria y llegan de /me en cada
+ * carga (privacidad, 2026-10-16): localStorage persiste en el equipo y lo lee
+ * cualquier script del origen.
+ */
+const storedProfile = (user: User): User => ({
+  email: user.email,
+  role: user.role,
+  store_id: user.store_id,
+  public_id: user.public_id,
+  is_global_admin: user.is_global_admin
+})
+
 const saveUser = (user: User | null) => {
   try {
-    if (user) localStorage.setItem(SAVED_USER_KEY, JSON.stringify(user))
+    if (user) localStorage.setItem(SAVED_USER_KEY, JSON.stringify(storedProfile(user)))
     else localStorage.removeItem(SAVED_USER_KEY)
   } catch {
     /* almacenamiento no disponible */

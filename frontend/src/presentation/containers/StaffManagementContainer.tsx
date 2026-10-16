@@ -4,6 +4,8 @@ import { Plus, User, UserCheck, Loader2, Search } from 'lucide-react'
 
 import { Staff } from '@domain/entities/Staff'
 
+import { DISPLAY_NAME_MAX_LENGTH } from '@application/validators/staff.validators'
+
 import { colors2000s, buttonStyles2000s } from '../../theme/colors'
 import { QueryErrorNotice } from '../components/molecules/QueryErrorNotice'
 import { StaffCard } from '../components/molecules/StaffCard'
@@ -58,7 +60,13 @@ export const StaffManagementContainer: React.FC = () => {
     hasAnyRole(user?.role, ROLES_ADMIN_SUPER, user?.is_global_admin) &&
     staffList !== undefined &&
     !staffList.some((member) => member.id === myId)
-  const myName = [user?.first_name, user?.last_name].filter(Boolean).join(' ').trim()
+  // Nombre y apellido miden hasta 100 cada uno; el nombre visible, 100 en total
+  // (DISPLAY_NAME_MAX_LENGTH). Sin recortar, la propuesta larga era un 422.
+  const myName = [user?.first_name, user?.last_name]
+    .filter(Boolean)
+    .join(' ')
+    .slice(0, DISPLAY_NAME_MAX_LENGTH)
+    .trim()
   // Tienda suspendida (FF-15): POST, PUT y DELETE /staff/... (horarios y
   // servicios incluidos) no estan en SUSPENSION_ALLOWED_WRITES y responden 402.
   const writeAccess = useStoreWriteAccess()

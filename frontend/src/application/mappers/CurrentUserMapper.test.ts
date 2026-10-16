@@ -1,4 +1,4 @@
-import { toAuthenticatedUser } from './CurrentUserMapper'
+import { toSessionUser } from './CurrentUserMapper'
 import type { CurrentUserDTO } from '../dtos/CurrentUserDTO'
 
 // 2026-10-14, produccion: /me no traia nombre ni apellido y "Agregarme como
@@ -14,9 +14,9 @@ const dto: CurrentUserDTO = {
   last_name: 'Martinez'
 }
 
-describe('toAuthenticatedUser', () => {
+describe('toSessionUser', () => {
   it('mapea cada campo de /me, nombre y apellido incluidos', () => {
-    expect(toAuthenticatedUser(dto)).toEqual({
+    expect(toSessionUser(dto)).toEqual({
       email: 'duenio@example.com',
       role: 'admin',
       store_id: 'st-1',
@@ -28,14 +28,14 @@ describe('toAuthenticatedUser', () => {
   })
 
   it('un nombre null queda sin nombre, nunca como texto', () => {
-    const user = toAuthenticatedUser({ ...dto, first_name: null, last_name: null })
+    const user = toSessionUser({ ...dto, first_name: null, last_name: null })
 
     expect(user.first_name).toBeUndefined()
     expect(user.last_name).toBeUndefined()
   })
 
   it('recorta espacios y trata un nombre en blanco como ausente', () => {
-    const user = toAuthenticatedUser({ ...dto, first_name: '  Enrique ', last_name: '   ' })
+    const user = toSessionUser({ ...dto, first_name: '  Enrique ', last_name: '   ' })
 
     expect(user.first_name).toBe('Enrique')
     expect(user.last_name).toBeUndefined()
@@ -45,7 +45,7 @@ describe('toAuthenticatedUser', () => {
     const legacy: Partial<CurrentUserDTO> = { ...dto }
     delete legacy.first_name
     delete legacy.last_name
-    const user = toAuthenticatedUser(legacy as CurrentUserDTO)
+    const user = toSessionUser(legacy as CurrentUserDTO)
 
     expect(user.first_name).toBeUndefined()
     expect(user.last_name).toBeUndefined()
