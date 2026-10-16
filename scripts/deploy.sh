@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 # Deploy y rollback en el VPS (F0-03). Uso, desde el clon del servidor:
 #
-#   APP_VERSION=<sha> scripts/deploy.sh deploy     (o: make deploy APP_VERSION=<sha>)
-#   scripts/deploy.sh rollback                     (o: make rollback)
-#   scripts/deploy.sh edge                         (o: make deploy-edge)
+#   APP_VERSION=<sha> bash scripts/deploy.sh deploy   (o: make deploy APP_VERSION=<sha>)
+#   bash scripts/deploy.sh rollback                    (o: make rollback)
+#   bash scripts/deploy.sh edge                        (o: make deploy-edge)
+#
+# El VPS no tiene `make`: ahi se usa la forma con bash; make es solo un atajo
+# donde este instalado.
 #
 # Secuencia del deploy (docs/DEPLOY_RUNBOOK.md):
 #   1. Preflight: COMPOSE_FILE incluye docker-compose.prod.yml, Compose >=
@@ -32,13 +35,17 @@
 #      resuelva (`resolve`), baja las viejas. Si las nuevas no quedan sanas se
 #      descartan y las viejas siguen sirviendo. Primero el backend y despues el
 #      frontend, que corre UNA replica y en el cambio tiene dos un momento
-#      (2026-10-15: recrearlo dejaba la home en 502 en cada deploy).
+#      (2026-10-15: recrearlo dejaba la home en 502 en cada deploy). Bajada la
+#      vieja, `nginx -t` + reload para que el borde la saque de sus peers en
+#      el momento (si no, la tiene hasta 5 s mas).
 #      DEPLOY_ROLLING=0: `up` directo (5-10 s de 502 mientras se recrean).
 #   6. Resto de la app (workers, beat) con `up -d --no-deps`: nunca recrea
 #      db/redis/rabbitmq ni el borde.
 #   7. `nginx -t` + `nginx -s reload`. El borde (nginx) solo se RECARGA en un
 #      deploy normal; se recrea unicamente con `edge` (make deploy-edge),
-#      cuando cambio su imagen o su config.
+#      cuando cambio su imagen o su config. Ojo: el reload NO toma un
+#      nginx.prod.conf nuevo despues de un `git pull` (bind mount de un
+#      archivo: el contenedor sigue viendo el inodo viejo); eso pide `edge`.
 #   8. Compuerta de 60 s: /api/ops/health/ready y la home responden, ningun
 #      contenedor unhealthy, `rabbitmq-diagnostics alarms` sin alarmas, 5xx < 0,5 %
 #      en el log de nginx de los ultimos 2 minutos. Si falla: rollback
@@ -338,12 +345,23 @@ backend_gradual() {
 }
 
 # Solo si el frontend esta en DEPLOY_SERVICES (un staging sin SPA lo saca).
+# Devuelve 1 si la replica nueva no quedo sana (sigue la vieja) y 2 si el
+# borde no recargo despues de bajar la vieja.
 frontend_gradual() {
   case " $DEPLOY_SERVICES " in
     *" $DEPLOY_FRONTEND_SERVICE "*) ;;
     *) return 0 ;;
   esac
-  servicio_gradual "$DEPLOY_FRONTEND_SERVICE" "$DEPLOY_FRONTEND_REPLICAS"
+  servicio_gradual "$DEPLOY_FRONTEND_SERVICE" "$DEPLOY_FRONTEND_REPLICAS" || return 1
+  # Revision del PR #188: borrada la replica vieja, nginx la sigue teniendo
+  # como peer hasta re-resolver (valid=5s) y la mitad de las conexiones nuevas
+  # iban a una IP que ya no existe. El reload re-resuelve `frontend` en el
+  # momento; proxy_connect_timeout 2s (nginx.prod.conf) cubre los requests
+  # que lleguen antes.
+  if ! recargar_nginx; then
+    log "$DEPLOY_FRONTEND_SERVICE: nginx -t o reload fallo despues de bajar la replica vieja"
+    return 2
+  fi
 }
 
 resto_de_la_app() {
@@ -517,21 +535,30 @@ cmd_deploy() {
   fi
   # Un frontend nuevo que no queda sano cae aca: siguen la SPA vieja y el
   # backend nuevo, y el rollback vuelve a dejar las dos en la version anterior.
-  if frontend_gradual && resto_de_la_app && recargar_nginx && printf '%s\n' "$nueva" >"$estado_dir/current" && compuerta; then
-    log "deploy: ok, corre $nueva"
-    return 0
-  fi
+  # La alerta nombra la causa real (revision del PR #188: decia "compuerta").
+  local causa="fallo la compuerta" codigo_front=0
+  frontend_gradual || codigo_front=$?
+  case "$codigo_front" in
+    0)
+      if resto_de_la_app && recargar_nginx && printf '%s\n' "$nueva" >"$estado_dir/current" && compuerta; then
+        log "deploy: ok, corre $nueva"
+        return 0
+      fi
+      ;;
+    2) causa="el borde no recargo despues de renovar el frontend" ;;
+    *) causa="el frontend nuevo no quedo sano" ;;
+  esac
 
   # En un redeploy, antes ya corria esta misma version: no hay estado al que
   # volver. Ir a previous seria cambiar de version sin que nadie lo pidiera, y
   # un sha que ya paso la compuerta y ahora falla apunta al entorno (rabbitmq,
   # base, disco), no al codigo. Se avisa y previous queda intacto.
   if [ "$redeploy" = 1 ]; then
-    alert "deploy $nueva: fallo la compuerta en un redeploy de la misma version; sin rollback automatico" \
-      "Sigue corriendo $nueva, como antes. Revisar el entorno (docs/DEPLOY_RUNBOOK.md); si el codigo es el problema, make rollback vuelve a $(head -n 1 "$estado_dir/previous" 2>/dev/null || echo '(sin previous)')."
+    alert "deploy $nueva: $causa en un redeploy de la misma version; sin rollback automatico" \
+      "Sigue corriendo $nueva, como antes. Revisar el entorno (docs/DEPLOY_RUNBOOK.md); si el codigo es el problema, bash scripts/deploy.sh rollback (o make rollback) vuelve a $(head -n 1 "$estado_dir/previous" 2>/dev/null || echo '(sin previous)')."
     exit 1
   fi
-  alert "deploy $nueva: fallo la compuerta, rollback a ${anterior:-?}" "Ver docs/DEPLOY_RUNBOOK.md"
+  alert "deploy $nueva: $causa, rollback a ${anterior:-?}" "Ver docs/DEPLOY_RUNBOOK.md"
   if [ "$DEPLOY_AUTO_ROLLBACK" != 1 ] || [ -z "$anterior" ]; then
     log "deploy: sin rollback automatico (DEPLOY_AUTO_ROLLBACK=$DEPLOY_AUTO_ROLLBACK, previa=${anterior:-ninguna})"
     exit 1

@@ -562,8 +562,18 @@ def test_el_frontend_nuevo_esta_sano_antes_de_bajar_el_viejo(host: Host) -> None
     para_viejo = _indice(llamadas, r"docker stop -t 35 front-old1$")
     dns = _ultimo_indice(llamadas[:para_viejo], r"^sleep 6$")
     borra_viejo = _indice(llamadas, r"docker rm front-old1$")
-    reload = _ultimo_indice(llamadas, r"compose exec -T nginx nginx -s reload")
-    assert backend_viejo_fuera < front_nuevo < dns < para_viejo < borra_viejo < reload
+    # Revision del PR #188: apenas se borra la vieja, el borde recarga y la
+    # saca de sus peers (si no, la tiene hasta 5 s mas y la mitad de las
+    # conexiones nuevas van a una IP que ya no existe). Antes que los workers.
+    despues = llamadas[borra_viejo:]
+    prueba = borra_viejo + _indice(despues, r"^docker compose exec -T nginx nginx -t$")
+    recarga = borra_viejo + _indice(
+        despues, r"^docker compose exec -T nginx nginx -s reload$"
+    )
+    resto = _indice(llamadas, r"compose up .* celery_beat$")
+    assert backend_viejo_fuera < front_nuevo < dns < para_viejo < borra_viejo
+    assert borra_viejo < prueba < recarga < resto, llamadas[borra_viejo : resto + 1]
+    assert recarga == borra_viejo + 2, "el reload va justo despues de borrar la vieja"
     # El frontend nunca se recrea en el lugar: ningun `up` lo nombra sin
     # --no-recreate --scale (eso bajaba el viejo antes de tener el nuevo).
     for llamada in llamadas:
@@ -606,7 +616,12 @@ def test_un_frontend_nuevo_que_no_queda_sano_se_descarta_y_hace_rollback(
     )
 
     assert resultado.returncode == 1, resultado.stderr
-    assert "rollback" in resultado.stderr.lower()
+    # La alerta nombra la causa real, no la compuerta (revision del PR #188).
+    assert (
+        "ALERTA: deploy v2: el frontend nuevo no quedo sano, rollback a v1"
+        in resultado.stderr
+    )
+    assert "fallo la compuerta" not in resultado.stderr
     llamadas = host.llamadas()
     descarta = _indice(llamadas, r"docker rm -f front-new2-v2$")
     rondas = [
@@ -623,6 +638,25 @@ def test_un_frontend_nuevo_que_no_queda_sano_se_descarta_y_hace_rollback(
     ids = (host.fake / "backend_ids").read_text().split()
     assert ids and all(i.endswith("-v1") for i in ids), ids
     assert (host.repo / ".deploy" / "current").read_text().strip() == "v1"
+
+
+def test_un_borde_que_no_recarga_tras_el_frontend_lo_dice_en_la_alerta(
+    host: Host,
+) -> None:
+    _preparar_deploy(host, actual="v1")
+
+    resultado = host.correr(
+        "deploy.sh", "deploy", APP_VERSION="v2", FAKE_NGINX_EXIT="1", **_BASE_DEPLOY
+    )
+
+    assert resultado.returncode != 0
+    assert (
+        "ALERTA: deploy v2: el borde no recargo despues de renovar el frontend, "
+        "rollback a v1" in resultado.stderr
+    )
+    assert "nginx -t o reload fallo despues de bajar la replica vieja" in (
+        resultado.stderr
+    )
 
 
 def test_rollback_renueva_el_frontend_sin_corte(host: Host) -> None:

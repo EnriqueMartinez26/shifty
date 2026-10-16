@@ -798,18 +798,21 @@ Una instrucción en lenguaje natural no es una garantía.
 - **Imágenes con versión y deploy por script.** CI construye y publica
   `ghcr.io/enriquemartinez26/shifty-{backend,frontend,nginx}:<sha>`
   (`.github/workflows/build-images.yml`); el VPS no construye, hace `pull`
-  del sha (todo `up` y `run` lleva `--no-build`). `make deploy
-  APP_VERSION=<sha>` corre `scripts/deploy.sh`: preflight (`COMPOSE_FILE` con
+  del sha (todo `up` y `run` lleva `--no-build`). `APP_VERSION=<sha> bash
+  scripts/deploy.sh deploy` (el VPS no tiene `make`; donde está, `make deploy
+  APP_VERSION=<sha>` es lo mismo) corre: preflight (`COMPOSE_FILE` con
   `docker-compose.prod.yml`, Compose >= 2.24, disco, backup de menos de
   24 h, Quality verde en `main` para el sha), imágenes verificadas con `docker image inspect`, migración con el
   código viejo sirviendo, backend y después frontend nuevos al lado de los
   viejos (los dos detrás del borde; recrear el frontend en el lugar dejaba la
-  home en 502 en cada deploy, 2026-10-15), `up -d --no-deps
+  home en 502 en cada deploy, 2026-10-15; bajada la réplica vieja del
+  frontend el borde recarga, y la SPA tiene `proxy_connect_timeout 2s`), `up -d --no-deps
   --remove-orphans` con lista explícita (nunca recrea db, redis, rabbitmq ni el borde),
   compuerta de 60 s y rollback automático sin migrar. En un deploy normal el
   borde (nginx) solo se RECARGA (`nginx -t && nginx -s reload`); se recrea
-  únicamente con `make deploy-edge`, cuando cambió su imagen o
-  `nginx/nginx.prod.conf`. `docker-compose.prod.yml` exige `APP_VERSION` en todo comando
+  únicamente con `bash scripts/deploy.sh edge` (`make deploy-edge`), cuando
+  cambió su imagen o `nginx/nginx.prod.conf` (el reload no ve un archivo
+  nuevo: es un bind mount de un archivo y git lo reemplaza por otro inodo). `docker-compose.prod.yml` exige `APP_VERSION` en todo comando
   de compose; no se fija en el `.env` del servidor (queda en
   `.deploy/current`).
 - **Toda llamada externa dentro de un request tiene un presupuesto total
@@ -1010,5 +1013,6 @@ Una instrucción en lenguaje natural no es una garantía.
 - `docs/RELEASE_CHECKLIST.md` y `docs/BACKUP_RESTORE_RUNBOOK.md` (RPO ≤24h,
   RTO ≤4h) gatean releases: un ítem sin marcar necesita excepción explícita
   del dueño, no un salto silencioso. El deploy a producción es
-  `make deploy APP_VERSION=<sha>` (`docs/DEPLOY_RUNBOOK.md`), que además se
+  `APP_VERSION=<sha> bash scripts/deploy.sh deploy` (o `make deploy
+  APP_VERSION=<sha>` donde haya make; `docs/DEPLOY_RUNBOOK.md`), que además se
   niega a migrar sin un backup de menos de 24 h.
