@@ -41,6 +41,8 @@ describe('Sidebar', () => {
       'href',
       '/dashboard/calendar'
     )
+    expect(screen.getByRole('link', { name: 'Agenda' })).toHaveAttribute('aria-current', 'page')
+    expect(screen.getByRole('link', { name: 'Dashboard' })).not.toHaveAttribute('aria-current')
     // El personal no tiene ningun hijo visible en "Mi Negocio": el grupo entero
     // no deberia renderizarse, ni siquiera colapsado.
     expect(screen.queryByRole('button', { name: /Mi Negocio/ })).not.toBeInTheDocument()
@@ -86,6 +88,10 @@ describe('Sidebar', () => {
     expect(screen.getByRole('link', { name: 'Cuentas pendientes' })).toHaveAttribute(
       'href',
       '/dashboard/ledger'
+    )
+    expect(screen.getByRole('link', { name: 'Cuentas pendientes' })).toHaveAttribute(
+      'aria-current',
+      'page'
     )
   })
 })
