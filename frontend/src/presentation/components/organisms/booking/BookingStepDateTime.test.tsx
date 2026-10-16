@@ -118,6 +118,47 @@ describe('BookingStepDateTime', () => {
     expect(screen.queryByText('Ana')).not.toBeInTheDocument()
   })
 
+  // 2026-10-16: la confirmacion muestra quien atiende; con "Cualquiera" es el
+  // que asigno el horario, y una cancha no se presenta como profesional.
+  it('al elegir entrega quien atiende el slot y si es una cancha o sala', () => {
+    mockStaff.mockReturnValue({
+      isLoading: false,
+      data: [
+        { public_id: 'st-1', kind: 'person', display_name: 'Ana', service_ids: ['svc-1'] },
+        { public_id: 'st-2', kind: 'resource', display_name: 'Cancha 1', service_ids: ['svc-1'] }
+      ]
+    })
+    mockAvailability.mockReturnValue({
+      isLoading: false,
+      data: [
+        {
+          staff_id: 'st-2',
+          staff_name: 'Cancha 1',
+          starts_at: '2026-09-15T12:00:00+00:00',
+          ends_at: '2026-09-15T12:30:00+00:00',
+          status: 'available',
+          reason: null
+        }
+      ]
+    })
+    const onSelect = jest.fn()
+
+    render(
+      <BookingStepDateTime
+        storePublicId="store-1"
+        serviceId="svc-1"
+        staffId={null}
+        selectedDate={null}
+        selectedTime={null}
+        onSelect={onSelect}
+        onBack={() => undefined}
+      />
+    )
+    fireEvent.click(screen.getByText('09:00'))
+
+    expect(onSelect.mock.calls[0]?.[5]).toEqual({ name: 'Cancha 1', isResource: true })
+  })
+
   // 2026-10-14: de noche todo el dia quedaba 'blocked' por el aviso minimo y el
   // cliente veia 18 botones grises. El portal solo ofrece horarios libres.
   const slotDe = (staff_id: string, staff_name: string, status: string) => ({

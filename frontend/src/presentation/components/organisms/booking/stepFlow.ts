@@ -38,7 +38,8 @@ export const resolveBackJump = (from: number, options: StepOptions): number => {
   return step
 }
 
-const STEP_CONFIRMATION = 2
+/** Paso de datos y confirmacion: muestra la politica de seña completa. */
+export const STEP_CONFIRMATION = 2
 const STEP_PARAM = 'step'
 
 /**

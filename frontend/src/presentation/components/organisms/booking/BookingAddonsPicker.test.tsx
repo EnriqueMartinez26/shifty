@@ -25,6 +25,17 @@ describe('BookingAddonsPicker', () => {
     expect(screen.getByLabelText('Cantidad de Diseño')).toHaveTextContent('0')
   })
 
+  // 2026-10-16: "Se cobra aparte del servicio" sonaba a otro pago; el
+  // adicional entra en el mismo total.
+  it('aclara que el adicional se suma al total y no cambia la duracion', () => {
+    render(<BookingAddonsPicker addons={addons} quantities={{}} onChange={jest.fn()} />)
+
+    expect(
+      screen.getByText('Sumá lo que quieras a tu turno. Se suma al total y no cambia la duración.')
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/Se cobra aparte/)).not.toBeInTheDocument()
+  })
+
   it('el contador suma y resta de a uno', () => {
     const onChange = jest.fn()
     render(<BookingAddonsPicker addons={addons} quantities={{ strass: 6 }} onChange={onChange} />)

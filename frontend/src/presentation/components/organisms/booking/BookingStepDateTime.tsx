@@ -15,6 +15,7 @@ import { usePublicAvailability, usePublicStaff } from '@presentation/hooks/usePu
 
 import { formatArgentinaTime } from '@shared/utils/argentinaTime'
 
+import type { BookingSlotStaff } from './types'
 import { WaitlistJoinForm } from './WaitlistJoinForm'
 import { colors2000s, orangeCtaGradient } from '../../../../theme/colors'
 import { createBookingBackButtonStyle, createBookingSurfaceStyle } from '../../../lib/surfaceStyles'
@@ -30,7 +31,9 @@ interface BookingStepDateTimeProps {
     time: string,
     assignedStaffId: string,
     requestedStaffId: string | null,
-    startsAt: string
+    startsAt: string,
+    /** Quien atiende el slot (con "Cualquiera", el asignado). */
+    slotStaff: BookingSlotStaff
   ) => void
   onBack: () => void
   /**
@@ -82,7 +85,10 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
 
   const { data: staffList, isLoading: isStaffLoading } = usePublicStaff(storePublicId, serviceId)
   // Copy por tipo: una cancha o sala no es "un profesional".
-  const hayRecursos = (staffList || []).some((staff) => staff.kind === 'resource')
+  const resourceIds = new Set(
+    (staffList || []).filter((staff) => staff.kind === 'resource').map((staff) => staff.public_id)
+  )
+  const hayRecursos = resourceIds.size > 0
   const staffOptions = useMemo(
     () => [
       { id: null as string | null, label: 'Cualquiera' },
@@ -340,7 +346,10 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
                 <button
                   key={`${slot.staff_id}-${slot.start_time || slot.starts_at}`}
                   onClick={() =>
-                    onSelect(dateStr, timeString, slot.staff_id, selectedStaffId, slot.starts_at)
+                    onSelect(dateStr, timeString, slot.staff_id, selectedStaffId, slot.starts_at, {
+                      name: slot.staff_name,
+                      isResource: resourceIds.has(slot.staff_id)
+                    })
                   }
                   className="py-3 rounded-md font-black text-lg transition-all active:scale-95 border"
                   style={{

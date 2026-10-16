@@ -290,6 +290,20 @@ describe('BookingWizardContainer', () => {
     })
   })
 
+  // 2026-10-16 (pedido de Mateo): la confirmacion mostraba solo fecha y hora.
+  it('con "Cualquiera" la confirmacion muestra el servicio y el profesional del horario', async () => {
+    mockServices.mockReturnValue({ data: [servicio('a')], isLoading: false })
+    render(<WizardEnRuta store={tienda(false)} />)
+
+    await waitFor(() => expect(screen.getByText(HORARIO)).toBeInTheDocument())
+    fireEvent.click(screen.getByText('09:00'))
+
+    const dato = (etiqueta: string) =>
+      screen.getByText(etiqueta, { selector: 'dt' }).nextElementSibling?.textContent
+    expect(dato('Servicio')).toBe('Servicio a')
+    expect(dato('Profesional')).toBe('Pro')
+  })
+
   it('el codigo OTP se pide por email, al email que escribe el cliente', async () => {
     mockServices.mockReturnValue({ data: [servicio('a')], isLoading: false })
     mockRequestOtp.mockResolvedValue({ ok: true, expires_at: '2026-09-25T13:00:00Z' })
@@ -301,7 +315,7 @@ describe('BookingWizardContainer', () => {
     fireEvent.change(screen.getByPlaceholderText('juan@email.com'), {
       target: { value: 'lucia@example.com' }
     })
-    fireEvent.change(screen.getByPlaceholderText('PREFIJO + NUM'), {
+    fireEvent.change(screen.getByPlaceholderText('Ej: 351 1234567'), {
       target: { value: '+5491155550101' }
     })
     // El email del codigo arranca con el del formulario.
@@ -329,7 +343,7 @@ describe('BookingWizardContainer', () => {
 
     await waitFor(() => expect(screen.getByText(HORARIO)).toBeInTheDocument())
     fireEvent.click(screen.getByText('09:00'))
-    fireEvent.change(screen.getByPlaceholderText('PREFIJO + NUM'), {
+    fireEvent.change(screen.getByPlaceholderText('Ej: 351 1234567'), {
       target: { value: '+5491155550101' }
     })
 
@@ -346,7 +360,7 @@ describe('BookingWizardContainer', () => {
 
     await waitFor(() => expect(screen.getByText(HORARIO)).toBeInTheDocument())
     fireEvent.click(screen.getByText('09:00'))
-    fireEvent.change(screen.getByPlaceholderText('PREFIJO + NUM'), {
+    fireEvent.change(screen.getByPlaceholderText('Ej: 351 1234567'), {
       target: { value: '+5491155550101' }
     })
 
@@ -374,7 +388,7 @@ describe('BookingWizardContainer', () => {
 
       await waitFor(() => expect(screen.getByText(HORARIO)).toBeInTheDocument())
       fireEvent.click(screen.getByText('09:00'))
-      fireEvent.change(screen.getByPlaceholderText('PREFIJO + NUM'), {
+      fireEvent.change(screen.getByPlaceholderText('Ej: 351 1234567'), {
         target: { value: '54 9 11 5555-0101' }
       })
       fireEvent.change(screen.getByPlaceholderText('Código que te llegó por email'), {
@@ -391,7 +405,7 @@ describe('BookingWizardContainer', () => {
 
       expect(screen.getByText('Teléfono validado correctamente')).toBeInTheDocument()
 
-      fireEvent.change(screen.getByPlaceholderText('PREFIJO + NUM'), {
+      fireEvent.change(screen.getByPlaceholderText('Ej: 351 1234567'), {
         target: { value: '54 9 11 5555-0102' }
       })
       expect(screen.queryByText('Teléfono validado correctamente')).not.toBeInTheDocument()
@@ -411,7 +425,7 @@ describe('BookingWizardContainer', () => {
       fireEvent.change(screen.getByPlaceholderText('Ej: Juan Perez'), {
         target: { value: nombre }
       })
-      fireEvent.change(screen.getByPlaceholderText('PREFIJO + NUM'), {
+      fireEvent.change(screen.getByPlaceholderText('Ej: 351 1234567'), {
         target: { value: '+5491155550101' }
       })
       // Obligatorio en el portal (decision de Mateo, 2026-10-14).
@@ -505,7 +519,7 @@ describe('BookingWizardContainer', () => {
       fireEvent.change(screen.getByPlaceholderText('Ej: Juan Perez'), {
         target: { value: 'Lucia' }
       })
-      fireEvent.change(screen.getByPlaceholderText('PREFIJO + NUM'), {
+      fireEvent.change(screen.getByPlaceholderText('Ej: 351 1234567'), {
         target: { value: '+5491155550101' }
       })
       fireEvent.change(screen.getByPlaceholderText('juan@email.com'), {
@@ -574,7 +588,7 @@ describe('BookingWizardContainer', () => {
       fireEvent.change(screen.getByPlaceholderText('juan@email.com'), {
         target: { value: 'lucia@example.com' }
       })
-      fireEvent.change(screen.getByPlaceholderText('PREFIJO + NUM'), {
+      fireEvent.change(screen.getByPlaceholderText('Ej: 351 1234567'), {
         target: { value: '+5491155550101' }
       })
       await act(async () => {
@@ -658,7 +672,7 @@ describe('BookingWizardContainer', () => {
       await hastaPedirElCodigo()
       expect(screen.getByRole('button', { name: 'Reenviar en 60 s' })).toBeDisabled()
 
-      fireEvent.change(screen.getByPlaceholderText('PREFIJO + NUM'), {
+      fireEvent.change(screen.getByPlaceholderText('Ej: 351 1234567'), {
         target: { value: '+5491155550202' }
       })
 
@@ -715,7 +729,7 @@ describe('BookingWizardContainer', () => {
         // nunca se hubiera mostrado; el borrado tiene que partir de verlo.
         expect(screen.getByText(AVISO)).toBeInTheDocument()
 
-        fireEvent.change(screen.getByPlaceholderText('PREFIJO + NUM'), {
+        fireEvent.change(screen.getByPlaceholderText('Ej: 351 1234567'), {
           target: { value: '+5491155550202' }
         })
 

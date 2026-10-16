@@ -8,6 +8,7 @@ import {
   initialStepFor,
   resolveBookingPreselect
 } from '@presentation/components/organisms/booking/deepLink'
+import { STEP_CONFIRMATION } from '@presentation/components/organisms/booking/stepFlow'
 import { useBookingStepParam } from '@presentation/hooks/useBookingStepParam'
 
 import { buildWaMeUrl } from '@shared/utils/whatsAppPhone'
@@ -281,9 +282,14 @@ const PublicBooking: React.FC = () => {
         onStepChange={bookingStep.changeStep}
       />
 
-      {/* Footer minimalista */}
+      {/* Footer minimalista. En el paso de confirmacion la politica de seña
+          se muestra completa junto a la seña, antes de aceptar y reservar:
+          repetir aca que existe era ruido. Terminos y privacidad quedan en
+          todos los pasos. */}
       <div className="max-w-2xl mx-auto mt-12 text-center space-y-3">
-        <LegalFooterLinks depositPolicy={store.deposit_policy} />
+        <LegalFooterLinks
+          depositPolicy={bookingStep.step === STEP_CONFIRMATION ? null : store.deposit_policy}
+        />
         <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">
           POWERED BY <span className="text-orange-500 font-extrabold">SHIFTY</span>
         </p>

@@ -52,7 +52,7 @@ export const BookingAddonsPicker: React.FC<BookingAddonsPickerProps> = ({
         </h3>
       </div>
       <p className="text-xs font-bold text-gray-500">
-        Sumá lo que quieras a tu turno. Se cobra aparte del servicio y no cambia la duración.
+        Sumá lo que quieras a tu turno. Se suma al total y no cambia la duración.
       </p>
       <ul className="space-y-2">
         {addons.map((addon) => {
