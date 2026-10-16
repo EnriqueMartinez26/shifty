@@ -2,7 +2,6 @@ import React, { useEffect, useId, useReducer, useRef, useState } from 'react'
 
 import {
   CalendarCheck,
-  ChevronLeft,
   FileText,
   Loader2,
   Mail,
@@ -40,6 +39,7 @@ import { phoneDigits } from '@shared/utils/otpSession'
 import { navigateExternal } from '@shared/utils/safeUrl'
 
 import { BookingAddonsPicker } from './BookingAddonsPicker'
+import { BookingBackButton } from './BookingBackButton'
 import { BookingOtpSection } from './BookingOtpSection'
 import { BookingPriceSummary } from './BookingPriceSummary'
 import { BookingSuccess } from './BookingSuccess'
@@ -48,7 +48,6 @@ import type { BookingClientData, BookingOtpState, BookingWizardState } from './t
 import { buttonStyles2000s, colors2000s, orangeCtaGradient } from '../../../../theme/colors'
 import { revealOnMount } from '../../../lib/revealOnMount'
 import {
-  createBookingBackButtonStyle,
   createBookingClientInputStyle,
   createBookingInputStyle,
   createBookingSurfaceStyle,
@@ -722,15 +721,8 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
 
   return (
     <div className="space-y-6 duration-500">
-      <div className="flex items-center gap-4 mb-2">
-        <button
-          onClick={onBack}
-          type="button"
-          className="p-2 rounded-full transition-all active:scale-90 flex items-center justify-center border"
-          style={createBookingBackButtonStyle()}
-        >
-          <ChevronLeft size={20} className="stroke-[3px]" />
-        </button>
+      <div className="space-y-3 mb-2">
+        <BookingBackButton onBack={onBack} />
         <div>
           <h2
             className="text-2xl font-black uppercase tracking-tight"

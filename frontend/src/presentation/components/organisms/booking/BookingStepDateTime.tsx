@@ -2,23 +2,17 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 
 import { addDays, format, parseISO } from 'date-fns'
 import { es } from 'date-fns/locale'
-import {
-  Calendar as CalendarIcon,
-  ChevronLeft,
-  Clock,
-  Loader2,
-  Sparkles,
-  Users
-} from 'lucide-react'
+import { Calendar as CalendarIcon, Clock, Loader2, Sparkles, Users } from 'lucide-react'
 
 import { usePublicAvailability, usePublicStaff } from '@presentation/hooks/usePublic'
 
 import { formatArgentinaTime } from '@shared/utils/argentinaTime'
 
+import { BookingBackButton } from './BookingBackButton'
 import type { BookingSlotStaff } from './types'
 import { WaitlistJoinForm } from './WaitlistJoinForm'
 import { colors2000s, orangeCtaGradient } from '../../../../theme/colors'
-import { createBookingBackButtonStyle, createBookingSurfaceStyle } from '../../../lib/surfaceStyles'
+import { createBookingSurfaceStyle } from '../../../lib/surfaceStyles'
 
 interface BookingStepDateTimeProps {
   storePublicId: string
@@ -89,6 +83,11 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
     (staffList || []).filter((staff) => staff.kind === 'resource').map((staff) => staff.public_id)
   )
   const hayRecursos = resourceIds.size > 0
+  // Con un solo profesional (o cancha) para el servicio, "Cualquiera" es el
+  // mismo: no hay nada que elegir y se filtra por el directamente
+  // (2026-10-16, pedido de Mateo). Un profesional fijo sigue mandando.
+  const soloStaff = staffList?.length === 1 ? staffList[0] : undefined
+  const staffFilterId = lockedStaffId ?? soloStaff?.public_id ?? selectedStaffId
   const staffOptions = useMemo(
     () => [
       { id: null as string | null, label: 'Cualquiera' },
@@ -115,8 +114,8 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
     // muestra en ningun modo (2026-10-14: de noche todo el dia quedaba
     // "Bloqueado" por el aviso minimo y el cliente veia 18 botones grises).
     const libres = availability.filter((slot) => slot.status === 'available')
-    if (selectedStaffId) {
-      return libres.filter((slot) => slot.staff_id === selectedStaffId)
+    if (staffFilterId) {
+      return libres.filter((slot) => slot.staff_id === staffFilterId)
     }
 
     const firstSlotByTime = new Map<string, (typeof availability)[number]>()
@@ -128,7 +127,7 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
     return Array.from(firstSlotByTime.values()).sort((a, b) =>
       a.starts_at.localeCompare(b.starts_at)
     )
-  }, [availability, selectedStaffId])
+  }, [availability, staffFilterId])
 
   // El backend solo genera horarios dentro de las franjas del profesional: un
   // dia sin ninguno (para el profesional elegido, si hay uno) es un dia sin
@@ -136,12 +135,23 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
   // dentro del aviso minimo: ahi si tiene sentido la lista de espera.
   const diaSinAtencion =
     availability !== undefined &&
-    !availability.some((slot) => !selectedStaffId || slot.staff_id === selectedStaffId)
+    !availability.some((slot) => !staffFilterId || slot.staff_id === staffFilterId)
 
   const emptyReported = useRef<string | null>(null)
   useEffect(() => {
-    if (!onEmptyAvailability || isLoading || isFetching || isError || !availability) return
-    const key = `${storePublicId}:${serviceId}:${dateStr}:${selectedStaffId ?? ''}:${forceAll}`
+    // Sin la lista de profesionales todavia no se sabe si hay uno solo: medir
+    // antes contaria dos veces el mismo dia vacio (con y sin filtro).
+    if (
+      !onEmptyAvailability ||
+      isStaffLoading ||
+      isLoading ||
+      isFetching ||
+      isError ||
+      !availability
+    ) {
+      return
+    }
+    const key = `${storePublicId}:${serviceId}:${dateStr}:${staffFilterId ?? ''}:${forceAll}`
     // availability_empty sigue midiendo todo dia sin horarios libres, tambien el
     // que no tiene atencion: es el contrato de la metrica del embudo.
     if (visibleSlots.length > 0) {
@@ -152,6 +162,7 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
     }
   }, [
     availability,
+    isStaffLoading,
     isLoading,
     isFetching,
     isError,
@@ -159,23 +170,26 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
     storePublicId,
     serviceId,
     dateStr,
-    selectedStaffId,
+    staffFilterId,
     forceAll,
     onEmptyAvailability
   ])
 
+  const subtitle = soloStaff
+    ? 'Elegí el día y el horario que te quede mejor.'
+    : hayRecursos
+      ? staffFilterId
+        ? 'Busca un horario disponible para esa cancha o sala.'
+        : 'Te mostramos horarios en cualquier cancha o sala disponible.'
+      : staffFilterId
+        ? 'Busca un horario disponible para ese profesional.'
+        : 'Te mostramos horarios con cualquier profesional disponible.'
+  const staffLabel = hayRecursos ? 'Cancha / sala' : 'Profesional'
+
   return (
     <div className="space-y-6 duration-500">
-      <div className="flex items-center gap-4 mb-2">
-        <button
-          type="button"
-          aria-label="Volver"
-          onClick={onBack}
-          className="p-2 rounded-full transition-all active:scale-90 flex items-center justify-center border"
-          style={createBookingBackButtonStyle()}
-        >
-          <ChevronLeft size={20} className="stroke-[3px]" />
-        </button>
+      <div className="space-y-3 mb-2">
+        <BookingBackButton onBack={onBack} />
         <div>
           <h2
             className="text-2xl font-black uppercase tracking-tight"
@@ -183,23 +197,27 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
           >
             {heading}
           </h2>
-          <p className="text-sm font-bold text-gray-500">
-            {hayRecursos
-              ? selectedStaffId
-                ? 'Busca un horario disponible para esa cancha o sala.'
-                : 'Te mostramos horarios en cualquier cancha o sala disponible.'
-              : selectedStaffId
-                ? 'Busca un horario disponible para ese profesional.'
-                : 'Te mostramos horarios con cualquier profesional disponible.'}
-          </p>
+          <p className="text-sm font-bold text-gray-500">{subtitle}</p>
         </div>
       </div>
 
-      {!lockedStaffId && (
+      {!lockedStaffId && soloStaff && (
+        <div>
+          <div className="flex items-center gap-2 mb-1 text-xs font-black text-gray-500 uppercase tracking-widest ml-1">
+            <Users size={14} className="text-orange-500" />
+            <span>{staffLabel}</span>
+          </div>
+          <p className="ml-1 text-sm font-black" style={{ color: colors2000s.text.primary }}>
+            {soloStaff.display_name}
+          </p>
+        </div>
+      )}
+
+      {!lockedStaffId && !soloStaff && (
         <div>
           <div className="flex items-center gap-2 mb-3 text-xs font-black text-gray-500 uppercase tracking-widest ml-1">
             <Users size={14} className="text-orange-500" />
-            <span>{hayRecursos ? 'Cancha / sala' : 'Profesional'}</span>
+            <span>{staffLabel}</span>
           </div>
 
           <div className="flex gap-2 overflow-x-auto pb-1 hide-scrollbar">
@@ -346,7 +364,7 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
                 <button
                   key={`${slot.staff_id}-${slot.start_time || slot.starts_at}`}
                   onClick={() =>
-                    onSelect(dateStr, timeString, slot.staff_id, selectedStaffId, slot.starts_at, {
+                    onSelect(dateStr, timeString, slot.staff_id, staffFilterId, slot.starts_at, {
                       name: slot.staff_name,
                       isResource: resourceIds.has(slot.staff_id)
                     })
@@ -368,7 +386,7 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
                   }}
                 >
                   <div>{timeString}</div>
-                  {!selectedStaffId && (
+                  {!staffFilterId && (
                     <div
                       className="text-[8px] uppercase tracking-widest mt-1"
                       style={{

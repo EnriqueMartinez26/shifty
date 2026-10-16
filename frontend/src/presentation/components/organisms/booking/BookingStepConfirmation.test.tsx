@@ -173,6 +173,19 @@ describe('BookingStepConfirmation', () => {
       expect(datos.contains(screen.getByLabelText('Teléfono'))).toBe(true)
     })
 
+    // 2026-10-16 (pedido de Mateo): "atras" era un circulo con un chevron, sin
+    // texto ni nombre accesible, y los clientes no lo encontraban.
+    it('"Volver" es un boton con texto visible que vuelve al paso anterior', () => {
+      const onBack = jest.fn()
+      render(<BookingStepConfirmation {...props({ onBack })} />)
+
+      const volver = screen.getByRole('button', { name: 'Volver' })
+      expect(volver).toHaveTextContent('Volver')
+      expect(volver).toHaveAttribute('type', 'button')
+      fireEvent.click(volver)
+      expect(onBack).toHaveBeenCalledTimes(1)
+    })
+
     it('el telefono muestra un ejemplo y las notas dicen para quien son', () => {
       render(<BookingStepConfirmation {...props()} />)
 
