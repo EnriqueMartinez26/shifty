@@ -54,6 +54,7 @@ from modules.auth.dependencies import (
     get_current_user,
     get_optional_current_user,
 )
+from modules.notifications.tasks import is_deliverable_email
 
 # NOTA: use public_api as the stable runtime import path for public booking data access.
 from modules.public_api.repository import PublicRepository
@@ -627,6 +628,7 @@ def _to_search_result(
         client_name=client.full_name or client.email,
         client_id=client.public_id,
         client_phone=client.phone if show_phone else None,
+        client_has_email=is_deliverable_email(appointment.client_email),
         **(_search_charge_fields(appointment, cobro) if show_charge else _SIN_COBRO),
     )
 

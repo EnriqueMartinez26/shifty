@@ -48,6 +48,11 @@ export interface AffectedAppointment {
   /** null = se cancela; 'pending_payment' | 'has_deposit' = requiere decision humana. */
   blocker: string | null
   cancellable: boolean
+  /**
+   * Tiene un email entregable: la cancelacion por bloqueo le llega por mail.
+   * Sin el (reservo sin email) hay que avisarle por WhatsApp.
+   */
+  client_has_email?: boolean
 }
 
 export interface BlockPreviewResult {

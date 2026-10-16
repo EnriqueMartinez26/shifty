@@ -10,6 +10,11 @@ interface AppointmentProps {
   staffName: string | null
   clientName: string
   clientPhone: string | null
+  /**
+   * Recibe avisos por email. Una reserva sin email (propuesta por Mateo,
+   * 2026-10-16) no: la agenda sugiere avisarle por WhatsApp al cancelar.
+   */
+  clientHasEmail: boolean
   timeSpan: BookingTimeSpan
   /**
    * Crudo a proposito: un estado que el front todavia no conoce no puede
@@ -39,6 +44,7 @@ export class Appointment {
     staff_name?: string | null
     client_name: string
     client_phone?: string | null
+    client_has_email?: boolean | null
     starts_at: string
     ends_at: string
     status: string
@@ -54,6 +60,8 @@ export class Appointment {
       staffName: props.staff_name ?? null,
       clientName: props.client_name,
       clientPhone: props.client_phone ?? null,
+      // Sin el dato (respuesta vieja) no se sugiere nada: se asume que si.
+      clientHasEmail: props.client_has_email !== false,
       timeSpan: BookingTimeSpan.create(props.starts_at, props.ends_at),
       status: props.status,
       notes: props.notes,
@@ -88,6 +96,9 @@ export class Appointment {
   get clientPhone(): string | null {
     return this.props.clientPhone
   }
+  get clientHasEmail(): boolean {
+    return this.props.clientHasEmail
+  }
   get timeSpan() {
     return this.props.timeSpan
   }
@@ -121,6 +132,7 @@ export class Appointment {
       staff_name: this.props.staffName,
       client_name: this.props.clientName,
       client_phone: this.props.clientPhone,
+      client_has_email: this.props.clientHasEmail,
       starts_at: this.props.timeSpan.getStartsAt().toISOString(),
       ends_at: this.props.timeSpan.getEndsAt().toISOString(),
       status: this.props.status,

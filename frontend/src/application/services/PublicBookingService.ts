@@ -132,8 +132,12 @@ export interface PublicBookingPayload {
   notes?: string
   idempotency_key: string
   client_name: string
-  /** Obligatorio en el portal (decision de Mateo, 2026-10-14). */
-  client_email: string
+  /**
+   * Opcional, salvo en una tienda con `otp_booking` (el codigo sale solo por
+   * email): ahi el backend responde 422 `CLIENT_EMAIL_REQUIRED` sin el.
+   * Propuesta por Mateo, 2026-10-16.
+   */
+  client_email?: string
   client_phone: string
   custom_fields?: Record<string, string>
   promotion_code?: string

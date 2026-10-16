@@ -57,6 +57,7 @@ const card = {
   endsAt: new Date('2026-09-15T12:30:00Z'),
   status: 'confirmed',
   clientPhone: null,
+  clientHasEmail: true,
   serviceId: 'svc-1',
   top: '0px',
   height: '128px',

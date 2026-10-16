@@ -24,8 +24,8 @@ jest.mock('@presentation/hooks/usePublic', () => ({
   useRefreshPublicServices: () => mockRefreshServices
 }))
 
-// El portal exige email (decision de Mateo, 2026-10-14): el cliente de los
-// tests lo trae completo, salvo los que prueban justamente su falta.
+// El cliente de los tests trae email, salvo los que prueban su falta (opcional
+// sin OTP, obligatorio con OTP; propuesta por Mateo, 2026-10-16).
 const cliente = (patch: Partial<BookingClientData> = {}): BookingClientData => ({
   name: '',
   email: 'lucia@example.com',
@@ -170,7 +170,7 @@ describe('BookingStepConfirmation', () => {
       ).not.toBeInTheDocument()
       const datos = screen.getByRole('region', { name: 'Tus datos' })
       expect(datos.contains(screen.getByLabelText('Nombre Completo'))).toBe(true)
-      expect(datos.contains(screen.getByLabelText('Email'))).toBe(true)
+      expect(datos.contains(screen.getByLabelText('Email (opcional)'))).toBe(true)
       expect(datos.contains(screen.getByLabelText('Teléfono'))).toBe(true)
     })
 
@@ -210,7 +210,7 @@ describe('BookingStepConfirmation', () => {
       expect(botonReservar()).not.toBeDisabled()
     })
 
-    it('reservar queda deshabilitado hasta tener nombre, telefono, email y terminos', () => {
+    it('reservar queda deshabilitado hasta tener nombre, telefono y terminos', () => {
       const { rerender } = render(<BookingStepConfirmation {...props()} />)
       aceptarTerminos()
       expect(botonReservar()).toBeDisabled()
@@ -271,10 +271,10 @@ describe('BookingStepConfirmation', () => {
       expect(aviso).not.toHaveTextContent(/ocupado/)
     })
 
-    // 2026-10-14: un cliente reservo sin email (el campo decia "Opcional") y
-    // despues no pudo entrar a "Mis turnos", que se abre con un codigo que
-    // sale solo por email. Decision de Mateo: el email es obligatorio.
-    it('el email es obligatorio y dice para que se usa', () => {
+    // Propuesta por Mateo (2026-10-16): el email vuelve a ser opcional, salvo
+    // con OTP (el codigo sale solo por email). El #181 lo habia hecho
+    // obligatorio porque sin email no hay "Mis turnos"; ahora el campo lo dice.
+    it('sin OTP el email es opcional, dice que se pierde y se puede reservar sin el', () => {
       render(
         <BookingStepConfirmation
           {...props({
@@ -286,8 +286,32 @@ describe('BookingStepConfirmation', () => {
       )
       aceptarTerminos()
 
+      expect(botonReservar()).not.toBeDisabled()
+      expect(screen.getByText('Email (opcional)')).toBeInTheDocument()
+      expect(screen.getByPlaceholderText('juan@email.com')).not.toHaveAttribute('required')
+      expect(
+        screen.getByText(
+          'Opcional. Si no lo dejás, no vas a poder gestionar tu turno desde acá ni recibir avisos; para cambiarlo o cancelarlo escribile a la tienda por WhatsApp.'
+        )
+      ).toBeInTheDocument()
+    })
+
+    it('con OTP el email sigue obligatorio aunque el telefono este verificado', () => {
+      render(
+        <BookingStepConfirmation
+          {...props({
+            requiresOtp: true,
+            otpState: otpInicial({ verified: true, verifiedPhone: '+1155550101' }),
+            bookingState: estado({
+              client: cliente({ name: 'Lucia', phone: '1155550101', email: '' })
+            })
+          })}
+        />
+      )
+      aceptarTerminos()
+
       expect(botonReservar()).toBeDisabled()
-      expect(screen.queryByText(/Email \(Opcional\)/i)).not.toBeInTheDocument()
+      expect(screen.queryByText('Email (opcional)')).not.toBeInTheDocument()
       expect(screen.getByPlaceholderText('juan@email.com')).toHaveAttribute('required')
       expect(
         screen.getByText('Te enviamos la confirmación y el acceso a tus turnos.')

@@ -1,6 +1,6 @@
 import React from 'react'
 
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 
 import type { BookingConfirmation } from '@application/services/PublicBookingService'
 
@@ -16,7 +16,14 @@ const estado = (patch: Partial<BookingWizardState> = {}): BookingWizardState => 
   date: '2026-09-25',
   startTime: '09:00',
   startsAt: '2026-09-25T12:00:00+00:00',
-  client: { name: 'Lucia', email: '', phone: '1155550101', notes: '', customFields: {} },
+  // Con email: la reserva sin email tiene su propio bloque de tests.
+  client: {
+    name: 'Lucia',
+    email: 'lucia@example.com',
+    phone: '1155550101',
+    notes: '',
+    customFields: {}
+  },
   promotionCode: '',
   promotionPreview: null,
   addons: [],
@@ -399,5 +406,127 @@ describe('BookingSuccess: adicionales', () => {
 
     expect(screen.getByText(/Strass x6:/)).toHaveTextContent('3.000')
     expect(screen.getByText(/Total final:/)).toHaveTextContent('30.000')
+  })
+})
+
+describe('BookingSuccess: reserva sin email', () => {
+  const sinEmail = estado({
+    client: { name: 'Lucia', email: '  ', phone: '1155550101', notes: '', customFields: {} }
+  })
+  // 18:00 UTC = 15:00 en Argentina, viernes 23/10/2026.
+  const turno = confirmacion({
+    public_id: 'apt-77',
+    staff_name: 'Natalia',
+    starts_at: '2026-10-23T18:00:00Z',
+    ends_at: '2026-10-23T18:30:00Z'
+  })
+  const AVISO =
+    'Como no dejaste email, no te vamos a mandar recordatorios. Guardalo en tu calendario o mandátelo por WhatsApp.'
+
+  it('confirmada: titulo, cuando y con quien, aviso y sin "mis turnos"', () => {
+    render(<BookingSuccess {...props({ bookingState: sinEmail, confirmation: turno })} />)
+
+    expect(screen.getByRole('heading', { name: 'Turno reservado' })).toBeInTheDocument()
+    expect(
+      screen.getByText('Turno reservado para el viernes 23/10 a las 15:00 con Natalia.')
+    ).toBeInTheDocument()
+    expect(screen.getByRole('note')).toHaveTextContent(AVISO)
+    expect(screen.queryByText(/Te enviamos los detalles/)).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: MIS_TURNOS })).not.toBeInTheDocument()
+  })
+
+  it('pendiente de confirmacion se anuncia como reserva registrada', () => {
+    render(
+      <BookingSuccess
+        {...props({ bookingState: sinEmail, confirmation: { ...turno, status: 'pending' } })}
+      />
+    )
+
+    expect(screen.getByRole('heading', { name: 'Reserva registrada' })).toBeInTheDocument()
+    expect(
+      screen.getByText('Tu solicitud ya fue enviada y queda pendiente de confirmación.')
+    ).toBeInTheDocument()
+  })
+
+  it('agregar al calendario descarga el .ics del turno', () => {
+    jest.useFakeTimers()
+    const create = jest.fn((_blob: Blob) => 'blob:turno')
+    const originalCreate = window.URL.createObjectURL
+    const originalRevoke = window.URL.revokeObjectURL
+    window.URL.createObjectURL = create
+    window.URL.revokeObjectURL = jest.fn()
+    const click = jest.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+
+    render(<BookingSuccess {...props({ bookingState: sinEmail, confirmation: turno })} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Agregar al calendario' }))
+
+    expect(create).toHaveBeenCalledTimes(1)
+    const link = click.mock.instances[0] as unknown as HTMLAnchorElement
+    expect(link.download).toBe('turno-apt-77.ics')
+    jest.runOnlyPendingTimers()
+    jest.useRealTimers()
+    click.mockRestore()
+    window.URL.createObjectURL = originalCreate
+    window.URL.revokeObjectURL = originalRevoke
+  })
+
+  it('mandarselo por WhatsApp comparte el turno, el servicio y la tienda', () => {
+    render(<BookingSuccess {...props({ bookingState: sinEmail, confirmation: turno })} />)
+
+    const href = screen.getByRole('link', { name: 'Mandármelo por WhatsApp' }).getAttribute('href')
+    expect(href).toMatch(/^https:\/\/wa\.me\/\?text=/)
+    const texto = decodeURIComponent((href ?? '').split('?text=')[1] ?? '')
+    expect(texto).toContain('Turno reservado para el viernes 23/10 a las 15:00 con Natalia.')
+    expect(texto).toContain('Servicio: Corte')
+    expect(texto).toContain('Lugar: Tienda')
+  })
+
+  it('con WhatsApp de la tienda ofrece escribirle para cambiarlo o cancelarlo', () => {
+    render(
+      <BookingSuccess
+        {...props({ bookingState: sinEmail, confirmation: turno, whatsappNumber: '11 5555 0303' })}
+      />
+    )
+
+    const href = screen
+      .getByRole('link', { name: 'Escribirle a Tienda por WhatsApp' })
+      .getAttribute('href')
+    expect(href).toMatch(/^https:\/\/wa\.me\/5491155550303\?text=/)
+    expect(decodeURIComponent((href ?? '').split('?text=')[1] ?? '')).toBe(
+      'Hola, reservé el turno apt-77 para el viernes 23/10 a las 15:00. Quiero cambiarlo/cancelarlo.'
+    )
+  })
+
+  it('sin WhatsApp de la tienda pide comunicarse con ella', () => {
+    render(<BookingSuccess {...props({ bookingState: sinEmail, confirmation: turno })} />)
+
+    expect(
+      screen.queryByRole('link', { name: 'Escribirle a Tienda por WhatsApp' })
+    ).not.toBeInTheDocument()
+    expect(
+      screen.getByText('Para cambiarlo o cancelarlo, comunicate con Tienda.')
+    ).toBeInTheDocument()
+  })
+
+  it('con sena por WhatsApp mantiene el flujo de pago', () => {
+    render(
+      <BookingSuccess
+        {...props({
+          bookingState: sinEmail,
+          whatsappNumber: '11 5555 0303',
+          confirmation: {
+            ...turno,
+            status: 'pending_payment',
+            payment_required: true,
+            deposit_channel: 'whatsapp',
+            payment_amount: 3000
+          }
+        })}
+      />
+    )
+
+    expect(screen.getByRole('heading', { name: 'Reserva registrada' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: COORDINAR })).toBeInTheDocument()
+    expect(screen.getByText('Seña a pagar por WhatsApp')).toBeInTheDocument()
   })
 })

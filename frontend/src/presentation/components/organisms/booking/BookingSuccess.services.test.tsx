@@ -133,4 +133,25 @@ describe('BookingSuccess: servicios del turno', () => {
       expect(resumen()).toHaveTextContent(`Servicio: ${formatCurrency(10000)}`)
     })
   })
+
+  // Con #191 (reserva sin email): lo que el cliente se manda nombra todos los servicios.
+  it('sin email, mandarselo por WhatsApp nombra todos los servicios', () => {
+    render(
+      <BookingSuccess
+        confirmation={confirmacion({
+          extra_services: [{ public_id: 'barba', name: 'Barba', duration_minutes: 15 }],
+          services_label: 'Corte + Barba'
+        })}
+        bookingState={{ ...estado, client: { ...estado.client, email: '' } }}
+        storeSlug="tienda"
+        storeName="Tienda"
+        whatsappNumber={null}
+      />
+    )
+
+    const href = screen.getByRole('link', { name: 'Mandármelo por WhatsApp' }).getAttribute('href')
+    expect(decodeURIComponent((href ?? '').split('?text=')[1] ?? '')).toContain(
+      'Servicio: Corte + Barba'
+    )
+  })
 })
