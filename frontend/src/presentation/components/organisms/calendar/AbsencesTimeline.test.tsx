@@ -29,6 +29,7 @@ const absence: UnifiedCalendarEvent = {
   endsAt: new Date('2026-09-15T13:30:00Z'),
   status: 'absent',
   clientPhone: null,
+  clientHasEmail: true,
   serviceId: 'svc-1'
 }
 

@@ -86,14 +86,27 @@ class PublicStaffResponse(BaseModel):
         from_attributes = True
 
 
-# El portal exige email (decision de Mateo, 2026-10-14): "Mis turnos" entra
-# con un codigo que sale SOLO por email, y sin email la ficha quedaba con el
-# tecnico ``{tel}@store{id}.noreply``, que no recibe nada. El alta del panel
-# sigue sin pedirlo: la tienda puede no tenerlo.
+# Email de la reserva publica (propuesta por Mateo, 2026-10-16, pendiente de
+# OK del dueño): opcional, salvo en una tienda con ``otp_booking``, donde el
+# codigo sale SOLO por email y sin email no hay forma de verificar. Ese 422 lo
+# levanta ``PublicBookingService._resolve_request`` (``CLIENT_EMAIL_REQUIRED``)
+# antes de escribir nada. Sin email la ficha nace con el tecnico
+# ``{tel}@store{id}.noreply``: no recibe avisos ni entra a "Mis turnos". El
+# alta del panel nunca lo pidio. La lista de espera publica sigue exigiendolo.
 PUBLIC_BOOKING_EMAIL_REQUIRED = (
     "Para reservar hace falta un email: ahí te enviamos la confirmación "
     "y el acceso a tus turnos."
 )
+
+
+def blank_client_email_to_none(data: Any) -> Any:
+    """Un email en blanco es "sin email": el wizard manda ``""`` cuando el
+    campo opcional queda vacio y ``EmailStr`` lo rechazaria como invalido."""
+    if isinstance(data, dict):
+        email = data.get("client_email")
+        if isinstance(email, str) and not email.strip():
+            return {**data, "client_email": None}
+    return data
 
 
 def require_client_email(data: Any, message: str) -> Any:
@@ -128,7 +141,7 @@ class PublicBookingCreate(BaseModel):
     idempotency_key: Optional[str] = Field(default=None, min_length=10, max_length=128)
     client_name: str = Field(..., min_length=1, max_length=100)
     client_phone: str = Field(..., min_length=6, max_length=30)
-    client_email: EmailStr = Field(..., max_length=255)
+    client_email: Optional[EmailStr] = Field(default=None, max_length=255)
     custom_fields: dict[str, str] = Field(default_factory=dict, max_length=12)
     promotion_code: str | None = Field(
         default=None, min_length=3, max_length=30, pattern=r"^[A-Za-z0-9_-]+$"
@@ -154,8 +167,8 @@ class PublicBookingCreate(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def email_is_required(cls, data: Any) -> Any:
-        return require_client_email(data, PUBLIC_BOOKING_EMAIL_REQUIRED)
+    def blank_email_is_none(cls, data: Any) -> Any:
+        return blank_client_email_to_none(data)
 
     @field_validator("client_phone")
     @classmethod

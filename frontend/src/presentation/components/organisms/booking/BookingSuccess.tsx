@@ -15,6 +15,7 @@ import { formatCurrency } from '@shared/utils/currency'
 import { asSafeHttpsUrl } from '@shared/utils/safeUrl'
 import { buildWaMeUrl } from '@shared/utils/whatsAppPhone'
 
+import { BookingNoEmailActions, bookedSummary } from './BookingNoEmailActions'
 import type { BookingWizardState } from './types'
 import { colors2000s, orangeCtaGradient } from '../../../../theme/colors'
 
@@ -75,20 +76,29 @@ export const BookingSuccess: React.FC<BookingSuccessProps> = ({
   )
   const isPendingPayment = confirmation.status === 'pending_payment'
   const isPendingReview = confirmation.status === 'pending'
-  const title = isPendingPayment
+  // Sin email (propuesta por Mateo, 2026-10-16): no hay avisos ni "Mis
+  // turnos". La pantalla dice cuando es el turno y ofrece calendario y
+  // WhatsApp; los flujos de seña no cambian.
+  const withoutEmail = !bookingState.client.email.trim()
+  const emailTitle = isPendingPayment
     ? 'Reserva Pendiente de Pago'
     : isPendingReview
       ? 'Reserva Registrada'
       : 'Reserva Confirmada'
+  const title = withoutEmail
+    ? isPendingPayment || isPendingReview
+      ? 'Reserva registrada'
+      : 'Turno reservado'
+    : emailTitle
   const subtitle = isWhatsappDeposit
     ? `Pagá la seña por WhatsApp: tu turno se confirma cuando ${storeName} reciba el pago.`
     : confirmation.payment_required
       ? 'Tu turno se confirma cuando el cobro quede aprobado.'
       : isPendingReview
         ? 'Tu solicitud ya fue enviada y queda pendiente de confirmación.'
-        : bookingState.client.email
-          ? `Te enviamos los detalles a ${bookingState.client.email}`
-          : 'Tu reserva ya quedó registrada.'
+        : withoutEmail
+          ? null
+          : `Te enviamos los detalles a ${bookingState.client.email}`
 
   return (
     <div className="flex flex-col items-center py-10 text-center duration-500">
@@ -119,7 +129,12 @@ export const BookingSuccess: React.FC<BookingSuccessProps> = ({
       >
         {title}
       </h2>
-      <p className="text-sm font-bold text-gray-500 mb-10">{subtitle}</p>
+      {withoutEmail && (
+        <p className={`text-sm font-black text-gray-700 ${subtitle ? 'mb-2' : 'mb-10'}`}>
+          {bookedSummary(confirmation)}
+        </p>
+      )}
+      {subtitle && <p className="text-sm font-bold text-gray-500 mb-10">{subtitle}</p>}
 
       <div
         className="w-full rounded-lg p-6 text-left border"
@@ -270,7 +285,17 @@ export const BookingSuccess: React.FC<BookingSuccessProps> = ({
         </p>
       )}
 
-      {storeSlug && (
+      {withoutEmail && (
+        <BookingNoEmailActions
+          confirmation={confirmation}
+          storeName={storeName}
+          whatsappNumber={whatsappNumber}
+        />
+      )}
+
+      {/* "Mis turnos" se abre con un codigo que sale solo por email: sin email
+          no hay a donde mandarlo. */}
+      {storeSlug && !withoutEmail && (
         <a
           href={`/b/${storeSlug}/mis-turnos`}
           className="w-full mt-4 font-black py-4 rounded-xl transition-all uppercase tracking-widest text-xs border cursor-pointer select-none inline-flex items-center justify-center gap-2"

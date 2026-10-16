@@ -2399,6 +2399,7 @@ Responses:
 | `status` | string | yes |  |
 | `blocker` | string \| null | no |  |
 | `cancellable` | boolean | yes |  |
+| `client_has_email` | boolean | no | default=false |
 
 ### AnonymizeResponse
 
@@ -3227,6 +3228,7 @@ Responses:
 | `client_name` | string | yes |  |
 | `client_id` | string | yes |  |
 | `client_phone` | string \| null | no |  |
+| `client_has_email` | boolean | no | default=false |
 | `price_amount` | string \| null | no | pattern="^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$" |
 | `payment_status` | string \| null | no |  |
 | `payment_amount` | string \| null | no | pattern="^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$" |
@@ -3964,7 +3966,7 @@ Type: `enum("efectivo", "transferencia", "mercadopago", "otro")`
 | `idempotency_key` | string \| null | no | minLength=10, maxLength=128 |
 | `client_name` | string | yes | minLength=1, maxLength=100 |
 | `client_phone` | string | yes | minLength=6, maxLength=30 |
-| `client_email` | string | yes | maxLength=255, format="email" |
+| `client_email` | string \| null | no | maxLength=255, format="email" |
 | `custom_fields` | object<string, string> | no |  |
 | `promotion_code` | string \| null | no | minLength=3, maxLength=30, pattern="^[A-Za-z0-9_-]+$" |
 | `payment_method` | string | no | pattern="^(auto\|manual\|mercadopago)$", default="manual" |
@@ -4942,4 +4944,4 @@ Type: `enum("admin", "staff", "receptionist", "client")`
 | `terms_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 | `privacy_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 
-Generado desde app.openapi() el 2026-10-16, commit b53df5b0
+Generado desde app.openapi() el 2026-10-16, commit ec8a92cf

@@ -1,4 +1,9 @@
-import { buildClientMessage, buildRebookUrl, clientMessageKindFor } from './clientWhatsApp'
+import {
+  buildCancellationMessage,
+  buildClientMessage,
+  buildRebookUrl,
+  clientMessageKindFor
+} from './clientWhatsApp'
 
 const base = {
   clientName: 'Carla',
@@ -32,5 +37,20 @@ describe('clientWhatsApp', () => {
     expect(clientMessageKindFor('completed')).toBe('rebook')
     expect(clientMessageKindFor('cancelled')).toBeNull()
     expect(clientMessageKindFor('absent')).toBeNull()
+  })
+})
+
+describe('buildCancellationMessage', () => {
+  it('avisa la cancelacion con servicio, fecha y hora argentina', () => {
+    const texto = buildCancellationMessage(base)
+    expect(texto).toBe(
+      'Hola Carla! Te avisamos que cancelamos tu turno para Corte del 15/09/2026 a las 10:00 hs en Peluqueria Sol. Si querés, te ayudamos a elegir otro horario.'
+    )
+  })
+
+  it('sin nombre ni tienda saluda igual', () => {
+    const texto = buildCancellationMessage({ ...base, clientName: ' ', storeName: '' })
+    expect(texto.startsWith('Hola! Te avisamos')).toBe(true)
+    expect(texto).toContain('a las 10:00 hs. Si querés')
   })
 })

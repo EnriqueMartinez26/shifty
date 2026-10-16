@@ -106,16 +106,15 @@ async def test_anotarse_en_la_lista_de_espera_no_secuestra_el_email_del_cliente(
             "starts_at": slot.isoformat(),
             "client_name": "Victima",
             "client_phone": VICTIMA,
-            "client_email": f"c{VICTIMA.lstrip('+')}@example.com",
+            # Sin email (opcional otra vez en una tienda sin `otp_booking`,
+            # propuesta por Mateo del 2026-10-16): la ficha nace con el tecnico.
             "accepts_terms": True,
             "idempotency_key": "secuestro-000001",
         },
     )
     assert reserva.status_code == 201, reserva.text
     tecnico = await _email_del_cliente(test_session, "5491155550999")
-    # Desde el 2026-10-14 el portal exige email: la ficha nace con el de la
-    # victima, no con el tecnico .noreply. Lo que se prueba es que no cambie.
-    assert tecnico == f"c{VICTIMA.lstrip('+')}@example.com"
+    assert tecnico.endswith(".noreply")
 
     alta = await client.post(
         "/public/waitlist",
@@ -210,10 +209,7 @@ async def test_ni_con_el_telefono_verificado_por_otp_se_pisa_el_contacto_ajeno(
             "starts_at": slot.isoformat(),
             "client_name": "Duenio del telefono",
             "client_phone": VICTIMA,
-            # Desde el 2026-10-14 el portal exige email (decision de Mateo).
-            # Una ficha con email no entregable, como la que deja el alta del
-            # panel sin email: el codigo no se redirige a la victima.
-            "client_email": f"{VICTIMA.lstrip('+')}@tienda.noreply",
+            # Sin email: la ficha nace con el tecnico .noreply.
             "accepts_terms": True,
             "idempotency_key": "secuestro-otp-01",
         },
@@ -556,6 +552,79 @@ async def test_el_duenio_del_email_de_la_ficha_lista_y_cancela_sus_turnos(
 
 
 @pytest.mark.asyncio
+async def test_reservar_sin_email_no_abre_la_autogestion(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Sin email no hay "Mis turnos" (propuesta por Mateo, 2026-10-16).
+
+    La ficha nace con el tecnico ``.noreply``. Verificar un codigo pedido a un
+    email cualquiera con ese telefono no abre la autogestion: el guard "ficha
+    sin contacto entregable" responde 403 al listar, cancelar y reprogramar.
+    El front no ofrece el boton y manda a escribirle a la tienda.
+    """
+    monkeypatch.setattr(tasks, "_send_email", Buzon())
+    monkeypatch.setattr(tasks, "send_otp_email", Cola())
+    store, _token, service, staff, slot = await _tienda(client, "sin-email-autogestion")
+
+    reserva = await client.post(
+        "/public/appointments",
+        json={
+            "store_public_id": store,
+            "service_id": service,
+            "staff_id": staff,
+            "starts_at": slot.isoformat(),
+            "client_name": "Sin Email",
+            "client_phone": VICTIMA,
+            "accepts_terms": True,
+            "idempotency_key": "sin-email-autogestion-01",
+        },
+    )
+    assert reserva.status_code == 201, reserva.text
+    turno = reserva.json()["public_id"]
+    assert (await _email_del_cliente(test_session, "5491155550999")).endswith(
+        ".noreply"
+    )
+
+    pedido = await client.post(
+        "/public/otp/request",
+        json={
+            "store_public_id": store,
+            "phone": VICTIMA,
+            "channel": "email",
+            "email": "cualquiera@example.com",
+        },
+    )
+    assert pedido.status_code == 200, pedido.text
+    verificado = await client.post(
+        "/public/otp/verify",
+        json={
+            "store_public_id": store,
+            "phone": VICTIMA,
+            "code": str(pedido.json()["debug_code"]),
+        },
+    )
+    assert verificado.status_code == 200, verificado.text
+    client.headers["X-Client-Token"] = verificado.json()["client_token"]
+
+    listado = await client.get(f"/public/client/{store}/{VICTIMA}/appointments")
+    assert listado.status_code == 403, listado.text
+    cancelacion = await client.patch(
+        f"/public/client/appointments/{turno}/cancel",
+        json={"phone": VICTIMA, "reason": "no puedo ir"},
+    )
+    assert cancelacion.status_code == 403, cancelacion.text
+    reprogramacion = await client.patch(
+        f"/public/client/appointments/{turno}/reschedule",
+        json={
+            "phone": VICTIMA,
+            "new_starts_at": (slot + timedelta(hours=2)).isoformat(),
+            "idempotency_key": "sin-email-autogestion-02",
+        },
+    )
+    assert reprogramacion.status_code == 403, reprogramacion.text
+
+
+@pytest.mark.asyncio
 async def test_el_email_del_request_se_ignora_cuando_hay_ficha_con_contacto(
     client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -813,9 +882,8 @@ async def test_sin_contacto_verificado_la_sena_no_filtra_el_historial(
             "starts_at": _slot(2).isoformat(),
             "client_name": "Victima",
             "client_phone": VICTIMA,
-            # Una ficha con email no entregable, como la que deja el alta del
-            # panel sin email: el codigo no se redirige a la victima.
-            "client_email": f"{VICTIMA.lstrip('+')}@tienda.noreply",
+            # Sin email: la ficha nace con el tecnico .noreply, asi que el
+            # codigo no se redirige a la victima.
             "accepts_terms": True,
             "payment_method": "manual",
             "idempotency_key": "otp-historial-01",

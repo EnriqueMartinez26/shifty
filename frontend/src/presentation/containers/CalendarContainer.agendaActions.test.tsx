@@ -9,14 +9,21 @@ const mockRefetch = jest.fn()
 const idleMutation = { mutateAsync: jest.fn(), isPending: false }
 
 // Domingo 20/09/2026. Los turnos son a las 14:00 de Argentina: no empezaron.
-const appointmentOf = (id: string, staffId: string, clientName: string, status = 'confirmed') => ({
+const appointmentOf = (
+  id: string,
+  staffId: string,
+  clientName: string,
+  status = 'confirmed',
+  extra: { clientPhone?: string | null; clientHasEmail?: boolean } = {}
+) => ({
   id,
   status,
   staffId,
   staffName: staffId === 'st-1' ? 'Ana Gomez' : 'Beto Diaz',
   clientName,
   serviceName: 'Corte',
-  clientPhone: null,
+  clientPhone: extra.clientPhone ?? null,
+  clientHasEmail: extra.clientHasEmail ?? true,
   serviceId: 'svc-1',
   timeSpan: {
     getStartsAt: () => new Date('2026-09-20T17:00:00.000Z'),
@@ -238,6 +245,81 @@ describe('CalendarContainer - cancelar y reprogramar (FF-31)', () => {
         '¿Cancelar el turno de Luis Propio? El cobro pendiente se va a vencer y su link de pago deja de servir.'
       )
     ).toBeInTheDocument()
+  })
+
+  // Propuesta por Mateo (2026-10-16): quien reservo sin email no recibe
+  // ningun aviso. El dialogo lo dice y, ya cancelado, se ofrece WhatsApp con
+  // el aviso armado (servicio, fecha y hora argentina).
+  it('cancelar el turno de un cliente sin email ofrece avisarle por WhatsApp', async () => {
+    mockCancel.mockResolvedValue(undefined)
+    mockAppointments = [
+      appointmentOf('appt-own', 'st-1', 'Luis Propio', 'confirmed', {
+        clientPhone: '11 5555 0303',
+        clientHasEmail: false
+      })
+    ]
+    render(<CalendarContainer />)
+
+    fireEvent.click(within(cardOf('Luis Propio')).getByRole('button', { name: 'Cancelar turno' }))
+    expect(
+      await screen.findByText(
+        '¿Cancelar el turno de Luis Propio? Este turno no recibe avisos por email.'
+      )
+    ).toBeInTheDocument()
+    await confirmarCancelacion()
+
+    expect(await screen.findByText('Turno cancelado')).toBeInTheDocument()
+    expect(screen.getByText('Este turno no recibe avisos por email.')).toBeInTheDocument()
+    const href = screen.getByRole('link', { name: 'Avisale por WhatsApp' }).getAttribute('href')
+    expect(href?.startsWith('https://wa.me/5491155550303?text=')).toBe(true)
+    const texto = decodeURIComponent((href ?? '').split('?text=')[1] ?? '')
+    expect(texto).toContain('cancelamos tu turno para Corte del 20/09/2026 a las 14:00 hs')
+    expect(texto).toContain('Peluqueria Sol')
+  })
+
+  it('el aviso de WhatsApp se va al cambiar de dia', async () => {
+    mockCancel.mockResolvedValue(undefined)
+    mockAppointments = [
+      appointmentOf('appt-own', 'st-1', 'Luis Propio', 'confirmed', {
+        clientPhone: '11 5555 0303',
+        clientHasEmail: false
+      })
+    ]
+    render(<CalendarContainer />)
+
+    fireEvent.click(within(cardOf('Luis Propio')).getByRole('button', { name: 'Cancelar turno' }))
+    await confirmarCancelacion()
+    expect(await screen.findByText('Este turno no recibe avisos por email.')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Siguiente' }))
+
+    expect(screen.queryByText('Este turno no recibe avisos por email.')).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Avisale por WhatsApp' })).not.toBeInTheDocument()
+  })
+
+  it('sin telefono visible avisa que no recibe mails pero no arma el link', async () => {
+    mockCancel.mockResolvedValue(undefined)
+    mockAppointments = [
+      appointmentOf('appt-own', 'st-1', 'Luis Propio', 'confirmed', { clientHasEmail: false })
+    ]
+    render(<CalendarContainer />)
+
+    fireEvent.click(within(cardOf('Luis Propio')).getByRole('button', { name: 'Cancelar turno' }))
+    await confirmarCancelacion()
+
+    expect(await screen.findByText('Este turno no recibe avisos por email.')).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Avisale por WhatsApp' })).not.toBeInTheDocument()
+  })
+
+  it('con email no muestra el aviso de WhatsApp al cancelar', async () => {
+    mockCancel.mockResolvedValue(undefined)
+    render(<CalendarContainer />)
+
+    fireEvent.click(within(cardOf('Luis Propio')).getByRole('button', { name: 'Cancelar turno' }))
+    await confirmarCancelacion()
+
+    expect(await screen.findByText('Turno cancelado')).toBeInTheDocument()
+    expect(screen.queryByText('Este turno no recibe avisos por email.')).not.toBeInTheDocument()
   })
 
   it('reprogramar abre el formulario con el turno elegido, sin la opcion de fuera de horario', () => {

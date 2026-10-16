@@ -115,3 +115,11 @@ export const buildWaMeUrl = (phone: string | null | undefined, text: string): st
   const number = normalizePhoneForWhatsApp(phone)
   return number ? `https://wa.me/${number}?text=${encodeURIComponent(text)}` : null
 }
+
+/**
+ * Link wa.me para compartir un texto sin destinatario: WhatsApp deja elegir el
+ * chat (por ejemplo, el propio). Lo usa quien reservo sin email para guardarse
+ * el turno (propuesta por Mateo, 2026-10-16).
+ */
+export const buildWaShareUrl = (text: string): string =>
+  `https://wa.me/?text=${encodeURIComponent(text)}`
