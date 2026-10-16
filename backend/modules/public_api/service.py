@@ -111,6 +111,7 @@ from modules.public_api.schemas import (
     ClientRescheduleRequest,
     PublicAddonChoice,
     PublicBookingAddonLine,
+    PUBLIC_BOOKING_EMAIL_REQUIRED,
     PublicBookingCreate,
     PublicBookingResponse,
 )
@@ -562,6 +563,19 @@ def _payment_link_failed(exc: Exception) -> AppException:
     )
 
 
+def _require_email_for_otp_booking(data: PublicBookingCreate) -> None:
+    """Con ``otp_booking`` el email es obligatorio (propuesta por Mateo,
+    2026-10-16, pendiente de OK del dueño): el codigo sale SOLO por email, asi
+    que sin email no hay forma de verificar. En el resto de las tiendas es
+    opcional. Corre antes del gate de OTP y antes de escribir nada."""
+    if data.client_email is None:
+        raise AppException(
+            message=PUBLIC_BOOKING_EMAIL_REQUIRED,
+            http_status=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            error_code="CLIENT_EMAIL_REQUIRED",
+        )
+
+
 # ---------------------------------------------------------------------------
 # Alta publica
 # ---------------------------------------------------------------------------
@@ -716,6 +730,7 @@ class PublicBookingService:
         # el, la verificacion de otro abria su historial para la sena.
         otp_service = OtpService(self.db)
         if is_store_feature_enabled(store.feature_flags, "otp_booking"):
+            _require_email_for_otp_booking(data)
             await self._require_booking_otp(
                 otp_service, store.id, data.client_phone, client_token
             )
