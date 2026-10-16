@@ -12,7 +12,6 @@ from typing import Annotated, AsyncGenerator, List, Optional, TypedDict, cast
 from fastapi import Depends, Path, Query, status
 from pydantic import StringConstraints
 from redis.asyncio import Redis
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.availability_cache import AvailabilityCacheClient
@@ -67,8 +66,7 @@ from modules.services.selection import (
     services_label,
     snapshot_items,
 )
-from modules.services.selection_errors import require_selection_allowed
-from modules.stores.model import Store
+from modules.services.selection_errors import require_selection_size
 from modules.users.model import User, UserRole
 
 router = CanonicalAPIRouter(prefix="/appointments", tags=["Appointments"])
@@ -79,7 +77,7 @@ PublicIdQuery = Annotated[
     str, Query(min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)
 ]
 # Servicios extra del turno (2026-10-16): repetible, con el tope duro de la
-# entrada; el de producto lo aplica ``require_selection_allowed``.
+# entrada; el de producto lo aplica ``require_selection_size``.
 ExtraServiceQuery = Annotated[
     list[
         Annotated[
@@ -215,8 +213,8 @@ async def get_availability(
     disponible" y nunca con el motivo que tipeo el duenio (AUD2-B1-04).
 
     ``extra_service_id`` (repetible, 2026-10-16): los demas servicios del
-    turno, con las mismas reglas que ``/public/availability`` (flag de la
-    tienda, tope de cantidad y de duracion). La tienda se lee solo si hay.
+    turno, con las mismas reglas que ``/public/availability``: tope de
+    cantidad y de duracion, sin el flag (es de lectura).
     """
     svc = AvailabilityService(db, availability_cache)
     if user is None:
@@ -228,7 +226,7 @@ async def get_availability(
             service = await repo.get_service_by_public_id(service_id)
             if not service:
                 return []
-            await _require_selection_allowed(db, service.store_id, extra_service_id)
+            require_selection_size(extra_service_id)
             # El motivo de un bloqueo es un dato personal del profesional y
             # esta ruta es anonima (el service_id sale de /public/services):
             # regla 20, mismo criterio que public_api/router.py.
@@ -242,22 +240,12 @@ async def get_availability(
                 )
             )
 
-    await _require_selection_allowed(db, user.store_id, extra_service_id)
+    require_selection_size(extra_service_id)
     return list(
         await svc.get_available_slots(
             user.store_id, service_id, date, extra_service_public_ids=extra_service_id
         )
     )
-
-
-async def _require_selection_allowed(
-    db: AsyncSession, store_id: str, extra_service_ids: list[str]
-) -> None:
-    """Flag y tope de varios servicios; sin extras no lee la tienda."""
-    if not extra_service_ids:
-        return
-    flags = await db.scalar(select(Store.feature_flags).where(Store.id == store_id))
-    require_selection_allowed(flags, extra_service_ids)
 
 
 # ---------------------------------------------------------------------------

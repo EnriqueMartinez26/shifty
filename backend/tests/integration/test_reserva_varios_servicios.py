@@ -8,7 +8,8 @@ reglas de la decision:
 - el turno dura la suma y cuesta la suma; ``service_id`` es el principal (el
   primero elegido) y los demas se congelan en ``extra_services_snapshot``;
 - hasta 3 servicios (422 ``TOO_MANY_SERVICES``) y 480 minutos (422
-  ``SERVICES_TOO_LONG``); con el flag apagado, 422 ``MULTI_SERVICE_DISABLED``;
+  ``SERVICES_TOO_LONG``); con el flag apagado, el alta y los previews son
+  422 ``MULTI_SERVICE_DISABLED`` (la grilla, que es de lectura, no);
 - la sena es la regla MAS ALTA entre los servicios con sena, sobre el TOTAL
   (servicios + adicionales, con la promo): Corte $10.000 con 50 % + Barba
   $5.000 sin sena -> $7.500. Los previews dicen lo mismo que cobra el alta;
@@ -229,8 +230,15 @@ async def _turnos(session: AsyncSession) -> list[Appointment]:
     return list((await session.execute(select(Appointment))).scalars().all())
 
 
-def _barba(t: _Tienda) -> list[dict[str, Any]]:
-    return [{"public_id": t.barba, "name": "Barba", "duration_minutes": 20}]
+def _barba(t: _Tienda, *, precio: bool = True) -> list[dict[str, Any]]:
+    """La Barba congelada: con su precio en las respuestas del portal, sin el
+    en la agenda y la busqueda (la recepcion no ve importes)."""
+    linea: dict[str, Any] = {
+        "public_id": t.barba,
+        "name": "Barba",
+        "duration_minutes": 20,
+    }
+    return [linea | {"price": 5000.0}] if precio else [linea]
 
 
 # ---------------------------------------------------------------------------
@@ -256,7 +264,7 @@ async def test_el_flag_nace_apagado_y_la_vitrina_lo_expone(client: AsyncClient) 
 
 
 @pytest.mark.asyncio
-async def test_con_el_flag_apagado_los_extras_son_422_en_todos_lados(
+async def test_con_el_flag_apagado_el_alta_y_los_previews_son_422(
     client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(tasks, "_send_email", Buzon())
@@ -264,29 +272,8 @@ async def test_con_el_flag_apagado_los_extras_son_422_en_todos_lados(
     extra = ("extra_service_id", t.barba)
     base = [("store_public_id", t.store), ("service_id", t.corte)]
 
-    respuestas = [
+    escrituras = [
         await _reservar(client, t, [t.barba]),
-        await client.get(
-            "/public/availability",
-            params=[*base, ("date", _dia_local(t).isoformat()), extra],
-        ),
-        await client.get(
-            "/appointments/availability",
-            params=[
-                ("service_id", t.corte),
-                ("date", _dia_local(t).isoformat()),
-                extra,
-            ],
-            headers=auth_headers(t.token),
-        ),
-        await client.get(
-            "/appointments/availability",
-            params=[
-                ("service_id", t.corte),
-                ("date", _dia_local(t).isoformat()),
-                extra,
-            ],
-        ),
         await client.get(
             "/public/deposit/preview",
             params=[*base, ("starts_at", _slot(t, 13).isoformat()), extra],
@@ -295,11 +282,31 @@ async def test_con_el_flag_apagado_los_extras_son_422_en_todos_lados(
             "/public/promotions/preview", params=[*base, ("code", "NOEXISTE"), extra]
         ),
     ]
+    panel: list[tuple[str, Any]] = [
+        ("service_id", t.corte),
+        ("date", _dia_local(t).isoformat()),
+        extra,
+    ]
+    grillas = [
+        await client.get(
+            "/public/availability",
+            params=[*base, ("date", _dia_local(t).isoformat()), extra],
+        ),
+        await client.get(
+            "/appointments/availability", params=panel, headers=auth_headers(t.token)
+        ),
+        await client.get("/appointments/availability", params=panel),
+    ]
 
-    for res in respuestas:
+    for res in escrituras:
         assert res.status_code == 422, res.text
         assert res.json()["error_code"] == "MULTI_SERVICE_DISABLED"
     assert await _turnos(test_session) == []
+    # La grilla es de lectura: no mira el flag (revision de #195).
+    for res in grillas:
+        assert res.status_code == 200, res.text
+        assert res.json()
+        _slots_de(res.json(), DURACION)
     # Sin extras, la reserva de siempre.
     sola = await _reservar(client, t, [])
     assert sola.status_code == 201, sola.text
@@ -326,6 +333,8 @@ async def test_corte_y_barba_suman_duracion_y_precio_y_cobran_la_regla_mas_alta(
     assert cuerpo["service_id"] == t.corte
     assert cuerpo["extra_services"] == _barba(t)
     assert cuerpo["services_label"] == "Corte + Barba"
+    assert cuerpo["extra_services_amount"] == 5000.0
+    assert Decimal(str(cuerpo["service_price"])) == CORTE_PRECIO
     assert cuerpo["deposit_channel"] == "whatsapp"
     assert Decimal(str(cuerpo["final_price"])) == TOTAL
     assert Decimal(str(cuerpo["payment_amount"])) == SENA
@@ -619,7 +628,8 @@ async def test_la_grilla_dura_la_suma_y_solo_ofrece_a_quien_hace_todos(
     ]
     # Beto no hace Barba: elegirlo es 409; "cualquiera" toma a Ana.
     con_beto = await _reservar(client, t, [t.barba], staff="beto")
-    assert con_beto.status_code == 409, con_beto.text
+    assert con_beto.status_code == 422, con_beto.text
+    assert con_beto.json()["error_code"] == "STAFF_CANNOT_PERFORM_SELECTION"
     cualquiera = await _reservar(client, t, [t.barba], staff=None)
     assert cualquiera.status_code == 201, cualquiera.text
     assert cualquiera.json()["staff_id"] == t.ana
@@ -729,6 +739,90 @@ async def test_el_panel_reprograma_y_conserva_duracion_y_lineas(
     assert (nuevo.price_amount, nuevo.extra_services_amount) == (TOTAL, BARBA_PRECIO)
 
 
+def _slots_de(slots: list[dict[str, Any]], duracion: timedelta) -> None:
+    for slot in slots:
+        inicio = datetime.fromisoformat(slot["starts_at"])
+        assert datetime.fromisoformat(slot["ends_at"]) - inicio == duracion
+
+
+async def _reprogramar(client: AsyncClient, turno: str, nuevo: datetime) -> Response:
+    return await client.patch(
+        f"/public/client/appointments/{turno}/reschedule",
+        json={
+            "phone": TELEFONO,
+            "new_starts_at": nuevo.isoformat(),
+            "idempotency_key": f"varios-mover-{turno[-8:]}-{nuevo.hour}",
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_la_sena_por_whatsapp_se_muda_con_los_servicios_extra(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``carry_manual_deposit``: el turno movido conserva la sena por WhatsApp
+    (mismo importe, sin re-tarifar), las lineas y la duracion de 50 minutos."""
+    monkeypatch.setattr(tasks, "_send_email", Buzon())
+    t = await _tienda(client, "varios-whatsapp-se-muda")
+    reserva = await _reservar(client, t, [t.barba])
+    assert reserva.status_code == 201, reserva.text
+    assert reserva.json()["deposit_channel"] == "whatsapp"
+    original = await _turno(test_session, reserva.json()["public_id"])
+    lineas = original.extra_services_snapshot
+    await _verificar_cliente(client, monkeypatch, t)  # type: ignore[arg-type]
+
+    res = await _reprogramar(client, original.id, _slot(t, 16))
+
+    assert res.status_code == 200, res.text
+    assert res.json()["deposit_channel"] == "whatsapp"
+    nuevo = await _turno(test_session, res.json()["public_id"])
+    assert nuevo.status == AppointmentStatus.PENDING_PAYMENT.value
+    assert nuevo.ends_at - nuevo.starts_at == DURACION
+    assert nuevo.extra_services_snapshot == lineas
+    assert (nuevo.price_amount, nuevo.extra_services_amount) == (TOTAL, BARBA_PRECIO)
+    cobro = await _cobro(test_session, nuevo.id)
+    assert (cobro.provider, cobro.status, cobro.amount) == ("manual", "pending", SENA)
+
+
+@pytest.mark.asyncio
+async def test_apagar_el_flag_no_deja_sin_grilla_la_reprogramacion(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Revision de #195: con el flag apagado DESPUES de tomar un turno de
+    varios servicios, la grilla con sus extras sigue saliendo (50 minutos,
+    solo quien hace todos) y el cliente lo reprograma a uno de esos horarios.
+    Una reserva NUEVA de varios servicios si rebota."""
+    monkeypatch.setattr(tasks, "_send_email", Buzon())
+    t = await _tienda(client, "varios-flag-apagado-despues")
+    reserva = await _reservar(client, t, [t.barba])
+    assert reserva.status_code == 201, reserva.text
+    await _prender_flag(client, t.token, False)
+    await _verificar_cliente(client, monkeypatch, t)  # type: ignore[arg-type]
+
+    grilla = await client.get(
+        "/public/availability",
+        params=[
+            ("store_public_id", t.store),
+            ("service_id", t.corte),
+            ("date", _dia_local(t).isoformat()),
+            ("extra_service_id", t.barba),
+        ],
+    )
+
+    assert grilla.status_code == 200, grilla.text
+    libres = [s for s in grilla.json() if s["status"] == "available"]
+    assert libres and {s["staff_id"] for s in libres} == {t.ana}
+    _slots_de(grilla.json(), DURACION)
+    destino = datetime.fromisoformat(libres[-1]["starts_at"])
+    res = await _reprogramar(client, reserva.json()["public_id"], destino)
+    assert res.status_code == 200, res.text
+    nuevo = await _turno(test_session, res.json()["public_id"])
+    assert nuevo.ends_at - nuevo.starts_at == DURACION
+    otra = await _reservar(client, t, [t.barba], hora=16)
+    assert otra.status_code == 422, otra.text
+    assert otra.json()["error_code"] == "MULTI_SERVICE_DISABLED"
+
+
 # ---------------------------------------------------------------------------
 # Link del panel
 # ---------------------------------------------------------------------------
@@ -818,11 +912,11 @@ async def test_agenda_busqueda_y_reportes(
 
     assert agenda.status_code == 200, agenda.text
     (item,) = [a for a in agenda.json() if a["public_id"] == turno]
-    assert item["extra_services"] == _barba(t)
+    assert item["extra_services"] == _barba(t, precio=False)
     assert item["services_label"] == "Corte + Barba"
     assert busqueda.status_code == 200, busqueda.text
     (fila,) = [r for r in busqueda.json()["results"] if r["public_id"] == turno]
-    assert fila["extra_services"] == _barba(t)
+    assert fila["extra_services"] == _barba(t, precio=False)
     assert fila["services_label"] == "Corte + Barba"
     # El top de servicios cuenta el principal (decision de Mateo, 2026-10-16).
     assert reportes.status_code == 200, reportes.text

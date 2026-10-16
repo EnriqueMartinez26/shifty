@@ -51,6 +51,18 @@ def services_too_long() -> AppException:
     )
 
 
+def require_selection_size(extra_service_ids: Sequence[str]) -> None:
+    """Solo el tope de cantidad (422 ``TOO_MANY_SERVICES``), SIN el flag.
+
+    Para las dos disponibilidades, que son de lectura: apagar el flag no
+    puede dejar sin grilla la reprogramacion de un turno de varios servicios
+    ya tomado (revision adversarial de #195). El flag lo exigen el alta y los
+    dos previews (``require_selection_allowed``).
+    """
+    if too_many_services(extra_service_ids):
+        raise too_many_services_error()
+
+
 def require_selection_allowed(
     feature_flags: dict[str, Any] | None, extra_service_ids: Sequence[str]
 ) -> None:

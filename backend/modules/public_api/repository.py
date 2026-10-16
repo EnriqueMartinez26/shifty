@@ -58,6 +58,14 @@ def _visible_en_el_portal() -> tuple[ColumnElement[bool], ColumnElement[bool]]:
     return Store.is_active == True, Store.is_internal == False
 
 
+class StaffCannotPerformSelection(ValueError):
+    """El profesional elegido no hace todos los servicios de la seleccion
+    (solo con servicios extra: un servicio solo sigue con su 409)."""
+
+    def __init__(self) -> None:
+        super().__init__("El profesional no realiza todos los servicios elegidos")
+
+
 @dataclass(frozen=True)
 class ExtraServicesForBooking:
     """Los servicios extra de un alta: las entidades (para elegir quien los
@@ -94,9 +102,6 @@ class StoreRef:
     min_booking_notice_hours: int
     buffer_minutes: int
     cancellation_hours: int
-    # Para el flag ``multi_service_booking`` de la disponibilidad con varios
-    # servicios (2026-10-16): una columna mas en la MISMA sentencia.
-    feature_flags: dict[str, bool] | None = None
 
 
 class RangeRejection(str, Enum):
@@ -155,7 +160,6 @@ class PublicRepository:
                     Store.min_booking_notice_hours,
                     Store.buffer_minutes,
                     Store.cancellation_hours,
-                    Store.feature_flags,
                 ).where(Store.public_id == public_id, *_visible_en_el_portal())
             )
         ).one_or_none()
@@ -166,7 +170,6 @@ class PublicRepository:
             min_booking_notice_hours=row.min_booking_notice_hours,
             buffer_minutes=row.buffer_minutes,
             cancellation_hours=row.cancellation_hours,
-            feature_flags=row.feature_flags,
         )
 
     async def get_store_by_id(self, store_id: str) -> Store | None:
@@ -643,6 +646,10 @@ class PublicRepository:
                 for member in qualified_staff
                 if member.public_id == staff_public_id
             ]
+            if not candidates and extra_services:
+                # Varios servicios: 422 propio en el llamador, no el 409 de un
+                # horario ocupado (revision de #195).
+                raise StaffCannotPerformSelection()
             if not candidates:
                 raise ValueError("El profesional no realiza el servicio seleccionado")
         else:

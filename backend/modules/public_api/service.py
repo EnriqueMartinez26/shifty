@@ -111,6 +111,7 @@ from modules.public_api.repository import (
     ExtraServicesForBooking,
     PublicRepository,
     RangeRejection,
+    StaffCannotPerformSelection,
 )
 from modules.public_api.schemas import (
     ClientCancelRequest,
@@ -134,11 +135,13 @@ from modules.services.addons import (
 from modules.services.selection import (
     NO_EXTRA_SERVICES,
     ExtraServices,
+    extra_lines_from_snapshot,
     has_duplicates,
     price_extra_services,
     rescheduled_duration,
     services_label,
     snapshot_items,
+    snapshot_price,
     too_long,
 )
 from modules.services.selection_errors import (
@@ -568,9 +571,14 @@ def extra_service_items(snapshot: object) -> list[PublicBookingExtraService]:
     """Los servicios extra congelados del turno para la respuesta."""
     return [
         PublicBookingExtraService(
-            public_id=public_id, name=name, duration_minutes=minutes
+            public_id=public_id,
+            name=name,
+            duration_minutes=minutes,
+            price=float(snapshot_price(line)),
         )
-        for public_id, name, minutes in snapshot_items(snapshot)
+        for (public_id, name, minutes), line in zip(
+            snapshot_items(snapshot), extra_lines_from_snapshot(snapshot)
+        )
     ]
 
 
@@ -1011,6 +1019,12 @@ class PublicBookingService:
         try:
             async with self.db.begin_nested():
                 return await self._write_booking(data, request, idempotency_key)
+        except StaffCannotPerformSelection:
+            raise AppException(
+                message="El profesional elegido no hace todos los servicios elegidos",
+                http_status=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                error_code="STAFF_CANNOT_PERFORM_SELECTION",
+            )
         except ValueError as exc:
             raise AppException(
                 message=str(exc), http_status=409, error_code="APPOINTMENT_CONFLICT"
@@ -1732,6 +1746,7 @@ def _self_service_response(
         services_label=services_label(
             service.name if service else "", appointment.extra_services_snapshot
         ),
+        extra_services_amount=float(appointment.extra_services_amount or 0),
     )
 
 
@@ -1781,4 +1796,5 @@ def _booking_response(
         services_label=services_label(
             service.name, appointment.extra_services_snapshot
         ),
+        extra_services_amount=float(request.extras.amount),
     )

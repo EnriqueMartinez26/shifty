@@ -102,7 +102,7 @@ from modules.services.selection import (
 )
 from modules.services.selection_errors import (
     MULTI_SERVICE_FLAG,
-    require_selection_allowed,
+    require_selection_size,
 )
 from modules.services.schemas import ServiceAddonResponse
 from modules.stores.model import Store
@@ -387,9 +387,10 @@ async def get_public_availability(
     dejaba su cardinalidad sin tope).
 
     ``extra_service_id`` (repetible, 2026-10-16): los demas servicios del
-    turno. Con el flag de la tienda apagado es 422 ``MULTI_SERVICE_DISABLED``;
-    con mas de 3 servicios, 422 ``TOO_MANY_SERVICES``; con mas de 480 minutos,
-    422 ``SERVICES_TOO_LONG``.
+    turno. Con mas de 3 servicios, 422 ``TOO_MANY_SERVICES``; con mas de 480
+    minutos, 422 ``SERVICES_TOO_LONG``. No mira el flag de la tienda: es de
+    lectura, y apagarlo no deja sin grilla la reprogramacion de un turno de
+    varios servicios ya tomado.
     """
     search_date = _public_availability_date(date)
 
@@ -400,7 +401,8 @@ async def get_public_availability(
         store = await PublicRepository(db).get_store_ref(store_public_id)
         if not store:
             raise StoreNotFoundException(identifier=store_public_id)
-        require_selection_allowed(store.feature_flags, extra_service_id)
+        # De lectura: sin el flag (``require_selection_size``).
+        require_selection_size(extra_service_id)
         return list(
             await AvailabilityService(db, availability_cache).get_available_slots(
                 store.id,

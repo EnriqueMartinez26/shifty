@@ -3987,6 +3987,7 @@ Type: `enum("efectivo", "transferencia", "mercadopago", "otro")`
 | `public_id` | string | yes |  |
 | `name` | string | yes |  |
 | `duration_minutes` | integer | yes |  |
+| `price` | number | no | default=0.0 |
 
 ### PublicBookingResponse
 
@@ -4019,6 +4020,7 @@ Type: `enum("efectivo", "transferencia", "mercadopago", "otro")`
 | `addons_amount` | number | no | default=0.0 |
 | `extra_services` | array<PublicBookingExtraService> | no |  |
 | `services_label` | string | no | default="" |
+| `extra_services_amount` | number | no | default=0.0 |
 
 ### PublicDepositPreviewResponse
 
@@ -4962,4 +4964,4 @@ Type: `enum("admin", "staff", "receptionist", "client")`
 | `terms_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 | `privacy_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 
-Generado desde app.openapi() el 2026-10-16, commit b53df5b0
+Generado desde app.openapi() el 2026-10-16, commit 35a14418

@@ -218,6 +218,9 @@ class PublicBookingExtraService(BaseModel):
     public_id: str
     name: str
     duration_minutes: int
+    # Precio de lista congelado al reservar, sin descuento (para detallar el
+    # total en la pantalla de exito).
+    price: float = 0.0
 
 
 class PublicBookingAddonLine(BaseModel):
@@ -268,6 +271,9 @@ class PublicBookingResponse(BaseModel):
     # la etiqueta de todos ("Corte + Barba"; el nombre solo sin extras).
     extra_services: list[PublicBookingExtraService] = Field(default_factory=list)
     services_label: str = ""
+    # La parte de ``final_price`` que son servicios extra (su lista, sin
+    # descuento); ``service_price`` sigue siendo el principal.
+    extra_services_amount: float = 0.0
 
     class Config:
         from_attributes = True
