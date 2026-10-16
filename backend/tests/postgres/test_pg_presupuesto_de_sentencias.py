@@ -87,11 +87,13 @@ PRESUPUESTOS: dict[str, Presupuesto] = {
         consultas=15, set_config=4
     ),
     "POST /appointments/ [auto-turno]": Presupuesto(consultas=11, set_config=4),
-    # Varios servicios en un turno (decision de Mateo, 2026-10-16), medidos al
-    # nacer en CI. La grilla con extras es la misma forma que la de un servicio
-    # (una sentencia con ``in_()`` en vez de ``=``); el alta suma UNA lectura,
-    # los extras por ``in_()`` (``get_services_by_public_ids``): juntarla con
-    # la del principal cambiaria la sentencia del alta de un servicio.
+    # Varios servicios en un turno (decision de Mateo, 2026-10-16). Techos
+    # ESTIMADOS, no medidos: son una cota superior que CI verifica (sin
+    # Postgres local no se pudo medir el valor exacto; bajarlos al medido con
+    # PRESUPUESTO_MEDIR=1). La grilla con extras es la misma forma que la de un
+    # servicio (una sentencia con ``in_()`` en vez de ``=``); el alta suma UNA
+    # lectura, los extras por ``in_()`` (``get_services_by_public_ids``):
+    # juntarla con la del principal cambiaria la sentencia del alta de uno.
     "GET /public/availability [miss, varios]": Presupuesto(consultas=5, set_config=3),
     "POST /public/appointments [varios]": Presupuesto(consultas=18, set_config=5),
 }
