@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useRef, useState } from 'react'
 
 import { RefreshCcw, Settings2 } from 'lucide-react'
 import { useNavigate } from 'react-router'
@@ -6,6 +6,7 @@ import { useNavigate } from 'react-router'
 import { totalCollected } from '@domain/value-objects/AppointmentCharge'
 
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
+import { parseAmountInput } from '@shared/utils/amountInput'
 import { formatCurrency } from '@shared/utils/currency'
 
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
@@ -27,6 +28,20 @@ import {
   create2000sPanelStyle
 } from '../lib/surfaceStyles'
 
+type RefundScope = 'total' | 'partial'
+
+type RefundReview = {
+  paymentId: string
+  reason?: string
+} & ({ scope: 'total' } | { scope: 'partial'; amount: number })
+
+const preciseAmount = new Intl.NumberFormat('es-AR', {
+  style: 'currency',
+  currency: 'ARS',
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2
+})
+
 const PaymentsPage: React.FC = () => {
   useDocumentTitle('Cobros online · Shifty')
   // Navegacion dentro de la SPA: `window.location.assign` recargaba todo y
@@ -40,9 +55,15 @@ const PaymentsPage: React.FC = () => {
 
   const [refundForm, setRefundForm] = useState({
     paymentId: '',
+    scope: '' as RefundScope | '',
     amount: '',
     reason: ''
   })
+  const [refundReview, setRefundReview] = useState<RefundReview | null>(null)
+  const [refundError, setRefundError] = useState('')
+  const [externalRefundConfirmed, setExternalRefundConfirmed] = useState(false)
+  const [refundBusy, setRefundBusy] = useState(false)
+  const refundSubmitting = useRef(false)
   const [message, setMessage] = useState('')
 
   const summary = summaryQuery.data
@@ -58,12 +79,51 @@ const PaymentsPage: React.FC = () => {
     }
   ]
 
+  const updateRefundForm = (change: Partial<typeof refundForm>) => {
+    setRefundForm((previous) => ({ ...previous, ...change }))
+    setRefundReview(null)
+    setExternalRefundConfirmed(false)
+    setRefundError('')
+    setMessage('')
+  }
+
+  const prepareRefundReview = () => {
+    const paymentId = refundForm.paymentId.trim()
+    if (!paymentId) {
+      setRefundError('Ingresá el ID del cobro.')
+      return
+    }
+    if (!refundForm.scope) {
+      setRefundError('Elegí si la devolución fue total o parcial.')
+      return
+    }
+    const reason = refundForm.reason.trim() || undefined
+    if (refundForm.scope === 'partial') {
+      // 2026-10-16: Number('3.200') registraba 3,20 y Number('3.200,50')
+      // enviaba NaN, que podia terminar interpretado como devolucion total.
+      const parsed = parseAmountInput(refundForm.amount)
+      if (!parsed.ok) {
+        setRefundError(parsed.error)
+        return
+      }
+      setRefundReview({ paymentId, scope: 'partial', amount: parsed.value, reason })
+    } else {
+      setRefundReview({ paymentId, scope: 'total', reason })
+    }
+    setRefundError('')
+    setMessage('')
+    setExternalRefundConfirmed(false)
+  }
+
   const handleRefund = async () => {
+    if (!refundReview || !externalRefundConfirmed || refundSubmitting.current) return
+    refundSubmitting.current = true
+    setRefundBusy(true)
     try {
       const response = await refundPayment.mutateAsync({
-        paymentId: refundForm.paymentId,
-        amount: refundForm.amount ? Number(refundForm.amount) : undefined,
-        reason: refundForm.reason || undefined,
+        paymentId: refundReview.paymentId,
+        amount: refundReview.scope === 'partial' ? refundReview.amount : undefined,
+        reason: refundReview.reason,
         manual: true
       })
       // La devolucion no revierte el resto del turno (D-20261008-01).
@@ -73,8 +133,14 @@ const PaymentsPage: React.FC = () => {
           ? `Devolución registrada: ${response.public_id}. Hay un resto de ${formatCurrency(Number(resto))} registrado en ese turno; revertilo desde Cobros si también lo devolviste.`
           : `Devolución registrada: ${response.public_id}`
       )
+      setRefundForm({ paymentId: '', scope: '', amount: '', reason: '' })
+      setRefundReview(null)
+      setExternalRefundConfirmed(false)
     } catch (error: unknown) {
       setMessage(getErrorMessage(error, 'No se pudo registrar la devolución'))
+    } finally {
+      refundSubmitting.current = false
+      setRefundBusy(false)
     }
   }
 
@@ -210,44 +276,133 @@ const PaymentsPage: React.FC = () => {
           </div>
 
           <div className="space-y-3">
-            <label
+            <h3
               className="text-[10px] font-black uppercase tracking-widest"
               style={{ color: colors2000s.text.secondary }}
             >
               Devolución manual
+            </h3>
+            <p className="text-xs font-bold" style={{ color: colors2000s.text.secondary }}>
+              Shifty registra una devolución que ya hiciste por fuera. No transfiere dinero ni
+              inicia un reembolso en Mercado Pago.
+            </p>
+            <label htmlFor="refund-payment-id" className="block text-xs font-bold">
+              ID del cobro
             </label>
             <input
+              id="refund-payment-id"
               value={refundForm.paymentId}
-              onChange={(e) => setRefundForm((prev) => ({ ...prev, paymentId: e.target.value }))}
+              onChange={(e) => updateRefundForm({ paymentId: e.target.value })}
+              disabled={refundBusy}
               className="w-full rounded-2xl px-4 py-3 font-bold outline-none"
               style={inputStyle}
               placeholder="ID del cobro"
             />
-            <input
-              value={refundForm.amount}
-              onChange={(e) => setRefundForm((prev) => ({ ...prev, amount: e.target.value }))}
-              className="w-full rounded-2xl px-4 py-3 font-bold outline-none"
-              style={inputStyle}
-              placeholder="Monto opcional"
-            />
+            <fieldset disabled={refundBusy} className="space-y-2">
+              <legend className="text-xs font-bold">¿Cuánto devolviste?</legend>
+              <label className="flex items-center gap-2 text-xs font-bold">
+                <input
+                  type="radio"
+                  name="refund-scope"
+                  value="total"
+                  checked={refundForm.scope === 'total'}
+                  onChange={() => updateRefundForm({ scope: 'total', amount: '' })}
+                />
+                Total: todo el importe del cobro
+              </label>
+              <label className="flex items-center gap-2 text-xs font-bold">
+                <input
+                  type="radio"
+                  name="refund-scope"
+                  value="partial"
+                  checked={refundForm.scope === 'partial'}
+                  onChange={() => updateRefundForm({ scope: 'partial' })}
+                />
+                Parcial: un importe específico
+              </label>
+            </fieldset>
+            {refundForm.scope === 'partial' && (
+              <>
+                <label htmlFor="refund-amount" className="block text-xs font-bold">
+                  Importe devuelto en pesos
+                </label>
+                <input
+                  id="refund-amount"
+                  type="text"
+                  inputMode="decimal"
+                  value={refundForm.amount}
+                  onChange={(e) => updateRefundForm({ amount: e.target.value })}
+                  disabled={refundBusy}
+                  className="w-full rounded-2xl px-4 py-3 font-bold outline-none"
+                  style={inputStyle}
+                  placeholder="Ejemplo: 3.200,50"
+                  aria-describedby="refund-amount-help"
+                />
+                <p id="refund-amount-help" className="text-xs font-bold">
+                  Usá punto para miles y coma para centavos.
+                </p>
+              </>
+            )}
+            <label htmlFor="refund-reason" className="block text-xs font-bold">
+              Motivo de la devolución (opcional)
+            </label>
             <textarea
+              id="refund-reason"
               value={refundForm.reason}
-              onChange={(e) => setRefundForm((prev) => ({ ...prev, reason: e.target.value }))}
+              onChange={(e) => updateRefundForm({ reason: e.target.value })}
+              disabled={refundBusy}
+              maxLength={500}
               className="w-full min-h-24 rounded-2xl px-4 py-3 font-bold outline-none resize-y"
               style={inputStyle}
               placeholder="Motivo de la devolución"
             />
+            {refundError && <p role="alert">{refundError}</p>}
             <button
               type="button"
-              onClick={() => {
-                void handleRefund()
-              }}
-              disabled={!refundForm.paymentId}
+              onClick={prepareRefundReview}
+              disabled={refundBusy}
               className="w-full px-4 py-3 rounded-2xl text-xs font-black uppercase tracking-widest disabled:opacity-50"
               style={buttonStyles2000s.selected}
             >
-              Registrar devolución
+              Revisar devolución
             </button>
+            {refundReview && (
+              <div
+                className="space-y-3 rounded-2xl bg-white p-4"
+                style={create2000sListCardStyle()}
+              >
+                <h4 className="text-sm font-black">Revisá antes de registrar</h4>
+                <p className="text-xs font-bold">Cobro: {refundReview.paymentId}</p>
+                <p className="text-xs font-bold">
+                  Devolución:{' '}
+                  {refundReview.scope === 'total'
+                    ? 'total del cobro, según el importe registrado en Shifty'
+                    : `parcial de ${preciseAmount.format(refundReview.amount)}`}
+                </p>
+                <p className="text-xs font-bold">
+                  El cobro quedará marcado como devuelto. Esta acción no envía dinero y no admite
+                  registrar otra devolución sobre el mismo cobro.
+                </p>
+                <label className="flex items-start gap-2 text-xs font-bold">
+                  <input
+                    type="checkbox"
+                    checked={externalRefundConfirmed}
+                    onChange={(event) => setExternalRefundConfirmed(event.target.checked)}
+                    disabled={refundBusy}
+                  />
+                  Confirmo que ya hice esta devolución por fuera de Shifty.
+                </label>
+                <button
+                  type="button"
+                  onClick={() => void handleRefund()}
+                  disabled={!externalRefundConfirmed || refundBusy}
+                  className="w-full px-4 py-3 rounded-2xl text-xs font-black uppercase tracking-widest disabled:opacity-50"
+                  style={buttonStyles2000s.selected}
+                >
+                  {refundBusy ? 'Registrando devolución...' : 'Confirmar registro de devolución'}
+                </button>
+              </div>
+            )}
           </div>
         </div>
       </div>
