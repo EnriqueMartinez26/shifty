@@ -229,6 +229,38 @@ describe('StaffManagementContainer: agregarme como profesional', () => {
     expect(getByTestId('modal-self')).not.toHaveTextContent('duenio@example.com')
   })
 
+  // 2026-10-14: /me ahora trae nombre y apellido; una cuenta con solo el
+  // nombre propone ese nombre, sin espacios sobrantes ni "undefined".
+  it('con solo el nombre en la cuenta propone ese nombre', () => {
+    mockUser = { ...mockUser, last_name: undefined }
+    const { getByRole, getByTestId } = render(<StaffManagementContainer />)
+
+    fireEvent.click(getByRole('button', { name: /agregarme como profesional/i }))
+
+    expect(getByTestId('modal-self').textContent).toBe('Enrique')
+  })
+
+  // Nombre y apellido miden hasta 100 cada uno y el nombre visible 100 en
+  // total: sin recortar, la propuesta era un 422 del backend.
+  it('recorta la propuesta al tope del nombre visible, sin espacio final', () => {
+    mockUser = { ...mockUser, first_name: 'A'.repeat(99), last_name: 'Gomez' }
+    const { getByRole, getByTestId } = render(<StaffManagementContainer />)
+
+    fireEvent.click(getByRole('button', { name: /agregarme como profesional/i }))
+
+    // 99 letras + el espacio = 100; se recorta ahi y el espacio final se va.
+    expect(getByTestId('modal-self').textContent).toBe('A'.repeat(99))
+  })
+
+  it('con nombre y apellido largos la propuesta no pasa de 100', () => {
+    mockUser = { ...mockUser, first_name: 'A'.repeat(100), last_name: 'B'.repeat(100) }
+    const { getByRole, getByTestId } = render(<StaffManagementContainer />)
+
+    fireEvent.click(getByRole('button', { name: /agregarme como profesional/i }))
+
+    expect(getByTestId('modal-self').textContent).toBe('A'.repeat(100))
+  })
+
   it('si ya figura, no hay boton y su tarjeta se marca como propia', () => {
     mockUser = { ...mockUser, public_id: 'st-1' }
     const { queryByRole, getByTestId } = render(<StaffManagementContainer />)

@@ -2249,7 +2249,7 @@ Responses:
 
 Responses:
 
-- `200` Successful Response — `application/json`: `object`
+- `200` Successful Response — `application/json`: `CurrentUserResponse`
 
 ## Users Management
 
@@ -3473,6 +3473,18 @@ Type: `enum("efectivo", "transferencia", "mercadopago", "otro")`
 | `one_time_per_store` | boolean \| null | no |  |
 | `description` | string \| null | no | maxLength=2000 |
 | `is_active` | boolean \| null | no |  |
+
+### CurrentUserResponse
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `email` | string | yes |  |
+| `role` | string | yes |  |
+| `store_id` | string \| null | yes |  |
+| `public_id` | string | yes |  |
+| `is_global_admin` | boolean | yes |  |
+| `first_name` | string \| null | yes |  |
+| `last_name` | string \| null | yes |  |
 
 ### CustomerLedgerResponse
 
@@ -4966,4 +4978,4 @@ Type: `enum("admin", "staff", "receptionist", "client")`
 | `terms_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 | `privacy_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 
-Generado desde app.openapi() el 2026-10-16, commit e92a25f3
+Generado desde app.openapi() el 2026-10-16, commit c739efef

@@ -67,3 +67,22 @@ class SessionItem(BaseModel):
 
 class SessionListResponse(BaseModel):
     sessions: list[SessionItem]
+
+
+class CurrentUserResponse(BaseModel):
+    """Respuesta de ``GET /me``.
+
+    Todo sale del usuario que ``get_current_user`` relee de la base en cada
+    request, nunca de los claims del token (regla 1): un cambio de nombre se ve
+    en el proximo ``/me`` sin volver a iniciar sesion. ``first_name`` y
+    ``last_name`` son aditivos (2026-10-14): sin ellos el panel no podia
+    proponer el nombre visible de "Agregarme como profesional".
+    """
+
+    email: str
+    role: str
+    store_id: str | None
+    public_id: str
+    is_global_admin: bool
+    first_name: str | None
+    last_name: str | None

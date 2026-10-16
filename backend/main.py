@@ -1,6 +1,6 @@
 from contextlib import asynccontextmanager
 import json
-from typing import Any, AsyncIterator
+from typing import AsyncIterator
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -30,6 +30,7 @@ from modules.staff.router import router as staff_router
 from modules.appointments.router import router as appointments_router
 from modules.dashboard.router import router as dashboard_router
 from modules.auth.dependencies import get_current_user
+from modules.auth.schemas import CurrentUserResponse
 from modules.users.model import User
 from modules.users.router import router as users_router
 
@@ -567,16 +568,22 @@ async def root() -> dict[str, str]:
     }
 
 
-@app.get("/me", tags=["Users"])
-async def get_me(user: User = Depends(get_current_user)) -> dict[str, Any]:
-    """Ruta protegida para validar el token y el contexto del usuario."""
-    return {
-        "email": user.email,
-        "role": user.role,
-        "store_id": user.store_id,
-        "public_id": user.public_id,
-        "is_global_admin": user.is_global_admin,
-    }
+@app.get("/me", tags=["Users"], response_model=CurrentUserResponse)
+async def get_me(user: User = Depends(get_current_user)) -> CurrentUserResponse:
+    """Ruta protegida para validar el token y el contexto del usuario.
+
+    ``user`` es la fila releida de la base por ``get_current_user``: nombre,
+    rol y tienda nunca salen del JWT.
+    """
+    return CurrentUserResponse(
+        email=user.email,
+        role=user.role,
+        store_id=user.store_id,
+        public_id=user.public_id,
+        is_global_admin=user.is_global_admin,
+        first_name=user.first_name,
+        last_name=user.last_name,
+    )
 
 
 if __name__ == "__main__":

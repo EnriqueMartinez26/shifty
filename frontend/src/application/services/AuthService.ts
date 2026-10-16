@@ -1,15 +1,10 @@
 import apiClient, { refreshSession as refreshCoordinated } from '@infrastructure/http/client'
 import type { RefreshResult } from '@infrastructure/http/sessionSync'
 
-export interface AuthenticatedUser {
-  email: string
-  role: string
-  store_id: string | null
-  public_id: string
-  is_global_admin?: boolean
-  first_name?: string
-  last_name?: string
-}
+import type { AuthenticatedUser, CurrentUserDTO } from '../dtos/CurrentUserDTO'
+import { toSessionUser } from '../mappers/CurrentUserMapper'
+
+export type { AuthenticatedUser }
 
 export interface LoginPayload {
   email: string
@@ -49,8 +44,8 @@ class AuthService {
   }
 
   async fetchCurrentUser(): Promise<AuthenticatedUser> {
-    const { data } = await apiClient.get<AuthenticatedUser>('/me')
-    return data
+    const { data } = await apiClient.get<CurrentUserDTO>('/me')
+    return toSessionUser(data)
   }
 
   /**
