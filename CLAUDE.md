@@ -684,8 +684,10 @@ Una instrucción en lenguaje natural no es una garantía.
   pendiente de OK del dueño en `docs/DECISIONES.md`). Detrás del flag por
   tienda `multi_service_booking` (apagado por defecto): con el flag apagado,
   `extra_service_ids`/`extra_service_id` no vacío es 422
-  `MULTI_SERVICE_DISABLED` en el alta, las dos disponibilidades y los dos
-  previews (`services/selection_errors.py::require_selection_allowed`). Hasta
+  `MULTI_SERVICE_DISABLED` en el alta y los dos previews
+  (`services/selection_errors.py::require_selection_allowed`); las dos
+  disponibilidades son de lectura y no miran el flag (`require_selection_size`):
+  apagarlo no deja sin grilla la reprogramación de un turno ya tomado. Hasta
   3 servicios (422 `TOO_MANY_SERVICES`; la entrada tiene además un tope duro de
   9 extras) y 480 minutos en total (422 `SERVICES_TOO_LONG`); un extra
   repetido, el principal otra vez, inactivo o de otra tienda es el 404 neutro
@@ -694,8 +696,9 @@ Una instrucción en lenguaje natural no es una garantía.
   (lista sin descuento; `ck_appointments_extra_services_amount`, migraciones
   `b8d0f2a4c6e1` + `c9e1a3b5d7f2`); `duration_minutes`, `ends_at` (la exclusión
   GiST cubre el rango entero) y `price_amount` son el total. Lo toma un
-  profesional que hace TODOS (`qualified_staff` con `HAVING`); profesionales
-  distintos son turnos separados. La seña sale de
+  profesional que hace TODOS (`qualified_staff` con `HAVING`; elegido uno que
+  no, 422 `STAFF_CANNOT_PERFORM_SELECTION`); profesionales distintos son
+  turnos separados. La seña sale de
   `payments/deposit_rules.py::decide_selection_deposit`: entre los servicios
   con seña, la regla que da más aplicada al total (servicios + adicionales, con
   la promo) y sus recargos; modo `required` > `optional` > `none`; con un
