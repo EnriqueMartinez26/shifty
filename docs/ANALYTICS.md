@@ -1,97 +1,142 @@
 # Analítica de reservas (GA4)
 
-## Estado y alcance
+Descripción de lo que el código hace hoy. Si el código y este archivo difieren,
+gana el código. Todo vive en el frontend: no hay endpoint de analítica ni
+consentimiento de analítica en el backend.
 
-El código usa `VITE_GA4_MEASUREMENT_ID` como variable de build. El repositorio
-tiene configurado `G-KDKJ9FX8VZ` en esa variable; el ID es público y no es una
-credencial. No se incluye el valor en el código fuente. La analítica solo se
-activa en `/booking/:slug` y `/b/:slug`, y solo después de que la persona la
-acepte. No se carga en el panel, login, recuperación de clave, páginas legales
-ni «Mis turnos».
+## Alcance
 
-La política de privacidad incluye una descripción propuesta de GA4. Su revisión
-por el responsable queda pendiente antes de habilitar el servicio para clientes.
-El 2026-10-10 se volvió a confirmar en la propiedad real el flujo `Shifty` para
-`https://shifty-ar.tech` y que el ID coincide con la variable de GitHub. La
-Medición mejorada está apagada. Google signals, la recogida de datos
-proporcionados por usuarios y las vinculaciones con Google Ads se verificaron
-apagados el 2026-10-08; deben reconfirmarse antes de habilitar clientes. Google
-Analytics informó que no había recibido datos durante las últimas 48 horas.
+- **Solo el portal público de reservas**: rutas `/booking/:slug` y `/b/:slug`
+  (`isBookingAnalyticsPath`, `frontend/src/infrastructure/analytics/bookingAnalytics.ts`).
+  No se carga en el panel, login, «Mis turnos» ni páginas legales: al salir de
+  esas rutas se bloquea el tag y no se envía nada.
+- **Solo con ID válido**: sin `VITE_GA4_MEASUREMENT_ID` (o con un valor que no
+  cumpla `G-[A-Z0-9]{4,20}`) no aparece el aviso ni se carga nada.
+- **Solo tras consentimiento explícito** (ver abajo).
 
-La producción observada el 2026-10-10 todavía no prueba la integración: el
-bundle JavaScript servido no contiene los nombres de eventos propios y GA4 no
-recibió datos. Los cambios de marca y metadatos están propuestos en la PR de
-lanzamiento; aún no se publicaron en el dominio. El merge genera imágenes tras
-Quality, pero el despliegue al VPS y la prueba con consentimiento son pasos
-separados. La revisión del texto de privacidad sigue pendiente.
+## Configuración del ID
 
-## Consentimiento y datos
+`VITE_GA4_MEASUREMENT_ID` es una variable de build de Vite, leída en un único
+lugar (`frontend/src/shared/utils/env.ts::getGa4MeasurementId`). No es una
+credencial. Cadena: variable de repositorio de GitHub
+(`.github/workflows/build-images.yml`, build-arg) o entorno de Compose
+(`docker-compose.yml`) → `ARG`/`ENV` en `frontend/Dockerfile` → bundle.
+Cambiarlo exige construir una imagen nueva. Vacío = analítica apagada.
 
-Sin un ID válido, no aparece el aviso ni se carga el script. Antes de aceptar no
-se crea la cola de `gtag` ni se contacta a Google. Aceptar carga la biblioteca y
-permite la medición; rechazar o retirar el consentimiento bloquea nuevos envíos,
-descarta cargas pendientes y elimina las cookies `shifty_ga*` accesibles desde
-el navegador. La preferencia se guarda en `localStorage`; si el navegador lo
-bloquea, se conserva solo en memoria durante esa visita. Otras pestañas reciben
-los cambios de consentimiento.
+La CSP se genera en el mismo build (`frontend/configure-analytics-csp.mjs`):
+con ID agrega solo `https://www.googletagmanager.com` a `script-src` y
+`https://www.google-analytics.com` / `https://region1.google-analytics.com` a
+`connect-src` e `img-src`; sin ID deja la política original; un ID malformado
+rompe el build. Sin comodines ni `unsafe-inline`.
+Pruebas: `frontend/configure-analytics-csp.test.mjs` (`npm run test:csp`) y
+`backend/tests/unit/test_ga4_build_contract.py` (cableado CI/compose/Dockerfile).
 
-Los únicos eventos propios son `booking_started`, `service_selected`,
-`slot_selected`, `availability_empty`, `booking_created` y `booking_error`.
-No se pasan propiedades de formulario ni datos del turno. El identificador de
-una reserva se usa solo en memoria para deduplicar y no se envía ni persiste.
-La configuración reporta una página fija (`<origen>/booking`), título fijo y
-referrer vacío; no usa la ruta, query, fragmento ni `document.referrer`. Google
-recibe de todos modos datos técnicos de conexión y, tras aceptar, puede usar
-identificadores y cookies del navegador. La integración no equivale a analítica
-anónima.
+## Consentimiento
 
-Los eventos ocurridos antes de aceptar o antes de que cargue el tag se descartan.
-La carga de Google es best-effort: un bloqueo, una falla de red o CSP no debe
-impedir reservar. La opción `send_page_view: false` evita la vista inicial
-automática del código. La propiedad real se revisó el 2026-10-08 y los controles
-listados arriba estaban apagados o sin vinculaciones. Hay que volver a
-confirmarlos antes de activar el servicio para clientes.
+UI: `frontend/src/presentation/components/organisms/AnalyticsConsent.tsx`.
+Botones «Aceptar analítica» / «Rechazar analítica» (misma presentación) y, una
+vez elegido, el botón «Preferencias de analítica» para cambiar la decisión.
 
-## Build y CSP
+- Se guarda en `localStorage`, clave `shifty:analytics-consent:v1`, valores
+  `accepted` | `rejected`. La `v1` está en el nombre de la clave: cambiar el
+  alcance del consentimiento implica una clave nueva (no hay versionado de otro
+  tipo). Con storage bloqueado la elección vive en memoria durante la visita.
+- Es solo del navegador. **No pasa por el backend.** Los tests
+  `test_consentimiento_en_el_servidor.py` y `test_consentimiento_versionado.py`
+  son del consentimiento de términos y política de privacidad de la reserva
+  (`accepts_terms`, `terms_version`, `privacy_version`), no de la analítica.
+- Otras pestañas se sincronizan por el evento `storage`; al volver al portal se
+  relee la preferencia, así una revocación en otra pestaña se respeta.
+- Antes de aceptar (o tras rechazar) no se crea `gtag`/`dataLayer` ni se
+  contacta a Google.
 
-El build de Docker recibe el ID desde la variable de repositorio de GitHub; para
-un build local se puede definir `VITE_GA4_MEASUREMENT_ID` en el entorno de
-Compose. No se agrega a `.env.example` ni a archivos versionados. Cambiarlo
-requiere construir una imagen nueva. El generador de CSP acepta solo IDs con
-formato `G-...`, añade los hosts exactos necesarios únicamente cuando hay un ID
-y deja intacta la política cuando está vacío. No agrega comodines ni
-`unsafe-inline`.
+## Qué se envía
 
-## Verificación previa a activar
+Al aceptar se inserta `https://www.googletagmanager.com/gtag/js?id=<ID>`
+(`async`, `referrerPolicy = 'no-referrer'`) y se configura:
 
-1. Revisar y aprobar el texto de privacidad y las condiciones aplicables al uso
-   de Google Analytics.
-2. Antes de activar, volver a confirmar que Medición mejorada, Google signals,
-   recogida de datos proporcionados por usuarios y las vinculaciones con Google
-   Ads siguen apagados o vacías.
-3. En un entorno de prueba con el ID real, comprobar en DevTools que sin elegir
-   no hay solicitudes a Google; rechazar tampoco las genera; aceptar carga un
-   único script; retirar el consentimiento bloquea futuros eventos.
-4. Inspeccionar eventos y solicitudes: solo los seis eventos documentados,
-   página fija, sin ruta de tienda, query, fragmento, referrer ni datos del
-   formulario. Probar además `/login`, panel y «Mis turnos» después de aceptar.
-5. Validar el build Docker y la CSP de la imagen que se pretenda publicar.
+- `consent default`: `analytics_storage: granted` (solo se llega ahí tras
+  aceptar), `ad_storage`, `ad_user_data` y `ad_personalization`: `denied`.
+- `config`: `send_page_view: false`, `allow_google_signals: false`,
+  `allow_ad_personalization_signals: false`, `ignore_referrer: true`,
+  parámetros de campaña vacíos, cookies con prefijo `shifty`, sin dominio y con
+  vencimiento de 30 días.
+- Página enmascarada: `page_location = <origen>/booking` (sin slug de tienda,
+  query ni fragmento), `page_referrer = ''`, `page_title = 'Reserva de turno'`.
+  Nunca se usan `location`, `document.title` ni `document.referrer`.
+- Eventos (únicos permitidos, lista cerrada en `EVENTS`): `booking_started`
+  (al activarse), `service_selected`, `slot_selected`, `availability_empty`,
+  `booking_error` y `booking_created`. Disparados desde
+  `BookingWizardContainer.tsx`. Cada evento lleva solo `send_to` y los tres
+  campos de página; ningún dato del formulario, turno, tienda, servicio ni
+  profesional. El `public_id` de la reserva sirve solo para deduplicar
+  `booking_created` en memoria y no sale ni se persiste.
+- Los eventos previos a aceptar o previos a que cargue el tag se descartan.
 
-Pruebas locales focales desde `frontend/`:
+Sobre los parámetros de red (`npa=1`, `gcs=G101`): el código no los escribe; los
+deriva la biblioteca de Google de la configuración anterior (anuncios denegados
+y personalización apagada). Ninguna prueba del repo los fija; verificarlos en
+DevTools (paso 3 abajo). La política de privacidad (`Legal.tsx`, sección 5)
+afirma «no personalizar anuncios», así que esa verificación respalda el texto.
+
+## Cómo se apaga
+
+- **Para todos**: build sin `VITE_GA4_MEASUREMENT_ID` (nueva imagen).
+- **Una persona**: «Preferencias de analítica» → «Rechazar analítica». Pone
+  `ga-disable-<ID>`, descarta la cola pendiente, bloquea envíos y borra las
+  cookies `shifty_ga*` accesibles; no borra lo que Google ya recibió.
+- Un tag bloqueado, falla de red o de CSP nunca interrumpe la reserva
+  (`try/catch` en cada envío; `onerror` apaga la integración).
+
+## Garantías de privacidad y sus pruebas
+
+| Garantía | Prueba |
+| --- | --- |
+| Sin script ni cola antes de aceptar; rechazar no contacta a Google | `bookingAnalytics.test.ts` |
+| Solo eventos permitidos, página fija, sin datos de reserva ni formulario | `bookingAnalytics.test.ts` |
+| `public_id` no se transmite ni se persiste | `bookingAnalytics.test.ts` |
+| Revocar bloquea eventos y borra solo cookies `shifty_ga*` | `bookingAnalytics.test.ts` |
+| Salir a login/panel/«Mis turnos» bloquea el tag | `bookingAnalytics.test.ts`, `AnalyticsConsent.test.tsx` |
+| Revocación durante la carga o en otra pestaña se respeta | `bookingAnalytics.test.ts` |
+| Fallos de Google no rompen la reserva | `bookingAnalytics.test.ts` |
+| Sin ID válido no hay aviso | `AnalyticsConsent.test.tsx` |
+| Eventos del flujo de reserva | `BookingStepDateTime.analytics.test.tsx` |
+
+Estas pruebas verifican las guardas propias y lo que se encola en `gtag`; no
+ejecutan la biblioteca remota ni la propiedad de Analytics.
+
+## Configuración de la propiedad GA4 (fuera del código)
+
+No verificable desde el repo. Estado registrado en `docs/legal/README.md` y
+`docs/legal/POLITICA_DE_PRIVACIDAD.md`: Medición mejorada apagada (2026-10-10);
+Google signals, datos proporcionados por usuarios y vinculaciones con Google Ads
+apagados (2026-10-08), a reconfirmar antes de habilitar clientes. Estos
+controles son del lado de Google: el código no los garantiza.
+
+## Verificación antes de activar
+
+1. Texto de privacidad revisado por el responsable (pendiente de OK; ver
+   `docs/legal/`).
+2. Reconfirmar los controles de la propiedad listados arriba.
+3. En un entorno con el ID real, con DevTools: sin elegir o rechazando no hay
+   solicitudes a Google; aceptar carga un único script; las solicitudes llevan
+   página `/booking`, sin slug, query ni referrer, y `npa=1`/`gcs=G101`;
+   retirar el consentimiento detiene los envíos. Probar `/login`, panel y
+   «Mis turnos» tras aceptar: sin tráfico.
+4. Validar la CSP de la imagen que se publique.
+
+Desde `frontend/`:
 
 ```sh
 npm test -- --runInBand bookingAnalytics.test.ts AnalyticsConsent.test.tsx BookingStepDateTime.analytics.test.tsx BookingWizardContainer.test.tsx
+npm run test:csp
 npm run check
-npm run build
 ```
 
-Las pruebas locales verifican las guardas propias y los parámetros encolados;
-no ejecutan la biblioteca remota ni prueban la propiedad de Analytics. Los
-datos de reservas y cobros en el backend siguen siendo la fuente de verdad.
+Los datos de reservas y cobros del backend siguen siendo la fuente de verdad.
 
 ## Referencias
 
 - [Control de vistas de página en GA4](https://developers.google.com/analytics/devguides/collection/ga4/views)
-- [Medición mejorada](https://support.google.com/analytics/answer/9216061)
 - [Referencia de configuración de gtag.js](https://developers.google.com/analytics/devguides/collection/ga4/reference/config)
 - [Deshabilitar recolección con `ga-disable`](https://developers.google.com/tag-platform/security/guides/privacy)
