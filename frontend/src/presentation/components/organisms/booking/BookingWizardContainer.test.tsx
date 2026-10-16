@@ -164,7 +164,7 @@ describe('BookingWizardContainer', () => {
     render(<WizardEnRuta store={tienda(false)} />)
 
     await waitFor(() => expect(screen.getByText(HORARIO)).toBeInTheDocument())
-    expect(mockAvailability).toHaveBeenCalledWith('store-1', 'unico', expect.any(String), false)
+    expect(mockAvailability).toHaveBeenCalledWith('store-1', 'unico', expect.any(String), false, [])
 
     fireEvent.click(volver())
     expect(screen.getByText(HORARIO)).toBeInTheDocument()
@@ -207,7 +207,13 @@ describe('BookingWizardContainer', () => {
 
       atrasDelNavegador()
       expect(screen.getByText(HORARIO)).toBeInTheDocument()
-      expect(mockAvailability).toHaveBeenLastCalledWith('store-1', 'a', expect.any(String), false)
+      expect(mockAvailability).toHaveBeenLastCalledWith(
+        'store-1',
+        'a',
+        expect.any(String),
+        false,
+        []
+      )
 
       atrasDelNavegador()
       expect(screen.getByText(SERVICIO)).toBeInTheDocument()
@@ -756,6 +762,106 @@ describe('BookingWizardContainer', () => {
 
         expect(screen.queryByText(/Código debug/)).not.toBeInTheDocument()
       })
+    })
+  })
+
+  // Varios servicios en un turno (2026-10-16): solo con el flag de la tienda.
+  describe('varios servicios en un turno', () => {
+    const tiendaMulti = (multi: boolean): PublicStore => {
+      const base = tienda(false)
+      return { ...base, feature_flags: { ...base.feature_flags, multi_service_booking: multi } }
+    }
+    const profesional = {
+      public_id: 'st-1',
+      kind: 'person',
+      first_name: 'Pro',
+      last_name: '',
+      display_name: 'Pro',
+      service_ids: ['a', 'b']
+    }
+
+    const completarYConfirmar = async () => {
+      fireEvent.click(screen.getByText('09:00'))
+      fireEvent.change(screen.getByPlaceholderText('Ej: Juan Perez'), {
+        target: { value: 'Lucia' }
+      })
+      fireEvent.change(screen.getByPlaceholderText('Ej: 351 1234567'), {
+        target: { value: '+5491155550101' }
+      })
+      fireEvent.change(screen.getByPlaceholderText('juan@email.com'), {
+        target: { value: 'lucia@example.com' }
+      })
+      fireEvent.click(screen.getByRole('checkbox'))
+      await waitFor(() => expect(screen.getByText('Confirmar reserva')).not.toBeDisabled())
+      await act(async () => {
+        fireEvent.click(screen.getByText('Confirmar reserva'))
+      })
+      await waitFor(() => expect(mockCreateBooking).toHaveBeenCalledTimes(1))
+      return mockCreateBooking.mock.calls[0]?.[0] as Record<string, unknown>
+    }
+
+    beforeEach(() => {
+      mockServices.mockReturnValue({ data: [servicio('a'), servicio('b')], isLoading: false })
+      mockStaff.mockReturnValue({ data: [profesional], isLoading: false })
+      mockCreateBooking.mockRejectedValue(new NetworkError('No se pudo conectar con el servidor.'))
+    })
+
+    it('con el flag, tocar suma servicios y la barra lleva al horario con todos', async () => {
+      render(<WizardEnRuta store={tiendaMulti(true)} />)
+
+      fireEvent.click(screen.getByText('Servicio a'))
+      fireEvent.click(screen.getByText('Servicio b'))
+      expect(screen.getByText(SERVICIO)).toBeInTheDocument()
+      expect(screen.getByTestId('booking-services-bar')).toHaveTextContent('2 servicios · 60 min')
+
+      fireEvent.click(screen.getByRole('button', { name: /Continuar/ }))
+      expect(screen.getByText(HORARIO)).toBeInTheDocument()
+      expect(mockAvailability).toHaveBeenLastCalledWith('store-1', 'a', expect.any(String), false, [
+        'b'
+      ])
+
+      const pedido = await completarYConfirmar()
+      expect(pedido).toMatchObject({ service_id: 'a', extra_service_ids: ['b'] })
+    })
+
+    it('con el flag y un solo servicio elegido el pedido es el de siempre', async () => {
+      render(<WizardEnRuta store={tiendaMulti(true)} />)
+
+      fireEvent.click(screen.getByText('Servicio b'))
+      fireEvent.click(screen.getByRole('button', { name: /Continuar/ }))
+
+      const pedido = await completarYConfirmar()
+      expect(pedido.service_id).toBe('b')
+      expect(pedido).not.toHaveProperty('extra_service_ids')
+    })
+
+    it('sin el flag, tocar un servicio lo elige y avanza, sin barra', () => {
+      render(<WizardEnRuta store={tiendaMulti(false)} />)
+
+      fireEvent.click(screen.getByText('Servicio a'))
+
+      expect(screen.getByText(HORARIO)).toBeInTheDocument()
+      expect(screen.queryByTestId('booking-services-bar')).not.toBeInTheDocument()
+    })
+
+    it('volver al servicio conserva lo elegido y quitar el principal asciende al siguiente', async () => {
+      render(<WizardEnRuta store={tiendaMulti(true)} />)
+
+      fireEvent.click(screen.getByText('Servicio a'))
+      fireEvent.click(screen.getByText('Servicio b'))
+      fireEvent.click(screen.getByRole('button', { name: /Continuar/ }))
+      fireEvent.click(volver())
+
+      expect(screen.getByRole('button', { name: /Servicio a/ })).toHaveAttribute(
+        'aria-pressed',
+        'true'
+      )
+      fireEvent.click(screen.getByText('Servicio a'))
+      fireEvent.click(screen.getByRole('button', { name: /Continuar/ }))
+
+      const pedido = await completarYConfirmar()
+      expect(pedido.service_id).toBe('b')
+      expect(pedido).not.toHaveProperty('extra_service_ids')
     })
   })
 })

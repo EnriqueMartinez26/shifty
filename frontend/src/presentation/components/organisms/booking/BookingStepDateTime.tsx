@@ -4,6 +4,8 @@ import { addDays, format, parseISO } from 'date-fns'
 import { es } from 'date-fns/locale'
 import { Calendar as CalendarIcon, Clock, Loader2, Sparkles, Users } from 'lucide-react'
 
+import { staffForAllServices } from '@application/mappers/PublicServiceOptionMapper'
+
 import { usePublicAvailability, usePublicStaff } from '@presentation/hooks/usePublic'
 
 import { formatArgentinaTime } from '@shared/utils/argentinaTime'
@@ -17,6 +19,11 @@ import { createBookingSurfaceStyle } from '../../../lib/surfaceStyles'
 interface BookingStepDateTimeProps {
   storePublicId: string
   serviceId: string
+  /**
+   * Servicios sumados al principal en el mismo turno: la grilla mide el turno
+   * entero y solo ofrece a quien hace todos.
+   */
+  extraServiceIds?: readonly string[]
   staffId: string | null
   selectedDate: string | null
   selectedTime: string | null
@@ -41,9 +48,12 @@ interface BookingStepDateTimeProps {
   onEmptyAvailability?: () => void
 }
 
+const NO_EXTRA_SERVICES: readonly string[] = []
+
 export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
   storePublicId,
   serviceId,
+  extraServiceIds = NO_EXTRA_SERVICES,
   staffId,
   selectedDate,
   selectedTime,
@@ -77,7 +87,14 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
   }, [selectedDate])
   const dateStr = format(activeDate, 'yyyy-MM-dd')
 
-  const { data: staffList, isLoading: isStaffLoading } = usePublicStaff(storePublicId, serviceId)
+  const { data: serviceStaff, isLoading: isStaffLoading } = usePublicStaff(storePublicId, serviceId)
+  // Con varios servicios, solo quien los hace todos (la grilla ya viene asi).
+  const staffList = useMemo(
+    () => serviceStaff && staffForAllServices(serviceStaff, extraServiceIds),
+    [serviceStaff, extraServiceIds]
+  )
+  // La lista de espera es de UN servicio: con varios no se ofrece.
+  const waitlistAvailable = showWaitlist && extraServiceIds.length === 0
   // Copy por tipo: una cancha o sala no es "un profesional".
   const resourceIds = new Set(
     (staffList || []).filter((staff) => staff.kind === 'resource').map((staff) => staff.public_id)
@@ -105,7 +122,8 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
     storePublicId,
     serviceId,
     /^\d{4}-\d{2}-\d{2}$/.test(dateStr) ? dateStr : undefined,
-    forceAll
+    forceAll,
+    extraServiceIds
   )
 
   const visibleSlots = useMemo(() => {
@@ -151,7 +169,7 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
     ) {
       return
     }
-    const key = `${storePublicId}:${serviceId}:${dateStr}:${staffFilterId ?? ''}:${forceAll}`
+    const key = `${storePublicId}:${[serviceId, ...extraServiceIds].join('+')}:${dateStr}:${staffFilterId ?? ''}:${forceAll}`
     // availability_empty sigue midiendo todo dia sin horarios libres, tambien el
     // que no tiene atencion: es el contrato de la metrica del embudo.
     if (visibleSlots.length > 0) {
@@ -169,6 +187,7 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
     visibleSlots,
     storePublicId,
     serviceId,
+    extraServiceIds,
     dateStr,
     staffFilterId,
     forceAll,
@@ -343,7 +362,7 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
             <p className="text-xs text-gray-400 mt-2 font-medium">
               {diaSinAtencion ? 'Probá con otro día.' : 'Probá seleccionando otro día.'}
             </p>
-            {showWaitlist && !diaSinAtencion && (
+            {waitlistAvailable && !diaSinAtencion && (
               <div className="px-4 text-left">
                 <WaitlistJoinForm
                   key={dateStr}

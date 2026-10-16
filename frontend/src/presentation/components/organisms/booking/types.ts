@@ -17,7 +17,13 @@ export interface BookingSlotStaff {
 }
 
 export interface BookingWizardState {
+  /** Servicio principal: el primero elegido. */
   serviceId: string | null
+  /**
+   * Servicios sumados al principal en el mismo turno, en el orden elegido
+   * (solo con `multi_service_booking`; vacio si no hay).
+   */
+  extraServiceIds: string[]
   requestedStaffId: string | null
   assignedStaffId: string | null
   /**
@@ -39,8 +45,8 @@ export interface BookingWizardState {
   promotionPreview: PromotionPreview | null
   /**
    * Adicionales elegidos, con el nombre y el precio que vio el cliente (para
-   * reconocerlos si el catalogo cambia). Se vacian al cambiar de servicio:
-   * los adicionales son de UN servicio.
+   * reconocerlos si el catalogo cambia). Cada uno es de UN servicio
+   * (`serviceId`; sin el, del principal): quitar el servicio los quita.
    */
   addons: SelectedAddon[]
 }

@@ -1,6 +1,6 @@
 import React from 'react'
 
-import { Calendar, Check, Clock, ExternalLink } from 'lucide-react'
+import { Briefcase, Calendar, Check, Clock, ExternalLink } from 'lucide-react'
 
 import { formatAddonLabel } from '@domain/value-objects/AddonSelection'
 
@@ -173,6 +173,29 @@ export const BookingSuccess: React.FC<BookingSuccessProps> = ({
               </p>
             </div>
           </div>
+
+          {/* "Corte + Barba" con varios servicios; una respuesta vieja trae solo el principal. */}
+          {(confirmation.services_label || confirmation.service_name) && (
+            <div className="flex items-center gap-3">
+              <div
+                className="p-2.5 rounded-md text-orange-500"
+                style={{
+                  background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
+                  boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`
+                }}
+              >
+                <Briefcase size={18} className="stroke-[2.5px]" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-[9px] font-black uppercase tracking-wider text-gray-400">
+                  {confirmation.extra_services?.length ? 'Servicios' : 'Servicio'}
+                </p>
+                <p className="font-black text-gray-700 text-lg leading-tight break-words">
+                  {confirmation.services_label || confirmation.service_name}
+                </p>
+              </div>
+            </div>
+          )}
 
           {(confirmation.service_price || confirmation.final_price) && (
             <div

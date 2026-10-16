@@ -9,6 +9,7 @@ import type { BookingWizardState } from './types'
 
 const estado = (patch: Partial<BookingWizardState> = {}): BookingWizardState => ({
   serviceId: 'svc-1',
+  extraServiceIds: [],
   requestedStaffId: null,
   assignedStaffId: 'st-1',
   assignedStaff: { name: 'Pro', isResource: false },

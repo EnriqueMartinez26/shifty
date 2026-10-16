@@ -68,4 +68,27 @@ describe('BookingAddonsPicker', () => {
     expect(screen.getByRole('button', { name: 'Agregar uno de Strass' })).toBeDisabled()
     expect(screen.getByRole('button', { name: 'Quitar uno de Strass' })).toBeDisabled()
   })
+
+  // Con varios servicios hay un bloque por servicio: cada uno con su titulo.
+  it('con titulo propio nombra el bloque, y dos bloques no comparten id', () => {
+    render(
+      <>
+        <BookingAddonsPicker
+          title="Adicionales de Corte"
+          addons={addons}
+          quantities={{}}
+          onChange={jest.fn()}
+        />
+        <BookingAddonsPicker
+          title="Adicionales de Barba"
+          addons={addons}
+          quantities={{}}
+          onChange={jest.fn()}
+        />
+      </>
+    )
+
+    expect(screen.getByRole('region', { name: 'Adicionales de Corte' })).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'Adicionales de Barba' })).toBeInTheDocument()
+  })
 })

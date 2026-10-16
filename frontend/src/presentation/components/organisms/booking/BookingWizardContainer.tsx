@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useState } from 'react'
 
 import { Check } from 'lucide-react'
 
+import { ServiceSelection } from '@domain/value-objects/ServiceSelection'
+
 import { hasClientToken } from '@application/services/clientToken'
 
 import { trackBookingCreated, trackBookingEvent } from '@infrastructure/analytics/bookingAnalytics'
@@ -68,6 +70,7 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
   })
   const [bookingState, setBookingState] = useState<BookingWizardState>({
     serviceId: preselect.serviceId,
+    extraServiceIds: [],
     requestedStaffId: preselect.staffId,
     assignedStaffId: null,
     assignedStaff: null,
@@ -126,7 +129,7 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
       setBookingState((prev) =>
         prev.serviceId === jump.serviceId
           ? prev
-          : { ...prev, serviceId: jump.serviceId ?? null, addons: [] }
+          : { ...prev, serviceId: jump.serviceId ?? null, extraServiceIds: [], addons: [] }
       )
     }
     onStepChange({ to: jump.step, from: currentStep, mode: 'replace' })
@@ -145,6 +148,34 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
   const prevStep = () => {
     const to = resolveBackJump(currentStep, { services })
     if (to !== currentStep) onStepChange({ to, from: currentStep, mode: 'back' })
+  }
+
+  // Varios servicios en un turno (2026-10-16): tocar suma o quita, sin
+  // avanzar. Lo elegido despues (horario, promo) era para otra combinacion y
+  // se vuelve a elegir; los adicionales de un servicio quitado se van con el.
+  const multiService = Boolean(store.feature_flags?.multi_service_booking)
+  const handleToggleService = (id: string) => {
+    const previous = ServiceSelection.fromParts(
+      bookingState.serviceId,
+      bookingState.extraServiceIds
+    )
+    const next = previous.toggle(id)
+    const previousPrincipal = previous.principalId()
+    updateState({
+      serviceId: next.principalId(),
+      extraServiceIds: next.extraIds(),
+      addons: bookingState.addons.filter((addon) =>
+        next.includes(addon.serviceId ?? previousPrincipal ?? '')
+      ),
+      promotionCode: '',
+      promotionPreview: null,
+      requestedStaffId: null,
+      assignedStaffId: null,
+      assignedStaff: null,
+      date: null,
+      startTime: null,
+      startsAt: null
+    })
   }
 
   const handleClientChange = (client: BookingWizardState['client']) => {
@@ -339,6 +370,7 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
               trackBookingEvent('service_selected')
               updateState({
                 serviceId: id,
+                extraServiceIds: [],
                 // Los adicionales y el descuento son de UN servicio: otro
                 // servicio arranca sin ellos.
                 ...(id === bookingState.serviceId
@@ -353,6 +385,20 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
               })
               nextStep()
             }}
+            multiService={
+              multiService
+                ? {
+                    selectedIds: selectedServiceId
+                      ? [selectedServiceId, ...bookingState.extraServiceIds]
+                      : [],
+                    onToggle: handleToggleService,
+                    onContinue: () => {
+                      trackBookingEvent('service_selected')
+                      nextStep()
+                    }
+                  }
+                : undefined
+            }
           />
         )}
 
@@ -360,6 +406,7 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
           <BookingStepDateTime
             storePublicId={store.public_id}
             serviceId={selectedServiceId}
+            extraServiceIds={bookingState.extraServiceIds}
             staffId={bookingState.requestedStaffId}
             selectedDate={bookingState.date}
             selectedTime={bookingState.startTime}
@@ -421,6 +468,10 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
               const pedido = {
                 store_public_id: store.public_id,
                 service_id: selectedServiceId,
+                // Solo si hay: sin ellos el pedido (y su huella) es el de siempre.
+                ...(bookingState.extraServiceIds.length
+                  ? { extra_service_ids: bookingState.extraServiceIds }
+                  : {}),
                 staff_id:
                   bookingState.assignedStaffId || bookingState.requestedStaffId || undefined,
                 // El instante UTC del slot, tal cual lo devolvio la API: nunca se

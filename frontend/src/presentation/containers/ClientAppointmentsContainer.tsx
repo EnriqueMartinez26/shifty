@@ -38,6 +38,10 @@ const ESTADO: Record<BookingStatusValue, { label: string; color: string }> = {
   expired: { label: 'Vencido', color: '#6b7280' }
 }
 
+/** "Corte + Barba" con varios servicios; una respuesta vieja solo trae el principal. */
+const serviceLabelOf = (item: ClientAppointmentItem): string =>
+  item.services_label || item.service_name
+
 interface ClientAppointmentsContainerProps {
   store: Pick<PublicStore, 'public_id' | 'name' | 'slug'>
 }
@@ -107,7 +111,7 @@ export const ClientAppointmentsContainer: React.FC<ClientAppointmentsContainerPr
 
   // Un toque cancelaba sin preguntar (FF-07): se confirma con el dialogo propio.
   const cancelar = async (item: ClientAppointmentItem) => {
-    const question = `¿Cancelar tu turno de ${item.service_name} del ${formatArgentinaDateDisplay(
+    const question = `¿Cancelar tu turno de ${serviceLabelOf(item)} del ${formatArgentinaDateDisplay(
       item.starts_at
     )} a las ${formatArgentinaTime(item.starts_at)} hs? No se puede deshacer.`
     // "Cancelar" en el dialogo seria NO cancelar el turno: los botones dicen
@@ -261,7 +265,7 @@ export const ClientAppointmentsContainer: React.FC<ClientAppointmentsContainerPr
           >
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
-                <p className="font-black text-sm">{item.service_name}</p>
+                <p className="font-black text-sm">{serviceLabelOf(item)}</p>
                 <p className="text-[11px] font-bold text-gray-500">
                   {formatArgentinaDateDisplay(item.starts_at)} a las{' '}
                   {formatArgentinaTime(item.starts_at)} hs · {item.staff_name}
@@ -310,6 +314,8 @@ export const ClientAppointmentsContainer: React.FC<ClientAppointmentsContainerPr
               <BookingStepDateTime
                 storePublicId={store.public_id}
                 serviceId={item.service_id}
+                // Con varios servicios el turno nuevo dura lo mismo: la grilla los incluye.
+                extraServiceIds={(item.extra_services ?? []).map((extra) => extra.public_id)}
                 staffId={item.staff_id}
                 lockedStaffId={item.staff_id}
                 selectedDate={null}

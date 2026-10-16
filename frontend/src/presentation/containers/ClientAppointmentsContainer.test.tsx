@@ -137,6 +137,40 @@ describe('ClientAppointmentsContainer', () => {
     expect(screen.getByText('Confirmado')).toBeInTheDocument()
   })
 
+  // Varios servicios en un turno (2026-10-16): la etiqueta del backend y la
+  // grilla de reprogramar mide el turno entero.
+  it('un turno con varios servicios los nombra y reprograma pidiendo la grilla con todos', async () => {
+    mockAppointments.mockReturnValue({
+      data: {
+        client_name: 'Yo',
+        client_phone: '1155550101',
+        appointments: [
+          {
+            ...turno,
+            extra_services: [{ public_id: 'svc-2', name: 'Barba', duration_minutes: 15 }],
+            services_label: 'Corte + Barba'
+          }
+        ]
+      },
+      isLoading: false,
+      isError: false
+    })
+
+    render(<ClientAppointmentsContainer store={store} />)
+    await entrar()
+    expect(screen.getByText('Corte + Barba')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /Cambiar/ }))
+    await screen.findByRole('heading', { name: 'Elegí el nuevo horario' })
+    expect(mockAvailability).toHaveBeenCalledWith(
+      'store-1',
+      'svc-1',
+      format(new Date(), 'yyyy-MM-dd'),
+      false,
+      ['svc-2']
+    )
+  })
+
   describe('cancelar pide confirmacion (FF-07)', () => {
     // FF-07 (2026-09-29): un toque en "Cancelar" cancelaba el turno sin
     // preguntar; un dedo que rozaba el boton perdia el turno.
@@ -305,7 +339,8 @@ describe('ClientAppointmentsContainer', () => {
         'store-1',
         'svc-1',
         format(new Date(), 'yyyy-MM-dd'),
-        false
+        false,
+        []
       )
       expect(screen.queryByText('Profesional')).not.toBeInTheDocument()
       expect(screen.queryByRole('button', { name: /Cualquiera/ })).not.toBeInTheDocument()
