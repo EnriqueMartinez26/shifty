@@ -5,16 +5,14 @@ import { Briefcase, Clock, Loader2, Check } from 'lucide-react'
 import {
   MAX_SERVICES_PER_BOOKING,
   ServiceSelection,
-  type ServiceBlockReason
+  type ServiceBlockReason,
+  type ServicePerformer
 } from '@domain/value-objects/ServiceSelection'
 
-import {
-  publicPerformers,
-  publicServiceOptions
-} from '@application/mappers/PublicServiceOptionMapper'
+import { publicServiceOptions } from '@application/mappers/PublicServiceOptionMapper'
 import type { PublicService } from '@application/services/PublicBookingService'
 
-import { usePublicServices, usePublicStaff } from '@presentation/hooks/usePublic'
+import { usePublicServices } from '@presentation/hooks/usePublic'
 
 import { formatCurrency } from '@shared/utils/currency'
 
@@ -28,6 +26,11 @@ interface MultiServiceChoice {
   selectedIds: readonly string[]
   onToggle: (id: string) => void
   onContinue: () => void
+  /**
+   * Quien hace que (`service_ids` de /public/staff), lo trae el contenedor.
+   * Sin la lista (cargando) no se apaga nada por profesional.
+   */
+  performers?: readonly ServicePerformer[]
 }
 
 interface BookingStepServiceProps {
@@ -169,8 +172,6 @@ export const BookingStepService: React.FC<BookingStepServiceProps> = ({
   multiService
 }) => {
   const { data: services, isLoading } = usePublicServices(storePublicId)
-  // Quien hace que (`service_ids`): solo hace falta para combinar servicios.
-  const { data: staff } = usePublicStaff(storePublicId, undefined, Boolean(multiService))
 
   if (isLoading) {
     return (
@@ -185,7 +186,7 @@ export const BookingStepService: React.FC<BookingStepServiceProps> = ({
 
   const catalog = publicServiceOptions(services)
   const selection = ServiceSelection.of(multiService?.selectedIds ?? []).retainIn(catalog)
-  const performers = staff ? publicPerformers(staff) : undefined
+  const performers = multiService?.performers
 
   return (
     <div className="space-y-4 duration-500">

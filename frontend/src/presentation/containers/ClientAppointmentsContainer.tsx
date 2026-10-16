@@ -173,6 +173,11 @@ export const ClientAppointmentsContainer: React.FC<ClientAppointmentsContainerPr
       setMessage(
         getErrorMessage(error, 'No pudimos mover el turno a ese horario', {
           APPOINTMENT_NOT_ACTIVE: 'Este turno ya terminó o fue cancelado: no se puede mover.',
+          // Varios servicios en un turno: el horario no se ocupo, cambio quien hace que.
+          STAFF_CANNOT_PERFORM_SELECTION:
+            'El profesional de tu turno ya no hace todos sus servicios. Para moverlo, comunicate con el negocio.',
+          MULTI_SERVICE_DISABLED:
+            'Este turno tiene varios servicios y ya no se puede mover desde acá. Comunicate con el negocio.',
           CANCELLATION_WINDOW_EXPIRED:
             'Ya pasó el plazo para cambiar este turno. Si necesitás moverlo, comunicate con el negocio.'
         })

@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 import { act, renderHook, waitFor } from '@testing-library/react'
 
-import { ConflictError, RateLimitError } from '@shared/errors'
+import { ConflictError, RateLimitError, ValidationError } from '@shared/errors'
 
 import {
   useCreatePublicBooking,
@@ -80,6 +80,30 @@ describe('useCreatePublicBooking', () => {
       refetchType: 'all'
     })
     await waitFor(() => expect(refetchGrilla).toHaveBeenCalledTimes(1))
+  })
+
+  // Revision de #194 (L1): el horario sigue libre; no se trata como tomado.
+  it('un rechazo por el profesional o la combinacion de servicios no vuelve a pedir la grilla', async () => {
+    mockCreateBooking.mockRejectedValue(
+      new ValidationError('rechazado', {
+        errorCode: 'STAFF_CANNOT_PERFORM_SELECTION',
+        statusCode: 422
+      })
+    )
+    const { queryClient, refetchGrilla } = clienteConGrillaDelPaso2()
+    const invalidate = jest.spyOn(queryClient, 'invalidateQueries')
+
+    const { result } = renderHook(() => useCreatePublicBooking(), {
+      wrapper: envoltorio(queryClient)
+    })
+    await act(async () => {
+      await expect(
+        result.current.mutateAsync({} as Parameters<typeof result.current.mutateAsync>[0])
+      ).rejects.toThrow('rechazado')
+    })
+
+    expect(invalidate).not.toHaveBeenCalled()
+    expect(refetchGrilla).not.toHaveBeenCalled()
   })
 
   it('una reserva exitosa tambien vuelve a pedir la grilla (FF-33)', async () => {

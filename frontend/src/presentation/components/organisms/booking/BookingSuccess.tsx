@@ -39,6 +39,52 @@ const deadlineLabel = (deadline: string | null | undefined): string | null => {
   return day && time ? `${day} a las ${time}` : null
 }
 
+interface ServicePriceLine {
+  key: string
+  label: string
+  amount: number
+}
+
+const toCents = (value: number): number => Math.round(value * 100)
+
+/**
+ * Las lineas de servicios del resumen comercial, para que con el descuento y
+ * los adicionales sumen el total (revision de #194). `service_price` es solo
+ * el principal: con varios servicios va una linea por servicio si la
+ * respuesta trae el precio de cada uno, o una sola con la suma si trae
+ * `extra_services_amount`. Sin ninguno de los dos (backend anterior) no se
+ * muestra un importe que no cierre: queda solo el total.
+ */
+const servicePriceLines = (confirmation: BookingConfirmation): ServicePriceLine[] => {
+  const principal = Number(confirmation.service_price || 0)
+  const extras = confirmation.extra_services ?? []
+  if (extras.length === 0) return [{ key: 'servicio', label: 'Servicio', amount: principal }]
+  if (extras.every((extra) => extra.price !== undefined && extra.price !== null)) {
+    return [
+      { key: confirmation.service_id, label: confirmation.service_name, amount: principal },
+      ...extras.map((extra) => ({
+        key: extra.public_id,
+        label: extra.name,
+        amount: Number(extra.price)
+      }))
+    ]
+  }
+  if (
+    confirmation.extra_services_amount !== undefined &&
+    confirmation.extra_services_amount !== null
+  ) {
+    const label = confirmation.services_label || confirmation.service_name
+    return [
+      {
+        key: 'servicios',
+        label: `Servicios (${label})`,
+        amount: (toCents(principal) + toCents(Number(confirmation.extra_services_amount))) / 100
+      }
+    ]
+  }
+  return []
+}
+
 interface BookingSuccessProps {
   confirmation: BookingConfirmation
   bookingState: BookingWizardState
@@ -206,7 +252,11 @@ export const BookingSuccess: React.FC<BookingSuccessProps> = ({
                 Resumen comercial
               </p>
               <div className="space-y-1 text-sm font-black text-slate-900">
-                <p>Servicio: {formatCurrency(Number(confirmation.service_price || 0))}</p>
+                {servicePriceLines(confirmation).map((line) => (
+                  <p key={line.key}>
+                    {line.label}: {formatCurrency(line.amount)}
+                  </p>
+                ))}
                 {(confirmation.discount_amount || 0) > 0 && (
                   <p>Descuento: -{formatCurrency(Number(confirmation.discount_amount || 0))}</p>
                 )}

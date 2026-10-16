@@ -432,6 +432,70 @@ describe('ClientAppointmentsContainer', () => {
       expect(screen.getByRole('heading', { name: titulo })).toBeInTheDocument()
     })
 
+    // Revision de #194 (L1): el profesional ya no hace todos los servicios del
+    // turno. No es un horario tomado: se dice que pasa.
+    it('un 422 STAFF_CANNOT_PERFORM_SELECTION explica que paso, sin hablar del horario', async () => {
+      mockReschedule.mockRejectedValue(
+        new ValidationError('rechazado', {
+          errorCode: 'STAFF_CANNOT_PERFORM_SELECTION',
+          statusCode: 422
+        })
+      )
+      await abrirGrilla()
+
+      const dialogo = await elegirLibre()
+      fireEvent.click(within(dialogo).getByRole('button', { name: 'Sí, mover turno' }))
+
+      expect(await screen.findByRole('status')).toHaveTextContent(
+        'El profesional de tu turno ya no hace todos sus servicios.'
+      )
+    })
+
+    // Revision de #194 (M2): con el flag apagado la grilla de un turno con
+    // varios servicios puede responder 422; se explica en vez de verse vacia.
+    it('un 422 de la grilla se explica en vez de mostrarla vacia', async () => {
+      mockAvailability.mockReturnValue({
+        data: undefined,
+        isLoading: false,
+        isError: true,
+        error: new ValidationError('rechazado', {
+          errorCode: 'MULTI_SERVICE_DISABLED',
+          statusCode: 422
+        }),
+        refetch: jest.fn()
+      })
+      mockAppointments.mockReturnValue({
+        data: {
+          client_name: 'Yo',
+          client_phone: '1155550101',
+          appointments: [
+            {
+              ...turno,
+              extra_services: [{ public_id: 'svc-2', name: 'Barba', duration_minutes: 15 }],
+              services_label: 'Corte + Barba'
+            }
+          ]
+        },
+        isLoading: false,
+        isError: false
+      })
+      render(<ClientAppointmentsContainer store={store} />)
+      await entrar()
+      fireEvent.click(screen.getByRole('button', { name: /Cambiar/ }))
+      await screen.findByRole('heading', { name: titulo })
+
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        'La tienda ya no toma varios servicios en un mismo turno.'
+      )
+      expect(mockAvailability).toHaveBeenLastCalledWith(
+        'store-1',
+        'svc-1',
+        expect.any(String),
+        false,
+        ['svc-2']
+      )
+    })
+
     it('"Volver" cierra la grilla sin mover el turno', async () => {
       await abrirGrilla()
 

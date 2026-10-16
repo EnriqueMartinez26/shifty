@@ -8,6 +8,7 @@ import { staffForAllServices } from '@application/mappers/PublicServiceOptionMap
 
 import { usePublicAvailability, usePublicStaff } from '@presentation/hooks/usePublic'
 
+import { getErrorMessage } from '@shared/errors/getErrorMessage'
 import { formatArgentinaTime } from '@shared/utils/argentinaTime'
 
 import { BookingBackButton } from './BookingBackButton'
@@ -49,6 +50,16 @@ interface BookingStepDateTimeProps {
 }
 
 const NO_EXTRA_SERVICES: readonly string[] = []
+
+// Un 422 de la grilla con varios servicios (revision de #194): se dice por
+// que en vez de mostrar una grilla vacia como si no hubiera lugar.
+const AVAILABILITY_ERROR_MESSAGES: Partial<Record<string, string>> = {
+  MULTI_SERVICE_DISABLED:
+    'La tienda ya no toma varios servicios en un mismo turno. Para cambiarlo, escribile a la tienda.',
+  SERVICES_TOO_LONG: 'Los servicios elegidos no entran en un solo turno.',
+  TOO_MANY_SERVICES: 'Elegiste más servicios de los que entran en un turno.',
+  STAFF_CANNOT_PERFORM_SELECTION: 'Ningún profesional hace todos los servicios elegidos.'
+}
 
 export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
   storePublicId,
@@ -117,7 +128,9 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
     data: availability,
     isLoading,
     isError,
-    isFetching
+    isFetching,
+    error: availabilityError,
+    refetch: refetchAvailability
   } = usePublicAvailability(
     storePublicId,
     serviceId,
@@ -353,6 +366,30 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
         {isLoading ? (
           <div className="flex flex-col items-center justify-center py-10">
             <Loader2 className="w-8 h-8 animate-spin text-orange-500 mb-4" />
+          </div>
+        ) : isError ? (
+          <div
+            role="alert"
+            className="text-center py-8 px-4 border space-y-3"
+            style={createBookingSurfaceStyle()}
+          >
+            <p className="text-xs font-bold" style={{ color: colors2000s.text.primary }}>
+              {getErrorMessage(
+                availabilityError,
+                'No pudimos cargar los horarios. Probá de nuevo en unos minutos.',
+                AVAILABILITY_ERROR_MESSAGES
+              )}
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                void refetchAvailability()
+              }}
+              className="text-xs font-black underline"
+              style={{ color: colors2000s.orange.accent }}
+            >
+              Reintentar
+            </button>
           </div>
         ) : visibleSlots.length === 0 ? (
           <div className="text-center py-10 border" style={createBookingSurfaceStyle()}>

@@ -82,7 +82,11 @@ const SERVICE_COMBO_MESSAGES: Partial<Record<string, string>> = {
   SERVICES_TOO_LONG:
     'Los servicios que elegiste no entran en un solo turno. Volvé al primer paso y quitá alguno.',
   MULTI_SERVICE_DISABLED:
-    'La tienda ya no toma varios servicios en un mismo turno. Volvé al primer paso y elegí uno solo.'
+    'La tienda ya no toma varios servicios en un mismo turno. Volvé al primer paso y elegí uno solo.',
+  // El profesional elegido no hace todos los servicios: no es que el horario
+  // se ocupo (revision de #194).
+  STAFF_CANNOT_PERFORM_SELECTION:
+    'El profesional elegido no hace todos los servicios que elegiste. Volvé al horario y elegí otro profesional.'
 }
 const BOOKING_CODE_MESSAGES: Partial<Record<string, string>> = {
   [ADDON_UNAVAILABLE]: ADDON_UNAVAILABLE_MESSAGE,

@@ -1,4 +1,6 @@
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
+
+import { ValidationError } from '@shared/errors'
 
 import { BookingStepDateTime } from './BookingStepDateTime'
 
@@ -102,5 +104,29 @@ describe('BookingStepDateTime con varios servicios', () => {
     renderPaso()
 
     expect(screen.getByRole('button', { name: /Avisame si se libera/ })).toBeInTheDocument()
+  })
+
+  // Revision de #194 (M2): un 422 de la grilla se explica, no se muestra vacia.
+  it('un 422 de la grilla dice por que y deja reintentar', () => {
+    const refetch = jest.fn()
+    mockStaff.mockReturnValue({ data: [profesional('ana', ['corte', 'barba'])], isLoading: false })
+    mockAvailability.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      error: new ValidationError('rechazado', {
+        errorCode: 'MULTI_SERVICE_DISABLED',
+        statusCode: 422
+      }),
+      refetch
+    })
+    renderPaso(['barba'])
+
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'La tienda ya no toma varios servicios en un mismo turno.'
+    )
+    expect(screen.queryByText('No hay turnos disponibles.')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Reintentar' }))
+    expect(refetch).toHaveBeenCalled()
   })
 })

@@ -23,7 +23,7 @@ import {
   type WaitlistJoinPayload
 } from '@application/services/PublicBookingService'
 
-import { getRetryAfterSeconds } from '@shared/errors/getErrorMessage'
+import { getErrorCode, getRetryAfterSeconds } from '@shared/errors/getErrorMessage'
 
 import { PAYMENT_POLL_MAX_MS, paymentPollDelayMs } from '../lib/paymentPolling'
 
@@ -32,6 +32,21 @@ export type { PublicStore }
 // Clave, queryFn y retry de la tienda y sus servicios viven en un solo lugar:
 // el prefetch del portal (lib/portalPrefetch.ts, F4-14) usa las mismas y una
 // clave distinta repetiria la request al montar la pagina.
+/**
+ * Rechazos de la combinacion de servicios o del profesional elegido (varios
+ * servicios en un turno, 2026-10-16): el horario sigue libre, asi que no se
+ * vuelve a pedir la grilla como si alguien lo hubiera tomado.
+ */
+const SELECTION_REJECTION_CODES: ReadonlySet<string> = new Set([
+  'STAFF_CANNOT_PERFORM_SELECTION',
+  'TOO_MANY_SERVICES',
+  'SERVICES_TOO_LONG',
+  'MULTI_SERVICE_DISABLED'
+])
+
+const isSelectionRejection = (error: unknown): boolean =>
+  SELECTION_REJECTION_CODES.has(getErrorCode(error) ?? '')
+
 export const publicStoreQuery = (slug: string) =>
   queryOptions<PublicStore>({
     queryKey: ['public-store', slug],
@@ -130,7 +145,8 @@ export const useCreatePublicBooking = () => {
     // Con o sin exito la grilla quedo vieja: con staleTime de 30 s el horario
     // tomado seguia libre al volver al paso 2 (FF-33). El paso 2 esta
     // desmontado y su consulta inactiva: sin `refetchType: 'all'` no se pedia.
-    onSettled: () => {
+    onSettled: (_data, error) => {
+      if (isSelectionRejection(error)) return
       void queryClient.invalidateQueries({ queryKey: ['public-availability'], refetchType: 'all' })
     }
   })
@@ -227,7 +243,8 @@ export const useRescheduleClientAppointment = () => {
     // Un 409 (horario tomado, bloqueado) deja la grilla vieja: se vuelve a
     // pedir para no seguir ofreciendo ese horario (FF-06, mismo patron que
     // FF-33 en useCreatePublicBooking).
-    onError: () => {
+    onError: (error) => {
+      if (isSelectionRejection(error)) return
       void queryClient.invalidateQueries({ queryKey: ['public-availability'], refetchType: 'all' })
     }
   })

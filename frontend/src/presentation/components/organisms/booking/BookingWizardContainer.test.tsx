@@ -863,5 +863,91 @@ describe('BookingWizardContainer', () => {
       expect(pedido.service_id).toBe('b')
       expect(pedido).not.toHaveProperty('extra_service_ids')
     })
+
+    // Revision de #194 (L4): quien hace que lo pide el contenedor y el paso
+    // del servicio solo pinta.
+    it('el contenedor pide los profesionales y apaga lo que nadie hace junto', () => {
+      mockServices.mockReturnValue({
+        data: [servicio('a'), servicio('b'), servicio('c')],
+        isLoading: false
+      })
+      render(<WizardEnRuta store={tiendaMulti(true)} />)
+
+      fireEvent.click(screen.getByText('Servicio a'))
+
+      expect(mockStaff).toHaveBeenCalledWith('store-1', undefined, true)
+      expect(screen.getByRole('button', { name: /Servicio c/ })).toBeDisabled()
+      expect(screen.getByRole('button', { name: /Servicio b/ })).not.toBeDisabled()
+    })
+
+    it('sin el flag no pide la lista de profesionales de la tienda', () => {
+      render(<WizardEnRuta store={tiendaMulti(false)} />)
+
+      expect(mockStaff).toHaveBeenCalledWith('store-1', undefined, false)
+    })
+
+    // Revision de #194 (L6): sumar un servicio no pierde al profesional del
+    // deep-link si hace todos; si no, vuelve a "Cualquiera".
+    describe('profesional pedido por deep-link', () => {
+      const pro = (public_id: string, service_ids: string[]) => ({
+        ...profesional,
+        public_id,
+        display_name: `Pro ${public_id}`,
+        service_ids
+      })
+      const slotDe = (staff_id: string, starts_at: string) => ({
+        ...slot,
+        staff_id,
+        staff_name: `Pro ${staff_id}`,
+        starts_at
+      })
+
+      beforeEach(() => {
+        mockStaff.mockReturnValue({
+          data: [pro('st-1', ['a']), pro('st-2', ['a', 'b']), pro('st-3', ['a', 'b'])],
+          isLoading: false
+        })
+        mockAvailability.mockReturnValue({
+          data: [
+            slotDe('st-2', '2026-09-25T12:00:00+00:00'),
+            slotDe('st-3', '2026-09-25T13:00:00+00:00')
+          ],
+          isLoading: false
+        })
+      })
+
+      const sumarB = () => {
+        fireEvent.click(volver())
+        fireEvent.click(screen.getByText('Servicio b'))
+        fireEvent.click(screen.getByRole('button', { name: /Continuar/ }))
+        expect(screen.getByText(HORARIO)).toBeInTheDocument()
+      }
+
+      it('lo conserva si hace todos los servicios elegidos', () => {
+        render(
+          <WizardEnRuta
+            store={tiendaMulti(true)}
+            preselect={{ serviceId: 'a', staffId: 'st-2', date: '2026-09-25' }}
+          />
+        )
+        sumarB()
+
+        expect(screen.getByText('09:00')).toBeInTheDocument()
+        expect(screen.queryByText('10:00')).not.toBeInTheDocument()
+      })
+
+      it('lo suelta si no hace alguno', () => {
+        render(
+          <WizardEnRuta
+            store={tiendaMulti(true)}
+            preselect={{ serviceId: 'a', staffId: 'st-1', date: '2026-09-25' }}
+          />
+        )
+        sumarB()
+
+        expect(screen.getByText('09:00')).toBeInTheDocument()
+        expect(screen.getByText('10:00')).toBeInTheDocument()
+      })
+    })
   })
 })

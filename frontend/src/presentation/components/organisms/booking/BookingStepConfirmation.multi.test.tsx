@@ -313,7 +313,8 @@ describe('BookingStepConfirmation con varios servicios', () => {
   it.each([
     ['TOO_MANY_SERVICES', 'Podés reservar hasta 3 servicios por turno.'],
     ['SERVICES_TOO_LONG', 'Los servicios que elegiste no entran en un solo turno.'],
-    ['MULTI_SERVICE_DISABLED', 'La tienda ya no toma varios servicios en un mismo turno.']
+    ['MULTI_SERVICE_DISABLED', 'La tienda ya no toma varios servicios en un mismo turno.'],
+    ['STAFF_CANNOT_PERFORM_SELECTION', 'El profesional elegido no hace todos los servicios']
   ])('si la reserva rebota con %s lo explica y no culpa al horario', async (code, texto) => {
     const onConfirm = jest
       .fn()

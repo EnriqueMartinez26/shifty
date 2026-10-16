@@ -81,6 +81,8 @@ interface BookedExtraService {
   public_id: string
   name: string
   duration_minutes: number
+  /** Precio de lista congelado al reservar; ausente en una respuesta vieja. */
+  price?: number | null
 }
 
 /**
@@ -172,6 +174,8 @@ export interface BookingConfirmation {
   addons_amount?: number | null
   /** Servicios sumados al principal (vacio si no hay). */
   extra_services?: BookedExtraService[]
+  /** Suma de los precios de lista de los servicios sumados; ausente en una respuesta vieja. */
+  extra_services_amount?: number | null
   /** "Corte + Barba"; ausente en una respuesta vieja. */
   services_label?: string | null
 }

@@ -9,11 +9,11 @@ import { BookingStepService } from './BookingStepService'
 // una.
 
 const mockUsePublicServices = jest.fn()
-const mockUsePublicStaff = jest.fn()
 
+// Sin usePublicStaff: quien hace que lo trae el contenedor por props
+// (revision de #194, CLAUDE.md §2).
 jest.mock('@presentation/hooks/usePublic', () => ({
-  usePublicServices: (...args: unknown[]) => mockUsePublicServices(...args),
-  usePublicStaff: (...args: unknown[]) => mockUsePublicStaff(...args)
+  usePublicServices: (...args: unknown[]) => mockUsePublicServices(...args)
 }))
 
 const servicio = (public_id: string, name: string, duration_minutes: number, price: number) => ({
@@ -32,8 +32,6 @@ const servicio = (public_id: string, name: string, duration_minutes: number, pri
 describe('BookingStepService', () => {
   beforeEach(() => {
     mockUsePublicServices.mockReset()
-    mockUsePublicStaff.mockReset()
-    mockUsePublicStaff.mockReturnValue({ data: undefined })
   })
 
   it('la foto del servicio reserva su caja de 56 px y carga diferida', () => {
@@ -89,7 +87,7 @@ describe('BookingStepService', () => {
     expect(check?.classList.contains('flex-shrink-0')).toBe(true)
   })
 
-  it('sin varios servicios tocar uno lo elige, no pide profesionales ni muestra la barra', () => {
+  it('sin varios servicios tocar uno lo elige y no muestra la barra', () => {
     mockUsePublicServices.mockReturnValue({
       isLoading: false,
       data: [servicio('corte', 'Corte', 30, 10000), servicio('barba', 'Barba', 15, 5000)]
@@ -100,7 +98,6 @@ describe('BookingStepService', () => {
     fireEvent.click(screen.getByText('Barba'))
 
     expect(onSelect).toHaveBeenCalledWith('barba')
-    expect(mockUsePublicStaff).toHaveBeenCalledWith('store-1', undefined, false)
     expect(screen.queryByTestId('booking-services-bar')).not.toBeInTheDocument()
   })
 
@@ -113,11 +110,14 @@ describe('BookingStepService', () => {
       servicio('lavado', 'Lavado', 10, 2000),
       servicio('alisado', 'Alisado', 400, 80000)
     ]
-    const todos = { service_ids: catalogo.map((svc) => svc.public_id) }
+    const todos = { serviceIds: catalogo.map((svc) => svc.public_id) }
 
-    const renderMulti = (selectedIds: string[], staff: unknown = [todos]) => {
+    const renderMulti = (
+      selectedIds: string[],
+      // null: la lista todavia no llego.
+      performers: { serviceIds: string[] }[] | null = [todos]
+    ) => {
       mockUsePublicServices.mockReturnValue({ isLoading: false, data: catalogo })
-      mockUsePublicStaff.mockReturnValue({ data: staff })
       const onToggle = jest.fn()
       const onContinue = jest.fn()
       const onSelect = jest.fn()
@@ -126,7 +126,12 @@ describe('BookingStepService', () => {
           storePublicId="store-1"
           selectedId={selectedIds[0] ?? null}
           onSelect={onSelect}
-          multiService={{ selectedIds, onToggle, onContinue }}
+          multiService={{
+            selectedIds,
+            onToggle,
+            onContinue,
+            performers: performers ?? undefined
+          }}
         />
       )
       return { onToggle, onContinue, onSelect }
@@ -137,7 +142,6 @@ describe('BookingStepService', () => {
     it('tocar un servicio lo suma o lo quita, sin avanzar', () => {
       const { onToggle, onSelect } = renderMulti(['corte'])
 
-      expect(mockUsePublicStaff).toHaveBeenCalledWith('store-1', undefined, true)
       expect(tarjeta('Corte')).toHaveAttribute('aria-pressed', 'true')
       fireEvent.click(tarjeta('Barba'))
       fireEvent.click(tarjeta('Corte'))
@@ -179,13 +183,22 @@ describe('BookingStepService', () => {
     })
 
     it('lo que ningun profesional hace junto con lo elegido se apaga', () => {
-      renderMulti(['corte'], [{ service_ids: ['corte', 'barba'] }, { service_ids: ['color'] }])
+      renderMulti(['corte'], [{ serviceIds: ['corte', 'barba'] }, { serviceIds: ['color'] }])
 
       expect(tarjeta('Barba')).not.toBeDisabled()
       expect(tarjeta('Color')).toBeDisabled()
       expect(
         screen.getAllByText('Ningún profesional lo hace junto con lo que elegiste.').length
       ).toBeGreaterThan(0)
+    })
+
+    it('sin la lista de profesionales (cargando) no apaga nada por profesional', () => {
+      renderMulti(['corte'], null)
+
+      expect(tarjeta('Color')).not.toBeDisabled()
+      expect(
+        screen.queryByText('Ningún profesional lo hace junto con lo que elegiste.')
+      ).not.toBeInTheDocument()
     })
   })
 })
