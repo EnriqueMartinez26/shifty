@@ -10,6 +10,7 @@ from decimal import Decimal
 from typing import Annotated, AsyncGenerator, List, Optional, TypedDict, cast
 
 from fastapi import Depends, Path, Query, status
+from pydantic import StringConstraints
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -39,6 +40,7 @@ from modules.appointments.repository import AppointmentSearchRow, SearchCharge
 from modules.appointments.schemas import (
     AppointmentAddonItem,
     AppointmentCreate,
+    AppointmentExtraServiceItem,
     AppointmentFilterParams,
     AppointmentListItem,
     AppointmentNotesStaffUpdate,
@@ -60,6 +62,12 @@ from modules.notifications.tasks import is_deliverable_email
 from modules.public_api.repository import PublicRepository
 from modules.public_api.service import require_public_availability_day
 from modules.services.addons import lines_from_snapshot
+from modules.services.selection import (
+    EXTRA_SERVICES_INPUT_MAX,
+    services_label,
+    snapshot_items,
+)
+from modules.services.selection_errors import require_selection_size
 from modules.users.model import User, UserRole
 
 router = CanonicalAPIRouter(prefix="/appointments", tags=["Appointments"])
@@ -68,6 +76,17 @@ PublicIdPath = Annotated[
 ]
 PublicIdQuery = Annotated[
     str, Query(min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)
+]
+# Servicios extra del turno (2026-10-16): repetible, con el tope duro de la
+# entrada; el de producto lo aplica ``require_selection_size``.
+ExtraServiceQuery = Annotated[
+    list[
+        Annotated[
+            str,
+            StringConstraints(min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN),
+        ]
+    ],
+    Query(max_length=EXTRA_SERVICES_INPUT_MAX),
 ]
 
 
@@ -113,6 +132,16 @@ def _to_appointment_response(appointment: Appointment) -> AppointmentResponse:
     )
 
 
+def _extra_service_items(snapshot: object) -> list[AppointmentExtraServiceItem]:
+    """Los servicios extra congelados del turno (2026-10-16)."""
+    return [
+        AppointmentExtraServiceItem(
+            public_id=public_id, name=name, duration_minutes=minutes
+        )
+        for public_id, name, minutes in snapshot_items(snapshot)
+    ]
+
+
 def _addon_items(snapshot: object) -> list[AppointmentAddonItem]:
     """Los adicionales congelados del turno, sin importes (agenda)."""
     return [
@@ -156,6 +185,10 @@ async def list_appointments_by_date(
             notes=appointment.notes,
             intake_answers=appointment.intake_answers or {},
             addons=_addon_items(appointment.addons_snapshot),
+            extra_services=_extra_service_items(appointment.extra_services_snapshot),
+            services_label=services_label(
+                service.name, appointment.extra_services_snapshot
+            ),
         )
         for appointment, service, staff, client in rows
     ]
@@ -170,6 +203,7 @@ async def list_appointments_by_date(
 async def get_availability(
     service_id: PublicIdQuery,
     date: GridDay,
+    extra_service_id: ExtraServiceQuery = [],
     user: User | None = Depends(get_optional_current_user),
     db: AsyncSession = Depends(get_db),
     availability_cache: Redis = Depends(get_availability_cache),
@@ -178,6 +212,10 @@ async def get_availability(
 
     Sin token la respuesta es la del portal: un bloqueo sale como "No
     disponible" y nunca con el motivo que tipeo el duenio (AUD2-B1-04).
+
+    ``extra_service_id`` (repetible, 2026-10-16): los demas servicios del
+    turno, con las mismas reglas que ``/public/availability``: tope de
+    cantidad y de duracion, sin el flag (es de lectura).
     """
     svc = AvailabilityService(db, availability_cache)
     if user is None:
@@ -189,16 +227,26 @@ async def get_availability(
             service = await repo.get_service_by_public_id(service_id)
             if not service:
                 return []
+            require_selection_size(extra_service_id)
             # El motivo de un bloqueo es un dato personal del profesional y
             # esta ruta es anonima (el service_id sale de /public/services):
             # regla 20, mismo criterio que public_api/router.py.
             return list(
                 await svc.get_available_slots(
-                    service.store_id, service_id, date, hide_private_reasons=True
+                    service.store_id,
+                    service_id,
+                    date,
+                    hide_private_reasons=True,
+                    extra_service_public_ids=extra_service_id,
                 )
             )
 
-    return list(await svc.get_available_slots(user.store_id, service_id, date))
+    require_selection_size(extra_service_id)
+    return list(
+        await svc.get_available_slots(
+            user.store_id, service_id, date, extra_service_public_ids=extra_service_id
+        )
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -623,6 +671,10 @@ def _to_search_result(
         completed_at=appointment.completed_at,
         service_name=service.name,
         service_id=service.public_id,
+        extra_services=_extra_service_items(appointment.extra_services_snapshot),
+        services_label=services_label(
+            service.name, appointment.extra_services_snapshot
+        ),
         staff_name=staff_name,
         staff_id=staff_id,
         client_name=client.full_name or client.email,

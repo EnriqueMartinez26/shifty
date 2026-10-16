@@ -30,6 +30,8 @@ export interface StoreFeatureFlags {
   advanced_reports: boolean
   new_calendar: boolean
   otp_booking: boolean
+  /** Varios servicios en un turno, con el mismo profesional (apagado por defecto). */
+  multi_service_booking: boolean
 }
 
 export interface StoreSettings {

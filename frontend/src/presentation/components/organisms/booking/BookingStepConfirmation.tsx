@@ -12,14 +12,20 @@ import {
   WalletCards
 } from 'lucide-react'
 
-import { AddonSelection, type SelectedAddon } from '@domain/value-objects/AddonSelection'
+import {
+  AddonSelection,
+  type AddonOption,
+  type SelectedAddon
+} from '@domain/value-objects/AddonSelection'
 import { Email } from '@domain/value-objects/Email'
+import { MAX_SERVICES_PER_BOOKING } from '@domain/value-objects/ServiceSelection'
 
 import { publicAddonOptions } from '@application/mappers/PublicAddonMapper'
 import type {
   BookingConfirmation,
   PromotionPreview,
-  PublicBookingAddon
+  PublicBookingAddon,
+  PublicService
 } from '@application/services/PublicBookingService'
 import type { StoreCustomField } from '@application/services/StoreSettingsService'
 
@@ -69,8 +75,22 @@ const BOOKING_FIELD_MESSAGES: Partial<Record<string, string>> = {
 const ADDON_UNAVAILABLE = 'ADDON_UNAVAILABLE'
 const ADDON_UNAVAILABLE_MESSAGE =
   'Uno de los adicionales que elegiste ya no está disponible o cambió. Revisá la selección y volvé a confirmar.'
+// Varios servicios en un turno (2026-10-16): la combinacion elegida ya no se
+// puede reservar. El horario no tiene nada que ver; se cambia en el paso 1.
+const SERVICE_COMBO_MESSAGES: Partial<Record<string, string>> = {
+  TOO_MANY_SERVICES: `Podés reservar hasta ${MAX_SERVICES_PER_BOOKING} servicios por turno. Volvé al primer paso y quitá alguno.`,
+  SERVICES_TOO_LONG:
+    'Los servicios que elegiste no entran en un solo turno. Volvé al primer paso y quitá alguno.',
+  MULTI_SERVICE_DISABLED:
+    'La tienda ya no toma varios servicios en un mismo turno. Volvé al primer paso y elegí uno solo.',
+  // El profesional elegido no hace todos los servicios: no es que el horario
+  // se ocupo (revision de #194).
+  STAFF_CANNOT_PERFORM_SELECTION:
+    'El profesional elegido no hace todos los servicios que elegiste. Volvé al horario y elegí otro profesional.'
+}
 const BOOKING_CODE_MESSAGES: Partial<Record<string, string>> = {
-  [ADDON_UNAVAILABLE]: ADDON_UNAVAILABLE_MESSAGE
+  [ADDON_UNAVAILABLE]: ADDON_UNAVAILABLE_MESSAGE,
+  ...SERVICE_COMBO_MESSAGES
 }
 const ADDONS_CHANGED_MESSAGE =
   'Los adicionales del servicio cambiaron. Revisá tu selección antes de confirmar.'
@@ -82,6 +102,52 @@ const ADDONS_PREVIEW_DEBOUNCE_MS = 300
 const LONG_DEPOSIT_POLICY_CHARS = 280
 
 const sumAmounts = (a: number, b: number): number => Math.round((a + b) * 100) / 100
+
+/** Los adicionales de UN servicio elegido, contra el catalogo vigente. */
+interface ServiceAddonsGroup {
+  serviceId: string
+  service: PublicService | undefined
+  options: AddonOption[]
+  selection: AddonSelection
+  /** Lo elegido cambio en el catalogo (borrado, otro precio, otro maximo). */
+  changed: boolean
+  /** Habia algo elegido para este servicio. */
+  hasChosen: boolean
+}
+
+/**
+ * Agrupa lo elegido por servicio (un adicional sin `serviceId` es del
+ * principal) y lo concilia con el catalogo de cada uno. Sin el servicio en el
+ * catalogo lo elegido no se puede cobrar: si el catalogo ya llego se avisa.
+ */
+const groupAddonsByService = (
+  serviceIds: readonly string[],
+  catalog: readonly PublicService[] | undefined,
+  chosen: readonly SelectedAddon[]
+): ServiceAddonsGroup[] =>
+  serviceIds.map((id) => {
+    const service = catalog?.find((candidate) => candidate.public_id === id)
+    const mine = chosen.filter((addon) => (addon.serviceId ?? serviceIds[0]) === id)
+    const hasChosen = mine.some((addon) => addon.quantity > 0)
+    const options = publicAddonOptions(service)
+    const { selection, changed } = service
+      ? AddonSelection.reconcile(options, mine)
+      : { selection: AddonSelection.empty(), changed: Boolean(catalog) && hasChosen }
+    return { serviceId: id, service, options, selection, changed, hasChosen }
+  })
+
+/**
+ * Las lineas para el wizard: las de un servicio sumado llevan su `serviceId`;
+ * las del principal van sin marca, como siempre.
+ */
+const toSelectedAddons = (
+  groups: readonly Pick<ServiceAddonsGroup, 'serviceId' | 'selection'>[]
+): SelectedAddon[] =>
+  groups.flatMap((group, index) =>
+    group.selection
+      .lines()
+      .map((line) => (index === 0 ? line : { ...line, serviceId: group.serviceId }))
+  )
 
 interface BookingStepConfirmationProps {
   storePublicId: string
@@ -191,24 +257,37 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
   const previewPromotion = usePreviewPublicPromotion()
   const servicesQuery = usePublicServices(storePublicId)
   const refreshServices = useRefreshPublicServices(storePublicId)
-  const selectedService = servicesQuery.data?.find((service) => service.public_id === serviceId)
+  // Varios servicios en un turno (2026-10-16): el principal y los sumados, en
+  // el orden elegido. Un mismo profesional los hace todos.
+  const { extraServiceIds } = bookingState
+  const hasExtraServices = extraServiceIds.length > 0
+  const serviceIds = [serviceId, ...extraServiceIds]
   // Lo elegido contra el catalogo vigente. Si cambio (un adicional borrado,
   // otro precio, un maximo menor) se avisa y hay que revisarlo antes de
   // confirmar: nunca se descarta en silencio.
-  const addonOptions = publicAddonOptions(selectedService)
-  // Sin el servicio en el catalogo lo elegido no se puede cobrar: si el
-  // catalogo ya llego (el servicio desaparecio) se avisa; mientras carga solo
-  // se frena la reserva.
-  const hasChosenAddons = bookingState.addons.some((addon) => addon.quantity > 0)
-  const { selection: addonSelection, changed: addonsChanged } = selectedService
-    ? AddonSelection.reconcile(addonOptions, bookingState.addons)
-    : { selection: AddonSelection.empty(), changed: Boolean(servicesQuery.data) && hasChosenAddons }
-  const addonsBlocked = addonsChanged || (!selectedService && hasChosenAddons)
-  const addonLines = addonSelection.lines()
-  const addonsKey = addonSelection.toQueryParams().join(',')
+  const addonGroups = groupAddonsByService(serviceIds, servicesQuery.data, bookingState.addons)
+  const selectedServices = addonGroups.flatMap((group) => (group.service ? [group.service] : []))
+  const hasAddonOptions = addonGroups.some((group) => group.options.length > 0)
+  const addonsChanged = addonGroups.some((group) => group.changed)
+  // Sin el servicio en el catalogo lo elegido no se puede cobrar: mientras
+  // carga solo se frena la reserva.
+  const addonsBlocked =
+    addonsChanged || addonGroups.some((group) => !group.service && group.hasChosen)
+  const addonLines = addonGroups.flatMap((group) => group.selection.lines())
+  const addonQueryParams = addonGroups.flatMap((group) => group.selection.toQueryParams())
+  const addonsEmpty = addonLines.length === 0
+  const addonsTotal = addonGroups.reduce(
+    (sum, group) => sumAmounts(sum, group.selection.total()),
+    0
+  )
+  const addonsKey = addonQueryParams.join(',')
   const debouncedAddonsKey = useDebouncedValue(addonsKey, ADDONS_PREVIEW_DEBOUNCE_MS)
-  const listPrice = Number(selectedService?.price ?? 0)
-  const subtotal = sumAmounts(listPrice, addonSelection.total())
+  // Precios de lista, solo para el detalle: el total lo dice el backend.
+  const listPrice = selectedServices.reduce(
+    (sum, service) => sumAmounts(sum, Number(service.price)),
+    0
+  )
+  const subtotal = sumAmounts(listPrice, addonsTotal)
   // La seña real la decide el backend (antelación e historial del cliente):
   // inferirla desde los campos crudos del servicio divergía en cuanto la
   // tienda configuraba un recargo. Mientras carga, se cae a la inferencia.
@@ -227,7 +306,8 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
     startsAt: bookingState.startsAt,
     clientPhone: debouncedDepositPhone,
     promotionCode: bookingState.promotionCode || undefined,
-    addons: debouncedAddonsKey ? debouncedAddonsKey.split(',') : []
+    addons: debouncedAddonsKey ? debouncedAddonsKey.split(',') : [],
+    extraServiceIds
   })
   const addonsOutdated = getErrorCode(depositQuery.error) === ADDON_UNAVAILABLE
   // Mientras la seña se recalcula (otros adicionales, otro telefono) la que
@@ -243,7 +323,8 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
   // promo cotiza solo el servicio, asi que no se usa para el total cuando hay
   // adicionales. Sin el preview vigente solo se muestra lo que es exacto sin
   // la red: sin codigo, la suma; con codigo y sin adicionales, el total de la
-  // promo. Lo demas espera al backend ("Calculando…").
+  // promo. Lo demas espera al backend ("Calculando…"). Con varios servicios
+  // el total sale SOLO del preview (decision de Mateo, 2026-10-16).
   const promotionApplied = Boolean(bookingState.promotionCode) && promotionPreview !== null
   const serverTotal =
     depositQuery.data && !depositUpdating && !depositQuery.error
@@ -251,11 +332,13 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
       : null
   const totalPrice =
     serverTotal ??
-    (!promotionApplied
-      ? subtotal
-      : addonSelection.isEmpty() && promotionPreview
-        ? Number(promotionPreview.final_amount)
-        : null)
+    (hasExtraServices
+      ? null
+      : !promotionApplied
+        ? subtotal
+        : addonsEmpty && promotionPreview
+          ? Number(promotionPreview.final_amount)
+          : null)
   const discount =
     promotionApplied && totalPrice !== null
       ? Math.max(0, Math.round((subtotal - totalPrice) * 100) / 100)
@@ -292,7 +375,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
     promotionCheck.current.timer = window.setTimeout(() => {
       const isCurrent = () => seq === promotionCheck.current.seq
       previewPromotion
-        .mutateAsync({ storePublicId, serviceId, code, addons })
+        .mutateAsync({ storePublicId, serviceId, code, addons, extraServiceIds })
         .then((preview) => {
           if (!isCurrent()) return
           applyPromotion(code, preview)
@@ -319,23 +402,34 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
         })
     }, ADDONS_PREVIEW_DEBOUNCE_MS)
   }
-  const commitAddons = (selection: AddonSelection) => {
-    onAddonsChange(selection.lines())
-    revalidatePromotion(selection.toQueryParams())
+  const commitAddons = (groups: readonly Pick<ServiceAddonsGroup, 'serviceId' | 'selection'>[]) => {
+    onAddonsChange(toSelectedAddons(groups))
+    revalidatePromotion(groups.flatMap((group) => group.selection.toQueryParams()))
   }
-  const handleAddonChange = (addonId: string, quantity: number) => {
+  const handleAddonChange = (groupServiceId: string, addonId: string, quantity: number) => {
     commitAddons(
-      AddonSelection.create(addonOptions, {
-        ...addonSelection.toQuantities(),
-        [addonId]: quantity
-      })
+      addonGroups.map((group) =>
+        group.serviceId === groupServiceId
+          ? {
+              serviceId: group.serviceId,
+              selection: AddonSelection.create(group.options, {
+                ...group.selection.toQuantities(),
+                [addonId]: quantity
+              })
+            }
+          : group
+      )
     )
   }
-  const inferredDeposit = Boolean(
-    selectedService &&
-    selectedService.deposit_mode !== 'none' &&
-    Number(selectedService.deposit_amount ?? (selectedService.deposit_type === 'full' ? 1 : 0)) > 0
+  // Mientras el preview no llega solo se infiere SI hay seña (para ofrecer
+  // los botones), nunca el importe: con varios servicios la seña sale sobre
+  // el total con la regla mas alta, y eso lo decide el backend.
+  const inferredDeposit = selectedServices.some(
+    (service) =>
+      service.deposit_mode !== 'none' &&
+      Number(service.deposit_amount ?? (service.deposit_type === 'full' ? 1 : 0)) > 0
   )
+  const depositRequired = selectedServices.some((service) => service.deposit_mode === 'required')
   const depositPreview = depositQuery.data ?? null
   // Lleva seña (obligatoria u opcional), se cobre online o no.
   const hasDeposit = depositPreview ? depositPreview.amount > 0 : inferredDeposit
@@ -344,14 +438,14 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
   // con una opcional el backend no genera cobro manual
   // (deposit_channels.resolve_deposit_channel), asi que no hay nada que pagar
   // por WhatsApp. Sin el servicio cargado no se sabe y se cae a confirmar.
-  const owesDepositByWhatsApp = hasDeposit && selectedService?.deposit_mode === 'required'
+  const owesDepositByWhatsApp = hasDeposit && depositRequired
   // Con seña obligatoria y coordinación manual deshabilitada por la tienda, la
   // única vía válida es pagar online. El backend lo rechaza igual, pero no tiene
   // sentido ofrecer un botón que va a fallar.
   const onlinePaymentMandatory = Boolean(
     depositPreview
       ? depositPreview.online_payment_mandatory
-      : canPayDeposit && selectedService?.deposit_mode === 'required' && !allowManualCoordination
+      : canPayDeposit && depositRequired && !allowManualCoordination
   )
 
   const { client } = bookingState
@@ -391,10 +485,12 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
   const promotionConfirmed =
     !bookingState.promotionCode || (!promotionChecking && !promotionCheckFailed)
   const amountDependsOnServer =
-    Boolean(bookingState.promotionCode) || !addonSelection.isEmpty() || hasDeposit
+    Boolean(bookingState.promotionCode) || !addonsEmpty || hasDeposit || hasExtraServices
   const amountConfirmed = !amountDependsOnServer || (depositPreviewConfirmed && promotionConfirmed)
   // El 422 ADDON_UNAVAILABLE tiene su propio aviso (actualizar el catalogo).
   const amountFailed = amountDependsOnServer && Boolean(depositQuery.error) && !addonsOutdated
+  // La combinacion de servicios ya no se puede reservar: se dice por que.
+  const serviceComboMessage = SERVICE_COMBO_MESSAGES[getErrorCode(depositQuery.error) ?? '']
   const canSubmit =
     acceptsTerms && clientValid && otpVerifiedGate && !addonsBlocked && amountConfirmed
   const showOtpSection = requiresOtp && client.phone.trim().length >= 6
@@ -413,10 +509,20 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
   // Que, con quien y cuando: con "Cualquiera" el profesional es el que asigno
   // el horario elegido; si no se conoce, no se muestra.
   const { assignedStaff } = bookingState
+  // "Corte + Barba" y la duracion del turno entero, solo con todo el catalogo.
+  const allServicesLoaded = selectedServices.length === serviceIds.length
+  const servicesLabel = selectedServices.map((service) => service.name).join(' + ')
+  const totalDuration = selectedServices.reduce(
+    (sum, service) => sum + Number(service.duration_minutes),
+    0
+  )
   const turnSummary = [
     { label: 'Fecha', value: formatArgentinaDateDisplay(bookingState.date ?? '') },
     { label: 'Hora', value: `${bookingState.startTime ?? ''} hs` },
-    ...(selectedService?.name ? [{ label: 'Servicio', value: selectedService.name }] : []),
+    ...(allServicesLoaded && servicesLabel ? [{ label: 'Servicio', value: servicesLabel }] : []),
+    ...(allServicesLoaded && hasExtraServices
+      ? [{ label: 'Duración', value: `${totalDuration} min` }]
+      : []),
     ...(assignedStaff
       ? [
           {
@@ -442,7 +548,8 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
         storePublicId,
         serviceId,
         code: normalizedCode,
-        addons: addonSelection.toQueryParams()
+        addons: addonQueryParams,
+        extraServiceIds
       })
       applyPromotion(normalizedCode, preview)
       setPromotionCode(normalizedCode)
@@ -467,7 +574,11 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
     dispatchSubmission({ type: 'submit' })
     setErrorMessage('')
     try {
-      const result = await onConfirm(paymentMethod, acceptsTerms, addonSelection.toPayload())
+      const result = await onConfirm(
+        paymentMethod,
+        acceptsTerms,
+        addonGroups.flatMap((group) => group.selection.toPayload())
+      )
       if (paymentMethod === 'mercadopago') {
         if (!navigateExternal(result.payment_link)) {
           throw new Error('Mercado Pago no devolvió un enlace de pago válido')
@@ -485,7 +596,10 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
       if (code === ADDON_UNAVAILABLE) void refreshServices()
       dispatchSubmission({
         type: 'fail',
-        slotMayBeTaken: code !== 'DEPOSIT_CHANNEL_UNAVAILABLE' && code !== ADDON_UNAVAILABLE
+        slotMayBeTaken:
+          code !== 'DEPOSIT_CHANNEL_UNAVAILABLE' &&
+          code !== ADDON_UNAVAILABLE &&
+          !SERVICE_COMBO_MESSAGES[code ?? '']
       })
       setErrorMessage(
         getErrorMessage(
@@ -855,7 +969,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
                 {promotionCheckFailed && (
                   <button
                     type="button"
-                    onClick={() => revalidatePromotion(addonSelection.toQueryParams())}
+                    onClick={() => revalidatePromotion(addonQueryParams)}
                     className="underline font-black"
                   >
                     Reintentar
@@ -883,11 +997,13 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
                 <p className="text-[10px] font-black uppercase tracking-widest text-green-700">
                   {promotionPreview.title}
                 </p>
-                {addonOptions.length > 0 ? (
-                  // Con adicionales el descuento sale sobre el total: los importes
-                  // de este preview (solo el servicio) no son los que se cobran.
+                {hasAddonOptions || hasExtraServices ? (
+                  // Con adicionales o varios servicios el descuento sale sobre el
+                  // total: los importes de este preview no son los que se cobran.
                   <p className="mt-2 text-sm font-black text-green-900">
-                    El descuento se aplica al total, adicionales incluidos.
+                    {hasExtraServices
+                      ? 'El descuento se aplica al total del turno.'
+                      : 'El descuento se aplica al total, adicionales incluidos.'}
                   </p>
                 ) : (
                   <div className="mt-2 space-y-1 text-sm font-black text-green-900">
@@ -917,7 +1033,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
             <span className="flex-1">{ADDONS_CHANGED_MESSAGE}</span>
             <button
               type="button"
-              onClick={() => commitAddons(addonSelection)}
+              onClick={() => commitAddons(addonGroups)}
               className="underline font-black"
             >
               Revisé mi selección
@@ -925,13 +1041,24 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
           </div>
         )}
 
-        {addonOptions.length > 0 && (
+        {(hasAddonOptions || hasExtraServices) && (
           <>
-            <BookingAddonsPicker
-              addons={addonOptions}
-              quantities={addonSelection.toQuantities()}
-              onChange={handleAddonChange}
-            />
+            {/* Con varios servicios, un bloque por servicio con sus adicionales. */}
+            {addonGroups.map((group) => (
+              <BookingAddonsPicker
+                key={group.serviceId}
+                title={
+                  hasExtraServices && group.service
+                    ? `Adicionales de ${group.service.name}`
+                    : undefined
+                }
+                addons={group.options}
+                quantities={group.selection.toQuantities()}
+                onChange={(addonId, quantity) =>
+                  handleAddonChange(group.serviceId, addonId, quantity)
+                }
+              />
+            ))}
             {addonsOutdated && (
               <div
                 role="alert"
@@ -961,6 +1088,16 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
             <BookingPriceSummary
               basePrice={listPrice}
               addons={addonLines}
+              serviceLines={
+                hasExtraServices
+                  ? addonGroups.map((group) => ({
+                      serviceId: group.serviceId,
+                      name: group.service?.name ?? 'Servicio',
+                      price: Number(group.service?.price ?? 0),
+                      addons: group.selection.lines()
+                    }))
+                  : undefined
+              }
               discount={discount}
               promotionCode={promotionApplied ? bookingState.promotionCode : undefined}
               total={totalPrice}
@@ -999,7 +1136,8 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
           >
             <TriangleAlert className="w-4 h-4 flex-shrink-0" />
             <span className="flex-1">
-              No pudimos confirmar el importe de tu reserva. Reintentá para continuar.
+              {serviceComboMessage ??
+                'No pudimos confirmar el importe de tu reserva. Reintentá para continuar.'}
             </span>
             <button
               type="button"

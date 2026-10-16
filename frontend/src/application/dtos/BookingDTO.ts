@@ -20,4 +20,8 @@ export interface AppointmentResponseDTO {
   notes: string | null
   /** Adicionales del turno: solo nombre y cantidad (recepcion no ve importes). */
   addons?: { name: string; quantity: number }[] | null
+  /** Servicios sumados al principal en el mismo turno (vacio si no hay). */
+  extra_services?: { public_id: string; name: string; duration_minutes: number }[] | null
+  /** "Corte + Barba"; ausente en una respuesta vieja. */
+  services_label?: string | null
 }

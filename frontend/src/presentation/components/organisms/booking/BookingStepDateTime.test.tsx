@@ -414,7 +414,7 @@ describe('BookingStepDateTime', () => {
     fireEvent.click(interruptor)
 
     expect(interruptor).toHaveAttribute('aria-checked', 'true')
-    expect(mockAvailability).toHaveBeenLastCalledWith('store-1', 'svc-1', '2026-09-25', true)
+    expect(mockAvailability).toHaveBeenLastCalledWith('store-1', 'svc-1', '2026-09-25', true, [])
   })
 
   it('una fecha lejana que vino por deep-link aparece en la tira y carga sus horarios', () => {
@@ -438,7 +438,7 @@ describe('BookingStepDateTime', () => {
     )
 
     expect(screen.getByTestId(`date-${lejanaStr}`)).toBeInTheDocument()
-    expect(mockAvailability).toHaveBeenCalledWith('store-1', 'svc-1', lejanaStr, false)
+    expect(mockAvailability).toHaveBeenCalledWith('store-1', 'svc-1', lejanaStr, false, [])
   })
 
   describe('reprogramar desde "Mis turnos" (FF-06)', () => {

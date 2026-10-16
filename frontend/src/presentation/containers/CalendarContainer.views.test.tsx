@@ -20,6 +20,7 @@ const appointmentOf = (
   staffId: 'st-1',
   staffName: 'Ana Gomez',
   clientName,
+  servicesLabel: 'Corte',
   serviceName: 'Corte',
   clientPhone: null,
   serviceId: 'svc-1',

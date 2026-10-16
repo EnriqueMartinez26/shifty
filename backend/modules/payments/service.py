@@ -37,6 +37,7 @@ from modules.payments.model import (
     external_reference_for,
 )
 from modules.services.model import Service
+from modules.services.selection import services_label
 from modules.payments.links import ImportesDelLink, record_retired_link
 from modules.payments.minimization import minimize_preference_payload
 from modules.payments.model import (  # reexportado: lo importan jobs y tests
@@ -813,7 +814,11 @@ async def prepare_mercadopago_preference(
                 "items": [
                     {
                         "id": service.public_id,
-                        "title": service.name,
+                        # "Corte + Barba" en un turno de varios servicios
+                        # (2026-10-16); el nombre solo si es uno.
+                        "title": services_label(
+                            service.name, appointment.extra_services_snapshot
+                        ),
                         "description": service.description,
                         # Una imagen subida es una ruta relativa (F1-28): el
                         # checkout de MP la muestra fuera del sitio.

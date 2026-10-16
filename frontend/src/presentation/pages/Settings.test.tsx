@@ -39,7 +39,8 @@ const store: StoreSettings = {
     ledger: false,
     advanced_reports: false,
     new_calendar: false,
-    otp_booking: false
+    otp_booking: false,
+    multi_service_booking: false
   }
 }
 
@@ -250,7 +251,8 @@ describe('SettingsPage - funciones (FF-28)', () => {
       ledger: false,
       advanced_reports: true,
       new_calendar: true,
-      otp_booking: false
+      otp_booking: false,
+      multi_service_booking: false
     }
   }
 

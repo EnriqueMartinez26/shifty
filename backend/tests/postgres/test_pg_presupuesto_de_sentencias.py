@@ -87,6 +87,15 @@ PRESUPUESTOS: dict[str, Presupuesto] = {
         consultas=15, set_config=4
     ),
     "POST /appointments/ [auto-turno]": Presupuesto(consultas=11, set_config=4),
+    # Varios servicios en un turno (decision de Mateo, 2026-10-16). Techos
+    # ESTIMADOS, no medidos: son una cota superior que CI verifica (sin
+    # Postgres local no se pudo medir el valor exacto; bajarlos al medido con
+    # PRESUPUESTO_MEDIR=1). La grilla con extras es la misma forma que la de un
+    # servicio (una sentencia con ``in_()`` en vez de ``=``); el alta suma UNA
+    # lectura, los extras por ``in_()`` (``get_services_by_public_ids``):
+    # juntarla con la del principal cambiaria la sentencia del alta de uno.
+    "GET /public/availability [miss, varios]": Presupuesto(consultas=5, set_config=3),
+    "POST /public/appointments [varios]": Presupuesto(consultas=18, set_config=5),
 }
 
 # Prefijos de las rutas calientes: el portal publico y las lecturas del panel
@@ -397,6 +406,13 @@ async def test_los_endpoints_calientes_no_pasan_su_presupuesto(
     )
     assert login.status_code == 200, login.text
     panel = auth_headers(str(login.json()["access_token"]))
+    # Las filas "[varios]" necesitan el flag de la tienda (no se mide).
+    flag = await client.put(
+        "/stores/me/feature-flags",
+        headers=panel,
+        json={"multi_service_booking": True},
+    )
+    assert flag.status_code == 200, flag.text
     dia = tienda.dia.isoformat()
     tienda_q = {"store_public_id": tienda.store_public_id}
     disponibilidad = {**tienda_q, "service_id": tienda.service_ids[0], "date": dia}
@@ -541,6 +557,41 @@ async def test_los_endpoints_calientes_no_pasan_su_presupuesto(
                 "idempotency_key": "presupuesto-panel-3",
             },
             panel,
+            201,
+        ),
+        (
+            # Otro dia: un MISS de verdad, sin la agenda del dia que dejo la
+            # fila de un servicio en el nivel 2.
+            "GET /public/availability [miss, varios]",
+            "GET",
+            "/public/availability",
+            {
+                **disponibilidad,
+                "date": (tienda.dia + timedelta(days=1)).isoformat(),
+                "extra_service_id": tienda.service_ids[1],
+            },
+            None,
+            {},
+            200,
+        ),
+        (
+            "POST /public/appointments [varios]",
+            "POST",
+            "/public/appointments",
+            {},
+            {
+                "store_public_id": tienda.store_public_id,
+                "service_id": tienda.service_ids[0],
+                "extra_service_ids": [tienda.service_ids[1]],
+                "staff_id": tienda.staff_ids[1],
+                "starts_at": (tienda.slot_libre + timedelta(hours=1)).isoformat(),
+                "client_name": "Cliente Varios",
+                "client_phone": "+5491166600004",
+                "client_email": "c5491166600004@example.com",
+                "accepts_terms": True,
+                "idempotency_key": "presupuesto-reserva-varios-1",
+            },
+            {},
             201,
         ),
     ]

@@ -125,6 +125,14 @@ describe('CollectionsPage: cuando no se puede cobrar', () => {
     expect(confirmarPago()).not.toHaveAttribute('title')
   })
 
+  // Varios servicios en un turno (2026-10-16): el cobro dice que se hizo.
+  it('un turno con varios servicios muestra la etiqueta del backend', () => {
+    mockAppointments = [{ ...turno, services_label: 'Corte + Barba' }]
+    render(<CollectionsPage />)
+
+    expect(screen.getByText(/Corte \+ Barba · Ana/)).toBeInTheDocument()
+  })
+
   it('con la tienda suspendida los deshabilita con el motivo', () => {
     mockWriteAccess = { readOnly: true, reason: 'Tienda suspendida' }
     render(<CollectionsPage />)

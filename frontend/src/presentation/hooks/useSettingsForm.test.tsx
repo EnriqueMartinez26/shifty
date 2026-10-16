@@ -41,7 +41,8 @@ const store: StoreSettings = {
     ledger: false,
     advanced_reports: false,
     new_calendar: false,
-    otp_booking: false
+    otp_booking: false,
+    multi_service_booking: false
   }
 }
 

@@ -33,6 +33,7 @@ from modules.payments.minimization import (
     minimize_payment_payload,
 )
 from modules.services.model import Service
+from modules.services.selection import services_label
 from modules.payments.service import (
     RELEASED_APPOINTMENT_STATUSES,
     GatewayConfigs,
@@ -658,7 +659,12 @@ async def _publicar_aviso_de_cobro(
                 "payment_id": payment.id,
                 "amount": str(payment.amount),
                 "client_name": appointment.client_name if appointment else None,
-                "service_name": service.name if service else None,
+                # "Corte + Barba" en un turno de varios servicios (2026-10-16).
+                "service_name": services_label(
+                    service.name, getattr(appointment, "extra_services_snapshot", None)
+                )
+                if service
+                else None,
             },
         )
     )

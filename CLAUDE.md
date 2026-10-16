@@ -564,8 +564,8 @@ Una instrucción en lenguaje natural no es una garantía.
   mandan SMTP en línea se llaman `send_*`; una función `enqueue_*` tiene que
   encolar de verdad (`test_enqueue_encola_de_verdad.py`).
 - **El email de la reserva pública es opcional, salvo con `otp_booking`**
-  (propuesta por Mateo, 2026-10-16, pendiente de OK del dueño; reemplaza el
-  email obligatorio de #181). Sin email la reserva entra: un teléfono nuevo
+  (propuesta por Mateo el 2026-10-16, adoptada por el dueño el 2026-10-17,
+  D-20261016-01; reemplaza el email obligatorio de #181). Sin email la reserva entra: un teléfono nuevo
   crea la ficha con el técnico `{tel}@store{id}.noreply` (sin "Mis turnos":
   el código no tiene adónde ir y la autogestión responde 403), sin adoptar
   contacto, con `UNKNOWN_HISTORY` y sin ningún mail encolado. El turno guarda
@@ -702,6 +702,47 @@ Una instrucción en lenguaje natural no es una garantía.
   todavía no eligen adicionales. (`test_adicionales_precio.py`,
   `test_adicionales_del_servicio.py`, `test_reserva_con_adicionales.py`,
   `test_pg_adicionales.py`)
+- **Varios servicios en un turno: mismo profesional, duración y precio
+  sumados, seña = regla más alta sobre el total, el turno congela extras y
+  snapshot; reprogramar conserva las líneas** (decisión de Mateo, 2026-10-16;
+  pendiente de OK del dueño en `docs/DECISIONES.md`). Detrás del flag por
+  tienda `multi_service_booking` (apagado por defecto): con el flag apagado,
+  `extra_service_ids`/`extra_service_id` no vacío es 422
+  `MULTI_SERVICE_DISABLED` en el alta y los dos previews
+  (`services/selection_errors.py::require_selection_allowed`); las dos
+  disponibilidades son de lectura y no miran el flag (`require_selection_size`):
+  apagarlo no deja sin grilla la reprogramación de un turno ya tomado. Hasta
+  3 servicios (422 `TOO_MANY_SERVICES`; la entrada tiene además un tope duro de
+  9 extras) y 480 minutos en total (422 `SERVICES_TOO_LONG`); un extra
+  repetido, el principal otra vez, inactivo o de otra tienda es el 404 neutro
+  de un servicio. `service_id` es el principal (el primero elegido) y el turno
+  congela los demás en `extra_services_snapshot` y `extra_services_amount`
+  (lista sin descuento; `ck_appointments_extra_services_amount`, migraciones
+  `b8d0f2a4c6e1` + `c9e1a3b5d7f2`); `duration_minutes`, `ends_at` (la exclusión
+  GiST cubre el rango entero) y `price_amount` son el total. Lo toma un
+  profesional que hace TODOS (`qualified_staff` con `HAVING`; elegido uno que
+  no, 422 `STAFF_CANNOT_PERFORM_SELECTION`); profesionales distintos son
+  turnos separados. La seña sale de
+  `payments/deposit_rules.py::decide_selection_deposit`: entre los servicios
+  con seña, la regla que da más aplicada al total (servicios + adicionales, con
+  la promo) y sus recargos; modo `required` > `optional` > `none`; con un
+  servicio es `decide_deposit`. Los previews usan las mismas funciones y el
+  `deposit_rule` del cobro guarda la regla elegida y las líneas. Cada adicional
+  tiene que ser de un servicio elegido y su línea dice de cuál (las de un turno
+  de un servicio no cambian de forma). Las dos reprogramaciones y
+  `carry_manual_deposit` mudan las líneas: duración del principal de hoy + la
+  de los extras congelados. El link del panel cobra la lista de hoy de cada
+  línea (la congelada si el extra ya no existe) + los adicionales, con el tope
+  de la promo, y la misma regla de seña. La disponibilidad cachea la selección
+  con los ids ordenados y unidos con `+` (un servicio solo: la clave de
+  siempre) y el filtro de huecos mide con el servicio más corto (decisión
+  técnica del coordinador). El top de servicios cuenta el principal. Sin cambio
+  para un servicio solo: claves de cache e idempotencia, sentencias y
+  respuestas (salvo campos aditivos). El panel y la lista de espera todavía no
+  eligen varios. Antes de un rollback sin migrar se apaga el flag: el código
+  viejo reprograma un turno de varios servicios con la duración del principal.
+  (`test_varios_servicios_reglas.py`, `test_reserva_varios_servicios.py`,
+  `test_pg_varios_servicios.py`)
 - **Una seña obligatoria se cobra por Mercado Pago o por WhatsApp**
   (decisión de Mateo, 2026-10-03; `payments/deposit_channels.py`).
   Configurarla exige un canal: MP conectado con el flag `payments`, o un

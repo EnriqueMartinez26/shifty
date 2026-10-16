@@ -174,6 +174,7 @@ class StoreFeatureFlags(BaseModel):
     advanced_reports: bool = False
     new_calendar: bool = False
     otp_booking: bool = False
+    multi_service_booking: bool = False
 
 
 class StoreFeatureFlagsUpdate(BaseModel):
@@ -182,6 +183,7 @@ class StoreFeatureFlagsUpdate(BaseModel):
     advanced_reports: bool | None = None
     new_calendar: bool | None = None
     otp_booking: bool | None = None
+    multi_service_booking: bool | None = None
 
 
 class StoreFeatureFlagsResponse(BaseModel):

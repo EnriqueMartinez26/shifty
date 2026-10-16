@@ -16,6 +16,7 @@ reembolsos: eso es de la tienda.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import timedelta
 from decimal import ROUND_HALF_UP, Decimal
@@ -163,3 +164,74 @@ def decide_deposit(
     return DepositDecision(
         amount=amount, base_amount=base, extra_percent=extra, reasons=reasons
     )
+
+
+# ---------------------------------------------------------------------------
+# Varios servicios en un turno (decision de Mateo, 2026-10-16)
+# ---------------------------------------------------------------------------
+
+_MODE_RANK = {"none": 0, "optional": 1, "required": 2}
+
+
+def selection_deposit_mode(services: Sequence[Any]) -> str:
+    """El modo de sena del turno: ``required`` si algun servicio la exige, si
+    no ``optional`` si alguno la ofrece, si no ``none``. Con un servicio, su
+    modo (``deposit_channels.deposit_mode_of``)."""
+    modo = "none"
+    for service in services:
+        candidato = str(getattr(service, "deposit_mode", "none") or "none")
+        if _MODE_RANK.get(candidato, 0) > _MODE_RANK.get(modo, 0):
+            modo = candidato
+    return modo
+
+
+@dataclass(frozen=True)
+class SelectionDeposit:
+    """La sena de un turno de uno o varios servicios y de donde salio."""
+
+    decision: DepositDecision
+    # El servicio cuya regla dio el maximo; None si ninguno pide sena.
+    rule_service: Any | None
+
+
+def decide_selection_deposit(
+    services: Sequence[Any],
+    *,
+    price: Decimal,
+    notice: timedelta,
+    rules: DepositRules,
+    history: ClientHistory,
+) -> SelectionDeposit:
+    """Sena SOBRE EL TOTAL del turno: la regla mas alta entre sus servicios.
+
+    Decision de Mateo (2026-10-16): si al menos un servicio elegido tiene sena
+    (``required`` u ``optional``), la sena se calcula sobre ``price``, el TOTAL
+    del turno (todos los servicios y todos los adicionales, con la promo), con
+    la regla de cada servicio que la tiene, y se cobra la mayor. Los recargos
+    por antelacion e historial son los de esa regla (``decide_deposit``). Un
+    empate lo gana el que se eligio primero (el principal antes que los
+    extras). Ejemplo: Corte $10.000 con 50% + Barba $5.000 sin sena -> $7.500.
+
+    Con un solo servicio es exactamente ``decide_deposit`` de ese servicio.
+    """
+    if not services:
+        raise ValueError("un turno tiene al menos un servicio")
+    mejor: DepositDecision | None = None
+    regla: Any | None = None
+    for service in services:
+        if str(getattr(service, "deposit_mode", "none") or "none") == "none":
+            continue
+        decision = decide_deposit(
+            service, price=price, notice=notice, rules=rules, history=history
+        )
+        if mejor is None or decision.amount > mejor.amount:
+            mejor, regla = decision, service
+    if mejor is None:
+        # Ningun servicio pide sena: la misma decision vacia de siempre.
+        return SelectionDeposit(
+            decide_deposit(
+                services[0], price=price, notice=notice, rules=rules, history=history
+            ),
+            None,
+        )
+    return SelectionDeposit(mejor, regla)

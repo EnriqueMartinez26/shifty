@@ -135,6 +135,14 @@ class AppointmentAddonItem(BaseModel):
     quantity: int
 
 
+class AppointmentExtraServiceItem(BaseModel):
+    """Un servicio extra congelado del turno (2026-10-16)."""
+
+    public_id: str
+    name: str
+    duration_minutes: int
+
+
 class AppointmentListItem(BaseModel):
     public_id: str
     service_id: str
@@ -156,6 +164,10 @@ class AppointmentListItem(BaseModel):
     # Aditivo (2026-10-14): los adicionales congelados del turno, sin importes
     # (la recepcion ve la agenda y no opera cobros).
     addons: List[AppointmentAddonItem] = Field(default_factory=list)
+    # Aditivos (2026-10-16): los servicios extra del turno y la etiqueta de
+    # todos ("Corte + Barba"; el nombre solo sin extras).
+    extra_services: List[AppointmentExtraServiceItem] = Field(default_factory=list)
+    services_label: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -253,6 +265,9 @@ class AppointmentSearchResult(BaseModel):
     completed_at: Optional[datetime] = None
     service_name: str
     service_id: str
+    # Aditivos (2026-10-16): servicios extra y etiqueta del turno.
+    extra_services: List[AppointmentExtraServiceItem] = Field(default_factory=list)
+    services_label: str = ""
     staff_name: str
     staff_id: str
     client_name: str

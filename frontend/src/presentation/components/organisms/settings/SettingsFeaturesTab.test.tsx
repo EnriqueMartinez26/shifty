@@ -12,14 +12,15 @@ const flags: StoreFeatureFlags = {
   ledger: true,
   advanced_reports: true,
   new_calendar: false,
-  otp_booking: false
+  otp_booking: false,
+  multi_service_booking: false
 }
 
 describe('SettingsFeaturesTab', () => {
-  it('muestra solo los tres flags que el backend lee', () => {
+  it('muestra solo los cuatro flags que el backend lee', () => {
     render(<SettingsFeaturesTab flags={flags} onChange={jest.fn()} />)
 
-    expect(screen.getAllByRole('switch')).toHaveLength(3)
+    expect(screen.getAllByRole('switch')).toHaveLength(4)
     expect(screen.getByRole('switch', { name: 'Deuda / fiado' })).toHaveAttribute(
       'aria-checked',
       'true'
@@ -33,6 +34,17 @@ describe('SettingsFeaturesTab', () => {
     fireEvent.click(screen.getByRole('switch', { name: 'Cobros online y señas' }))
 
     expect(onChange).toHaveBeenCalledWith({ ...flags, payments: true })
+  })
+
+  // 2026-10-16: varios servicios en un turno, apagado por defecto.
+  it('varios servicios en un turno se prende desde aca y explica que hace', () => {
+    const onChange = jest.fn()
+    render(<SettingsFeaturesTab flags={flags} onChange={onChange} />)
+
+    expect(screen.getByText(/hasta 3 servicios que hace el mismo profesional/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('switch', { name: 'Varios servicios en un turno' }))
+
+    expect(onChange).toHaveBeenCalledWith({ ...flags, multi_service_booking: true })
   })
 
   it('en solo lectura los interruptores se apagan con el motivo', () => {

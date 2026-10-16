@@ -32,6 +32,8 @@ describe('Appointment.fromPrimitives', () => {
       // Sin el dato se asume que tiene email: no se sugiere WhatsApp de mas.
       client_has_email: true,
       addons: [],
+      // Sin la etiqueta del backend, la del servicio.
+      services_label: props.service_name,
       starts_at: '2026-09-10T12:00:00.000Z',
       ends_at: '2026-09-10T12:30:00.000Z'
     })

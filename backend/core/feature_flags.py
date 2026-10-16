@@ -9,6 +9,10 @@ DEFAULT_STORE_FEATURE_FLAGS: dict[str, bool] = {
     "advanced_reports": False,
     "new_calendar": False,
     "otp_booking": False,
+    # Varios servicios del mismo profesional en un turno (decision de Mateo,
+    # 2026-10-16). Apagado: ``extra_service_ids`` no vacio es 422
+    # ``MULTI_SERVICE_DISABLED`` en la reserva y en la disponibilidad.
+    "multi_service_booking": False,
 }
 
 

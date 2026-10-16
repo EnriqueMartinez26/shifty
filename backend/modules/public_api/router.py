@@ -48,11 +48,12 @@ from modules.otp.client_token import CLIENT_TOKEN_HEADER
 from modules.otp.service import OtpService
 from modules.payments.deposit_channels import (
     deposit_channels_for,
-    deposit_mode_of,
     online_payment_mandatory,
 )
 from modules.payments.deposit_rules import (
     UNKNOWN_HISTORY,
+    ClientHistory,
+    selection_deposit_mode,
 )
 from modules.payments.model import Payment
 from modules.payments.on_demand import (
@@ -67,8 +68,11 @@ from modules.public_api.service import (
     require_public_availability_day,
     client_may_leave,
     client_reschedule_denial,
-    decide,
+    decide_selection,
+    extra_service_items,
+    gross_total,
     quote_addons,
+    resolve_extra_services,
     require_recent_client_otp as _require_recent_client_otp,
 )
 from modules.public_api.schemas import (
@@ -90,6 +94,16 @@ from modules.public_api.schemas import (
 )
 from modules.services.addons import AddonChoice, AddonsQuote
 from modules.services.model import ADDONS_PER_SERVICE, Service
+from modules.services.selection import (
+    EXTRA_SERVICES_INPUT_MAX,
+    ExtraServices,
+    price_extra_services,
+    services_label,
+)
+from modules.services.selection_errors import (
+    MULTI_SERVICE_FLAG,
+    require_selection_size,
+)
 from modules.services.schemas import ServiceAddonResponse
 from modules.stores.model import Store
 from modules.stores.schemas import StoreCustomField
@@ -112,6 +126,20 @@ AddonQuery = Annotated[
     ],
     Query(max_length=ADDONS_PER_SERVICE),
 ]
+# Servicios extra del mismo turno (decision de Mateo, 2026-10-16):
+# ``extra_service_id`` repetible, con el tope duro de la entrada (regla 9); el
+# de producto (3 servicios en total) sale con 422 ``TOO_MANY_SERVICES``.
+ExtraServiceQuery = Annotated[
+    list[
+        Annotated[
+            str,
+            StringConstraints(min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN),
+        ]
+    ],
+    Query(max_length=EXTRA_SERVICES_INPUT_MAX),
+]
+# Los flags que la vitrina publica expone (``GET /public/stores/{slug}``).
+PUBLIC_FEATURE_FLAGS = ("payments", "otp_booking", MULTI_SERVICE_FLAG)
 # Token que ``/public/otp/verify`` le devuelve a quien verifico: la
 # autogestion lo exige ademas de la verificacion en la base (2026-10-14,
 # ``modules/otp/client_token.py``). Opcional en el esquema: faltante o
@@ -126,14 +154,17 @@ SlugPath = Annotated[
 
 
 def _public_booking_idempotency_key(data: PublicBookingCreate) -> str:
-    raw_key = "|".join(
-        [
-            data.service_id,
-            data.staff_id or "any",
-            data.starts_at.isoformat(),
-            data.client_phone,
-        ]
-    )
+    partes = [
+        data.service_id,
+        data.staff_id or "any",
+        data.starts_at.isoformat(),
+        data.client_phone,
+    ]
+    # Con servicios extra (2026-10-16) la seleccion es otra reserva: van
+    # ordenados y SOLO si hay, asi la clave de un servicio solo no cambia.
+    if data.extra_service_ids:
+        partes.append("+".join(sorted(data.extra_service_ids)))
+    raw_key = "|".join(partes)
     return "public-" + hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
 
 
@@ -199,12 +230,13 @@ async def get_store_by_slug(
                 StoreCustomField.model_validate(field)
                 for field in (store.custom_client_fields or [])
             ],
-            # Solo los flags que la vitrina publica necesita (pago online y si
-            # exige OTP). No exponer a anonimos capacidades internas de la
-            # tienda (ledger, reportes avanzados, calendario nuevo).
+            # Solo los flags que la vitrina publica necesita (pago online, si
+            # exige OTP y si se eligen varios servicios en un turno). No
+            # exponer a anonimos capacidades internas de la tienda (ledger,
+            # reportes avanzados, calendario nuevo).
             feature_flags={
                 flag: bool(store.normalized_feature_flags.get(flag, False))
-                for flag in ("payments", "otp_booking")
+                for flag in PUBLIC_FEATURE_FLAGS
             },
         )
 
@@ -342,6 +374,7 @@ async def get_public_availability(
     service_id: PublicIdQuery,
     date: Annotated[str, Query(pattern=r"^\d{4}-\d{2}-\d{2}$")],
     force_all: Annotated[bool, Query()] = False,
+    extra_service_id: ExtraServiceQuery = [],
     db: AsyncSession = Depends(get_db),
     availability_cache: Redis = Depends(get_availability_cache),
 ) -> list[object]:
@@ -352,6 +385,12 @@ async def get_public_availability(
     ``VALIDATION_ERROR`` sin tocar la base ni el cache (F1-11, decision 14
     del dueno, 2026-09-24: cada fecha es una clave de cache y la fecha libre
     dejaba su cardinalidad sin tope).
+
+    ``extra_service_id`` (repetible, 2026-10-16): los demas servicios del
+    turno. Con mas de 3 servicios, 422 ``TOO_MANY_SERVICES``; con mas de 480
+    minutos, 422 ``SERVICES_TOO_LONG``. No mira el flag de la tienda: es de
+    lectura, y apagarlo no deja sin grilla la reprogramacion de un turno de
+    varios servicios ya tomado.
     """
     search_date = _public_availability_date(date)
 
@@ -362,6 +401,8 @@ async def get_public_availability(
         store = await PublicRepository(db).get_store_ref(store_public_id)
         if not store:
             raise StoreNotFoundException(identifier=store_public_id)
+        # De lectura: sin el flag (``require_selection_size``).
+        require_selection_size(extra_service_id)
         return list(
             await AvailabilityService(db, availability_cache).get_available_slots(
                 store.id,
@@ -373,6 +414,7 @@ async def get_public_availability(
                     notice_hours=store.min_booking_notice_hours,
                     buffer_minutes=store.buffer_minutes or 0,
                 ),
+                extra_service_public_ids=extra_service_id,
             )
         )
 
@@ -386,6 +428,7 @@ async def preview_public_deposit(
     client_phone: Annotated[str | None, Query(min_length=6, max_length=30)] = None,
     promotion_code: Annotated[str | None, Query(min_length=3, max_length=30)] = None,
     addon: AddonQuery = [],
+    extra_service_id: ExtraServiceQuery = [],
     client_token: ClientTokenHeader = None,
     db: AsyncSession = Depends(get_db),
 ) -> PublicDepositPreviewResponse:
@@ -405,6 +448,9 @@ async def preview_public_deposit(
     sena sale sobre el total (servicio + adicionales, con la promo aplicada a
     esa suma) con la misma funcion que el alta; uno que ya no es del servicio
     es 422 ``ADDON_UNAVAILABLE``.
+
+    ``extra_service_id`` (repetible, 2026-10-16): los demas servicios, como
+    en el alta (``_preview_quote``); la sena es ``decide_selection``.
     """
     telefono = re.sub(r"[\s\-\(\)\+]", "", client_phone) if client_phone else ""
     await enforce_rate_limit(
@@ -422,20 +468,17 @@ async def preview_public_deposit(
         if not service or service.store_id != store.id:
             raise ServiceNotFoundException(identifier=service_id)
 
-        addons = await quote_addons(db, service, _parse_addons(addon))
-        price = await _preview_total(db, store, service, promotion_code, addons)
-        history = UNKNOWN_HISTORY
-        if telefono and await OtpService(db).is_self_service_allowed(
-            store_id=store.id, phone=telefono, client_token=client_token
-        ):
-            history = await repo.get_client_history(store.id, telefono)
+        services, quote, addons, price = await _preview_quote(
+            db, repo, store, service, extra_service_id, addon, promotion_code
+        )
+        history = await _preview_history(db, repo, store.id, telefono, client_token)
         starts_at_utc = (
             starts_at if starts_at.tzinfo else starts_at.replace(tzinfo=timezone.utc)
         )
-        decision = decide(
-            service, store, price=price, starts_at=starts_at_utc, history=history
-        )
-        deposit_mode = deposit_mode_of(service)
+        decision = decide_selection(
+            services, store, price=price, starts_at=starts_at_utc, history=history
+        ).decision
+        deposit_mode = selection_deposit_mode(services)
         # Atajo de ``deposit_channels_for``: sin sena obligatoria no se lee la
         # config de MP (los canales no deciden nada).
         channels = await deposit_channels_for(db, store, deposit_mode=deposit_mode)
@@ -455,7 +498,53 @@ async def preview_public_deposit(
                 allow_manual_coordination=store.allow_manual_coordination,
             ),
             addons_amount=float(addons.total),
+            extra_services_amount=float(quote.amount),
         )
+
+
+async def _preview_history(
+    db: AsyncSession,
+    repo: PublicRepository,
+    store_id: str,
+    telefono: str,
+    client_token: str | None,
+) -> ClientHistory:
+    """El historial del cliente para el preview, SOLO con el contacto
+    verificado por quien pregunta (ver ``preview_public_deposit``)."""
+    if telefono and await OtpService(db).is_self_service_allowed(
+        store_id=store_id, phone=telefono, client_token=client_token
+    ):
+        return await repo.get_client_history(store_id, telefono)
+    return UNKNOWN_HISTORY
+
+
+def _list_price(service: Service) -> Decimal:
+    return Decimal(str(service.price or 0))
+
+
+async def _preview_quote(
+    db: AsyncSession,
+    repo: PublicRepository,
+    store: Store,
+    service: Service,
+    extra_service_ids: list[str],
+    addon: list[str],
+    promotion_code: str | None,
+) -> tuple[tuple[Service, ...], ExtraServices, AddonsQuote, Decimal]:
+    """Servicios, extras, adicionales y total con la promo del preview de la
+    sena: las mismas validaciones y funciones que el alta
+    (``resolve_extra_services``, ``quote_addons``, ``gross_total``)."""
+    extras = await resolve_extra_services(repo, store, service, extra_service_ids)
+    quote = price_extra_services(extras)
+    addons = await quote_addons(db, service, _parse_addons(addon), extras)
+    price = await _preview_total(
+        db,
+        store,
+        service,
+        promotion_code,
+        gross_total(_list_price(service), quote, addons),
+    )
+    return (service, *extras), quote, addons, price
 
 
 def _parse_addons(raw: list[str]) -> list[AddonChoice]:
@@ -473,11 +562,10 @@ async def _preview_total(
     store: Store,
     service: Service,
     promotion_code: str | None,
-    addons: AddonsQuote,
+    gross_price: Decimal,
 ) -> Decimal:
-    """Servicio + adicionales con la promo, si el codigo vale: la misma
+    """Servicios + adicionales con la promo, si el codigo vale: la misma
     cotizacion que el alta (``quote_promotion`` sobre el total)."""
-    gross_price = Decimal(str(service.price or 0)) + addons.total
     if promotion_code:
         _promotion, quote, _error = await quote_promotion(
             db,
@@ -497,11 +585,13 @@ async def preview_public_promotion(
     service_id: PublicIdQuery,
     code: Annotated[str, Query(min_length=3, max_length=30)],
     addon: AddonQuery = [],
+    extra_service_id: ExtraServiceQuery = [],
     db: AsyncSession = Depends(get_db),
 ) -> PublicPromotionPreviewResponse:
     """La promo sobre el total de la reserva: servicio + adicionales elegidos
     (``addon`` repetible, ``<id>:<cantidad>``; decision de Mateo 2026-10-15).
-    Sin ``addon``, sobre el servicio solo, como antes."""
+    Sin ``addon``, sobre el servicio solo, como antes. ``extra_service_id``
+    (repetible, 2026-10-16) suma los demas servicios del turno a esa base."""
     async with tenant_bypass(db):
         repo = PublicRepository(db)
         store = await repo.get_store_by_public_id(store_public_id)
@@ -511,13 +601,16 @@ async def preview_public_promotion(
         if not service or service.store_id != store.id:
             raise ServiceNotFoundException(identifier=service_id)
 
-        addons = await quote_addons(db, service, _parse_addons(addon))
+        extras = await resolve_extra_services(repo, store, service, extra_service_id)
+        addons = await quote_addons(db, service, _parse_addons(addon), extras)
         _promotion, quote, error = await quote_promotion(
             db,
             store_id=store.id,
             service=service,
             code=code,
-            base_amount=Decimal(str(service.price or 0)) + addons.total,
+            base_amount=gross_total(
+                _list_price(service), price_extra_services(extras), addons
+            ),
         )
         if not quote:
             raise ValidationException(error or "Promocion invalida")
@@ -716,6 +809,8 @@ def _client_item(
         status=appt.status,
         notes=appt.notes,
         custom_fields=appt.intake_answers or {},
+        extra_services=extra_service_items(appt.extra_services_snapshot),
+        services_label=services_label(appt.service.name, appt.extra_services_snapshot),
         can_cancel=vigente
         and client_cancel_denial(
             appt,

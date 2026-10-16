@@ -22,7 +22,8 @@ const dto: AppointmentResponseDTO = {
   staff_name: 'Ana Perez',
   client_phone: '+5491100000000',
   client_has_email: true,
-  addons: [{ name: 'Strass', quantity: 6 }]
+  addons: [{ name: 'Strass', quantity: 6 }],
+  services_label: 'Corte'
 }
 
 describe('BookingMapper.toDomain', () => {
