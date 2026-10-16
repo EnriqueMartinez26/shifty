@@ -563,6 +563,24 @@ Una instrucción en lenguaje natural no es una garantía.
   `test_mails_del_panel_sin_transaccion.py`) Los helpers de `notifications/tasks.py` que
   mandan SMTP en línea se llaman `send_*`; una función `enqueue_*` tiene que
   encolar de verdad (`test_enqueue_encola_de_verdad.py`).
+- **El email de la reserva pública es opcional, salvo con `otp_booking`**
+  (propuesta por Mateo, 2026-10-16, pendiente de OK del dueño; reemplaza el
+  email obligatorio de #181). Sin email la reserva entra como siempre: ficha
+  con el técnico `{tel}@store{id}.noreply`, sin adoptar contacto, con
+  `UNKNOWN_HISTORY`, sin ningún mail encolado y sin "Mis turnos" (el código
+  no tiene adónde ir; la autogestión responde 403). En una tienda con
+  `otp_booking` el código sale solo por email, así que sin email es 422
+  `CLIENT_EMAIL_REQUIRED` en `PublicBookingService._resolve_request`, antes
+  del gate de OTP y antes de escribir nada. La lista de espera pública sigue
+  exigiendo email: el cupo liberado solo se ofrece por email (D-20260930-11).
+  El front, sin email, muestra el turno con "Agregar al calendario" (`.ics`
+  armado en el navegador) y el WhatsApp de la tienda para cambiarlo, y no
+  ofrece la autogestión; el panel, al cancelar el turno de un cliente sin
+  email entregable (desde la agenda o con un bloqueo), ofrece avisarle por
+  WhatsApp con `client_has_email` (booleano aditivo de `/appointments/search`
+  y del preview de bloqueos; el email no se expone).
+  (`test_email_en_el_portal.py`, `test_secuestro_de_contacto.py`,
+  `test_pg_reserva_concurrente.py`)
 - **OTP solo por email** (SMTP existente); `whatsapp`/`sms` existen solo con
   `OTP_PROVIDER=console`. Si el teléfono ya es de un cliente de la tienda
   con email entregable, el código va SOLO a ese email y al tipeado le llega
