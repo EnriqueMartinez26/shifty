@@ -50,7 +50,7 @@ const AffectedRow: React.FC<{ item: AffectedAppointment; reason: string }> = ({ 
         {nota && <p className="text-[11px] font-bold text-amber-700 mt-1">{nota}</p>}
         {item.cancellable && item.client_has_email === false && (
           <p className="text-[11px] font-bold text-emerald-700 mt-1">
-            Esta clienta no recibe avisos por email.
+            Este turno no recibe avisos por email.
           </p>
         )}
       </div>

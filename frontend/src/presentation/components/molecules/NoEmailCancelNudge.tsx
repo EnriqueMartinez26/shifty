@@ -18,7 +18,7 @@ export const NoEmailCancelNudge: React.FC<NoEmailCancelNudgeProps> = ({ whatsapp
     className="flex flex-wrap items-center gap-3 p-4 rounded-[6px] text-sm font-bold"
     style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', color: '#166534' }}
   >
-    <span className="flex-1 min-w-0">Esta clienta no recibe avisos por email.</span>
+    <span className="flex-1 min-w-0">Este turno no recibe avisos por email.</span>
     {whatsappHref && (
       <a
         href={whatsappHref}

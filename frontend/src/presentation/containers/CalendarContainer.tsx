@@ -112,8 +112,13 @@ export const CalendarContainer: React.FC = () => {
   }
   const [message, setMessage] = useState('')
   // Turno recien cancelado de alguien sin email: el aviso para mandarle por
-  // WhatsApp (href null si no hay telefono legible o no se ve).
-  const [noEmailNudge, setNoEmailNudge] = useState<{ whatsappHref: string | null } | null>(null)
+  // WhatsApp (href null si no hay telefono legible o no se ve). Vale para la
+  // vista y el dia en que se cancelo: al cambiar de dia o de vista deja de
+  // mostrarse (se compara en el render, sin efecto).
+  const [noEmailNudge, setNoEmailNudge] = useState<{
+    whatsappHref: string | null
+    scope: string
+  } | null>(null)
   const [isNewAppointmentOpen, setIsNewAppointmentOpen] = useState(false)
   // El panel de bloqueos se remonta con `key` al elegir otro bloqueo: sin
   // efecto que copie el bloqueo al formulario (regla 27).
@@ -136,6 +141,7 @@ export const CalendarContainer: React.FC = () => {
   const rangeKeyFrom = format(rangeStart, 'yyyy-MM-dd')
   const rangeKeyTo = format(rangeEnd, 'yyyy-MM-dd')
   const dateStr = format(selectedDate, 'yyyy-MM-dd')
+  const nudgeScope = `${view}:${dateStr}`
 
   const { data: staffMembers, isLoading: loadingStaff, error: staffError } = useManagedStaff()
   // Nombre y slug de la tienda para el texto de WhatsApp y el deep-link.
@@ -297,7 +303,7 @@ export const CalendarContainer: React.FC = () => {
     // Reservo sin email (propuesta por Mateo, 2026-10-16): no le llega ningun
     // aviso. Se dice antes y, despues de cancelar, se ofrece WhatsApp.
     const withoutEmail = event.clientHasEmail === false
-    const noEmailWarning = withoutEmail ? ' Esta clienta no recibe avisos por email.' : ''
+    const noEmailWarning = withoutEmail ? ' Este turno no recibe avisos por email.' : ''
     // "Cancelar"/"Confirmar" en un dialogo que cancela era ambiguo (QA 2026-10-02).
     const confirmed = await confirm(
       `¿Cancelar el turno de ${event.title}?${liveChargeWarning}${noEmailWarning}`,
@@ -312,6 +318,7 @@ export const CalendarContainer: React.FC = () => {
       setMessage('Turno cancelado')
       if (withoutEmail) {
         setNoEmailNudge({
+          scope: nudgeScope,
           whatsappHref: buildWaMeUrl(
             event.clientPhone,
             buildCancellationMessage({
@@ -506,7 +513,9 @@ export const CalendarContainer: React.FC = () => {
         </div>
       )}
 
-      {noEmailNudge && <NoEmailCancelNudge whatsappHref={noEmailNudge.whatsappHref} />}
+      {noEmailNudge?.scope === nudgeScope && (
+        <NoEmailCancelNudge whatsappHref={noEmailNudge.whatsappHref} />
+      )}
 
       {view === 'day' && (
         <AgendaDayView

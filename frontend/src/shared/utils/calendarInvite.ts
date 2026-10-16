@@ -23,6 +23,8 @@ const CRLF = '\r\n'
 // RFC 5545 3.1: una linea de contenido no pasa de 75 octetos; la continuacion
 // empieza con un espacio, que cuenta dentro de los 75.
 const MAX_LINE_OCTETS = 75
+const UID_DOMAIN = 'shifty-ar.tech'
+const REVOKE_DELAY_MS = 1000
 
 /** `20261023T180000Z`, o null si el instante no se puede leer. */
 const toIcsUtc = (iso: string | Date): string | null => {
@@ -84,7 +86,8 @@ export const buildCalendarInvite = (input: CalendarInviteInput): string | null =
     'CALSCALE:GREGORIAN',
     'METHOD:PUBLISH',
     'BEGIN:VEVENT',
-    `UID:${escapeIcsText(input.uid)}`,
+    // RFC 5545 pide un UID unico global: el public_id con el dominio.
+    `UID:${escapeIcsText(`${input.uid}@${UID_DOMAIN}`)}`,
     `DTSTAMP:${stamp}`,
     `DTSTART:${start}`,
     `DTEND:${end}`,
@@ -112,6 +115,8 @@ export const downloadCalendarInvite = (input: CalendarInviteInput, filename: str
   document.body.appendChild(link)
   link.click()
   link.remove()
-  window.URL.revokeObjectURL(url)
+  // Revocar en el mismo tick puede abortar la descarga (Firefox, Safari de
+  // iOS): se libera despues.
+  window.setTimeout(() => window.URL.revokeObjectURL(url), REVOKE_DELAY_MS)
   return true
 }

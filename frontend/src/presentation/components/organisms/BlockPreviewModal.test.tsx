@@ -157,17 +157,17 @@ describe('BlockPreviewModal: clientes sin email', () => {
   it('un cancelable sin email dice que no recibe avisos y ofrece WhatsApp', () => {
     renderModal(false)
 
-    expect(screen.getByText('Esta clienta no recibe avisos por email.')).toBeInTheDocument()
+    expect(screen.getByText('Este turno no recibe avisos por email.')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: /Avisar por WhatsApp/ })).toBeInTheDocument()
   })
 
   it('con email, o sin el dato, no muestra el aviso', () => {
     renderModal(true)
-    expect(screen.queryByText('Esta clienta no recibe avisos por email.')).not.toBeInTheDocument()
+    expect(screen.queryByText('Este turno no recibe avisos por email.')).not.toBeInTheDocument()
   })
 
   it('sin el dato (respuesta vieja) no supone que falta el email', () => {
     renderModal(undefined)
-    expect(screen.queryByText('Esta clienta no recibe avisos por email.')).not.toBeInTheDocument()
+    expect(screen.queryByText('Este turno no recibe avisos por email.')).not.toBeInTheDocument()
   })
 })

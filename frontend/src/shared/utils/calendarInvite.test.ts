@@ -19,14 +19,14 @@ const turno = {
 }
 
 describe('buildCalendarInvite', () => {
-  it('arma un VCALENDAR con CRLF, instantes UTC y el public_id como UID', () => {
+  it('arma un VCALENDAR con CRLF, instantes UTC y el public_id con dominio como UID', () => {
     const ics = buildCalendarInvite(turno)
     expect(ics).not.toBeNull()
     const lines = (ics ?? '').split('\r\n')
     expect(lines[0]).toBe('BEGIN:VCALENDAR')
     expect(lines).toContain('VERSION:2.0')
     expect(lines).toContain('BEGIN:VEVENT')
-    expect(lines).toContain('UID:apt-01HZX')
+    expect(lines).toContain('UID:apt-01HZX@shifty-ar.tech')
     expect(lines).toContain('DTSTART:20261023T180000Z')
     expect(lines).toContain('DTEND:20261023T183000Z')
     expect(lines).toContain('DTSTAMP:20261016T123456Z')
@@ -89,7 +89,8 @@ describe('downloadCalendarInvite', () => {
     window.URL.revokeObjectURL = originalRevoke
   })
 
-  it('descarga el archivo con el nombre pedido', () => {
+  it('descarga el archivo con el nombre pedido y libera la URL despues', () => {
+    jest.useFakeTimers()
     const create = jest.fn(() => 'blob:turno')
     const revoke = jest.fn()
     window.URL.createObjectURL = create
@@ -102,8 +103,12 @@ describe('downloadCalendarInvite', () => {
     expect(click).toHaveBeenCalledTimes(1)
     const link = click.mock.instances[0] as unknown as HTMLAnchorElement
     expect(link.download).toBe('turno.ics')
+    // Revocar en el mismo tick puede abortar la descarga (Firefox, iOS).
+    expect(revoke).not.toHaveBeenCalled()
+    jest.advanceTimersByTime(1000)
     expect(revoke).toHaveBeenCalledWith('blob:turno')
     click.mockRestore()
+    jest.useRealTimers()
   })
 
   it('no descarga nada si el turno no se puede armar', () => {

@@ -263,18 +263,38 @@ describe('CalendarContainer - cancelar y reprogramar (FF-31)', () => {
     fireEvent.click(within(cardOf('Luis Propio')).getByRole('button', { name: 'Cancelar turno' }))
     expect(
       await screen.findByText(
-        '¿Cancelar el turno de Luis Propio? Esta clienta no recibe avisos por email.'
+        '¿Cancelar el turno de Luis Propio? Este turno no recibe avisos por email.'
       )
     ).toBeInTheDocument()
     await confirmarCancelacion()
 
     expect(await screen.findByText('Turno cancelado')).toBeInTheDocument()
-    expect(screen.getByText('Esta clienta no recibe avisos por email.')).toBeInTheDocument()
+    expect(screen.getByText('Este turno no recibe avisos por email.')).toBeInTheDocument()
     const href = screen.getByRole('link', { name: 'Avisale por WhatsApp' }).getAttribute('href')
     expect(href?.startsWith('https://wa.me/5491155550303?text=')).toBe(true)
     const texto = decodeURIComponent((href ?? '').split('?text=')[1] ?? '')
     expect(texto).toContain('cancelamos tu turno para Corte del 20/09/2026 a las 14:00 hs')
     expect(texto).toContain('Peluqueria Sol')
+  })
+
+  it('el aviso de WhatsApp se va al cambiar de dia', async () => {
+    mockCancel.mockResolvedValue(undefined)
+    mockAppointments = [
+      appointmentOf('appt-own', 'st-1', 'Luis Propio', 'confirmed', {
+        clientPhone: '11 5555 0303',
+        clientHasEmail: false
+      })
+    ]
+    render(<CalendarContainer />)
+
+    fireEvent.click(within(cardOf('Luis Propio')).getByRole('button', { name: 'Cancelar turno' }))
+    await confirmarCancelacion()
+    expect(await screen.findByText('Este turno no recibe avisos por email.')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Siguiente' }))
+
+    expect(screen.queryByText('Este turno no recibe avisos por email.')).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Avisale por WhatsApp' })).not.toBeInTheDocument()
   })
 
   it('sin telefono visible avisa que no recibe mails pero no arma el link', async () => {
@@ -287,7 +307,7 @@ describe('CalendarContainer - cancelar y reprogramar (FF-31)', () => {
     fireEvent.click(within(cardOf('Luis Propio')).getByRole('button', { name: 'Cancelar turno' }))
     await confirmarCancelacion()
 
-    expect(await screen.findByText('Esta clienta no recibe avisos por email.')).toBeInTheDocument()
+    expect(await screen.findByText('Este turno no recibe avisos por email.')).toBeInTheDocument()
     expect(screen.queryByRole('link', { name: 'Avisale por WhatsApp' })).not.toBeInTheDocument()
   })
 
@@ -299,7 +319,7 @@ describe('CalendarContainer - cancelar y reprogramar (FF-31)', () => {
     await confirmarCancelacion()
 
     expect(await screen.findByText('Turno cancelado')).toBeInTheDocument()
-    expect(screen.queryByText('Esta clienta no recibe avisos por email.')).not.toBeInTheDocument()
+    expect(screen.queryByText('Este turno no recibe avisos por email.')).not.toBeInTheDocument()
   })
 
   it('reprogramar abre el formulario con el turno elegido, sin la opcion de fuera de horario', () => {

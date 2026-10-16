@@ -448,6 +448,7 @@ describe('BookingSuccess: reserva sin email', () => {
   })
 
   it('agregar al calendario descarga el .ics del turno', () => {
+    jest.useFakeTimers()
     const create = jest.fn((_blob: Blob) => 'blob:turno')
     const originalCreate = window.URL.createObjectURL
     const originalRevoke = window.URL.revokeObjectURL
@@ -461,6 +462,8 @@ describe('BookingSuccess: reserva sin email', () => {
     expect(create).toHaveBeenCalledTimes(1)
     const link = click.mock.instances[0] as unknown as HTMLAnchorElement
     expect(link.download).toBe('turno-apt-77.ics')
+    jest.runOnlyPendingTimers()
+    jest.useRealTimers()
     click.mockRestore()
     window.URL.createObjectURL = originalCreate
     window.URL.revokeObjectURL = originalRevoke
