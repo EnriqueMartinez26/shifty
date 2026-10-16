@@ -105,12 +105,17 @@ from modules.payments.service import (
 )
 from modules.promotions.model import PromotionRedemption
 from modules.promotions.service import PromotionQuote, quote_promotion, redeem_promotion
-from modules.public_api.repository import PublicRepository, RangeRejection
+from modules.public_api.repository import (
+    PublicRepository,
+    RangeRejection,
+    technical_client_email,
+)
 from modules.public_api.schemas import (
     ClientCancelRequest,
     ClientRescheduleRequest,
     PublicAddonChoice,
     PublicBookingAddonLine,
+    PUBLIC_BOOKING_EMAIL_REQUIRED,
     PublicBookingCreate,
     PublicBookingResponse,
 )
@@ -562,6 +567,33 @@ def _payment_link_failed(exc: Exception) -> AppException:
     )
 
 
+def _booking_contact_email(data: PublicBookingCreate, store_id: str) -> str:
+    """El email de ESTA reserva (snapshot del turno), nunca el de la ficha.
+
+    Sin email es el tecnico ``.noreply``, aunque el telefono ya tenga una
+    ficha con un email real: un telefono sin OTP no es de nadie, y caer al
+    email de la ficha mandaba "reserva registrada", confirmaciones y
+    recordatorios al buzon del cliente real por una reserva que pudo hacer
+    cualquiera (revision de #191, 2026-10-16). La ficha no se toca.
+    """
+    if data.client_email:
+        return str(data.client_email)
+    return technical_client_email(data.client_phone, store_id)
+
+
+def _require_email_for_otp_booking(data: PublicBookingCreate) -> None:
+    """Con ``otp_booking`` el email es obligatorio (propuesta por Mateo,
+    2026-10-16, pendiente de OK del dueño): el codigo sale SOLO por email, asi
+    que sin email no hay forma de verificar. En el resto de las tiendas es
+    opcional. Corre antes del gate de OTP y antes de escribir nada."""
+    if data.client_email is None:
+        raise AppException(
+            message=PUBLIC_BOOKING_EMAIL_REQUIRED,
+            http_status=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            error_code="CLIENT_EMAIL_REQUIRED",
+        )
+
+
 # ---------------------------------------------------------------------------
 # Alta publica
 # ---------------------------------------------------------------------------
@@ -716,6 +748,7 @@ class PublicBookingService:
         # el, la verificacion de otro abria su historial para la sena.
         otp_service = OtpService(self.db)
         if is_store_feature_enabled(store.feature_flags, "otp_booking"):
+            _require_email_for_otp_booking(data)
             await self._require_booking_otp(
                 otp_service, store.id, data.client_phone, client_token
             )
@@ -913,7 +946,7 @@ class PublicBookingService:
             buffer_minutes=request.store.buffer_minutes or 0,
             # El total congelado: servicio + adicionales, con la promo.
             price_amount=request.total_price,
-            client_email=str(data.client_email) if data.client_email else None,
+            client_email=_booking_contact_email(data, store_id),
             # Un turno esperando la seña retiene el slot hasta su plazo de pago
             # (por MP una ventana corta, por WhatsApp hasta 2 h antes): si no
             # se paga, el horario vuelve a estar libre. Sin seña retiene hasta

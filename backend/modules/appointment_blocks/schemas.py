@@ -222,6 +222,10 @@ class AffectedAppointmentResponse(BaseModel):
     # (decision de Mateo).
     blocker: str | None = None
     cancellable: bool
+    # Aditivo (propuesta por Mateo, 2026-10-16): el turno tiene un email
+    # entregable (no el tecnico ``.noreply``). Sin el, la cancelacion por
+    # bloqueo no le llega por mail y el modal sugiere avisarle por WhatsApp.
+    client_has_email: bool = False
 
 
 class BlockPreviewResponse(BaseModel):

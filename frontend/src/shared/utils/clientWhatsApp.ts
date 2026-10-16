@@ -41,6 +41,20 @@ export const buildClientMessage = (kind: ClientMessageKind, input: ClientMessage
   return `${nombre} Te recordamos tu turno para ${input.serviceName} con ${input.staffName} el ${cuando}. Te esperamos en ${input.storeName}.`
 }
 
+/**
+ * Aviso de cancelacion para un cliente que no recibe mails (reservo sin email;
+ * propuesta por Mateo, 2026-10-16): el panel lo ofrece despues de cancelar.
+ */
+export const buildCancellationMessage = (
+  input: Pick<ClientMessageInput, 'clientName' | 'serviceName' | 'startsAt' | 'storeName'>
+): string => {
+  const nombre = input.clientName.trim() ? `Hola ${input.clientName.trim()}!` : 'Hola!'
+  const iso = input.startsAt.toISOString()
+  const cuando = `${formatArgentinaDateDisplay(iso)} a las ${formatArgentinaTime(iso)} hs`
+  const tienda = input.storeName.trim() ? ` en ${input.storeName.trim()}` : ''
+  return `${nombre} Te avisamos que cancelamos tu turno para ${input.serviceName} del ${cuando}${tienda}. Si querés, te ayudamos a elegir otro horario.`
+}
+
 /** Que mensaje corresponde segun el estado del turno; null si no tiene sentido. */
 export const clientMessageKindFor = (status: string): ClientMessageKind | null => {
   if (status === 'completed') return 'rebook'

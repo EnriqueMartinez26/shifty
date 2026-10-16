@@ -45,6 +45,14 @@ from modules.users.model import User, UserRole
 _UNUSABLE_CLIENT_PASSWORD_HASH = hash_password(str(ulid.ULID()))
 
 
+def technical_client_email(phone: str, store_id: str) -> str:
+    """El email tecnico de quien reserva sin email: no es entregable
+    (``is_deliverable_email``) y no recibe nada. En minusculas: el store_id es
+    un ULID en mayusculas y la base exige el email normalizado
+    (ck_users_email_lower, F1-12)."""
+    return f"{phone}@store{store_id}.noreply".lower()
+
+
 def _visible_en_el_portal() -> tuple[ColumnElement[bool], ColumnElement[bool]]:
     """Predicado de toda tienda que el portal publico resuelve.
 
@@ -291,10 +299,7 @@ class PublicRepository:
         if existing:
             return existing
 
-        # El tecnico tambien va en minusculas: el store_id es un ULID en
-        # mayusculas y la base exige el email normalizado
-        # (ck_users_email_lower, F1-12).
-        technical_email = email or f"{phone}@store{store_id}.noreply".lower()
+        technical_email = email or technical_client_email(phone, store_id)
         new_client = User(
             email=technical_email,
             hashed_password=_UNUSABLE_CLIENT_PASSWORD_HASH,
