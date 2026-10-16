@@ -30,6 +30,8 @@ describe('Appointment.fromPrimitives', () => {
       staff_name: null,
       client_phone: null,
       addons: [],
+      // Sin la etiqueta del backend, la del servicio.
+      services_label: props.service_name,
       starts_at: '2026-09-10T12:00:00.000Z',
       ends_at: '2026-09-10T12:30:00.000Z'
     })

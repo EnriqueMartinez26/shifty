@@ -90,7 +90,8 @@ export const buildUnifiedEvents = ({
         staffMembers?.find((staff) => staff.id === appointment.staffId)?.displayName ||
         'Profesional',
       title: appointment.clientName,
-      subtitle: appointment.serviceName,
+      // "Corte + Barba" con varios servicios en el turno.
+      subtitle: appointment.servicesLabel,
       startsAt: appointment.timeSpan.getStartsAt(),
       endsAt: appointment.timeSpan.getEndsAt(),
       status: appointment.status,

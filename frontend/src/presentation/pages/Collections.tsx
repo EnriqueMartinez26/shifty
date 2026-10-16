@@ -267,7 +267,7 @@ const CollectionsPage: React.FC = () => {
             <CollectionAppointmentCard
               key={appointment.public_id}
               clientName={appointment.client_name}
-              serviceName={appointment.service_name}
+              serviceName={appointment.services_label || appointment.service_name}
               staffName={appointment.staff_name}
               startsAt={appointment.starts_at}
               status={appointment.status}
@@ -315,7 +315,7 @@ const CollectionsPage: React.FC = () => {
       {paying && payingCharge && (
         <ManualPaymentModal
           clientName={paying.client_name}
-          serviceName={paying.service_name}
+          serviceName={paying.services_label || paying.service_name}
           startsAt={paying.starts_at}
           suggestedAmount={suggestedAmountOf(payingCharge)}
           isDeposit={payingCharge.kind === 'pending' && payingCharge.isDeposit}
@@ -332,7 +332,7 @@ const CollectionsPage: React.FC = () => {
         <ManualPaymentModal
           mode="remainder"
           clientName={remainderFor.client_name}
-          serviceName={remainderFor.service_name}
+          serviceName={remainderFor.services_label || remainderFor.service_name}
           startsAt={remainderFor.starts_at}
           suggestedAmount={remainingOf(remainderCharge)}
           maxAmount={remainingOf(remainderCharge)}

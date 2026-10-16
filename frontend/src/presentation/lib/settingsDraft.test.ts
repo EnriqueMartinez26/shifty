@@ -38,7 +38,8 @@ const store: StoreSettings = {
     ledger: false,
     advanced_reports: false,
     new_calendar: true,
-    otp_booking: false
+    otp_booking: false,
+    multi_service_booking: false
   }
 }
 
@@ -57,7 +58,8 @@ describe('base que arma el formulario desde el servidor', () => {
       ledger: true,
       advanced_reports: false,
       new_calendar: false,
-      otp_booking: false
+      otp_booking: false,
+      multi_service_booking: false
     })
     expect(conFlags.feature_flags.ledger).toBe(true)
     expect(conFlags.feature_flags.payments).toBe(false)
@@ -70,7 +72,8 @@ describe('base que arma el formulario desde el servidor', () => {
       ledger: false,
       advanced_reports: false,
       new_calendar: false,
-      otp_booking: false
+      otp_booking: false,
+      multi_service_booking: false
     })
   })
 })
@@ -199,7 +202,8 @@ describe('orden de guardado: cada endpoint valida contra el estado del otro', ()
     ledger: false,
     advanced_reports: false,
     new_calendar: false,
-    otp_booking: false
+    otp_booking: false,
+    multi_service_booking: false
   })
 
   it('prender los cobros manda la tienda primero, asi la politica ya esta en la base', () => {

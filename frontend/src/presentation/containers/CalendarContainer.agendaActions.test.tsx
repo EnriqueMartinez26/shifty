@@ -15,6 +15,7 @@ const appointmentOf = (id: string, staffId: string, clientName: string, status =
   staffId,
   staffName: staffId === 'st-1' ? 'Ana Gomez' : 'Beto Diaz',
   clientName,
+  servicesLabel: 'Corte',
   serviceName: 'Corte',
   clientPhone: null,
   serviceId: 'svc-1',

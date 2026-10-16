@@ -90,6 +90,8 @@ export interface AppointmentSearchItem {
   remainder_payment?: RemainderPaymentSummary | null
   /** Parte de `price_amount` que son adicionales (0 sin adicionales). */
   addons_amount?: string | number | null
+  /** "Corte + Barba" con varios servicios; ausente en una respuesta vieja. */
+  services_label?: string | null
 }
 
 interface RemainderPaymentSummary {

@@ -15,6 +15,7 @@ const mockAppointment = {
   staffId: 'st-1',
   staffName: 'Ana Gomez',
   clientName: 'Luis Perez',
+  servicesLabel: 'Corte',
   serviceName: 'Corte',
   clientPhone: null,
   serviceId: 'svc-1',
