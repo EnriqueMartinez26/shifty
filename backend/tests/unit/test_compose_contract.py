@@ -789,6 +789,52 @@ def test_la_api_escala_por_replicas_de_un_proceso() -> None:
     assert "command" not in base, "backend no puede pisar el CMD de la imagen"
 
 
+# --- La SPA se renueva sin corte (2026-10-15, produccion) ---------------------
+#
+# Con `container_name` el deploy RECREABA el frontend y la home daba 502 en
+# cada deploy (log de 2026-10-15 23:49 UTC: "compuerta: https://shifty-ar.tech/
+# no respondio bien"). scripts/deploy.sh lo renueva como al backend: la replica
+# nueva al lado de la vieja, y eso exige un servicio sin nombre fijo y con un
+# healthcheck que `--wait` pueda esperar.
+
+
+def _replicas_del_frontend_en_el_deploy() -> int:
+    encontrado = re.search(
+        r'^: "\$\{DEPLOY_FRONTEND_REPLICAS:=(\d+)\}"$',
+        DEPLOY_SH.read_text(encoding="utf-8"),
+        re.MULTILINE,
+    )
+    assert encontrado, "scripts/deploy.sh no fija DEPLOY_FRONTEND_REPLICAS"
+    return int(encontrado.group(1))
+
+
+def test_la_spa_puede_tener_una_replica_nueva_al_lado_de_la_vieja() -> None:
+    base = _services()["frontend"]
+    assert "container_name" not in base, (
+        "frontend fija container_name: el deploy no puede levantar la replica "
+        "nueva al lado de la vieja y vuelve el 502 en cada deploy"
+    )
+    healthcheck = base.get("healthcheck")
+    assert isinstance(healthcheck, dict), (
+        "frontend sin healthcheck: --wait no espera nada"
+    )
+    prueba = [str(parte) for parte in healthcheck["test"]]
+    assert prueba[0] == "CMD", prueba
+    assert "http://127.0.0.1:3000/" in prueba, prueba
+    # El override de produccion no puede volver a fijar un nombre.
+    assert "container_name" not in _servicios_de_produccion()["frontend"]
+
+
+def test_la_spa_corre_una_replica_y_el_deploy_levanta_una_al_lado() -> None:
+    """Una alcanza para servir estaticos; la segunda vive solo durante el
+    cambio. Si el compose y el deploy difieren, despues del primer deploy corre
+    otro numero de replicas que el que cuenta la memoria."""
+    deploy = _servicios_de_produccion()["frontend"].get("deploy") or {}
+    assert isinstance(deploy, dict)
+    assert int(deploy.get("replicas", 1)) == 1, deploy
+    assert _replicas_del_frontend_en_el_deploy() == 1
+
+
 # --- Apagado ordenado (F0-21, plan de rendimiento) ----------------------------
 #
 # Docker manda SIGTERM y, pasado `stop_grace_period` (10 s por default), SIGKILL.
@@ -1326,16 +1372,20 @@ def _replicas_nuevas_del_deploy() -> int:
 
 
 def memoria_de_produccion(
-    servicios: dict[str, dict[str, object]], nuevas_del_deploy: int
+    servicios: dict[str, dict[str, object]],
+    nuevas_del_deploy: int,
+    nuevas_del_frontend: int = 0,
 ) -> tuple[int, int]:
     """(estable, pico del deploy) en MiB, sumando los limites de la vista dada.
 
     Estable: cada limite por sus replicas. Pico: lo estable mas lo mas grande
-    que el deploy agrega encima, que es o la tanda nueva del backend (el
-    deploy gradual las levanta antes de bajar las viejas) o el contenedor de
-    la migracion (`compose run backend`, con el limite del backend; corre
-    antes, con las viejas sirviendo, y se borra al terminar). Los demas
-    servicios se recrean de a uno: el viejo se baja antes de crear el nuevo.
+    que el deploy agrega encima, que es la tanda nueva del backend (el deploy
+    gradual las levanta antes de bajar las viejas), el contenedor de la
+    migracion (`compose run backend`, con el limite del backend; corre antes,
+    con las viejas sirviendo, y se borra al terminar) o la replica nueva del
+    frontend (se levanta DESPUES de bajar las viejas del backend, asi que no se
+    suma a su tanda). Los demas servicios se recrean de a uno: el viejo se baja
+    antes de crear el nuevo.
     """
     estable = 0
     for nombre, servicio in servicios.items():
@@ -1344,7 +1394,10 @@ def memoria_de_produccion(
         replicas = int(deploy.get("replicas", 1))
         estable += _mib(_limite(servicio)) * replicas
     backend = _mib(_limite(servicios["backend"]))
-    pico = estable + max(backend * nuevas_del_deploy, backend)
+    frontend = _mib(_limite(servicios["frontend"])) if "frontend" in servicios else 0
+    pico = estable + max(
+        backend * nuevas_del_deploy, backend, frontend * nuevas_del_frontend
+    )
     return estable, pico
 
 
@@ -1361,7 +1414,9 @@ def test_la_memoria_de_produccion_entra_en_el_vps() -> None:
     subir un limite, una replica o la tanda del deploy sin rehacer la cuenta
     falla aca."""
     estable, pico = memoria_de_produccion(
-        _servicios_de_produccion(), _replicas_nuevas_del_deploy()
+        _servicios_de_produccion(),
+        _replicas_nuevas_del_deploy(),
+        _replicas_del_frontend_en_el_deploy(),
     )
     disponible = RAM_DEL_HOST_MIB - RESERVA_DEL_SISTEMA_MIB
     assert estable <= TECHO_ESTABLE_MIB, (
@@ -1384,6 +1439,20 @@ def test_la_cuenta_de_memoria_ve_replicas_y_la_tanda_del_deploy() -> None:
     assert memoria_de_produccion(servicios, 3) == (2048 + 1536, 2048 + 3072)
     # Sin deploy gradual el pico es la migracion: una replica mas.
     assert memoria_de_produccion(servicios, 0) == (2048 + 1536, 2048 + 2048)
+    # La replica nueva de la SPA llega cuando la tanda del backend ya bajo: no
+    # se suman; manda la mas grande.
+    spa: dict[str, object] = {"deploy": {"resources": {"limits": {"memory": "64M"}}}}
+    assert memoria_de_produccion({**servicios, "frontend": spa}, 3, 1) == (
+        2048 + 1536 + 64,
+        2048 + 1536 + 64 + 1536,
+    )
+    spa_pesada: dict[str, object] = {
+        "deploy": {"resources": {"limits": {"memory": "2G"}}}
+    }
+    assert memoria_de_produccion({**servicios, "frontend": spa_pesada}, 3, 1) == (
+        2048 + 1536 + 2048,
+        2048 + 1536 + 2048 + 2048,
+    )
     with pytest.raises(AssertionError, match="sin limite"):
         memoria_de_produccion({"x": {}, **servicios}, 1)
 
@@ -1566,7 +1635,6 @@ NOMBRES_EN_DESARROLLO = {
     "celery_worker": "shifty_celery",
     "celery_worker_interactive": "shifty_celery_interactive",
     "celery_beat": "shifty_celery_beat",
-    "frontend": "shifty_frontend",
     "nginx": "shifty_nginx",
 }
 

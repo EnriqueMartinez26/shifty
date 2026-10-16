@@ -445,9 +445,20 @@ services:
         VITE_SUPPORT_WHATSAPP: ${VITE_SUPPORT_WHATSAPP:-}
         VITE_CONTACT_EMAIL: ${VITE_CONTACT_EMAIL:-}
         VITE_LEGAL_RESPONSABLES: ${VITE_LEGAL_RESPONSABLES:-}
-    container_name: ${COMPOSE_PROJECT_NAME:-shifty}_frontend
+    # Sin container_name, como backend (F0-04): scripts/deploy.sh levanta la
+    # replica nueva AL LADO de la vieja y baja la vieja cuando la nueva esta
+    # sana. Con un nombre fijo habia que recrearla y la home daba 502 en cada
+    # deploy (2026-10-15).
     restart: always
     logging: *logging
+    # Sana = sirve index.html. El `--wait` del deploy espera esto antes de
+    # bajar la replica vieja. wget es el de busybox (imagen nginx alpine).
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3000/"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
     ports:
       - "127.0.0.1:3000:3000"
     networks:

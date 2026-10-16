@@ -798,16 +798,21 @@ Una instrucción en lenguaje natural no es una garantía.
 - **Imágenes con versión y deploy por script.** CI construye y publica
   `ghcr.io/enriquemartinez26/shifty-{backend,frontend,nginx}:<sha>`
   (`.github/workflows/build-images.yml`); el VPS no construye, hace `pull`
-  del sha (todo `up` y `run` lleva `--no-build`). `make deploy
-  APP_VERSION=<sha>` corre `scripts/deploy.sh`: preflight (`COMPOSE_FILE` con
+  del sha (todo `up` y `run` lleva `--no-build`). `APP_VERSION=<sha> bash
+  scripts/deploy.sh deploy` (el VPS no tiene `make`; donde está, `make deploy
+  APP_VERSION=<sha>` es lo mismo) corre: preflight (`COMPOSE_FILE` con
   `docker-compose.prod.yml`, Compose >= 2.24, disco, backup de menos de
   24 h, Quality verde en `main` para el sha), imágenes verificadas con `docker image inspect`, migración con el
-  código viejo sirviendo, backend nuevo al lado del viejo, `up -d --no-deps
+  código viejo sirviendo, backend y después frontend nuevos al lado de los
+  viejos (los dos detrás del borde; recrear el frontend en el lugar dejaba la
+  home en 502 en cada deploy, 2026-10-15; bajada la réplica vieja del
+  frontend el borde recarga, y la SPA tiene `proxy_connect_timeout 2s`), `up -d --no-deps
   --remove-orphans` con lista explícita (nunca recrea db, redis, rabbitmq ni el borde),
   compuerta de 60 s y rollback automático sin migrar. En un deploy normal el
   borde (nginx) solo se RECARGA (`nginx -t && nginx -s reload`); se recrea
-  únicamente con `make deploy-edge`, cuando cambió su imagen o
-  `nginx/nginx.prod.conf`. `docker-compose.prod.yml` exige `APP_VERSION` en todo comando
+  únicamente con `bash scripts/deploy.sh edge` (`make deploy-edge`), cuando
+  cambió su imagen o `nginx/nginx.prod.conf` (el reload no ve un archivo
+  nuevo: es un bind mount de un archivo y git lo reemplaza por otro inodo). `docker-compose.prod.yml` exige `APP_VERSION` en todo comando
   de compose; no se fija en el `.env` del servidor (queda en
   `.deploy/current`).
 - **Toda llamada externa dentro de un request tiene un presupuesto total
@@ -925,11 +930,13 @@ Una instrucción en lenguaje natural no es una garantía.
   conjunto (2026-09-16: 24.16.0) el hook bloquea todos los commits y `npm ci`
   necesita `--engine-strict=false`: el toolchain se alinea antes de
   activarlo.
-- Nombres de contenedor: las réplicas del backend son
-  `<proyecto>-backend-N` (sin `container_name`, F0-04); el resto,
-  `${COMPOSE_PROJECT_NAME:-shifty}_<servicio>`. Scripts, docs y comandos usan
-  `docker compose exec backend ...`, nunca `shifty_backend`: ese nombre ya no
-  existe y con un segundo proyecto (staging) apuntaría al equivocado.
+- Nombres de contenedor: las réplicas del backend y del frontend son
+  `<proyecto>-backend-N` y `<proyecto>-frontend-N` (sin `container_name`,
+  F0-04 y 2026-10-15: el deploy levanta la réplica nueva al lado de la
+  vieja); el resto, `${COMPOSE_PROJECT_NAME:-shifty}_<servicio>`. Scripts,
+  docs y comandos usan `docker compose exec backend ...`, nunca
+  `shifty_backend` ni `shifty_frontend`: esos nombres ya no existen y con un
+  segundo proyecto (staging) apuntarían al equivocado.
 - El E2E con Playwright (`frontend/e2e/`, `npm run e2e`, workflow manual
   `e2e.yml`) corrió por primera vez el 2026-09-16 contra el stack local
   detrás de nginx (`E2E_BASE_URL=http://localhost`,
@@ -1006,5 +1013,6 @@ Una instrucción en lenguaje natural no es una garantía.
 - `docs/RELEASE_CHECKLIST.md` y `docs/BACKUP_RESTORE_RUNBOOK.md` (RPO ≤24h,
   RTO ≤4h) gatean releases: un ítem sin marcar necesita excepción explícita
   del dueño, no un salto silencioso. El deploy a producción es
-  `make deploy APP_VERSION=<sha>` (`docs/DEPLOY_RUNBOOK.md`), que además se
+  `APP_VERSION=<sha> bash scripts/deploy.sh deploy` (o `make deploy
+  APP_VERSION=<sha>` donde haya make; `docs/DEPLOY_RUNBOOK.md`), que además se
   niega a migrar sin un backup de menos de 24 h.

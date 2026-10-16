@@ -266,6 +266,68 @@ def test_upstream_resuelve_en_runtime_y_reusa_conexiones(
     assert int(una(upstream, "keepalive").args[0]) >= keepalive_minimo
 
 
+def _locations_de_la_spa(
+    http: list[Directiva],
+) -> list[tuple[list[Directiva], Directiva]]:
+    """(server, location) de cada location que proxea a la SPA."""
+    return [
+        (server, loc)
+        for server in servidores(http)
+        for loc in locations(server)
+        if todas(loc.bloque, "proxy_pass")
+        and una(loc.bloque, "proxy_pass").args[0] == "http://spa"
+    ]
+
+
+@EDGES
+def test_un_request_a_una_replica_de_la_spa_que_se_apaga_va_a_otra(
+    ruta: Path,
+) -> None:
+    """scripts/deploy.sh renueva el frontend con una replica nueva al lado de
+    la vieja (2026-10-15: recrearlo daba 502 en la home en cada deploy). Si un
+    request todavia va a la vieja cuando se apaga, falla al conectar y nginx
+    lo pasa a la otra: `proxy_next_upstream` por defecto (error timeout) y sin
+    tope de intentos. Apagar eso devuelve el 502 del deploy."""
+    http = leer(ruta)
+    spa = _locations_de_la_spa(http)
+    assert spa
+    for server, loc in spa:
+        siguiente = efectivo("proxy_next_upstream", http, server, loc.bloque)
+        assert siguiente is None or {"error", "timeout"} <= set(siguiente), (
+            loc.args,
+            siguiente,
+        )
+        intentos = efectivo("proxy_next_upstream_tries", http, server, loc.bloque)
+        assert intentos is None or intentos[0] == "0" or int(intentos[0]) >= 2, (
+            loc.args,
+            intentos,
+        )
+
+
+def _segundos(valor: str) -> float:
+    if valor.endswith("ms"):
+        return float(valor[:-2]) / 1000
+    return float(valor.removesuffix("s"))
+
+
+@EDGES
+def test_una_replica_de_la_spa_que_ya_no_existe_no_retiene_el_request(
+    ruta: Path,
+) -> None:
+    """Revision del PR #188: despues de borrar la replica vieja, nginx puede
+    tenerla como peer hasta re-resolver (valid=5s). Un SYN a esa IP espera
+    "no route to host" o el `proxy_connect_timeout` por defecto (60 s) antes
+    de pasar a la otra. Conectar a la SPA, en la red interna, tarda
+    microsegundos: el tope es corto en todas sus locations."""
+    http = leer(ruta)
+    spa = _locations_de_la_spa(http)
+    assert spa
+    for server, loc in spa:
+        tope = efectivo("proxy_connect_timeout", http, server, loc.bloque)
+        assert tope is not None, f"{loc.args}: sin proxy_connect_timeout (60 s)"
+        assert _segundos(tope[0]) <= 2, (loc.args, tope)
+
+
 @EDGES
 def test_el_keepalive_al_backend_vence_antes_que_el_de_uvicorn(ruta: Path) -> None:
     # uvicorn cierra una conexion ociosa a los 5 s (--timeout-keep-alive por

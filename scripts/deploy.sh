@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 # Deploy y rollback en el VPS (F0-03). Uso, desde el clon del servidor:
 #
-#   APP_VERSION=<sha> scripts/deploy.sh deploy     (o: make deploy APP_VERSION=<sha>)
-#   scripts/deploy.sh rollback                     (o: make rollback)
-#   scripts/deploy.sh edge                         (o: make deploy-edge)
+#   APP_VERSION=<sha> bash scripts/deploy.sh deploy   (o: make deploy APP_VERSION=<sha>)
+#   bash scripts/deploy.sh rollback                    (o: make rollback)
+#   bash scripts/deploy.sh edge                        (o: make deploy-edge)
+#
+# El VPS no tiene `make`: ahi se usa la forma con bash; make es solo un atajo
+# donde este instalado.
 #
 # Secuencia del deploy (docs/DEPLOY_RUNBOOK.md):
 #   1. Preflight: COMPOSE_FILE incluye docker-compose.prod.yml, Compose >=
@@ -26,17 +29,23 @@
 #      `compose run --rm --no-deps backend alembic upgrade head`. Por eso las
 #      migraciones son expand/contract (CLAUDE.md §3): el codigo viejo tiene
 #      que funcionar contra el esquema nuevo.
-#   5. Backend gradual: levanta las replicas nuevas AL LADO de las viejas
-#      (`--no-recreate --scale`), espera que esten sanas (`--wait`), deja que
-#      nginx las resuelva (`resolve`), baja las viejas. Si las nuevas no quedan
-#      sanas se descartan y las viejas siguen sirviendo. DEPLOY_ROLLING=0: `up`
-#      directo (5-10 s de 502 mientras se recrean).
-#   6. Resto de la app (workers, beat, frontend) con `up -d --no-deps`:
-#      nunca recrea db/redis/rabbitmq ni el borde. El frontend se recrea si
-#      cambio su imagen: la SPA da 502 un instante.
+#   5. Backend y frontend graduales (los dos servicios detras del borde):
+#      levanta las replicas nuevas AL LADO de las viejas (`--no-recreate
+#      --scale`), espera que esten sanas (`--wait`), deja que nginx las
+#      resuelva (`resolve`), baja las viejas. Si las nuevas no quedan sanas se
+#      descartan y las viejas siguen sirviendo. Primero el backend y despues el
+#      frontend, que corre UNA replica y en el cambio tiene dos un momento
+#      (2026-10-15: recrearlo dejaba la home en 502 en cada deploy). Bajada la
+#      vieja, `nginx -t` + reload para que el borde la saque de sus peers en
+#      el momento (si no, la tiene hasta 5 s mas).
+#      DEPLOY_ROLLING=0: `up` directo (5-10 s de 502 mientras se recrean).
+#   6. Resto de la app (workers, beat) con `up -d --no-deps`: nunca recrea
+#      db/redis/rabbitmq ni el borde.
 #   7. `nginx -t` + `nginx -s reload`. El borde (nginx) solo se RECARGA en un
 #      deploy normal; se recrea unicamente con `edge` (make deploy-edge),
-#      cuando cambio su imagen o su config.
+#      cuando cambio su imagen o su config. Ojo: el reload NO toma un
+#      nginx.prod.conf nuevo despues de un `git pull` (bind mount de un
+#      archivo: el contenedor sigue viendo el inodo viejo); eso pide `edge`.
 #   8. Compuerta de 60 s: /api/ops/health/ready y la home responden, ningun
 #      contenedor unhealthy, `rabbitmq-diagnostics alarms` sin alarmas, 5xx < 0,5 %
 #      en el log de nginx de los ultimos 2 minutos. Si falla: rollback
@@ -67,9 +76,14 @@ cd "$SHIFTY_DIR"
 # Las mismas que `deploy.replicas` de docker-compose.prod.yml (contrato en
 # test_compose_contract): en el pico corren el doble, viejas mas nuevas.
 : "${DEPLOY_BACKEND_REPLICAS:=2}"
+# La SPA estatica (nginx, 64M): una replica alcanza en estado estable. El
+# deploy levanta la nueva al lado de la vieja y la vieja se baja despues.
+: "${DEPLOY_FRONTEND_SERVICE:=frontend}"
+: "${DEPLOY_FRONTEND_REPLICAS:=1}"
 : "${DEPLOY_ROLLING:=1}"
 : "${DEPLOY_WAIT_TIMEOUT:=180}"
-# Lo que tarda nginx en re-resolver `backend` (resolver valid=5s, F0-01).
+# Lo que tarda nginx en re-resolver `backend` y `frontend` (resolver
+# valid=5s, F0-01).
 : "${DEPLOY_DNS_SETTLE:=6}"
 : "${DEPLOY_STOP_TIMEOUT:=35}"
 : "${DEPLOY_MIN_COMPOSE:=2.24.0}"
@@ -278,18 +292,20 @@ recargar_nginx() {
 # Replicas nuevas al lado de las viejas; las viejas se bajan solo cuando las
 # nuevas estan sanas. Verificado con Compose v5.5: `--no-recreate --scale`
 # crea las que faltan con la configuracion nueva y deja las existentes.
-backend_gradual() {
-  local servicio="$DEPLOY_BACKEND_SERVICE"
+# Uso: servicio_gradual <servicio> <replicas nuevas>. El servicio no puede
+# fijar container_name (un nombre fijo impide una segunda replica).
+servicio_gradual() {
+  local servicio="$1" replicas="$2"
   if [ "$DEPLOY_ROLLING" != 1 ]; then
-    log "backend: recreacion directa (DEPLOY_ROLLING=0): 5-10 s de 502"
+    log "$servicio: recreacion directa (DEPLOY_ROLLING=0): 5-10 s de 502"
     docker compose up -d --no-deps --no-build --remove-orphans --wait --wait-timeout "$DEPLOY_WAIT_TIMEOUT" "$servicio" || return 1
     return 0
   fi
 
   local viejas=() todas=() nuevas=() id
   mapfile -t viejas < <(docker compose ps -q "$servicio")
-  local total=$((${#viejas[@]} + DEPLOY_BACKEND_REPLICAS))
-  log "backend: ${#viejas[@]} replicas viejas, levanto $DEPLOY_BACKEND_REPLICAS nuevas"
+  local total=$((${#viejas[@]} + replicas))
+  log "$servicio: ${#viejas[@]} replicas viejas, levanto $replicas nuevas"
 
   local fallo=0
   docker compose up -d --no-deps --no-build --remove-orphans --no-recreate --wait --wait-timeout "$DEPLOY_WAIT_TIMEOUT" \
@@ -304,27 +320,54 @@ backend_gradual() {
     if [ "${#nuevas[@]}" -gt 0 ]; then
       docker rm -f "${nuevas[@]}" >/dev/null || true
     fi
-    log "backend: las replicas nuevas no quedaron sanas en ${DEPLOY_WAIT_TIMEOUT} s; se descartaron y siguen las viejas"
-    log "backend: si el error dice container_name, el servicio no se puede escalar (DEPLOY_ROLLING=0)"
+    log "$servicio: las replicas nuevas no quedaron sanas en ${DEPLOY_WAIT_TIMEOUT} s; se descartaron y siguen las viejas"
+    log "$servicio: si el error dice container_name, el servicio no se puede escalar (DEPLOY_ROLLING=0)"
     return 1
   fi
 
-  # nginx re-resuelve `backend` solo (`server backend:8000 resolve` +
-  # `resolver 127.0.0.11 valid=5s`, nginx/nginx.prod.conf): se espera que
-  # aprenda las IPs nuevas antes de bajar las viejas. El reload del final es
-  # por si cambio la imagen o la config de nginx.
+  # nginx re-resuelve el servicio solo (`server backend:8000 resolve`,
+  # `server frontend:3000 resolve` + `resolver 127.0.0.11 valid=5s`,
+  # nginx/nginx.prod.conf): se espera que aprenda las IPs nuevas antes de
+  # bajar las viejas. Un request que todavia va a una vieja que se apaga falla
+  # al conectar y nginx lo reintenta en otra replica (`proxy_next_upstream`
+  # por defecto: error timeout). El reload del final es por si cambio la
+  # imagen o la config de nginx.
   sleep "$DEPLOY_DNS_SETTLE"
   if [ "${#viejas[@]}" -gt 0 ]; then
     docker stop -t "$DEPLOY_STOP_TIMEOUT" "${viejas[@]}" >/dev/null || return 1
     docker rm "${viejas[@]}" >/dev/null || return 1
   fi
-  log "backend: ${#nuevas[@]} replicas nuevas sirviendo"
+  log "$servicio: ${#nuevas[@]} replicas nuevas sirviendo"
+}
+
+backend_gradual() {
+  servicio_gradual "$DEPLOY_BACKEND_SERVICE" "$DEPLOY_BACKEND_REPLICAS"
+}
+
+# Solo si el frontend esta en DEPLOY_SERVICES (un staging sin SPA lo saca).
+# Devuelve 1 si la replica nueva no quedo sana (sigue la vieja) y 2 si el
+# borde no recargo despues de bajar la vieja.
+frontend_gradual() {
+  case " $DEPLOY_SERVICES " in
+    *" $DEPLOY_FRONTEND_SERVICE "*) ;;
+    *) return 0 ;;
+  esac
+  servicio_gradual "$DEPLOY_FRONTEND_SERVICE" "$DEPLOY_FRONTEND_REPLICAS" || return 1
+  # Revision del PR #188: borrada la replica vieja, nginx la sigue teniendo
+  # como peer hasta re-resolver (valid=5s) y la mitad de las conexiones nuevas
+  # iban a una IP que ya no existe. El reload re-resuelve `frontend` en el
+  # momento; proxy_connect_timeout 2s (nginx.prod.conf) cubre los requests
+  # que lleguen antes.
+  if ! recargar_nginx; then
+    log "$DEPLOY_FRONTEND_SERVICE: nginx -t o reload fallo despues de bajar la replica vieja"
+    return 2
+  fi
 }
 
 resto_de_la_app() {
   local resto=() s
   for s in $DEPLOY_SERVICES; do
-    [ "$s" = "$DEPLOY_BACKEND_SERVICE" ] || resto+=("$s")
+    [ "$s" = "$DEPLOY_BACKEND_SERVICE" ] || [ "$s" = "$DEPLOY_FRONTEND_SERVICE" ] || resto+=("$s")
   done
   [ "${#resto[@]}" -gt 0 ] || return 0
   docker compose up -d --no-deps --no-build --remove-orphans "${resto[@]}" || return 1
@@ -437,6 +480,7 @@ desplegar_version() {
     return 2
   fi
   backend_gradual || return 1
+  frontend_gradual || return 1
   resto_de_la_app || return 1
   recargar_nginx || return 1
   printf '%s\n' "$version" >"$estado_dir/current"
@@ -489,21 +533,32 @@ cmd_deploy() {
     alert "deploy $nueva: el backend nuevo no quedo sano" "Siguen sirviendo las replicas de ${anterior:-antes}. La migracion ya corrio (expand/contract)."
     exit 1
   fi
-  if resto_de_la_app && recargar_nginx && printf '%s\n' "$nueva" >"$estado_dir/current" && compuerta; then
-    log "deploy: ok, corre $nueva"
-    return 0
-  fi
+  # Un frontend nuevo que no queda sano cae aca: siguen la SPA vieja y el
+  # backend nuevo, y el rollback vuelve a dejar las dos en la version anterior.
+  # La alerta nombra la causa real (revision del PR #188: decia "compuerta").
+  local causa="fallo la compuerta" codigo_front=0
+  frontend_gradual || codigo_front=$?
+  case "$codigo_front" in
+    0)
+      if resto_de_la_app && recargar_nginx && printf '%s\n' "$nueva" >"$estado_dir/current" && compuerta; then
+        log "deploy: ok, corre $nueva"
+        return 0
+      fi
+      ;;
+    2) causa="el borde no recargo despues de renovar el frontend" ;;
+    *) causa="el frontend nuevo no quedo sano" ;;
+  esac
 
   # En un redeploy, antes ya corria esta misma version: no hay estado al que
   # volver. Ir a previous seria cambiar de version sin que nadie lo pidiera, y
   # un sha que ya paso la compuerta y ahora falla apunta al entorno (rabbitmq,
   # base, disco), no al codigo. Se avisa y previous queda intacto.
   if [ "$redeploy" = 1 ]; then
-    alert "deploy $nueva: fallo la compuerta en un redeploy de la misma version; sin rollback automatico" \
-      "Sigue corriendo $nueva, como antes. Revisar el entorno (docs/DEPLOY_RUNBOOK.md); si el codigo es el problema, make rollback vuelve a $(head -n 1 "$estado_dir/previous" 2>/dev/null || echo '(sin previous)')."
+    alert "deploy $nueva: $causa en un redeploy de la misma version; sin rollback automatico" \
+      "Sigue corriendo $nueva, como antes. Revisar el entorno (docs/DEPLOY_RUNBOOK.md); si el codigo es el problema, bash scripts/deploy.sh rollback (o make rollback) vuelve a $(head -n 1 "$estado_dir/previous" 2>/dev/null || echo '(sin previous)')."
     exit 1
   fi
-  alert "deploy $nueva: fallo la compuerta, rollback a ${anterior:-?}" "Ver docs/DEPLOY_RUNBOOK.md"
+  alert "deploy $nueva: $causa, rollback a ${anterior:-?}" "Ver docs/DEPLOY_RUNBOOK.md"
   if [ "$DEPLOY_AUTO_ROLLBACK" != 1 ] || [ -z "$anterior" ]; then
     log "deploy: sin rollback automatico (DEPLOY_AUTO_ROLLBACK=$DEPLOY_AUTO_ROLLBACK, previa=${anterior:-ninguna})"
     exit 1
