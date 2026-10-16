@@ -112,6 +112,14 @@ describe('PaymentsPage: seguridad de devoluciones', () => {
     mockRefund.mockResolvedValue({ public_id: 'pay-1', live_remainder_amount: null })
   })
 
+  it('expone un nombre accesible para el motivo opcional', () => {
+    renderPage()
+
+    expect(
+      screen.getByRole('textbox', { name: 'Motivo de la devolución (opcional)' })
+    ).toBeInTheDocument()
+  })
+
   it.each([
     ['3.200', 3200, /3\.200,00/],
     ['3.200,50', 3200.5, /3\.200,50/]
@@ -155,6 +163,23 @@ describe('PaymentsPage: seguridad de devoluciones', () => {
     fireEvent.click(screen.getByRole('button', { name: /Revisar devolución/i }))
 
     expect(screen.getByRole('alert')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Confirmar registro/i })).not.toBeInTheDocument()
+    expect(mockRefund).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['un número infinito', '9'.repeat(400)],
+    ['un importe sin centavos seguros', '90071992547410']
+  ])('rechaza %s sin mostrar una revisión de devolución', (_case, input) => {
+    renderPage()
+    identifyPayment()
+    fireEvent.click(screen.getByRole('radio', { name: /Parcial:/i }))
+    fireEvent.change(screen.getByRole('textbox', { name: /Importe devuelto en pesos/i }), {
+      target: { value: input }
+    })
+    fireEvent.click(screen.getByRole('button', { name: /Revisar devolución/i }))
+
+    expect(screen.getByRole('alert')).toHaveTextContent('demasiado grande para registrarlo')
     expect(screen.queryByRole('button', { name: /Confirmar registro/i })).not.toBeInTheDocument()
     expect(mockRefund).not.toHaveBeenCalled()
   })

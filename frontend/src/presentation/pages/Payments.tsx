@@ -106,6 +106,10 @@ const PaymentsPage: React.FC = () => {
         setRefundError(parsed.error)
         return
       }
+      if (!Number.isFinite(parsed.value) || !Number.isSafeInteger(Math.round(parsed.value * 100))) {
+        setRefundError('El importe es demasiado grande para registrarlo con precisión.')
+        return
+      }
       setRefundReview({ paymentId, scope: 'partial', amount: parsed.value, reason })
     } else {
       setRefundReview({ paymentId, scope: 'total', reason })
