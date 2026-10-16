@@ -57,6 +57,7 @@ from modules.payments.model import JsonValue, Payment, PaymentStatus
 from modules.payments.service import expire_live_charge
 from modules.public_api.repository import PublicRepository, RangeRejection
 from modules.services.model import Service
+from modules.services.selection import rescheduled_duration
 from modules.staff.model import Staff, StaffBlock
 from modules.users.model import User
 from modules.waitlist.events import EVENT_SLOT_RELEASED, slot_released_payload
@@ -744,7 +745,9 @@ class AppointmentService:
         original, payment = await self._lock_reschedulable(public_id, actor)
         service, staff = await self._service_and_staff_of(original, actor)
 
-        ends_at = new_starts_at + timedelta(minutes=service.duration_minutes)
+        # Conserva los servicios extra (decision de Mateo, 2026-10-16).
+        duration = rescheduled_duration(service, original)
+        ends_at = new_starts_at + timedelta(minutes=duration)
         if not allow_outside_schedule:
             await self._require_working_hours(
                 original.store_id, original.staff_id, new_starts_at, ends_at
@@ -754,7 +757,7 @@ class AppointmentService:
             staff_id=original.staff_id,
             starts_at=new_starts_at,
             ends_at=ends_at,
-            duration_minutes=service.duration_minutes,
+            duration_minutes=duration,
             exclude_appointment_id=original.id,
         )
 
@@ -1192,7 +1195,7 @@ def _rescheduled_copy(
         client_id=original.client_id,
         starts_at=new_starts_at,
         ends_at=ends_at,
-        duration_minutes=service.duration_minutes,
+        duration_minutes=int((ends_at - new_starts_at).total_seconds() // 60),
         price_amount=(
             original.price_amount
             if original.price_amount is not None
@@ -1202,6 +1205,10 @@ def _rescheduled_copy(
         # ya los incluye (decision de Mateo, 2026-10-14).
         addons_amount=original.addons_amount or Decimal("0.00"),
         addons_snapshot=original.addons_snapshot,
+        # Y los servicios extra (decision de Mateo, 2026-10-16): el rango
+        # ``ends_at`` ya cubre su duracion.
+        extra_services_amount=original.extra_services_amount or Decimal("0.00"),
+        extra_services_snapshot=original.extra_services_snapshot,
         client_name=original.client_name,
         client_email=original.client_email,
         client_phone=original.client_phone,

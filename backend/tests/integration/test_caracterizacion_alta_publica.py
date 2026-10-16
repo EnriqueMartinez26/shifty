@@ -232,6 +232,10 @@ async def test_reserva_manual_cuerpo_filas_outbox_cache_mail_y_replay(
         # Aditivo (2026-10-14, decision de Mateo): adicionales del turno.
         "addons": [],
         "addons_amount": 0.0,
+        # Aditivo (2026-10-16, decision de Mateo): servicios extra del turno.
+        "extra_services": [],
+        "services_label": "Consulta",
+        "extra_services_amount": 0.0,
     }
     assert ensure_utc_aware(datetime.fromisoformat(cuerpo["starts_at"])) == t.slot
     assert ensure_utc_aware(
@@ -321,6 +325,10 @@ async def test_reserva_con_mp_commit_antes_del_link(
         # Aditivo (2026-10-14, decision de Mateo): adicionales del turno.
         "addons": [],
         "addons_amount": 0.0,
+        # Aditivo (2026-10-16, decision de Mateo): servicios extra del turno.
+        "extra_services": [],
+        "services_label": "Consulta",
+        "extra_services_amount": 0.0,
     }
     # El plazo de pago (aditivo, PR #108) es la retencion corta de MP.
     assert cuerpo["deposit_deadline"] is not None

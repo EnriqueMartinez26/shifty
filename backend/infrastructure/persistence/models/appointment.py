@@ -103,6 +103,23 @@ class AppointmentModel(Base):
     addons_snapshot: Mapped[list[dict[str, Any]] | None] = mapped_column(
         JSON, nullable=True
     )
+    # Varios servicios del mismo profesional en UN turno (decision de Mateo,
+    # 2026-10-16): ``service_id`` es el principal (el primero elegido) y estos
+    # congelan los demas. ``extra_services_snapshot`` es ``[{service_id,
+    # public_id, name, duration_minutes, price}]`` (precio como texto) o NULL
+    # en un turno de un solo servicio; ``extra_services_amount`` es la suma
+    # SIN descuento de esos precios. ``duration_minutes``/``ends_at`` y
+    # ``price_amount`` ya son el total. Migraciones b8d0f2a4c6e1 +
+    # c9e1a3b5d7f2 (``ck_appointments_extra_services_amount``).
+    extra_services_amount: Mapped[Decimal] = mapped_column(
+        Numeric(12, 2),
+        nullable=False,
+        default=Decimal("0.00"),
+        server_default=text("0"),
+    )
+    extra_services_snapshot: Mapped[list[dict[str, Any]] | None] = mapped_column(
+        JSON, nullable=True
+    )
     # Columna privada: la unica escritura legitima es apply_status_transition().
     # Se expone como hybrid_property de solo lectura, asi que
     # `appointment.status = "completed"` levanta AttributeError en vez de
@@ -208,6 +225,10 @@ class AppointmentModel(Base):
         CheckConstraint(
             "addons_amount >= 0 AND (price_amount IS NULL OR price_amount >= 0)",
             name="ck_appointments_addons_amount",
+        ),
+        CheckConstraint(
+            "extra_services_amount >= 0",
+            name="ck_appointments_extra_services_amount",
         ),
         # Retenciones vivas para el job de vencimiento (cada minuto):
         # ``expires_at`` nunca se limpia y el indice plano barria todas las

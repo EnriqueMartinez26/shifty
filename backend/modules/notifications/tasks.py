@@ -21,6 +21,7 @@ from core.worker_loop import run_in_worker_loop
 from core.config import settings
 from core.utils import ARGENTINA_TZ, format_ars
 from modules.services.addons import lines_from_snapshot
+from modules.services.selection import services_label
 from core.database import (
     AsyncSessionFactory,
     _apply_tenant_context,
@@ -401,7 +402,12 @@ def build_client_details(
     return {
         "public_id": appointment.public_id,
         "client_name": getattr(appointment, "client_name", None) or "",
-        "service": getattr(service, "name", ""),
+        # "Corte + Barba" en un turno de varios servicios (2026-10-16); el
+        # nombre solo si es uno.
+        "service": services_label(
+            getattr(service, "name", ""),
+            getattr(appointment, "extra_services_snapshot", None),
+        ),
         "staff": getattr(staff, "display_name", ""),
         "staff_kind": getattr(staff, "kind", None) or "person",
         "starts_at": appointment.starts_at.isoformat(),

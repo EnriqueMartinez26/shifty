@@ -4,6 +4,7 @@ from functools import partial
 import hashlib
 import hmac
 import re
+from collections.abc import Sequence
 from typing import Annotated, Any, AsyncGenerator
 
 import structlog
@@ -99,6 +100,7 @@ from modules.payments.schemas import (
 )
 from modules.promotions.model import PromotionRedemption
 from modules.services.model import Service
+from modules.services.selection import extra_lines_from_snapshot, snapshot_price
 from modules.stores.model import Store
 from modules.users.model import User, UserRole
 
@@ -148,7 +150,11 @@ def _payment_response(payment: Payment) -> PaymentResponse:
 
 
 def _payment_amount_for_appointment(
-    appointment: Appointment, service: Service, *, with_promotion: bool
+    appointment: Appointment,
+    service: Service,
+    *,
+    with_promotion: bool,
+    extra_services: Sequence[Service] = (),
 ) -> Decimal:
     """Importe del link del panel: la sena del servicio sobre el precio de
     lista MAS los adicionales congelados del turno, o esa suma entera si el
@@ -163,11 +169,59 @@ def _payment_amount_for_appointment(
     promo ya se aplico al total y ``price_amount`` es lo que el cliente
     acepto; sin el tope el link cobraba el total sin descuento y el saldo
     (``remaining_balance_of``, que no baja de cero) lo escondia.
+
+    Varios servicios en un turno (decision de Mateo, 2026-10-16): la base es
+    la lista de hoy de CADA servicio (el congelado si un extra ya no existe,
+    ``extra_services``: los que siguen en la tienda) + los adicionales
+    congelados, con el mismo tope de la promo; la sena, la regla mas alta
+    entre los servicios sobre ese total.
     """
     price = Decimal(str(service.price)) + (appointment.addons_amount or Decimal("0"))
+    if appointment.extra_services_snapshot:
+        price += _extra_services_list_price(appointment, extra_services)
     if with_promotion and appointment.price_amount is not None:
         price = min(price, appointment.price_amount)
-    return calculate_service_payment_amount(service, base_price=price) or price
+    if not appointment.extra_services_snapshot:
+        return calculate_service_payment_amount(service, base_price=price) or price
+    servicios = [service, *extra_services]
+    return (
+        max(calculate_service_payment_amount(s, base_price=price) for s in servicios)
+        or price
+    )
+
+
+def _extra_services_list_price(
+    appointment: Appointment, extra_services: Sequence[Service]
+) -> Decimal:
+    """Precio de lista de hoy de cada servicio extra del turno; el congelado
+    en el snapshot si ese servicio ya no esta en la tienda."""
+    vigentes = {extra.id: extra for extra in extra_services}
+    total = Decimal("0")
+    for line in extra_lines_from_snapshot(appointment.extra_services_snapshot):
+        vigente = vigentes.get(str(line.get("service_id", "")))
+        total += (
+            Decimal(str(vigente.price)) if vigente is not None else snapshot_price(line)
+        )
+    return total
+
+
+async def _extra_services_of(
+    db: AsyncSession, appointment: Appointment
+) -> list[Service]:
+    """Los servicios extra del turno que siguen en la tienda, en UNA consulta
+    (``in_()``); sin extras no consulta la base."""
+    ids = [
+        str(line.get("service_id", ""))
+        for line in extra_lines_from_snapshot(appointment.extra_services_snapshot)
+    ]
+    if not ids:
+        return []
+    result = await db.execute(
+        select(Service).where(
+            Service.id.in_(ids), Service.store_id == appointment.store_id
+        )
+    )
+    return list(result.scalars().all())
 
 
 async def _has_promotion(db: AsyncSession, appointment: Appointment) -> bool:
@@ -778,6 +832,7 @@ async def create_payment_preference(
                 appointment,
                 service,
                 with_promotion=await _has_promotion(db, appointment),
+                extra_services=await _extra_services_of(db, appointment),
             ),
         )
     # SEG-04: mensajes fijos; el texto de la excepcion puede traer el detalle

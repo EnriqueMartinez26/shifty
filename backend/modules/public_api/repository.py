@@ -7,12 +7,13 @@ Responsabilidades:
 - Consulta y autogestion publica de turnos.
 """
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import Enum
 from datetime import datetime, timedelta
 
-from sqlalchemy import exists, func, select
+from sqlalchemy import Select, distinct, exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, raiseload, selectinload
 from sqlalchemy.sql.elements import ColumnElement
@@ -32,6 +33,7 @@ from modules.legal.versions import AcceptedVersions
 from modules.payments.deposit_rules import ClientHistory
 from modules.payments.repository import live_charge_provider_of, paid_appointment_of
 from modules.services.model import Service, ServiceAddon
+from modules.services.selection import NO_EXTRA_SERVICES, ExtraServices
 from modules.staff.model import Staff, StaffBlock, StaffServiceModel
 from modules.stores.model import Store
 from modules.users.model import User, UserRole
@@ -62,6 +64,42 @@ def _visible_en_el_portal() -> tuple[ColumnElement[bool], ColumnElement[bool]]:
     columnas de la fila: bajo RLS son predicados leakproof (CLAUDE.md §3).
     """
     return Store.is_active == True, Store.is_internal == False
+
+
+class StaffCannotPerformSelection(ValueError):
+    """El profesional elegido no hace todos los servicios de la seleccion
+    (solo con servicios extra: un servicio solo sigue con su 409)."""
+
+    def __init__(self) -> None:
+        super().__init__("El profesional no realiza todos los servicios elegidos")
+
+
+@dataclass(frozen=True)
+class ExtraServicesForBooking:
+    """Los servicios extra de un alta: las entidades (para elegir quien los
+    hace) y lo que el turno congela de ellos."""
+
+    services: tuple[Service, ...] = ()
+    quote: ExtraServices = NO_EXTRA_SERVICES
+
+
+def _hacen_todos(services: Sequence[Service]) -> Select[tuple[str]]:
+    """Ids de los profesionales asignados a TODOS estos servicios."""
+    ids = [service.id for service in services]
+    return (
+        select(StaffServiceModel.staff_id)
+        .where(StaffServiceModel.service_id.in_(ids))
+        .group_by(StaffServiceModel.staff_id)
+        .having(func.count(distinct(StaffServiceModel.service_id)) == len(ids))
+    )
+
+
+def _por_desempate(staff: Sequence[Staff]) -> list[Staff]:
+    """El orden de desempate de "cualquier profesional": display_name y
+    public_id."""
+    return sorted(
+        staff, key=lambda member: (member.display_name or "", member.public_id)
+    )
 
 
 @dataclass(frozen=True)
@@ -204,6 +242,25 @@ class PublicRepository:
             )
         )
         return result.scalar_one_or_none()
+
+    async def get_services_by_public_ids(
+        self, store_id: str, public_ids: Sequence[str]
+    ) -> list[Service]:
+        """Servicios activos de la tienda por ``public_id``, en UNA consulta
+        (``in_()``, regla 12) y en el orden pedido. Un id que no es de la
+        tienda, esta inactivo o no existe simplemente no vuelve: el llamador
+        compara la cantidad (404 neutro)."""
+        if not public_ids:
+            return []
+        result = await self.db.execute(
+            select(Service).where(
+                Service.public_id.in_(list(public_ids)),
+                Service.store_id == store_id,
+                Service.is_active == True,
+            )
+        )
+        por_id = {service.public_id: service for service in result.scalars().all()}
+        return [por_id[pid] for pid in public_ids if pid in por_id]
 
     async def get_staff(
         self, store_id: str, service_public_id: str | None = None
@@ -528,9 +585,30 @@ class PublicRepository:
             require_schedule=require_schedule,
         )
 
-    async def qualified_staff(self, store_id: str, service: Service) -> list[Staff]:
+    async def qualified_staff(
+        self,
+        store_id: str,
+        service: Service,
+        extra_services: Sequence[Service] = (),
+    ) -> list[Staff]:
         """Profesionales activos de la tienda que hacen el servicio, en el orden
-        de desempate (display_name, public_id). Una consulta (F3-03)."""
+        de desempate (display_name, public_id). Una consulta (F3-03).
+
+        Con ``extra_services`` (varios servicios en un turno, decision de
+        Mateo 2026-10-16), los que hacen TODOS: ``IN`` sobre los servicios y
+        ``HAVING count(DISTINCT service_id) = n`` en una subconsulta de la
+        misma sentencia. Sin extras, la consulta de siempre."""
+        if extra_services:
+            result = await self.db.execute(
+                select(Staff)
+                .where(
+                    Staff.id.in_(_hacen_todos([service, *extra_services])),
+                    Staff.store_id == store_id,
+                    Staff.is_active == True,
+                )
+                .options(raiseload(Staff.services), raiseload(Staff.schedules))
+            )
+            return _por_desempate(result.scalars().all())
         result = await self.db.execute(
             select(Staff)
             .join(StaffServiceModel, StaffServiceModel.staff_id == Staff.id)
@@ -547,7 +625,11 @@ class PublicRepository:
         )
 
     async def _candidates(
-        self, store_id: str, service: Service, staff_public_id: str | None
+        self,
+        store_id: str,
+        service: Service,
+        staff_public_id: str | None,
+        extra_services: Sequence[Service] = (),
     ) -> list[Staff]:
         """Profesionales que pueden tomar el turno, en el orden de desempate.
 
@@ -562,13 +644,17 @@ class PublicRepository:
         lee esas colecciones (AUD2-B6-02), y un acceso levanta en vez de
         consultar.
         """
-        qualified_staff = await self.qualified_staff(store_id, service)
+        qualified_staff = await self.qualified_staff(store_id, service, extra_services)
         if staff_public_id:
             candidates = [
                 member
                 for member in qualified_staff
                 if member.public_id == staff_public_id
             ]
+            if not candidates and extra_services:
+                # Varios servicios: 422 propio en el llamador, no el 409 de un
+                # horario ocupado (revision de #195).
+                raise StaffCannotPerformSelection()
             if not candidates:
                 raise ValueError("El profesional no realiza el servicio seleccionado")
         else:
@@ -598,6 +684,7 @@ class PublicRepository:
         accepted_versions: AcceptedVersions | None = None,
         addons_amount: Decimal = Decimal("0.00"),
         addons_snapshot: list[dict[str, str | int]] | None = None,
+        extra_services: ExtraServicesForBooking | None = None,
     ) -> tuple[Appointment, Service, Staff]:
         """Alta del turno: lock del profesional, relectura bajo lock e INSERT.
 
@@ -605,19 +692,17 @@ class PublicRepository:
         publica lo leia dos veces). Se valida contra la tienda, el public_id y
         que siga activo; sin el, se lee aca. ``expires_at`` y
         ``terms_accepted_at`` van en el INSERT (antes un UPDATE aparte), igual
-        que los adicionales congelados (``price_amount`` ya los incluye).
+        que los adicionales y los servicios extra congelados (2026-10-16: el
+        turno dura la suma; ``price_amount`` ya los incluye).
         """
         service = await self._service_for_booking(store_id, service_public_id, service)
-        ends_at = starts_at + timedelta(minutes=service.duration_minutes)
-        candidates = await self._candidates(store_id, service, staff_public_id)
-        selected_staff = await self._pick_staff_for_slot(
-            store_id, candidates, starts_at, ends_at, buffer_minutes
-        )
-
-        if not selected_staff:
-            if staff_public_id:
-                raise ValueError("El horario ya esta ocupado. Por favor elegi otro.")
-            raise ValueError("No hay profesionales disponibles para ese horario")
+        extras = extra_services or ExtraServicesForBooking()
+        duration = service.duration_minutes + extras.quote.duration_minutes
+        ends_at = starts_at + timedelta(minutes=duration)
+        selected_staff = await self._staff_for_booking(
+            store_id, service, extras.services, staff_public_id,
+            (starts_at, ends_at), buffer_minutes,
+        )  # fmt: skip
 
         new_appointment = Appointment(
             store_id=store_id,
@@ -626,7 +711,7 @@ class PublicRepository:
             client_id=client.id,
             starts_at=starts_at,
             ends_at=ends_at,
-            duration_minutes=service.duration_minutes,
+            duration_minutes=duration,
             client_name=client.full_name or client.email,
             # Snapshot del contacto de ESTA reserva: el mail de esta reserva
             # va al email que dejaron ahora, sin pisar el del cliente.
@@ -645,6 +730,8 @@ class PublicRepository:
             ),
             addons_amount=addons_amount,
             addons_snapshot=addons_snapshot,
+            extra_services_amount=extras.quote.amount,
+            extra_services_snapshot=extras.quote.snapshot(),
             expires_at=expires_at,
             terms_accepted_at=terms_accepted_at,
             terms_version=(accepted_versions or AcceptedVersions()).terms_version,
@@ -655,6 +742,30 @@ class PublicRepository:
         await self.db.refresh(new_appointment)
 
         return new_appointment, service, selected_staff
+
+    async def _staff_for_booking(
+        self,
+        store_id: str,
+        service: Service,
+        extra_services: Sequence[Service],
+        staff_public_id: str | None,
+        rango: tuple[datetime, datetime],
+        buffer_minutes: int,
+    ) -> Staff:
+        """Quien toma el turno, ya lockeado: el primer candidato que hace el
+        servicio (y los extras) y tiene libre el rango. ``ValueError`` (409 en
+        el llamador) si no hay ninguno."""
+        candidates = await self._candidates(
+            store_id, service, staff_public_id, extra_services
+        )
+        selected_staff = await self._pick_staff_for_slot(
+            store_id, candidates, rango[0], rango[1], buffer_minutes
+        )
+        if not selected_staff:
+            if staff_public_id:
+                raise ValueError("El horario ya esta ocupado. Por favor elegi otro.")
+            raise ValueError("No hay profesionales disponibles para ese horario")
+        return selected_staff
 
     async def _service_for_booking(
         self, store_id: str, service_public_id: str, service: Service | None
