@@ -26,6 +26,8 @@ export type UnifiedCalendarEvent =
       status: string
       /** Solo llega para administradores (dato personal). */
       clientPhone: string | null
+      /** Recibe avisos por email; sin el, al cancelar se sugiere WhatsApp. */
+      clientHasEmail: boolean
       serviceId: string
       /** "Strass x6, Diseño x1"; ausente si el turno no tiene adicionales. */
       addonsLabel?: string
@@ -95,6 +97,7 @@ export const buildUnifiedEvents = ({
       endsAt: appointment.timeSpan.getEndsAt(),
       status: appointment.status,
       clientPhone: appointment.clientPhone,
+      clientHasEmail: appointment.clientHasEmail !== false,
       serviceId: appointment.serviceId,
       addonsLabel: formatAddonsLabel(appointment.addons) || undefined
     }

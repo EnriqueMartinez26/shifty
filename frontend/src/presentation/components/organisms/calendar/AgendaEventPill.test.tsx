@@ -17,6 +17,7 @@ const appointment: UnifiedCalendarEvent = {
   endsAt: new Date('2026-09-15T13:30:00Z'),
   status: 'confirmed',
   clientPhone: null,
+  clientHasEmail: true,
   serviceId: 'svc-1'
 }
 

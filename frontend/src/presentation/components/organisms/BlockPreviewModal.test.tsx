@@ -136,3 +136,38 @@ describe('BlockPreviewModal', () => {
     expect(onCancel).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('BlockPreviewModal: clientes sin email', () => {
+  const renderModal = (clientHasEmail: boolean | undefined) => {
+    const [primero] = preview.affected
+    render(
+      <BlockPreviewModal
+        preview={{ ...preview, affected: [{ ...primero!, client_has_email: clientHasEmail }] }}
+        reason="Vacaciones"
+        busy={false}
+        canCancel
+        onConfirm={() => undefined}
+        onCancel={() => undefined}
+      />
+    )
+  }
+
+  // Propuesta por Mateo (2026-10-16): quien reservo sin email no recibe el
+  // mail de la cancelacion por bloqueo; la fila lo dice junto al WhatsApp.
+  it('un cancelable sin email dice que no recibe avisos y ofrece WhatsApp', () => {
+    renderModal(false)
+
+    expect(screen.getByText('Esta clienta no recibe avisos por email.')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /Avisar por WhatsApp/ })).toBeInTheDocument()
+  })
+
+  it('con email, o sin el dato, no muestra el aviso', () => {
+    renderModal(true)
+    expect(screen.queryByText('Esta clienta no recibe avisos por email.')).not.toBeInTheDocument()
+  })
+
+  it('sin el dato (respuesta vieja) no supone que falta el email', () => {
+    renderModal(undefined)
+    expect(screen.queryByText('Esta clienta no recibe avisos por email.')).not.toBeInTheDocument()
+  })
+})

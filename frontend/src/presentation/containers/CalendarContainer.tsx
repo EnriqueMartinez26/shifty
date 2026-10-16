@@ -13,7 +13,8 @@ import {
 
 import { getErrorMessage, isStateConflictError } from '@shared/errors/getErrorMessage'
 import { formatArgentinaDate, formatArgentinaTime } from '@shared/utils/argentinaTime'
-import { buildRebookUrl } from '@shared/utils/clientWhatsApp'
+import { buildCancellationMessage, buildRebookUrl } from '@shared/utils/clientWhatsApp'
+import { buildWaMeUrl } from '@shared/utils/whatsAppPhone'
 
 import { BlocksPanel, type EditableBlock } from './BlocksPanel'
 import {
@@ -25,6 +26,7 @@ import {
   type AppointmentAction
 } from '../components/molecules/AppointmentActions'
 import { ClientWhatsAppButton } from '../components/molecules/ClientWhatsAppButton'
+import { NoEmailCancelNudge } from '../components/molecules/NoEmailCancelNudge'
 import { QueryErrorNotice } from '../components/molecules/QueryErrorNotice'
 import { AbsencesTimeline } from '../components/organisms/calendar/AbsencesTimeline'
 import { AgendaDayView } from '../components/organisms/calendar/AgendaDayView'
@@ -109,6 +111,9 @@ export const CalendarContainer: React.FC = () => {
     saveAgendaView(user?.public_id, next)
   }
   const [message, setMessage] = useState('')
+  // Turno recien cancelado de alguien sin email: el aviso para mandarle por
+  // WhatsApp (href null si no hay telefono legible o no se ve).
+  const [noEmailNudge, setNoEmailNudge] = useState<{ whatsappHref: string | null } | null>(null)
   const [isNewAppointmentOpen, setIsNewAppointmentOpen] = useState(false)
   // El panel de bloqueos se remonta con `key` al elegir otro bloqueo: sin
   // efecto que copie el bloqueo al formulario (regla 27).
@@ -289,15 +294,35 @@ export const CalendarContainer: React.FC = () => {
       event.status === 'pending_payment'
         ? ' El cobro pendiente se va a vencer y su link de pago deja de servir.'
         : ''
+    // Reservo sin email (propuesta por Mateo, 2026-10-16): no le llega ningun
+    // aviso. Se dice antes y, despues de cancelar, se ofrece WhatsApp.
+    const withoutEmail = event.clientHasEmail === false
+    const noEmailWarning = withoutEmail ? ' Esta clienta no recibe avisos por email.' : ''
     // "Cancelar"/"Confirmar" en un dialogo que cancela era ambiguo (QA 2026-10-02).
-    const confirmed = await confirm(`¿Cancelar el turno de ${event.title}?${liveChargeWarning}`, {
-      confirmLabel: 'Cancelar turno',
-      cancelLabel: 'Volver'
-    })
+    const confirmed = await confirm(
+      `¿Cancelar el turno de ${event.title}?${liveChargeWarning}${noEmailWarning}`,
+      {
+        confirmLabel: 'Cancelar turno',
+        cancelLabel: 'Volver'
+      }
+    )
     if (!confirmed) return
     try {
       await cancelAppointment.mutateAsync(event.id)
       setMessage('Turno cancelado')
+      if (withoutEmail) {
+        setNoEmailNudge({
+          whatsappHref: buildWaMeUrl(
+            event.clientPhone,
+            buildCancellationMessage({
+              clientName: event.title,
+              serviceName: event.subtitle,
+              startsAt: event.startsAt,
+              storeName: storeSettings?.name ?? ''
+            })
+          )
+        })
+      }
     } catch (error: unknown) {
       setMessage(
         getErrorMessage(error, 'No se pudo cancelar el turno', {
@@ -315,6 +340,8 @@ export const CalendarContainer: React.FC = () => {
     action: AppointmentAction
   ) => {
     if (event.type === 'block') return
+    // El aviso de WhatsApp es del ultimo turno cancelado: otra accion lo quita.
+    setNoEmailNudge(null)
     if (action === 'release') {
       await handleReleaseAppointment(event)
       return
@@ -478,6 +505,8 @@ export const CalendarContainer: React.FC = () => {
           {message}
         </div>
       )}
+
+      {noEmailNudge && <NoEmailCancelNudge whatsappHref={noEmailNudge.whatsappHref} />}
 
       {view === 'day' && (
         <AgendaDayView
