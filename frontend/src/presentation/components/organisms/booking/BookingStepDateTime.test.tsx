@@ -182,6 +182,18 @@ describe('BookingStepDateTime', () => {
         onEmptyAvailability={onEmpty}
       />
     )
+  const montarConSelect = (staffId: string | null, onSelect: jest.Mock) =>
+    render(
+      <BookingStepDateTime
+        storePublicId="store-1"
+        serviceId="svc-1"
+        staffId={staffId}
+        selectedDate={null}
+        selectedTime={null}
+        onSelect={onSelect}
+        onBack={() => undefined}
+      />
+    )
 
   it.each([
     ['Cualquiera', null],
@@ -223,19 +235,15 @@ describe('BookingStepDateTime', () => {
 
   it('con recursos (cancha, sala) no habla de "profesional"', () => {
     mockAvailability.mockReturnValue({ isLoading: false, data: [] })
-    mockStaff.mockReturnValue({
-      isLoading: false,
-      data: [
-        {
-          public_id: 'cancha-1',
-          kind: 'resource',
-          first_name: '',
-          last_name: '',
-          display_name: 'Cancha 1',
-          service_ids: ['svc-1']
-        }
-      ]
+    const cancha = (n: number) => ({
+      public_id: `cancha-${n}`,
+      kind: 'resource',
+      first_name: '',
+      last_name: '',
+      display_name: `Cancha ${n}`,
+      service_ids: ['svc-1']
     })
+    mockStaff.mockReturnValue({ isLoading: false, data: [cancha(1), cancha(2)] })
 
     render(
       <BookingStepDateTime
@@ -255,6 +263,125 @@ describe('BookingStepDateTime', () => {
       screen.getByText('Te mostramos horarios en cualquier cancha o sala disponible.')
     ).toBeInTheDocument()
     expect(screen.queryByText(/profesional/i)).not.toBeInTheDocument()
+  })
+
+  // 2026-10-16 (pedido de Mateo): con un solo profesional para el servicio se
+  // ofrecia "Cualquiera" y ese profesional, dos opciones que eran lo mismo.
+  describe('con un solo profesional para el servicio', () => {
+    const SUBTITULO_UNICO = 'Elegí el día y el horario que te quede mejor.'
+    const ana = { public_id: 'st-1', kind: 'person', display_name: 'Ana', service_ids: ['svc-1'] }
+    const bruno = {
+      public_id: 'st-2',
+      kind: 'person',
+      display_name: 'Bruno',
+      service_ids: ['svc-1']
+    }
+    const libreDe = (staff_id: string, staff_name: string, starts_at: string) => ({
+      staff_id,
+      staff_name,
+      starts_at,
+      ends_at: starts_at,
+      status: 'available',
+      reason: null
+    })
+
+    it('no ofrece "Cualquiera", nombra al profesional y la reserva viaja con el', () => {
+      mockStaff.mockReturnValue({ isLoading: false, data: [ana] })
+      mockAvailability.mockReturnValue({
+        isLoading: false,
+        data: [libreDe('st-1', 'Ana', '2026-09-15T12:00:00+00:00')]
+      })
+      const onSelect = jest.fn()
+
+      montarConSelect(null, onSelect)
+
+      expect(screen.queryByRole('button', { name: /Cualquiera/ })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /Ana/ })).not.toBeInTheDocument()
+      expect(screen.getByText('Profesional')).toBeInTheDocument()
+      expect(screen.getByText('Ana')).toBeInTheDocument()
+      expect(screen.getByText(SUBTITULO_UNICO)).toBeInTheDocument()
+      expect(
+        screen.queryByText('Te mostramos horarios con cualquier profesional disponible.')
+      ).not.toBeInTheDocument()
+
+      // El horario no repite el nombre: ya esta arriba.
+      const horario = screen.getByRole('button', { name: '09:00' })
+      fireEvent.click(horario)
+
+      expect(onSelect).toHaveBeenCalledTimes(1)
+      const [, hora, asignado, pedido, startsAt, quien] = onSelect.mock.calls[0] as unknown[]
+      expect(hora).toBe('09:00')
+      expect(asignado).toBe('st-1')
+      expect(pedido).toBe('st-1')
+      expect(startsAt).toBe('2026-09-15T12:00:00+00:00')
+      expect(quien).toEqual({ name: 'Ana', isResource: false })
+    })
+
+    it('una sola cancha o sala tampoco ofrece "Cualquiera" ni habla de "profesional"', () => {
+      mockStaff.mockReturnValue({
+        isLoading: false,
+        data: [{ ...ana, public_id: 'cancha-1', kind: 'resource', display_name: 'Cancha 1' }]
+      })
+      mockAvailability.mockReturnValue({ isLoading: false, data: [] })
+
+      montarConSelect(null, jest.fn())
+
+      expect(screen.queryByRole('button', { name: /Cualquiera/ })).not.toBeInTheDocument()
+      expect(screen.getByText('Cancha / sala')).toBeInTheDocument()
+      expect(screen.getByText('Cancha 1')).toBeInTheDocument()
+      expect(screen.getByText(SUBTITULO_UNICO)).toBeInTheDocument()
+      expect(screen.queryByText(/profesional/i)).not.toBeInTheDocument()
+    })
+
+    it('con varios profesionales sigue el selector con "Cualquiera" y el pedido va sin profesional', () => {
+      mockStaff.mockReturnValue({ isLoading: false, data: [ana, bruno] })
+      mockAvailability.mockReturnValue({
+        isLoading: false,
+        data: [libreDe('st-2', 'Bruno', '2026-09-15T12:00:00+00:00')]
+      })
+      const onSelect = jest.fn()
+
+      montarConSelect(null, onSelect)
+
+      expect(screen.getByRole('button', { name: /Cualquiera/ })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Ana' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Bruno' })).toBeInTheDocument()
+      expect(
+        screen.getByText('Te mostramos horarios con cualquier profesional disponible.')
+      ).toBeInTheDocument()
+      expect(screen.queryByText(SUBTITULO_UNICO)).not.toBeInTheDocument()
+
+      fireEvent.click(screen.getByRole('button', { name: /09:00/ }))
+
+      const [, , asignado, pedido] = onSelect.mock.calls[0] as unknown[]
+      expect(asignado).toBe('st-2')
+      expect(pedido).toBeNull()
+    })
+  })
+
+  // 2026-10-16 (pedido de Mateo): "atras" era un circulo naranja con un chevron
+  // y los clientes no lo veian.
+  it('"Volver" es un boton con texto visible que vuelve al paso anterior', () => {
+    mockAvailability.mockReturnValue({ isLoading: false, data: [] })
+    const onBack = jest.fn()
+
+    render(
+      <BookingStepDateTime
+        storePublicId="store-1"
+        serviceId="svc-1"
+        staffId={null}
+        selectedDate={null}
+        selectedTime={null}
+        onSelect={() => undefined}
+        onBack={onBack}
+      />
+    )
+
+    const volver = screen.getByRole('button', { name: 'Volver' })
+    expect(volver).toHaveTextContent('Volver')
+    expect(volver).toHaveAttribute('type', 'button')
+    fireEvent.click(volver)
+    expect(onBack).toHaveBeenCalledTimes(1)
   })
 
   it('"Ver todos" es un interruptor alcanzable y operable por teclado', () => {

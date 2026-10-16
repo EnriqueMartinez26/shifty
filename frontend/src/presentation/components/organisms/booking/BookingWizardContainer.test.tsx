@@ -128,6 +128,8 @@ const WizardEnRuta = ({
 
 const url = () => screen.getByTestId('url').textContent
 const atrasDelNavegador = () => fireEvent.click(screen.getByText('Atras del navegador'))
+// El "Volver" de la app, con texto visible (2026-10-16).
+const volver = () => screen.getByRole('button', { name: 'Volver' })
 
 describe('BookingWizardContainer', () => {
   beforeEach(() => {
@@ -164,8 +166,7 @@ describe('BookingWizardContainer', () => {
     await waitFor(() => expect(screen.getByText(HORARIO)).toBeInTheDocument())
     expect(mockAvailability).toHaveBeenCalledWith('store-1', 'unico', expect.any(String), false)
 
-    // El primer boton del paso es el de "atras" (chevron).
-    fireEvent.click(screen.getAllByRole('button')[0] as HTMLElement)
+    fireEvent.click(volver())
     expect(screen.getByText(HORARIO)).toBeInTheDocument()
     expect(screen.queryByText(SERVICIO)).not.toBeInTheDocument()
   })
@@ -218,9 +219,9 @@ describe('BookingWizardContainer', () => {
       elegirServicioYHorario()
 
       // Atras desde los datos y desde el horario: dos pasos para atras.
-      fireEvent.click(screen.getAllByRole('button')[0] as HTMLElement)
+      fireEvent.click(volver())
       expect(screen.getByText(HORARIO)).toBeInTheDocument()
-      fireEvent.click(screen.getAllByRole('button')[0] as HTMLElement)
+      fireEvent.click(volver())
       expect(screen.getByText(SERVICIO)).toBeInTheDocument()
       expect(url()).toBe('/booking/tienda')
 
@@ -263,7 +264,7 @@ describe('BookingWizardContainer', () => {
         />
       )
 
-      fireEvent.click(screen.getAllByRole('button')[0] as HTMLElement)
+      fireEvent.click(volver())
 
       expect(screen.getByText(SERVICIO)).toBeInTheDocument()
       expect(url()).toBe('/booking/tienda?service=a&step=0')
@@ -496,6 +497,26 @@ describe('BookingWizardContainer', () => {
       await confirmarReserva('Lucia Perez')
 
       expect(claveDelIntento(1)).not.toBe(claveDelIntento(0))
+    })
+
+    // 2026-10-16 (pedido de Mateo): con un solo profesional no se ofrece
+    // "Cualquiera"; la reserva sigue viajando con quien atiende el horario.
+    it('con un solo profesional no ofrece "Cualquiera" y la reserva viaja con el', async () => {
+      mockStaff.mockReturnValue({
+        data: [{ public_id: 'st-1', kind: 'person', display_name: 'Pro', service_ids: ['a'] }],
+        isLoading: false
+      })
+      mockCreateBooking.mockRejectedValue(new NetworkError('No se pudo conectar con el servidor.'))
+      render(<WizardEnRuta store={tienda(false)} />)
+
+      await waitFor(() => expect(screen.getByText(HORARIO)).toBeInTheDocument())
+      expect(screen.queryByRole('button', { name: /Cualquiera/ })).not.toBeInTheDocument()
+      await confirmarReserva()
+
+      expect(mockCreateBooking.mock.calls[0]?.[0]).toMatchObject({
+        staff_id: 'st-1',
+        starts_at: slot.starts_at
+      })
     })
 
     it('manda los adicionales elegidos y otros adicionales son otro pedido', async () => {

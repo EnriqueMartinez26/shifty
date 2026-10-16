@@ -15,8 +15,8 @@ const STEP_DATETIME = 1
 /**
  * Un paso con una sola opcion no es una eleccion: se elige solo y se saltea.
  * En el wizard de 3 pasos el unico salteable es el del servicio (el
- * profesional ya no es un paso: es un filtro dentro del horario, con
- * "Cualquiera" como opcion valida aunque haya uno solo).
+ * profesional ya no es un paso: es un filtro dentro del horario; con uno
+ * solo, el filtro se fija en el y no se ofrece "Cualquiera").
  *
  * Mientras la lista carga (undefined) no se saltea nada: el paso se muestra
  * con su propio "Cargando".
