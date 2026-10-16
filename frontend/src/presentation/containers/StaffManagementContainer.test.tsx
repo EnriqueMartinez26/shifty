@@ -229,6 +229,17 @@ describe('StaffManagementContainer: agregarme como profesional', () => {
     expect(getByTestId('modal-self')).not.toHaveTextContent('duenio@example.com')
   })
 
+  // 2026-10-14: /me ahora trae nombre y apellido; una cuenta con solo el
+  // nombre propone ese nombre, sin espacios sobrantes ni "undefined".
+  it('con solo el nombre en la cuenta propone ese nombre', () => {
+    mockUser = { ...mockUser, last_name: undefined }
+    const { getByRole, getByTestId } = render(<StaffManagementContainer />)
+
+    fireEvent.click(getByRole('button', { name: /agregarme como profesional/i }))
+
+    expect(getByTestId('modal-self').textContent).toBe('Enrique')
+  })
+
   it('si ya figura, no hay boton y su tarjeta se marca como propia', () => {
     mockUser = { ...mockUser, public_id: 'st-1' }
     const { queryByRole, getByTestId } = render(<StaffManagementContainer />)
