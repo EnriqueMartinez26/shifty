@@ -29,10 +29,23 @@ describe('Appointment.fromPrimitives', () => {
       status: 'confirmed',
       staff_name: null,
       client_phone: null,
+      // Sin el dato se asume que tiene email: no se sugiere WhatsApp de mas.
+      client_has_email: true,
       addons: [],
       starts_at: '2026-09-10T12:00:00.000Z',
       ends_at: '2026-09-10T12:30:00.000Z'
     })
+  })
+
+  it('un turno sin email entregable lo conserva en la ida y vuelta', () => {
+    const turno = Appointment.fromPrimitives({
+      ...props,
+      status: 'confirmed',
+      client_has_email: false
+    })
+
+    expect(turno.clientHasEmail).toBe(false)
+    expect(turno.toPrimitives().client_has_email).toBe(false)
   })
 
   it.each([
