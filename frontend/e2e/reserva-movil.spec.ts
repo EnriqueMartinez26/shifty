@@ -67,12 +67,12 @@ test.describe('reserva publica desde el celular', () => {
     await slot.click()
 
     // Paso 3: datos y confirmacion.
-    await expect(page.getByPlaceholder('PREFIJO + NUM')).toBeVisible()
+    await expect(page.getByPlaceholder('Ej: 351 1234567')).toBeVisible()
     await sinScrollHorizontal(page, 'datos')
     const sufijo = `${Date.now()}`.slice(-6)
     await page.getByPlaceholder('Ej: Juan Perez').fill('Prueba E2E Movil')
     await page.getByPlaceholder('juan@email.com').fill(`e2e-${sufijo}@example.com`)
-    await page.getByPlaceholder('PREFIJO + NUM').fill(`+54911${sufijo}00`)
+    await page.getByPlaceholder('Ej: 351 1234567').fill(`+54911${sufijo}00`)
     await page.getByRole('checkbox').first().check()
     // Sin seña confirma; con seña coordinada a mano, se paga por WhatsApp.
     await page

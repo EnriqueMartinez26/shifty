@@ -39,6 +39,7 @@ const estado = (patch: Partial<BookingWizardState> = {}): BookingWizardState => 
   serviceId: 'svc-1',
   requestedStaffId: null,
   assignedStaffId: 'st-1',
+  assignedStaff: { name: 'Ana', isResource: false },
   date: '2026-09-25',
   startTime: '09:00',
   startsAt: '2026-09-25T12:00:00+00:00',
@@ -130,6 +131,9 @@ const RESERVAR_CON_SENA = 'Reservar y pagar la seña por WhatsApp'
 const PAGAR_MP = 'Pagar seña con Mercado Pago'
 const aceptarTerminos = () => fireEvent.click(screen.getByRole('checkbox'))
 const botonReservar = () => screen.getByRole('button', { name: RESERVAR })
+// El codigo promocional va plegado detras de un link (2026-10-16).
+const abrirCodigo = () =>
+  fireEvent.click(screen.getByRole('button', { name: '¿Tenés un código de descuento?' }))
 
 describe('BookingStepConfirmation', () => {
   beforeEach(() => {
@@ -150,7 +154,46 @@ describe('BookingStepConfirmation', () => {
       expect(screen.queryByText('2026-09-25')).not.toBeInTheDocument()
       expect(screen.getByText('09:00 hs')).toBeInTheDocument()
       expect(screen.getByPlaceholderText('Ej: Juan Perez')).toBeInTheDocument()
-      expect(screen.getByPlaceholderText('PREFIJO + NUM')).toBeInTheDocument()
+      expect(screen.getByPlaceholderText('Ej: 351 1234567')).toBeInTheDocument()
+    })
+
+    // 2026-10-16 (pedido de Mateo): "Tus datos y confirmación" y adentro otra
+    // vez "Tus datos / Los necesitamos para registrar tu reserva." en el celular.
+    it('el paso tiene un solo titulo y el bloque de datos sigue nombrado', () => {
+      render(<BookingStepConfirmation {...props()} />)
+
+      expect(screen.getAllByRole('heading')).toHaveLength(1)
+      expect(screen.getByRole('heading', { name: 'Tus datos y confirmación' })).toBeInTheDocument()
+      expect(
+        screen.queryByText('Los necesitamos para registrar tu reserva.')
+      ).not.toBeInTheDocument()
+      const datos = screen.getByRole('region', { name: 'Tus datos' })
+      expect(datos.contains(screen.getByLabelText('Nombre Completo'))).toBe(true)
+      expect(datos.contains(screen.getByLabelText('Email'))).toBe(true)
+      expect(datos.contains(screen.getByLabelText('Teléfono'))).toBe(true)
+    })
+
+    it('el telefono muestra un ejemplo y las notas dicen para quien son', () => {
+      render(<BookingStepConfirmation {...props()} />)
+
+      expect(screen.getByLabelText('Teléfono')).toHaveAttribute('placeholder', 'Ej: 351 1234567')
+      expect(screen.getByLabelText('Notas para la tienda (opcional)')).toBeInTheDocument()
+      expect(screen.queryByText(/PREFIJO/)).not.toBeInTheDocument()
+      expect(screen.queryByText(/Notas Adicionales/)).not.toBeInTheDocument()
+    })
+
+    it('el ejemplo del telefono pasa la validacion de siempre', () => {
+      render(
+        <BookingStepConfirmation
+          {...props({
+            bookingState: estado({ client: cliente({ name: 'Lucia', phone: '351 1234567' }) })
+          })}
+        />
+      )
+      aceptarTerminos()
+
+      expect(screen.getByLabelText('Teléfono')).toHaveAttribute('aria-invalid', 'false')
+      expect(botonReservar()).not.toBeDisabled()
     })
 
     it('reservar queda deshabilitado hasta tener nombre, telefono, email y terminos', () => {
@@ -278,6 +321,85 @@ describe('BookingStepConfirmation', () => {
         target: { value: 'Lucia' }
       })
       expect(onClientChange).toHaveBeenLastCalledWith(expect.objectContaining({ name: 'Lucia' }))
+    })
+  })
+
+  describe('resumen del turno', () => {
+    const dato = (etiqueta: string) =>
+      screen.getByText(etiqueta, { selector: 'dt' }).nextElementSibling?.textContent
+
+    it('muestra servicio y profesional junto a la fecha y la hora', () => {
+      mockServices.mockReturnValue({
+        data: [{ public_id: 'svc-1', name: 'Kapping', price: 27000, deposit_mode: 'none' }],
+        isLoading: false
+      })
+      render(<BookingStepConfirmation {...props()} />)
+
+      expect(dato('Fecha')).toBe('25/09/2026')
+      expect(dato('Hora')).toBe('09:00 hs')
+      expect(dato('Servicio')).toBe('Kapping')
+      expect(dato('Profesional')).toBe('Ana')
+    })
+
+    it('con "Cualquiera" muestra el profesional que asigno el horario', () => {
+      render(
+        <BookingStepConfirmation
+          {...props({
+            bookingState: estado({
+              requestedStaffId: null,
+              assignedStaff: { name: 'Bruno', isResource: false }
+            })
+          })}
+        />
+      )
+
+      expect(dato('Profesional')).toBe('Bruno')
+    })
+
+    it('sin el profesional del horario no lo inventa', () => {
+      render(
+        <BookingStepConfirmation {...props({ bookingState: estado({ assignedStaff: null }) })} />
+      )
+
+      expect(screen.queryByText('Profesional', { selector: 'dt' })).not.toBeInTheDocument()
+      expect(dato('Fecha')).toBe('25/09/2026')
+    })
+
+    it('una cancha o sala no se presenta como profesional', () => {
+      render(
+        <BookingStepConfirmation
+          {...props({
+            bookingState: estado({ assignedStaff: { name: 'Cancha 1', isResource: true } })
+          })}
+        />
+      )
+
+      expect(dato('Cancha / sala')).toBe('Cancha 1')
+      expect(screen.queryByText('Profesional', { selector: 'dt' })).not.toBeInTheDocument()
+    })
+  })
+
+  describe('politica de seña', () => {
+    it('una politica corta se ve entera, una sola vez', () => {
+      render(<BookingStepConfirmation {...props({ depositPolicy: 'La seña no se devuelve.' })} />)
+
+      expect(screen.getAllByText('La seña no se devuelve.')).toHaveLength(1)
+      expect(screen.getByText('La seña no se devuelve.').closest('details')).toBeNull()
+      expect(screen.getByText('Política de seña de Tienda')).toBeInTheDocument()
+    })
+
+    it('una politica larga va plegada detras de "Ver política de seña"', () => {
+      const larga = `Se cobra el 50% al reservar. ${'Con menos de 24 horas de aviso no se devuelve. '.repeat(8)}`
+      render(<BookingStepConfirmation {...props({ depositPolicy: larga })} />)
+
+      const resumen = screen.getByText('Ver política de seña de Tienda')
+      const plegable = resumen.closest('details')
+      expect(plegable).not.toHaveAttribute('open')
+      expect(plegable).toHaveTextContent('Se cobra el 50% al reservar.')
+
+      fireEvent.click(resumen)
+
+      expect(plegable).toHaveAttribute('open')
     })
   })
 
@@ -508,6 +630,7 @@ describe('BookingStepConfirmation', () => {
       })
       const onPromotionCodeChange = jest.fn()
       render(<BookingStepConfirmation {...props({ onPromotionCodeChange })} />)
+      abrirCodigo()
 
       fireEvent.change(screen.getByPlaceholderText('Ej: BIENVENIDA10'), {
         target: { value: ' bienvenida10 ' }
@@ -533,6 +656,7 @@ describe('BookingStepConfirmation', () => {
       )
       const onPromotionCodeChange = jest.fn()
       render(<BookingStepConfirmation {...props({ onPromotionCodeChange })} />)
+      abrirCodigo()
 
       fireEvent.change(screen.getByPlaceholderText('Ej: BIENVENIDA10'), {
         target: { value: 'VIEJO' }
@@ -556,6 +680,7 @@ describe('BookingStepConfirmation', () => {
         final_amount: 4500
       })
       render(<ConEstado base={props()} />)
+      abrirCodigo()
       const campo = screen.getByPlaceholderText('Ej: BIENVENIDA10') as HTMLInputElement
 
       fireEvent.change(campo, { target: { value: 'bienvenida10' } })
@@ -572,11 +697,61 @@ describe('BookingStepConfirmation', () => {
     it('aplicar con el campo vacio no consulta y limpia el codigo', () => {
       const onPromotionCodeChange = jest.fn()
       render(<BookingStepConfirmation {...props({ onPromotionCodeChange })} />)
+      abrirCodigo()
 
       fireEvent.click(screen.getByRole('button', { name: 'Aplicar' }))
 
       expect(mockPreviewPromotion).not.toHaveBeenCalled()
       expect(onPromotionCodeChange).toHaveBeenLastCalledWith('', null)
+    })
+
+    // 2026-10-16 (pedido de Mateo): el campo del codigo era ruido en el
+    // celular para quien no tiene uno.
+    it('arranca plegado detras de un link y al abrirlo muestra el campo con el foco', () => {
+      render(<BookingStepConfirmation {...props()} />)
+
+      expect(screen.queryByPlaceholderText('Ej: BIENVENIDA10')).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Aplicar' })).not.toBeInTheDocument()
+      const link = screen.getByRole('button', { name: '¿Tenés un código de descuento?' })
+      expect(link).toHaveAttribute('aria-expanded', 'false')
+
+      abrirCodigo()
+
+      const campo = screen.getByLabelText('Código promocional')
+      expect(campo).toHaveAttribute('placeholder', 'Ej: BIENVENIDA10')
+      expect(campo).toHaveFocus()
+      expect(screen.getByRole('button', { name: 'Aplicar' })).toBeInTheDocument()
+      expect(
+        screen.queryByRole('button', { name: '¿Tenés un código de descuento?' })
+      ).not.toBeInTheDocument()
+    })
+
+    it('con un codigo ya aplicado (volver al paso) arranca abierto con el descuento', () => {
+      render(
+        <BookingStepConfirmation
+          {...props({
+            bookingState: estado({
+              promotionCode: 'BIENVENIDA10',
+              promotionPreview: {
+                code: 'BIENVENIDA10',
+                title: 'Bienvenida',
+                promotion_type: 'percent',
+                base_amount: 5000,
+                discount_amount: 500,
+                final_amount: 4500
+              }
+            })
+          })}
+        />
+      )
+
+      expect((screen.getByPlaceholderText('Ej: BIENVENIDA10') as HTMLInputElement).value).toBe(
+        'BIENVENIDA10'
+      )
+      expect(screen.getByText('Bienvenida')).toBeInTheDocument()
+      expect(
+        screen.queryByRole('button', { name: '¿Tenés un código de descuento?' })
+      ).not.toBeInTheDocument()
     })
   })
 
@@ -656,7 +831,7 @@ describe('BookingStepConfirmation', () => {
 
       expect(screen.getByPlaceholderText('Ej: Juan Perez')).toHaveAttribute('autocomplete', 'name')
       expect(screen.getByPlaceholderText('juan@email.com')).toHaveAttribute('autocomplete', 'email')
-      expect(screen.getByPlaceholderText('PREFIJO + NUM')).toHaveAttribute('autocomplete', 'tel')
+      expect(screen.getByPlaceholderText('Ej: 351 1234567')).toHaveAttribute('autocomplete', 'tel')
     })
 
     it('el codigo usa teclado numerico, autocompletado de codigo y 6 digitos', () => {
@@ -940,6 +1115,9 @@ describe('BookingStepConfirmation: adicionales', () => {
     render(<ConEstado base={completo()} />)
 
     expect(screen.getByTestId('booking-price-summary')).toHaveTextContent(/Total\s*\$\s*27\.000/)
+    // Sin adicionales ni descuento solo el total: "Servicio" lo repetia
+    // (2026-10-16, pedido de Mateo).
+    expect(screen.getByTestId('booking-price-summary')).not.toHaveTextContent('Servicio')
     expect(ultimoPreview().addons).toEqual([])
 
     for (let i = 0; i < 6; i += 1) {
@@ -947,6 +1125,7 @@ describe('BookingStepConfirmation: adicionales', () => {
     }
 
     const resumen = screen.getByTestId('booking-price-summary')
+    expect(resumen).toHaveTextContent(/Servicio\s*\$\s*27\.000/)
     expect(resumen).toHaveTextContent('Strass x6')
     expect(resumen).toHaveTextContent(/3\.000/)
     expect(resumen).toHaveTextContent(/Total\s*\$\s*30\.000/)
@@ -1196,6 +1375,8 @@ describe('BookingStepConfirmation: promo sobre el total', () => {
 
     expect(resumen()).toHaveTextContent(/Total\s*\$\s*4\.500/)
     expect(screen.getByTestId('booking-price-discount')).toHaveTextContent(/500/)
+    // Con descuento vuelve el detalle: servicio, descuento y total.
+    expect(resumen()).toHaveTextContent(/Servicio\s*\$\s*5\.000/)
   })
 })
 
@@ -1261,6 +1442,7 @@ describe('BookingStepConfirmation: la promo se revalida con los adicionales', ()
     mockPreviewPromotion.mockResolvedValue(promo())
     render(<ConEstado base={props({ bookingState: estado({ addons: [] }) })} />)
     fireEvent.click(screen.getByRole('button', { name: 'Agregar uno de Strass' }))
+    abrirCodigo()
     fireEvent.change(screen.getByPlaceholderText('Ej: BIENVENIDA10'), {
       target: { value: 'min6000' }
     })

@@ -21,7 +21,11 @@ interface BookingPriceSummaryProps {
 
 const rowClass = 'flex justify-between gap-3 text-sm font-bold text-slate-700'
 
-/** Servicio, adicionales, descuento y total del turno. Solo pinta. */
+/**
+ * Total del turno. El detalle (servicio, adicionales y descuento) aparece solo
+ * cuando hay algo que sumar o restar: sin eso "Servicio" repetia el total en
+ * el celular (pedido de Mateo, 2026-10-16). Solo pinta.
+ */
 export const BookingPriceSummary: React.FC<BookingPriceSummaryProps> = ({
   basePrice,
   addons,
@@ -29,34 +33,42 @@ export const BookingPriceSummary: React.FC<BookingPriceSummaryProps> = ({
   promotionCode,
   total,
   pendingLabel = 'Calculando…'
-}) => (
-  <div
-    className="p-4 border space-y-2"
-    style={createBookingAccentBoxStyle('#f8fafc', '#cbd5e1')}
-    data-testid="booking-price-summary"
-  >
-    <div className={rowClass}>
-      <span>Servicio</span>
-      <span>{formatCurrency(basePrice)}</span>
-    </div>
-    {addons.map((line) => (
-      <div key={line.addonId} className={rowClass}>
-        <span className="min-w-0 break-words">{formatAddonLabel(line)}</span>
-        <span>{formatCurrency(line.amount)}</span>
-      </div>
-    ))}
-    {discount !== null && discount > 0 && (
-      <div className={rowClass} data-testid="booking-price-discount">
-        <span>Descuento{promotionCode ? ` (${promotionCode})` : ''}</span>
-        <span>-{formatCurrency(discount)}</span>
-      </div>
-    )}
+}) => {
+  const hasDiscount = discount !== null && discount > 0
+  const showBreakdown = addons.length > 0 || hasDiscount
+  return (
     <div
-      className="flex justify-between gap-3 pt-2 border-t text-base font-black text-slate-900"
-      style={{ borderColor: '#cbd5e1' }}
+      className="p-4 border space-y-2"
+      style={createBookingAccentBoxStyle('#f8fafc', '#cbd5e1')}
+      data-testid="booking-price-summary"
     >
-      <span>Total</span>
-      <span>{total === null ? pendingLabel : formatCurrency(total)}</span>
+      {showBreakdown && (
+        <>
+          <div className={rowClass}>
+            <span>Servicio</span>
+            <span>{formatCurrency(basePrice)}</span>
+          </div>
+          {addons.map((line) => (
+            <div key={line.addonId} className={rowClass}>
+              <span className="min-w-0 break-words">{formatAddonLabel(line)}</span>
+              <span>{formatCurrency(line.amount)}</span>
+            </div>
+          ))}
+          {hasDiscount && (
+            <div className={rowClass} data-testid="booking-price-discount">
+              <span>Descuento{promotionCode ? ` (${promotionCode})` : ''}</span>
+              <span>-{formatCurrency(discount)}</span>
+            </div>
+          )}
+        </>
+      )}
+      <div
+        className={`flex justify-between gap-3 text-base font-black text-slate-900${showBreakdown ? ' pt-2 border-t' : ''}`}
+        style={showBreakdown ? { borderColor: '#cbd5e1' } : undefined}
+      >
+        <span>Total</span>
+        <span>{total === null ? pendingLabel : formatCurrency(total)}</span>
+      </div>
     </div>
-  </div>
-)
+  )
+}

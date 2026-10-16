@@ -70,6 +70,7 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
     serviceId: preselect.serviceId,
     requestedStaffId: preselect.staffId,
     assignedStaffId: null,
+    assignedStaff: null,
     date: preselect.date,
     startTime: null,
     startsAt: null,
@@ -345,6 +346,7 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
                   : { addons: [], promotionCode: '', promotionPreview: null }),
                 requestedStaffId: null,
                 assignedStaffId: null,
+                assignedStaff: null,
                 date: null,
                 startTime: null,
                 startsAt: null
@@ -363,9 +365,16 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
             selectedTime={bookingState.startTime}
             onEmptyAvailability={() => trackBookingEvent('availability_empty')}
             onBack={prevStep}
-            onSelect={(date, time, assignedStaffId, requestedStaffId, startsAt) => {
+            onSelect={(date, time, assignedStaffId, requestedStaffId, startsAt, slotStaff) => {
               trackBookingEvent('slot_selected')
-              updateState({ date, startTime: time, assignedStaffId, requestedStaffId, startsAt })
+              updateState({
+                date,
+                startTime: time,
+                assignedStaffId,
+                assignedStaff: slotStaff.name ? slotStaff : null,
+                requestedStaffId,
+                startsAt
+              })
               nextStep()
             }}
           />

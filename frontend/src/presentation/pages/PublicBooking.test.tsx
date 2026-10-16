@@ -18,7 +18,8 @@ const TIENDA_SOL = {
     name: 'Peluqueria Sol',
     slug: 'sol',
     description: null,
-    whatsapp_number: null as string | null
+    whatsapp_number: null as string | null,
+    deposit_policy: null as string | null
   },
   isLoading: false,
   isError: false,
@@ -162,6 +163,38 @@ describe('PublicBooking: WhatsApp de la tienda', () => {
     renderEn('/booking/sol')
 
     expect(screen.getByText('pedir en el local').closest('a')).toBeNull()
+  })
+})
+
+// 2026-10-16 (pedido de Mateo): en el paso de confirmacion la politica de seña
+// salia entera junto a la seña y el pie la volvia a nombrar. Se muestra antes
+// de confirmar (Legal.tsx) en el paso mismo; el pie la nombra en los demas.
+describe('PublicBooking: politica de seña en el pie', () => {
+  const POLITICA_EN_EL_PIE = 'Política de seña publicada por la tienda'
+
+  beforeEach(() => {
+    mockTienda = {
+      ...TIENDA_SOL,
+      data: { ...TIENDA_SOL.data, deposit_policy: 'La seña no se devuelve.' }
+    }
+  })
+
+  afterEach(() => {
+    mockTienda = TIENDA_SOL
+  })
+
+  it('en el servicio y el horario el pie nombra la politica de la tienda', () => {
+    renderEn('/booking/sol?step=1')
+
+    expect(screen.getByText(POLITICA_EN_EL_PIE)).toBeInTheDocument()
+  })
+
+  it('en el paso de confirmacion el pie no la repite y deja terminos y privacidad', () => {
+    renderEn('/booking/sol?step=2')
+
+    expect(screen.queryByText(POLITICA_EN_EL_PIE)).not.toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Términos y condiciones' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Privacidad' })).toBeInTheDocument()
   })
 })
 

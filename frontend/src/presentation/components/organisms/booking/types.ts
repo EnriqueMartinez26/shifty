@@ -10,10 +10,22 @@ export interface BookingClientData {
   customFields: Record<string, string>
 }
 
+/** Nombre visible de quien atiende el slot; una cancha o sala no es "un profesional". */
+export interface BookingSlotStaff {
+  name: string
+  isResource: boolean
+}
+
 export interface BookingWizardState {
   serviceId: string | null
   requestedStaffId: string | null
   assignedStaffId: string | null
+  /**
+   * Quien atiende el horario elegido (`staff_name` del slot): con
+   * "Cualquiera" es el que asigno la disponibilidad. Solo se muestra en el
+   * resumen; la reserva viaja con el id.
+   */
+  assignedStaff: BookingSlotStaff | null
   date: string | null
   startTime: string | null
   /** Instante ISO (UTC) del slot elegido: es lo que se manda al reservar. */

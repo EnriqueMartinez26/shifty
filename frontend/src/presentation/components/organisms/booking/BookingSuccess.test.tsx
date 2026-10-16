@@ -11,6 +11,7 @@ const estado = (patch: Partial<BookingWizardState> = {}): BookingWizardState => 
   serviceId: 'svc-1',
   requestedStaffId: null,
   assignedStaffId: 'st-1',
+  assignedStaff: { name: 'Pro', isResource: false },
   date: '2026-09-25',
   startTime: '09:00',
   startsAt: '2026-09-25T12:00:00+00:00',
