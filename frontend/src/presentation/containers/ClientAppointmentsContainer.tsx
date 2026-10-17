@@ -29,13 +29,13 @@ import {
 import { createBookingSurfaceStyle } from '../lib/surfaceStyles'
 
 const ESTADO: Record<BookingStatusValue, { label: string; color: string }> = {
-  pending: { label: 'A confirmar', color: '#d97706' },
-  pending_payment: { label: 'Esperando la seña', color: '#d97706' },
-  confirmed: { label: 'Confirmado', color: '#15803d' },
-  completed: { label: 'Listo', color: '#2563eb' },
-  cancelled: { label: 'Cancelado', color: '#dc2626' },
-  absent: { label: 'No viniste', color: '#6b7280' },
-  expired: { label: 'Vencido', color: '#6b7280' }
+  pending: { label: 'A confirmar', color: colors2000s.status.warning.text },
+  pending_payment: { label: 'Esperando la seña', color: colors2000s.status.warning.text },
+  confirmed: { label: 'Confirmado', color: colors2000s.status.success.text },
+  completed: { label: 'Listo', color: colors2000s.status.info.text },
+  cancelled: { label: 'Cancelado', color: colors2000s.status.danger.text },
+  absent: { label: 'No viniste', color: colors2000s.text.secondary },
+  expired: { label: 'Vencido', color: colors2000s.text.secondary }
 }
 
 /** "Corte + Barba" con varios servicios; una respuesta vieja solo trae el principal. */
@@ -207,7 +207,7 @@ export const ClientAppointmentsContainer: React.FC<ClientAppointmentsContainerPr
             forgetOtpVerification(store.slug)
             setPhone(null)
           }}
-          className="px-3 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest"
+          className="min-h-11 min-w-11 px-3 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest"
           style={buttonStyles2000s.default}
         >
           Salir
@@ -221,14 +221,21 @@ export const ClientAppointmentsContainer: React.FC<ClientAppointmentsContainerPr
       )}
 
       {appointments.isLoading && (
-        <p className="flex items-center gap-2 text-xs font-black uppercase tracking-widest text-gray-500">
+        <p
+          className="flex items-center gap-2 text-xs font-black uppercase tracking-widest"
+          style={{ color: colors2000s.text.secondary }}
+        >
           <Loader2 className="w-4 h-4 animate-spin" /> Buscando tus turnos...
         </p>
       )}
 
       {appointments.isError && (
         <div className="space-y-2">
-          <p role="alert" className="text-xs font-bold text-red-600">
+          <p
+            role="alert"
+            className="break-words text-xs font-bold"
+            style={{ color: colors2000s.status.danger.text }}
+          >
             {/* FF-05: 404, 429 y 5xx decian todos "No encontramos turnos". */}
             {getErrorMessage(
               appointments.error,
@@ -244,7 +251,7 @@ export const ClientAppointmentsContainer: React.FC<ClientAppointmentsContainerPr
               onClick={() => {
                 void appointments.refetch()
               }}
-              className="px-3 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest"
+              className="min-h-11 min-w-11 px-3 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest"
               style={buttonStyles2000s.default}
             >
               Reintentar
@@ -254,13 +261,15 @@ export const ClientAppointmentsContainer: React.FC<ClientAppointmentsContainerPr
       )}
 
       {!appointments.isLoading && !appointments.isError && items.length === 0 && (
-        <p className="text-xs font-bold text-gray-500">Todavía no tenés turnos acá.</p>
+        <p className="text-xs font-bold" style={{ color: colors2000s.text.secondary }}>
+          Todavía no tenés turnos acá.
+        </p>
       )}
 
       {items.map((item) => {
         const estado = isBookingStatus(item.status)
           ? ESTADO[item.status]
-          : { label: item.status, color: '#6b7280' }
+          : { label: item.status, color: colors2000s.text.secondary }
         const editando = rescheduling?.id === item.public_id
         return (
           <article
@@ -270,14 +279,17 @@ export const ClientAppointmentsContainer: React.FC<ClientAppointmentsContainerPr
           >
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
-                <p className="font-black text-sm">{serviceLabelOf(item)}</p>
-                <p className="text-[11px] font-bold text-gray-500">
+                <p className="break-words font-black text-sm">{serviceLabelOf(item)}</p>
+                <p
+                  className="break-words text-[11px] font-bold"
+                  style={{ color: colors2000s.text.secondary }}
+                >
                   {formatArgentinaDateDisplay(item.starts_at)} a las{' '}
                   {formatArgentinaTime(item.starts_at)} hs · {item.staff_name}
                 </p>
               </div>
               <span
-                className="text-[9px] font-black uppercase tracking-widest whitespace-nowrap"
+                className="min-w-0 break-words text-right text-[9px] font-black uppercase tracking-widest"
                 style={{ color: estado.color }}
               >
                 {estado.label}
@@ -290,7 +302,7 @@ export const ClientAppointmentsContainer: React.FC<ClientAppointmentsContainerPr
                   <button
                     type="button"
                     onClick={() => setRescheduling(editando ? null : { id: item.public_id })}
-                    className="inline-flex items-center gap-1 rounded-lg px-3 py-2 text-[9px] font-black uppercase tracking-widest"
+                    className="inline-flex min-h-11 min-w-11 items-center justify-center gap-1 rounded-lg px-3 py-2 text-[9px] font-black uppercase tracking-widest"
                     style={buttonStyles2000s.default}
                   >
                     <CalendarClock className="w-3 h-3" /> Cambiar
@@ -303,8 +315,8 @@ export const ClientAppointmentsContainer: React.FC<ClientAppointmentsContainerPr
                     onClick={() => {
                       void cancelar(item)
                     }}
-                    className="inline-flex items-center gap-1 rounded-lg px-3 py-2 text-[9px] font-black uppercase tracking-widest disabled:opacity-50"
-                    style={{ ...buttonStyles2000s.default, color: '#dc2626' }}
+                    className="inline-flex min-h-11 min-w-11 items-center justify-center gap-1 rounded-lg px-3 py-2 text-[9px] font-black uppercase tracking-widest disabled:opacity-50"
+                    style={{ ...buttonStyles2000s.default, color: colors2000s.status.danger.text }}
                   >
                     <XCircle className="w-3 h-3" /> Cancelar
                   </button>

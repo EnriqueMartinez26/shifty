@@ -174,7 +174,7 @@ export const ClientOtpGate: React.FC<ClientOtpGateProps> = ({
             onChange={(e) => setForm({ ...form, email: e.target.value })}
             placeholder="tu@email.com"
             aria-label="Tu email"
-            className="w-full rounded-2xl px-4 py-3 font-bold outline-none"
+            className="w-full min-h-11 rounded-2xl px-4 py-3 font-bold outline-none"
             style={createBookingInputStyle()}
           />
           <button
@@ -183,7 +183,7 @@ export const ClientOtpGate: React.FC<ClientOtpGateProps> = ({
             onClick={() => {
               void pedirCodigo()
             }}
-            className="w-full py-3 rounded-2xl text-white text-xs font-black uppercase tracking-widest disabled:opacity-60"
+            className="w-full min-h-11 px-3 py-3 rounded-2xl text-white text-xs font-black uppercase tracking-widest disabled:opacity-60"
             style={buttonStyles2000s.selected}
           >
             {requestOtp.isPending ? 'Enviando...' : esperando ? textoEspera : 'Enviarme el código'}
@@ -225,7 +225,7 @@ export const ClientOtpGate: React.FC<ClientOtpGateProps> = ({
             onClick={() => {
               void pedirCodigo()
             }}
-            className="w-full py-2 rounded-2xl text-[10px] font-black uppercase tracking-widest disabled:opacity-60"
+            className="w-full min-h-11 px-3 py-2 rounded-2xl text-[10px] font-black uppercase tracking-widest disabled:opacity-60"
             style={buttonStyles2000s.default}
           >
             {requestOtp.isPending ? 'Enviando...' : esperando ? textoEspera : 'Reenviar código'}
@@ -233,7 +233,7 @@ export const ClientOtpGate: React.FC<ClientOtpGateProps> = ({
           <button
             type="button"
             onClick={() => setSent(false)}
-            className="w-full py-2 rounded-2xl text-[10px] font-black uppercase tracking-widest"
+            className="w-full min-h-11 px-3 py-2 rounded-2xl text-[10px] font-black uppercase tracking-widest"
             style={buttonStyles2000s.default}
           >
             Cambiar teléfono o email
