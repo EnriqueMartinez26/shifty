@@ -7,14 +7,15 @@ const { readFileSync } = jest.requireActual<{
 }>('node:fs')
 const { resolve } = jest.requireActual<{ resolve: (...paths: string[]) => string }>('node:path')
 
-// Blanco sobre el naranja de marca (#ff8c42/#e67e22) mide 2.31/2.85:1. El
-// usuario priorizó mantener letras blancas sobre esa identidad; este test
-// registra la excepción sin presentarla como WCAG AA. Los demás pares de
-// texto se mantienen en AA (4.5:1); text.disabled queda fuera a propósito,
-// porque solo se usa en controles deshabilitados (WCAG 1.4.3).
+// 2026-10-03: blanco sobre el naranja de marca (#ff8c42/#e67e22) medía
+// 2.31/2.85:1, text.secondary 3.0-3.4:1 sobre el fondo y el pie del portal
+// usaba text.disabled (1.72:1). Por eso marca decorativa y CTA legible son
+// roles distintos. Este test fija WCAG 2.1 AA para cada par de tokens de
+// texto: 4.5:1, aunque el texto grande se conforme con 3:1; los mismos
+// tokens van en etiquetas de 10 px. text.disabled queda fuera a propósito:
+// solo se usa en controles deshabilitados, que WCAG exime (1.4.3).
 
 const AA_NORMAL = 4.5
-const AA_LARGE = 3
 
 const channel = (hex: string, offset: number): number => {
   const value = parseInt(hex.slice(offset, offset + 2), 16) / 255
@@ -60,11 +61,11 @@ const lightPairs = Object.entries(TEXT_ON_LIGHT).flatMap(([text, fg]) =>
   Object.entries(LIGHT_SURFACES).map(([surface, bg]) => [text, fg, surface, bg] as const)
 )
 
-// Excepción visual aprobada por el usuario: texto blanco sobre el degradado
-// naranja de marca. Se documentan sus razones reales; no cumple WCAG AA.
-const brandSelectionPairs = [
-  ['orange.cta', colors2000s.orange.cta, 2.31],
-  ['orange.dark', colors2000s.orange.dark, 2.85]
+// El CTA y todo lo "seleccionado": texto blanco sobre el degradado
+// orange.cta -> orange.accent (buttonStyles2000s.selected, orangeCtaGradient).
+const ctaPairs = [
+  ['text.onOrange', colors2000s.text.onOrange, 'orange.cta', colors2000s.orange.cta],
+  ['text.onOrange', colors2000s.text.onOrange, 'orange.accent', colors2000s.orange.accent]
 ] as const
 
 const statusPairs = (['success', 'danger', 'warning', 'info'] as const).flatMap((tone) => {
@@ -94,27 +95,10 @@ describe('contraste de los tokens de texto (WCAG 2.1 AA)', () => {
     expect(() => luminance('#fff')).toThrow()
   })
 
-  it.each([...lightPairs, ...statusPairs, ...infoAvatarPairs])(
+  it.each([...lightPairs, ...ctaPairs, ...statusPairs, ...infoAvatarPairs])(
     '%s (%s) sobre %s (%s) llega a 4.5:1',
     (_text, fg, _surface, bg) => {
       expect(contrast(fg, bg)).toBeGreaterThanOrEqual(AA_NORMAL)
-    }
-  )
-
-  it('mantiene contraste AA para titulos grandes sobre el fondo de pagina', () => {
-    expect(contrast(colors2000s.orange.heading, colors2000s.bg.primary)).toBeGreaterThanOrEqual(
-      AA_LARGE
-    )
-    expect(contrast(colors2000s.orange.heading, colors2000s.bg.secondary)).toBeGreaterThanOrEqual(
-      AA_LARGE
-    )
-  })
-
-  it.each(brandSelectionPairs)(
-    'registra la excepción de contraste de texto blanco en %s',
-    (_surface, bg, expectedContrast) => {
-      expect(colors2000s.text.onOrangeSelection).toBe('#ffffff')
-      expect(contrast(colors2000s.text.onOrangeSelection, bg)).toBeCloseTo(expectedContrast, 2)
     }
   )
 
@@ -127,7 +111,7 @@ describe('contraste de los tokens de texto (WCAG 2.1 AA)', () => {
     }
 
     expect(tailwindToken('primary')).toBe(colors2000s.orange.cta)
-    expect(tailwindToken('primary-foreground')).toBe(colors2000s.text.onOrangeSelection)
+    expect(tailwindToken('primary-foreground')).toBe(colors2000s.text.onOrange)
     expect(tailwindToken('background')).toBe(colors2000s.bg.primary)
     expect(tailwindToken('background-end')).toBe(colors2000s.bg.secondary)
     expect(tailwindToken('foreground')).toBe(colors2000s.text.primary)
@@ -175,6 +159,8 @@ describe('contraste de los tokens de texto (WCAG 2.1 AA)', () => {
       expect(tailwindToken(utility)).toBe(color)
     }
 
-    expect(tailwindToken('primary-foreground')).toBe('#ffffff')
+    expect(
+      contrast(tailwindToken('primary-foreground'), tailwindToken('primary'))
+    ).toBeGreaterThanOrEqual(AA_NORMAL)
   })
 })
