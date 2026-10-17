@@ -156,6 +156,7 @@ describe('PublicBooking: WhatsApp de la tienda', () => {
 
     const link = screen.getByRole('link', { name: '351 555-1234' })
     expect(link.getAttribute('href')).toMatch(/^https:\/\/wa\.me\/5493515551234\?text=/)
+    expect(link).toHaveClass('min-h-11', 'min-w-11', 'break-all')
   })
 
   it('un numero que no se puede leer se muestra sin link', () => {
