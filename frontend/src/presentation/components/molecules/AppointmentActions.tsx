@@ -84,7 +84,7 @@ const ACTION_VIEWS: Record<AppointmentAction, ActionView> = {
  * del mes vuelven a su tamano: ahi no hay dedo y no entran.
  */
 export const TAP_TARGET = 'min-h-11 min-w-11'
-export const COMPACT_ON_DESKTOP = 'md:min-h-0 md:min-w-0'
+export const COMPACT_ON_DESKTOP = 'md:min-h-11 md:min-w-11'
 
 export const AppointmentActions: React.FC<AppointmentActionsProps> = ({
   status,
