@@ -2,6 +2,10 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import { format } from 'date-fns'
 
 import { BookingStepDateTime } from './BookingStepDateTime'
+import { colors2000s } from '../../../../theme/colors'
+
+const asRgb = (hex: string): string =>
+  `rgb(${[1, 3, 5].map((offset) => parseInt(hex.slice(offset, offset + 2), 16)).join(', ')})`
 
 const mockAvailability = jest.fn()
 const mockStaff = jest.fn()
@@ -415,6 +419,181 @@ describe('BookingStepDateTime', () => {
 
     expect(interruptor).toHaveAttribute('aria-checked', 'true')
     expect(mockAvailability).toHaveBeenLastCalledWith('store-1', 'svc-1', '2026-09-25', true, [])
+  })
+
+  it('indica el desplazamiento de fechas y adapta los horarios a dos columnas angostas', () => {
+    mockAvailability.mockReturnValue({
+      isLoading: false,
+      data: [
+        {
+          staff_id: 'st-1',
+          staff_name: 'Ana',
+          starts_at: '2026-09-15T12:00:00+00:00',
+          ends_at: '2026-09-15T12:30:00+00:00',
+          status: 'available',
+          reason: null
+        }
+      ]
+    })
+
+    render(
+      <BookingStepDateTime
+        storePublicId="store-1"
+        serviceId="svc-1"
+        staffId="st-1"
+        selectedDate={null}
+        selectedTime={null}
+        onSelect={() => undefined}
+        onBack={() => undefined}
+      />
+    )
+
+    expect(
+      screen.getByRole('group', { name: /fechas disponibles.*deslizá horizontalmente/i })
+    ).toBeInTheDocument()
+    expect(screen.getByText('Deslizá para ver más')).not.toHaveClass('sm:hidden')
+
+    const timeButton = screen.getByRole('button', { name: /09:00/ })
+    expect(timeButton).toHaveClass('min-h-11')
+    expect(timeButton.parentElement).toHaveClass(
+      'grid-cols-2',
+      'min-[380px]:grid-cols-3',
+      'sm:grid-cols-4'
+    )
+  })
+
+  it('usa texto secundario AA y objetivos tactiles para el selector de profesional', () => {
+    mockAvailability.mockReturnValue({ isLoading: false, data: [] })
+    mockStaff.mockReturnValue({
+      isLoading: false,
+      data: [
+        {
+          public_id: 'st-1',
+          kind: 'person',
+          first_name: 'Ana',
+          last_name: '',
+          display_name: 'Ana',
+          service_ids: ['svc-1']
+        },
+        {
+          public_id: 'st-2',
+          kind: 'person',
+          first_name: 'Sol',
+          last_name: '',
+          display_name: 'Sol',
+          service_ids: ['svc-1']
+        }
+      ]
+    })
+
+    render(
+      <BookingStepDateTime
+        storePublicId="store-1"
+        serviceId="svc-1"
+        staffId={null}
+        selectedDate={null}
+        selectedTime={null}
+        onSelect={() => undefined}
+        onBack={() => undefined}
+      />
+    )
+
+    expect(screen.getByText('Profesional').parentElement?.style.color).toBe(
+      asRgb(colors2000s.text.secondary)
+    )
+    expect(screen.getByText('Deslizá para ver más opciones.')).not.toHaveClass('sm:hidden')
+    expect(screen.getByText('Deslizá para ver más opciones.').style.color).toBe(
+      asRgb(colors2000s.text.secondary)
+    )
+    for (const name of [/Cualquiera/, /Ana/, /Sol/]) {
+      expect(screen.getByRole('button', { name })).toHaveClass('min-h-11', 'min-w-11')
+    }
+  })
+
+  it('usa texto secundario AA en el estado vacío sobre superficie blanca', () => {
+    mockAvailability.mockReturnValue({ isLoading: false, data: [] })
+    mockStaff.mockReturnValue({
+      isLoading: false,
+      data: [
+        {
+          public_id: 'st-1',
+          kind: 'person',
+          first_name: 'Ana',
+          last_name: '',
+          display_name: 'Ana',
+          service_ids: ['svc-1']
+        },
+        {
+          public_id: 'st-2',
+          kind: 'person',
+          first_name: 'Sol',
+          last_name: '',
+          display_name: 'Sol',
+          service_ids: ['svc-1']
+        }
+      ]
+    })
+
+    render(
+      <BookingStepDateTime
+        storePublicId="store-1"
+        serviceId="svc-1"
+        staffId={null}
+        selectedDate={null}
+        selectedTime={null}
+        showWaitlist={false}
+        onSelect={() => undefined}
+        onBack={() => undefined}
+      />
+    )
+
+    expect(screen.getByText('No hay turnos disponibles.').style.color).toBe(
+      asRgb(colors2000s.text.secondary)
+    )
+    expect(screen.getByText('Probá seleccionando otro día.').style.color).toBe(
+      asRgb(colors2000s.text.secondary)
+    )
+  })
+
+  it('mantiene los horarios en caché ante un error de actualización y permite reintentar', () => {
+    const refetch = jest.fn()
+    mockAvailability.mockReturnValue({
+      isLoading: false,
+      isError: true,
+      isFetching: false,
+      refetch,
+      data: [
+        {
+          staff_id: 'st-1',
+          staff_name: 'Ana',
+          starts_at: '2026-09-15T12:00:00+00:00',
+          ends_at: '2026-09-15T12:30:00+00:00',
+          status: 'available',
+          reason: null
+        }
+      ]
+    })
+
+    render(
+      <BookingStepDateTime
+        storePublicId="store-1"
+        serviceId="svc-1"
+        staffId="st-1"
+        selectedDate={null}
+        selectedTime={null}
+        onSelect={() => undefined}
+        onBack={() => undefined}
+      />
+    )
+
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'La información visible puede estar desactualizada.'
+    )
+    expect(screen.getByRole('button', { name: /09:00/ })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reintentar' }))
+
+    expect(refetch).toHaveBeenCalledTimes(1)
   })
 
   it('una fecha lejana que vino por deep-link aparece en la tira y carga sus horarios', () => {
