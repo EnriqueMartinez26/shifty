@@ -666,7 +666,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
   const renderClientFields = () => (
     <section
       aria-label="Tus datos"
-      className="p-6 bg-white space-y-5"
+      className="p-4 sm:p-6 bg-white space-y-5"
       style={createBookingSurfaceStyle()}
     >
       <div className="relative">
@@ -685,7 +685,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
             autoComplete="name"
             value={client.name}
             onChange={(e) => updateClient({ name: e.target.value })}
-            className="w-full pl-12 pr-4 py-3.5 font-bold"
+            className="w-full min-h-11 pl-12 pr-4 py-3.5 font-bold"
             style={clientInputStyle}
             placeholder="Ej: Juan Perez"
           />
@@ -709,7 +709,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
               autoComplete="email"
               value={client.email}
               onChange={(e) => updateClient({ email: e.target.value })}
-              className="w-full pl-12 pr-4 py-3.5 font-bold"
+              className="w-full min-h-11 pl-12 pr-4 py-3.5 font-bold"
               style={clientInputStyle}
               placeholder="juan@email.com"
               aria-invalid={emailTyped && !emailFormatValid}
@@ -745,7 +745,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
               autoComplete="tel"
               value={client.phone}
               onChange={(e) => updateClient({ phone: e.target.value })}
-              className="w-full pl-12 pr-4 py-3.5 font-bold"
+              className="w-full min-h-11 pl-12 pr-4 py-3.5 font-bold"
               style={clientInputStyle}
               // Un ejemplo con forma de numero: "PREFIJO + NUM" no decia nada en
               // el celular. La validacion no cambia (isValidClientPhone).
@@ -804,7 +804,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
             id={`${fieldId}-notes`}
             value={client.notes}
             onChange={(e) => updateClient({ notes: e.target.value })}
-            className="w-full pl-12 pr-4 py-3.5 font-bold min-h-[100px] resize-none"
+            className="w-full min-h-[100px] pl-12 pr-4 py-3.5 font-bold resize-none"
             style={clientInputStyle}
             placeholder="Algo que debamos saber?"
           />
@@ -846,7 +846,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
         <BookingBackButton onBack={onBack} />
         <div>
           <h2
-            className="text-2xl font-black uppercase tracking-tight"
+            className="break-words text-2xl font-black uppercase tracking-tight"
             style={{ color: colors2000s.orange.accent }}
           >
             Tus datos y confirmación
@@ -878,12 +878,15 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
         </p>
       )}
 
-      <div className="p-6 bg-white space-y-5" style={createBookingSurfaceStyle()}>
-        <dl className="grid grid-cols-2 gap-4" aria-label="Tu turno">
+      <div className="p-4 sm:p-6 bg-white space-y-5" style={createBookingSurfaceStyle()}>
+        <dl
+          className="grid grid-cols-1 min-[380px]:grid-cols-2 gap-3 sm:gap-4"
+          aria-label="Tu turno"
+        >
           {turnSummary.map((item) => (
             <div
               key={item.label}
-              className="p-4 border min-w-0"
+              className="p-3 sm:p-4 border min-w-0"
               style={{ ...createBookingAccentBoxStyle('#ffffff', '#e5e7eb') }}
             >
               <dt className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-1">
@@ -922,7 +925,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
                 Código promocional
               </label>
             </div>
-            <div className="grid sm:grid-cols-[1fr_auto] gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-3">
               <input
                 id={`${fieldId}-promo-code`}
                 ref={focusPromotionInput}
@@ -934,7 +937,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
                   applyPromotion('', null)
                   setErrorMessage('')
                 }}
-                className="w-full px-4 py-3 font-bold outline-none"
+                className="w-full min-h-11 px-4 py-3 font-bold outline-none"
                 style={createBookingInputStyle()}
                 placeholder="Ej: BIENVENIDA10"
               />
@@ -944,7 +947,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
                   void handleApplyPromotion()
                 }}
                 disabled={previewPromotion.isPending}
-                className="px-4 py-3 rounded-2xl text-xs font-black uppercase tracking-widest disabled:opacity-50"
+                className="min-h-11 px-4 py-3 rounded-2xl text-xs font-black uppercase tracking-widest disabled:opacity-50"
                 style={{
                   background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
                   border: `1px solid ${colors2000s.border.default}`,
@@ -1251,7 +1254,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
             onClick={() => {
               void handleConfirm('manual')
             }}
-            className="w-full font-black py-4 rounded-xl transition-all uppercase tracking-widest text-xs active:scale-95 border cursor-pointer select-none disabled:cursor-not-allowed"
+            className="w-full min-h-11 font-black py-4 rounded-xl transition-all uppercase tracking-widest text-xs active:scale-95 border cursor-pointer select-none disabled:cursor-not-allowed"
             style={
               canSubmit
                 ? {
@@ -1283,7 +1286,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
             onClick={() => {
               void handleConfirm('mercadopago')
             }}
-            className="w-full font-black py-4 rounded-xl transition-all uppercase tracking-widest text-xs active:scale-95 border cursor-pointer select-none inline-flex items-center justify-center gap-2 disabled:cursor-not-allowed"
+            className="w-full min-h-11 font-black py-4 rounded-xl transition-all uppercase tracking-widest text-xs active:scale-95 border cursor-pointer select-none inline-flex items-center justify-center gap-2 disabled:cursor-not-allowed"
             style={
               canSubmit
                 ? {
