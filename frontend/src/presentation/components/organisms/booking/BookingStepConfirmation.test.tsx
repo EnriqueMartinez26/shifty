@@ -158,6 +158,17 @@ describe('BookingStepConfirmation', () => {
       expect(screen.getByPlaceholderText('Ej: 351 1234567')).toBeInTheDocument()
     })
 
+    it('mantiene el formulario y las acciones utilizables en pantallas angostas', () => {
+      render(<BookingStepConfirmation {...props()} />)
+
+      expect(screen.getByRole('region', { name: 'Tus datos' })).toHaveClass('p-4', 'sm:p-6')
+      expect(screen.getByLabelText('Nombre Completo')).toHaveClass('min-h-11')
+      expect(screen.getByLabelText('Teléfono')).toHaveClass('min-h-11')
+      expect(screen.getByRole('button', { name: 'Volver' })).toHaveClass('min-h-11', 'min-w-11')
+      expect(screen.getByRole('button', { name: RESERVAR })).toHaveClass('min-h-11')
+      expect(screen.getByRole('link', { name: 'términos y condiciones' })).toHaveClass('underline')
+    })
+
     // 2026-10-16 (pedido de Mateo): "Tus datos y confirmación" y adentro otra
     // vez "Tus datos / Los necesitamos para registrar tu reserva." en el celular.
     it('el paso tiene un solo titulo y el bloque de datos sigue nombrado', () => {
