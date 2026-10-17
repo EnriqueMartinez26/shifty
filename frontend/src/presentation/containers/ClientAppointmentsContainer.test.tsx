@@ -135,6 +135,8 @@ describe('ClientAppointmentsContainer', () => {
     expect(screen.getByText('Corte')).toBeInTheDocument()
     expect(screen.getByText(/15\/09\/2026 a las 10:00 hs/)).toBeInTheDocument()
     expect(screen.getByText('Confirmado')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Cambiar/ })).toHaveClass('min-h-11', 'min-w-11')
+    expect(screen.getByRole('button', { name: 'Cancelar' })).toHaveClass('min-h-11', 'min-w-11')
   })
 
   // Varios servicios en un turno (2026-10-16): la etiqueta del backend y la
