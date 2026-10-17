@@ -3,6 +3,7 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import { Staff } from '@domain/entities/Staff'
 
 import { StaffCard } from './StaffCard'
+import { colors2000s } from '../../../theme/colors'
 
 describe('StaffCard', () => {
   // 2026-10-02, QA en navegador (S\45): los servicios salian como "S-1, S-2".
@@ -62,6 +63,35 @@ describe('StaffCard', () => {
     expect(screen.getByText('Ana Perez')).toBeInTheDocument()
   })
 
+  it('conserva y permite envolver los nombres largos en pantallas angostas', () => {
+    const persona = Staff.fromPrimitives({
+      public_id: 'st-long-name',
+      kind: 'person',
+      first_name: 'Ana Cecilia',
+      last_name: 'Fernández de la Torre',
+      email: 'ana@example.com',
+      display_name: 'Ana Cecilia Fernández de la Torre',
+      is_active: true,
+      service_ids: []
+    })
+
+    render(
+      <StaffCard
+        staff={persona}
+        onEdit={jest.fn()}
+        onDelete={jest.fn()}
+        onEditSchedule={jest.fn()}
+      />
+    )
+
+    const displayName = screen.getByRole('heading', { name: persona.displayName })
+    const fullName = screen.getByText('Ana Cecilia Fernández de la Torre', { selector: 'p' })
+    expect(displayName).toHaveClass('whitespace-normal', 'break-words')
+    expect(fullName).toHaveClass('whitespace-normal', 'break-words')
+    expect(displayName).not.toHaveClass('truncate')
+    expect(fullName).not.toHaveClass('truncate')
+  })
+
   it('un recurso sin email no rompe la pagina de personal', () => {
     // Regresion Fase 2 (2026-09-10): Email.create('') tiraba una excepcion y
     // se caia la pagina entera cuando el backend devolvia un staff sin email.
@@ -86,6 +116,10 @@ describe('StaffCard', () => {
     )
 
     expect(screen.getByText('Cancha 1')).toBeInTheDocument()
+    const initials = screen.getByText('C') as HTMLDivElement
+    expect(initials.getAttribute('style')).toContain(colors2000s.status.info.dark)
+    expect(initials.getAttribute('style')).toContain(colors2000s.status.info.accent)
+    expect(initials.getAttribute('style')).not.toContain(colors2000s.status.info.light)
     expect(screen.getByText('Recurso')).toBeInTheDocument()
     expect(screen.getByText('Cancha, sala o box: sin usuario')).toBeInTheDocument()
   })
