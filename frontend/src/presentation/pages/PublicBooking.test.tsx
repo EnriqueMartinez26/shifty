@@ -167,6 +167,23 @@ describe('PublicBooking: WhatsApp de la tienda', () => {
   })
 })
 
+describe('PublicBooking: objetivos táctiles', () => {
+  it('mantiene Mis turnos y los enlaces legales con altura mínima de 44 px', () => {
+    renderEn('/booking/sol')
+
+    expect(screen.getByRole('link', { name: 'Mis turnos' })).toHaveClass('min-h-11')
+    expect(screen.getByRole('link', { name: 'Términos y condiciones' })).toHaveClass('min-h-11')
+    expect(screen.getByRole('link', { name: 'Privacidad' })).toHaveClass('min-h-11')
+  })
+
+  it('conserva objetivos legales en el retorno del pago', () => {
+    renderEn('/booking/sol?payment_id=p1')
+
+    expect(screen.getByRole('link', { name: 'Términos y condiciones' })).toHaveClass('min-h-11')
+    expect(screen.getByRole('link', { name: 'Privacidad' })).toHaveClass('min-h-11')
+  })
+})
+
 // 2026-10-16 (pedido de Mateo): en el paso de confirmacion la politica de seña
 // salia entera junto a la seña y el pie la volvia a nombrar. Se muestra antes
 // de confirmar (Legal.tsx) en el paso mismo; el pie la nombra en los demas.
