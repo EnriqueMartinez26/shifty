@@ -14,10 +14,20 @@ jest.mock('sonner', () => ({ toast: { error: jest.fn(), warning: jest.fn(), info
 const mockDelete = jest.fn()
 const mockReplaceSchedules = jest.fn()
 const mockAddMyself = jest.fn()
+const mockStaffMember = {
+  id: 'st-1',
+  fullName: 'Ana Gomez',
+  displayName: 'Ana',
+  schedules: []
+}
+let mockStaffList = [mockStaffMember]
+beforeEach(() => {
+  mockStaffList = [mockStaffMember]
+})
 jest.mock('../hooks/useManagedStaff', () => ({
   useAddMyselfAsStaff: () => ({ mutateAsync: mockAddMyself }),
   useManagedStaff: () => ({
-    data: [{ id: 'st-1', fullName: 'Ana Gomez', displayName: 'Ana', schedules: [] }],
+    data: mockStaffList,
     isLoading: false,
     error: null
   }),
@@ -111,6 +121,41 @@ jest.mock('../components/organisms/StaffFormModal', () => ({
     </>
   )
 }))
+
+describe('StaffManagementContainer: búsqueda y estados vacíos', () => {
+  it('expone un nombre accesible y foco visible en la búsqueda', () => {
+    const { getByRole } = render(<StaffManagementContainer />)
+    const search = getByRole('searchbox', { name: 'Buscar profesional o recurso' })
+
+    expect(search).toHaveClass(
+      'focus-visible:outline',
+      'focus-visible:outline-2',
+      'focus-visible:outline-offset-2',
+      'focus-visible:outline-[#9a4507]'
+    )
+  })
+
+  it('anuncia cuando el catálogo todavía no contiene personal o recursos', () => {
+    mockStaffList = []
+    const { getByRole } = render(<StaffManagementContainer />)
+
+    expect(getByRole('status')).toHaveTextContent('Todavía no hay profesionales ni recursos')
+    expect(getByRole('status')).toHaveTextContent(
+      'Agregá un profesional o recurso para empezar a gestionar el equipo.'
+    )
+  })
+
+  it('anuncia por separado cuando la búsqueda no coincide con el catálogo', () => {
+    const { getByRole } = render(<StaffManagementContainer />)
+    fireEvent.change(getByRole('searchbox', { name: 'Buscar profesional o recurso' }), {
+      target: { value: 'inesistente' }
+    })
+
+    expect(getByRole('status')).toHaveTextContent('No se encontraron resultados')
+    expect(getByRole('status')).toHaveTextContent('Probá con otro término de búsqueda.')
+    expect(getByRole('status')).not.toHaveTextContent('Todavía no hay profesionales ni recursos')
+  })
+})
 
 // 2026-10-01: con la tienda suspendida cada accion fallaba con 402 en vez de
 // verse deshabilitada (FF-15). POST, PUT y DELETE /staff/... no estan en
