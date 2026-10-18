@@ -20,6 +20,7 @@ export const UserSearchForm: React.FC<UserSearchFormProps> = ({ onSearch }) => {
   return (
     <form
       role="search"
+      aria-label="Buscar usuarios"
       className="flex gap-3"
       onSubmit={(e) => {
         e.preventDefault()
@@ -36,7 +37,7 @@ export const UserSearchForm: React.FC<UserSearchFormProps> = ({ onSearch }) => {
           aria-label="Buscar usuario"
           placeholder="NOMBRE, TELÉFONO O EMAIL..."
           maxLength={80}
-          className="w-full pl-12 pr-4 py-3.5 rounded-2xl font-black uppercase tracking-widest text-xs outline-none"
+          className="w-full pl-12 pr-4 py-3.5 rounded-2xl font-black uppercase tracking-widest text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#9a4507]"
           style={{
             background: 'white',
             border: `1px solid ${colors2000s.border.default}`,
@@ -49,7 +50,7 @@ export const UserSearchForm: React.FC<UserSearchFormProps> = ({ onSearch }) => {
       </div>
       <button
         type="submit"
-        className="px-6 rounded-2xl font-black uppercase tracking-widest text-xs transition-all active:scale-95"
+        className="min-h-11 px-6 rounded-2xl font-black uppercase tracking-widest text-xs transition-all active:scale-95 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#9a4507]"
         style={buttonStyles2000s.default}
       >
         Buscar
