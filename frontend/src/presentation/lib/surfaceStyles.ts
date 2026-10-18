@@ -186,5 +186,5 @@ export const createBookingBackButtonStyle = (): CSSProperties => ({
   background: SURFACE_BACKGROUNDS.orange,
   borderColor: colors2000s.orange.accent,
   boxShadow: SURFACE_SHADOWS.raisedOrange,
-  color: colors2000s.text.onOrange
+  color: colors2000s.text.onOrangeSelection
 })

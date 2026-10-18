@@ -62,11 +62,21 @@ const lightPairs = Object.entries(TEXT_ON_LIGHT).flatMap(([text, fg]) =>
   Object.entries(LIGHT_SURFACES).map(([surface, bg]) => [text, fg, surface, bg] as const)
 )
 
-// El CTA y todo lo "seleccionado": texto blanco sobre el degradado
-// orange.cta -> orange.accent (buttonStyles2000s.selected, orangeCtaGradient).
+// El CTA y todo lo "seleccionado": texto oscuro sobre la rampa naranja
+// orange.cta -> orange.dark (buttonStyles2000s.selected, orangeCtaGradient).
 const ctaPairs = [
-  ['text.onOrange', colors2000s.text.onOrange, 'orange.cta', colors2000s.orange.cta],
-  ['text.onOrange', colors2000s.text.onOrange, 'orange.accent', colors2000s.orange.accent]
+  [
+    'text.onOrangeSelection',
+    colors2000s.text.onOrangeSelection,
+    'orange.cta',
+    colors2000s.orange.cta
+  ],
+  [
+    'text.onOrangeSelection',
+    colors2000s.text.onOrangeSelection,
+    'orange.dark',
+    colors2000s.orange.dark
+  ]
 ] as const
 
 const statusPairs = (['success', 'danger', 'warning', 'info'] as const).flatMap((tone) => {
@@ -121,7 +131,7 @@ describe('contraste de los tokens de texto (WCAG 2.1 AA)', () => {
     }
 
     expect(tailwindToken('primary')).toBe(colors2000s.orange.cta)
-    expect(tailwindToken('primary-foreground')).toBe(colors2000s.text.onOrange)
+    expect(tailwindToken('primary-foreground')).toBe(colors2000s.text.onOrangeSelection)
     expect(tailwindToken('background')).toBe(colors2000s.bg.primary)
     expect(tailwindToken('background-end')).toBe(colors2000s.bg.secondary)
     expect(tailwindToken('foreground')).toBe(colors2000s.text.primary)
