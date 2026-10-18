@@ -79,7 +79,7 @@ export const AgendaToolbar: React.FC<AgendaToolbarProps> = ({
         type="button"
         onClick={onPrev}
         aria-label="Anterior"
-        className="w-10 h-10 flex items-center justify-center transition-all active:scale-90"
+        className="min-w-11 min-h-11 flex items-center justify-center transition-all active:scale-90"
         style={buttonStyles2000s.default}
       >
         <ChevronLeft size={20} className="text-gray-600" />
@@ -102,7 +102,7 @@ export const AgendaToolbar: React.FC<AgendaToolbarProps> = ({
         type="button"
         onClick={onNext}
         aria-label="Siguiente"
-        className="w-10 h-10 flex items-center justify-center transition-all active:scale-90"
+        className="min-w-11 min-h-11 flex items-center justify-center transition-all active:scale-90"
         style={buttonStyles2000s.default}
       >
         <ChevronRight size={20} className="text-gray-600" />
@@ -116,7 +116,7 @@ export const AgendaToolbar: React.FC<AgendaToolbarProps> = ({
           type="button"
           onClick={() => onViewChange(viewKey)}
           aria-pressed={view === viewKey}
-          className="min-h-10 px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest"
+          className="min-h-11 px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest"
           style={view === viewKey ? buttonStyles2000s.selected : buttonStyles2000s.default}
         >
           {VIEW_LABELS[viewKey]}
@@ -127,7 +127,7 @@ export const AgendaToolbar: React.FC<AgendaToolbarProps> = ({
         onClick={onNewAppointment}
         disabled={readOnlyReason !== null}
         title={readOnlyReason ?? undefined}
-        className="px-6 py-4 rounded-xl flex items-center gap-2 font-black uppercase tracking-widest text-xs disabled:opacity-50"
+        className="min-h-11 px-6 py-4 rounded-xl flex items-center gap-2 font-black uppercase tracking-widest text-xs disabled:opacity-50"
         style={buttonStyles2000s.selected}
       >
         <Plus size={18} /> Nuevo turno
