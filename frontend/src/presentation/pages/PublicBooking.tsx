@@ -83,12 +83,12 @@ const PublicBooking: React.FC = () => {
 
   if (isLoading || resolvingDeepLink) {
     return (
-      <div
+      <main
         className="min-h-screen grid place-items-center text-sm font-black uppercase tracking-widest"
         style={{ background: colors2000s.bg.primary, color: colors2000s.text.secondary }}
       >
         Cargando...
-      </div>
+      </main>
     )
   }
 
@@ -97,16 +97,23 @@ const PublicBooking: React.FC = () => {
   // cargada, un refetch fallido no tapa la pagina.
   if (!store && isError && !isStoreMissing(storeQuery.error)) {
     return (
-      <StoreLoadError onRetry={() => void storeQuery.refetch()} retrying={storeQuery.isFetching} />
+      <main>
+        <StoreLoadError
+          onRetry={() => void storeQuery.refetch()}
+          retrying={storeQuery.isFetching}
+        />
+      </main>
     )
   }
 
   if (!store) {
     return (
-      <NotFoundScreen
-        title="Negocio no encontrado"
-        subtitle="No encontramos una tienda en esta dirección. Revisá el link que te compartieron."
-      />
+      <main>
+        <NotFoundScreen
+          title="Negocio no encontrado"
+          subtitle="No encontramos una tienda en esta dirección. Revisá el link que te compartieron."
+        />
+      </main>
     )
   }
 
@@ -116,7 +123,7 @@ const PublicBooking: React.FC = () => {
       payment?.payment_status === 'approved' && payment.appointment_status === 'confirmed'
     const failed = ['rejected', 'expired', 'refunded'].includes(payment?.payment_status || '')
     return (
-      <div
+      <main
         className="min-h-screen grid place-items-center px-4"
         style={{ background: colors2000s.bg.primary }}
       >
@@ -187,12 +194,12 @@ const PublicBooking: React.FC = () => {
           </button>
           <LegalFooterLinks className={`pt-2 ${LEGAL_FOOTER_TARGET_CLASSES}`} />
         </section>
-      </div>
+      </main>
     )
   }
 
   return (
-    <div
+    <main
       className="min-h-screen py-8 px-4 sm:py-12 sm:px-6 lg:px-8"
       style={{ background: colors2000s.bg.primary }}
     >
@@ -305,7 +312,7 @@ const PublicBooking: React.FC = () => {
           POWERED BY <span className="text-orange-500 font-extrabold">SHIFTY</span>
         </p>
       </div>
-    </div>
+    </main>
   )
 }
 
