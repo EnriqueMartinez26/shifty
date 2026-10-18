@@ -2,6 +2,9 @@ import { z } from 'zod'
 
 const emailSchema = z.string().email()
 
+/** Tope del nombre visible: `DISPLAY_NAME_MAX_LENGTH` de backend/modules/staff/schemas.py. */
+export const DISPLAY_NAME_MAX_LENGTH = 100
+
 /**
  * Persona o recurso (cancha, sala, box). Un recurso solo necesita nombre de
  * muestra y servicios; una persona sigue exigiendo nombre, apellido y email

@@ -47,6 +47,26 @@ describe('AuthService', () => {
     expect(mockGet).toHaveBeenCalledWith('/me')
   })
 
+  // 2026-10-14: /me no traia el nombre y el panel no podia proponerlo.
+  it('fetchCurrentUser entrega el nombre y el apellido de /me', async () => {
+    mockGet.mockResolvedValue({
+      data: {
+        email: 'ana@x.com',
+        role: 'admin',
+        store_id: 's-1',
+        public_id: 'u-1',
+        is_global_admin: false,
+        first_name: 'Ana',
+        last_name: null
+      }
+    })
+
+    const user = await authService.fetchCurrentUser()
+
+    expect(user.first_name).toBe('Ana')
+    expect(user.last_name).toBeUndefined()
+  })
+
   it('logout revoca la sesion por POST sin cuerpo', async () => {
     await authService.logout()
 
