@@ -22,19 +22,19 @@ Las agrupaciones son prácticas para la revisión, no se imponen cuando entran e
 4. Si hace falta cambiar API o BD, abrí una línea backend independiente.
 5. Mantené la ruta en progreso hasta completar los controles que le correspondan; una PR abierta o CI verde no la cierra.
 
-## Estado por ruta — 17 de octubre de 2026
+## Estado por ruta — 18 de octubre de 2026
 
 El [issue #163](https://github.com/EnriqueMartinez26/shifty/issues/163) sigue abierto. Este snapshot incluye las PR de UX #196–#202 y #204–#222, todas abiertas como borradores; #203 corresponde a performance del [issue #152](https://github.com/EnriqueMartinez26/shifty/issues/152) y se mantiene separado. Ninguna representa una ruta integrada o cerrada. El estado «checks verdes» se refiere a las comprobaciones automatizadas remotas de esa PR, no a QA visual, teclado ni E2E.
 
-| Ruta o área | Tarea / fricción atendida | Cambio UX y evidencia automatizada actual |
+| Ruta o área | Tarea / fricción atendida | Cambio UX y evidencia disponible |
 | --- | --- | --- |
-| `/b/:slug`, `/booking/:slug` | Elegir servicios, fecha y horario; completar y revisar la reserva en pantallas angostas. | Responsive y fundamento visual: [#196](https://github.com/EnriqueMartinez26/shifty/pull/196), [#199](https://github.com/EnriqueMartinez26/shifty/pull/199), [#200](https://github.com/EnriqueMartinez26/shifty/pull/200), [#201](https://github.com/EnriqueMartinez26/shifty/pull/201). Checks remotos verdes; PR abiertas en cadena. |
+| `/b/:slug`, `/booking/:slug` | Elegir servicios, fecha y horario; completar y revisar la reserva en pantallas angostas. | Responsive y fundamento visual: [#196](https://github.com/EnriqueMartinez26/shifty/pull/196), [#199](https://github.com/EnriqueMartinez26/shifty/pull/199), [#200](https://github.com/EnriqueMartinez26/shifty/pull/200), [#201](https://github.com/EnriqueMartinez26/shifty/pull/201). Checks remotos verdes; PR abiertas en cadena. QA visual en 390×844 y 1440×900 sin desborde; foco visible y transición por Enter al encabezado del paso siguiente en [#224](https://github.com/EnriqueMartinez26/shifty/pull/224). E2E de reserva pública en stack aislado: 1/1. Sigue pendiente completar los otros anchos y variantes del flujo. |
 | `/b/:slug/mis-turnos` y acceso OTP | Consultar y gestionar turnos con acciones legibles en móvil y mantener claro el acceso del cliente. | [#202](https://github.com/EnriqueMartinez26/shifty/pull/202). Checks remotos verdes; PR abierta y encadenada. |
 | `/login`, `/reset-password` | Acceder o recuperar la cuenta y alcanzar los controles táctiles. | [#204](https://github.com/EnriqueMartinez26/shifty/pull/204). Checks remotos verdes. La revisión puntual previa de Login a 390 y 1440 px observó foco en Email y sin desborde; no completa QA de recuperación ni teclado. |
 | Páginas legales, presentación móvil | Mantener legibles los objetivos táctiles y permitir que enlaces largos de contacto se ajusten al ancho. | [#204](https://github.com/EnriqueMartinez26/shifty/pull/204), [#207](https://github.com/EnriqueMartinez26/shifty/pull/207). Checks remotos verdes. El contenido legal definitivo no forma parte de estos cambios. |
 | Navegación del panel en móvil | Abrir y recorrer la navegación del panel desde pantallas pequeñas. | [#205](https://github.com/EnriqueMartinez26/shifty/pull/205). Checks remotos verdes. |
-| `/dashboard` | Consultar el panel sin desbordes en pantallas angostas. | [#206](https://github.com/EnriqueMartinez26/shifty/pull/206). Checks remotos verdes. |
-| Agenda y acciones de turnos | Avanzar por la agenda y alcanzar controles de fecha, vista, alta y acciones del turno. | [#197](https://github.com/EnriqueMartinez26/shifty/pull/197), [#208](https://github.com/EnriqueMartinez26/shifty/pull/208). Checks remotos verdes; #197 sigue encadenada. |
+| `/dashboard` | Consultar el panel sin desbordes en pantallas angostas. | [#206](https://github.com/EnriqueMartinez26/shifty/pull/206). Checks remotos verdes. Inspección visual del preview a 390×844 y 1440×900 sin desborde; no cierra revisión de todos los estados ni de teclado. |
+| Agenda y acciones de turnos | Avanzar por la agenda y alcanzar controles de fecha, vista, alta y acciones del turno. | [#197](https://github.com/EnriqueMartinez26/shifty/pull/197), [#208](https://github.com/EnriqueMartinez26/shifty/pull/208). Checks remotos verdes; #197 sigue encadenada. Inspección visual a 390×844 y 1440×900 sin desborde. El menú móvil abre con foco en navegación y Escape lo cierra restaurando el foco al botón. |
 | Tarjetas de servicios, personal y usuarios | Leer y operar las tarjetas en anchos móviles. | [#198](https://github.com/EnriqueMartinez26/shifty/pull/198). Checks remotos verdes; PR abierta y encadenada. |
 | `/dashboard/collections` | Alcanzar acciones de cobranza en móvil sin alterar permisos ni flujo financiero. | [#209](https://github.com/EnriqueMartinez26/shifty/pull/209). Checks remotos verdes. |
 | `/dashboard/payments` | Registrar una devolución manual indicando tipo, importe y confirmación externa explícita. | [#210](https://github.com/EnriqueMartinez26/shifty/pull/210). Checks remotos verdes; no envía dinero ni cambia el contrato del backend. |
@@ -49,13 +49,15 @@ El [issue #163](https://github.com/EnriqueMartinez26/shifty/issues/163) sigue ab
 | Manual | Cambiar entre seis secciones con pestañas y teclado; conservar foco visible, asociar cada pestaña a su panel y alcanzar enlaces legales con 44 px. | [#219](https://github.com/EnriqueMartinez26/shifty/pull/219), draft. Prueba focalizada 4/4 y gates locales verdes; Quality, Security, CodeQL y Vercel remotos en verde. |
 | SuperAdmin (`/control-global`) | Identificar los controles de formularios y usar diálogos con foco predecible. | [#220](https://github.com/EnriqueMartinez26/shifty/pull/220) etiqueta 40 controles (4/4 pruebas focalizadas y gates locales verdes; Quality, Security, CodeQL y Vercel remotos en verde). [#221](https://github.com/EnriqueMartinez26/shifty/pull/221) gestiona foco, Escape, restauración del foco y botón de 44 px (5/5 y gates locales verdes; checks remotos en verde). [#222](https://github.com/EnriqueMartinez26/shifty/pull/222) nombra filtros, expone `aria-pressed`, muestra el foco y lleva controles a 44 px (2/2 pruebas; check, build y auditoría locales verdes; checks remotos en verde). QA visual/teclado autenticado sigue pendiente. |
 
-### Revisión manual: pendiente
+### Revisión manual: parcial
 
-La revisión visual y de teclado/foco en escritorio y móvil sigue pendiente para las rutas de la tabla, salvo la observación puntual de Login indicada arriba. Para cada pantalla se debe verificar foco visible y ordenado, uso solo con teclado, contraste, anuncios de carga/error/estado, diálogos y objetivos táctiles. Revisar una pantalla o pasar CI no equivale a validar el recorrido completo.
+El 18 de octubre se revisaron el flujo de reserva pública, el dashboard y la agenda en el preview local a 390×844 y 1440×900. No hubo desborde horizontal en esas pantallas. En reserva, el foco de teclado es visible y Enter al avanzar lo lleva al encabezado del paso siguiente; en la navegación móvil, Enter abre el menú, Escape lo cierra y restaura foco al disparador. Estas observaciones cubren solo esos recorridos y anchos.
 
-### E2E: pendiente
+Quedan pendientes los anchos 320, 360, 412, 768, 1024 y 1280 px; el resto de rutas; estados de carga, vacío, error y reintento; revisión completa de contraste, anuncios, diálogos y uso exclusivo de teclado. La sesión autenticada de QA expiró durante la navegación repetida y el rate limit respondió 429, así que no se certifican más pantallas del panel con esta corrida.
 
-No se certifica ningún recorrido E2E: durante esta actualización la API local no está disponible. Quedan pendientes, como mínimo, reserva normal y multi-servicio; recuperación y OTP de Mis turnos; reintentos y errores; y recorridos autenticados de panel con tienda y datos deterministas aislados. No usar datos de producción ni ejecutar pagos o devoluciones reales.
+### E2E: parcial
+
+La reserva pública pasó 1/1 en un stack Docker descartable, con API disponible y tienda sintética `salon-sentinel`; no se usaron datos de producción ni se realizaron pagos. Este resultado cubre la reserva normal probada, no certifica la reserva multi-servicio, recuperación/OTP de Mis turnos, reintentos/error ni recorridos autenticados completos del panel. Esos casos siguen pendientes.
 
 ## Trabajo separado de #163
 
