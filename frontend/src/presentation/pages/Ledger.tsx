@@ -273,7 +273,7 @@ const LedgerPage: React.FC = () => {
             />
             <button
               type="submit"
-              className="px-4 rounded-2xl text-xs font-black uppercase"
+              className="min-h-11 shrink-0 px-4 rounded-2xl text-xs font-black uppercase"
               style={buttonStyles2000s.default}
             >
               Buscar
