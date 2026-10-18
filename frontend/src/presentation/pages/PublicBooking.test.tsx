@@ -95,6 +95,7 @@ describe('PublicBooking al volver del pago', () => {
   it('con el pago aprobado y el turno confirmado muestra la reserva confirmada', () => {
     renderEn('/booking/sol?payment_id=p1')
 
+    expect(screen.getByRole('main')).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Reserva confirmada' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Volver a consultar' })).not.toBeInTheDocument()
   })
@@ -168,6 +169,12 @@ describe('PublicBooking: WhatsApp de la tienda', () => {
 })
 
 describe('PublicBooking: objetivos táctiles', () => {
+  it('expone el contenido de la reserva dentro de un landmark principal', () => {
+    renderEn('/booking/sol')
+
+    expect(screen.getByRole('main')).toBeInTheDocument()
+  })
+
   it('mantiene Mis turnos y los enlaces legales con altura mínima de 44 px', () => {
     renderEn('/booking/sol')
 
@@ -233,6 +240,7 @@ describe('PublicBooking con una tienda que no existe', () => {
     expect(
       screen.getByRole('heading', { level: 1, name: 'Negocio no encontrado' })
     ).toBeInTheDocument()
+    expect(screen.getByRole('main')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Ir al inicio' })).toHaveAttribute('href', '/')
     // Ya esta en la portada de esa tienda: "volver" a ella no saca de ningun lado.
     expect(screen.queryByRole('link', { name: 'Volver a la tienda' })).toBeNull()
@@ -256,6 +264,7 @@ describe('PublicBooking cuando la tienda no se pudo consultar', () => {
     renderEn('/booking/sol')
 
     expect(screen.queryByText('Negocio no encontrado')).not.toBeInTheDocument()
+    expect(screen.getByRole('main')).toBeInTheDocument()
     expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(
       'No pudimos cargar la tienda'
     )
