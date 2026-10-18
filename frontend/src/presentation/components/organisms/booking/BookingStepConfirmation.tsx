@@ -587,24 +587,27 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
       }
       dispatchSubmission({ type: 'succeed', confirmation: result })
     } catch (error: unknown) {
-      // Sin canal para cobrar la seña (409 DEPOSIT_CHANNEL_UNAVAILABLE) o con
-      // un adicional que ya no existe (422 ADDON_UNAVAILABLE) el horario no
-      // tiene nada que ver: no se sugiere elegir otro.
+      // Sin canal para cobrar la seña (409 DEPOSIT_CHANNEL_UNAVAILABLE), con
+      // una operación idempotente todavía en curso, o con un adicional que ya
+      // no existe (422 ADDON_UNAVAILABLE), el horario no tiene nada que ver.
       const code = getErrorCode(error)
+      const status = getHttpStatus(error)
       // El catalogo cacheado (edge y navegador) puede ser el viejo: se pide
       // salteando los caches y lo elegido se revisa contra el nuevo.
       if (code === ADDON_UNAVAILABLE) void refreshServices()
       dispatchSubmission({
         type: 'fail',
         slotMayBeTaken:
+          status === 409 &&
           code !== 'DEPOSIT_CHANNEL_UNAVAILABLE' &&
+          code !== 'IDEMPOTENCY_IN_PROGRESS' &&
           code !== ADDON_UNAVAILABLE &&
           !SERVICE_COMBO_MESSAGES[code ?? '']
       })
       setErrorMessage(
         getErrorMessage(
           error,
-          'No pudimos procesar tu reserva. El horario podria estar ocupado.',
+          'No pudimos procesar tu reserva. Probá de nuevo.',
           BOOKING_CODE_MESSAGES,
           BOOKING_FIELD_MESSAGES
         )
