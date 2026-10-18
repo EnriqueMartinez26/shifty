@@ -36,6 +36,11 @@ const createEmptyPromotionForm = () => ({
   is_active: true
 })
 
+const focusVisibleControlClassName =
+  'focus:outline-none focus-visible:ring-2 focus-visible:ring-[#9a4507] focus-visible:ring-offset-2'
+const focusVisibleSwitchClassName =
+  '[&>button]:focus-visible:outline-none [&>button]:focus-visible:ring-2 [&>button]:focus-visible:ring-[#9a4507] [&>button]:focus-visible:ring-offset-2'
+
 const PromotionsPage: React.FC = () => {
   useDocumentTitle('Promociones · Shifty')
   const promotionsQuery = usePromotions(true, true)
@@ -180,7 +185,7 @@ const PromotionsPage: React.FC = () => {
               onClick={() => {
                 void handleSavePromotion()
               }}
-              className="px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest disabled:opacity-50"
+              className="min-h-11 px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest disabled:opacity-50"
               style={buttonStyles2000s.selected}
             >
               {isSaving ? (
@@ -195,32 +200,36 @@ const PromotionsPage: React.FC = () => {
           <div className="grid md:grid-cols-2 gap-4">
             <div className="space-y-2">
               <label
+                htmlFor="promotion-code"
                 className="text-[10px] font-black uppercase tracking-widest"
                 style={{ color: colors2000s.text.secondary }}
               >
                 Código
               </label>
               <input
+                id="promotion-code"
                 value={promotionForm.code}
                 onChange={(e) =>
                   setPromotionForm((prev) => ({ ...prev, code: e.target.value.toUpperCase() }))
                 }
-                className="w-full rounded-2xl px-4 py-3 font-bold outline-none"
+                className={`w-full rounded-2xl px-4 py-3 font-bold ${focusVisibleControlClassName}`}
                 style={inputStyle}
                 placeholder="BIENVENIDA10"
               />
             </div>
             <div className="space-y-2">
               <label
+                htmlFor="promotion-title"
                 className="text-[10px] font-black uppercase tracking-widest"
                 style={{ color: colors2000s.text.secondary }}
               >
                 Título
               </label>
               <input
+                id="promotion-title"
                 value={promotionForm.title}
                 onChange={(e) => setPromotionForm((prev) => ({ ...prev, title: e.target.value }))}
-                className="w-full rounded-2xl px-4 py-3 font-bold outline-none"
+                className={`w-full rounded-2xl px-4 py-3 font-bold ${focusVisibleControlClassName}`}
                 style={inputStyle}
                 placeholder="Descuento primera visita"
               />
@@ -229,17 +238,19 @@ const PromotionsPage: React.FC = () => {
 
           <div className="space-y-2">
             <label
+              htmlFor="promotion-description"
               className="text-[10px] font-black uppercase tracking-widest"
               style={{ color: colors2000s.text.secondary }}
             >
               Descripción
             </label>
             <textarea
+              id="promotion-description"
               value={promotionForm.description}
               onChange={(e) =>
                 setPromotionForm((prev) => ({ ...prev, description: e.target.value }))
               }
-              className="w-full min-h-24 rounded-2xl px-4 py-3 font-bold outline-none resize-y"
+              className={`w-full min-h-24 rounded-2xl px-4 py-3 font-bold resize-y ${focusVisibleControlClassName}`}
               style={inputStyle}
               placeholder="Texto interno para el equipo."
             />
@@ -248,12 +259,14 @@ const PromotionsPage: React.FC = () => {
           <div className="grid md:grid-cols-2 gap-4">
             <div className="space-y-2">
               <label
+                htmlFor="promotion-type"
                 className="text-[10px] font-black uppercase tracking-widest"
                 style={{ color: colors2000s.text.secondary }}
               >
                 Tipo
               </label>
               <select
+                id="promotion-type"
                 value={promotionForm.promotion_type}
                 onChange={(e) =>
                   setPromotionForm((prev) => ({
@@ -261,7 +274,7 @@ const PromotionsPage: React.FC = () => {
                     promotion_type: e.target.value as 'percent' | 'fixed'
                   }))
                 }
-                className="w-full rounded-2xl px-4 py-3 font-bold outline-none"
+                className={`w-full rounded-2xl px-4 py-3 font-bold ${focusVisibleControlClassName}`}
                 style={inputStyle}
               >
                 <option value="percent">Porcentaje</option>
@@ -270,18 +283,20 @@ const PromotionsPage: React.FC = () => {
             </div>
             <div className="space-y-2">
               <label
+                htmlFor="promotion-value"
                 className="text-[10px] font-black uppercase tracking-widest"
                 style={{ color: colors2000s.text.secondary }}
               >
                 Valor
               </label>
               <input
+                id="promotion-value"
                 type="number"
                 min="0"
                 step="0.01"
                 value={promotionForm.value}
                 onChange={(e) => setPromotionForm((prev) => ({ ...prev, value: e.target.value }))}
-                className="w-full rounded-2xl px-4 py-3 font-bold outline-none"
+                className={`w-full rounded-2xl px-4 py-3 font-bold ${focusVisibleControlClassName}`}
                 style={inputStyle}
                 placeholder={promotionForm.promotion_type === 'percent' ? '10' : '2000'}
               />
@@ -291,12 +306,14 @@ const PromotionsPage: React.FC = () => {
           <div className="grid md:grid-cols-2 gap-4">
             <div className="space-y-2">
               <label
+                htmlFor="promotion-minimum-amount"
                 className="text-[10px] font-black uppercase tracking-widest"
                 style={{ color: colors2000s.text.secondary }}
               >
                 Compra mínima
               </label>
               <input
+                id="promotion-minimum-amount"
                 type="number"
                 min="0"
                 step="0.01"
@@ -304,19 +321,21 @@ const PromotionsPage: React.FC = () => {
                 onChange={(e) =>
                   setPromotionForm((prev) => ({ ...prev, min_service_amount: e.target.value }))
                 }
-                className="w-full rounded-2xl px-4 py-3 font-bold outline-none"
+                className={`w-full rounded-2xl px-4 py-3 font-bold ${focusVisibleControlClassName}`}
                 style={inputStyle}
                 placeholder="Opcional"
               />
             </div>
             <div className="space-y-2">
               <label
+                htmlFor="promotion-maximum-uses"
                 className="text-[10px] font-black uppercase tracking-widest"
                 style={{ color: colors2000s.text.secondary }}
               >
                 Límite de usos
               </label>
               <input
+                id="promotion-maximum-uses"
                 type="number"
                 min="1"
                 step="1"
@@ -324,7 +343,7 @@ const PromotionsPage: React.FC = () => {
                 onChange={(e) =>
                   setPromotionForm((prev) => ({ ...prev, max_uses: e.target.value }))
                 }
-                className="w-full rounded-2xl px-4 py-3 font-bold outline-none"
+                className={`w-full rounded-2xl px-4 py-3 font-bold ${focusVisibleControlClassName}`}
                 style={inputStyle}
                 placeholder="Opcional"
               />
@@ -334,42 +353,46 @@ const PromotionsPage: React.FC = () => {
           <div className="grid md:grid-cols-2 gap-4">
             <div className="space-y-2">
               <label
+                htmlFor="promotion-valid-from"
                 className="text-[10px] font-black uppercase tracking-widest"
                 style={{ color: colors2000s.text.secondary }}
               >
                 Desde
               </label>
               <input
+                id="promotion-valid-from"
                 type="datetime-local"
                 value={promotionForm.valid_from}
                 onChange={(e) =>
                   setPromotionForm((prev) => ({ ...prev, valid_from: e.target.value }))
                 }
-                className="w-full rounded-2xl px-4 py-3 font-bold outline-none"
+                className={`w-full rounded-2xl px-4 py-3 font-bold ${focusVisibleControlClassName}`}
                 style={inputStyle}
               />
             </div>
             <div className="space-y-2">
               <label
+                htmlFor="promotion-valid-until"
                 className="text-[10px] font-black uppercase tracking-widest"
                 style={{ color: colors2000s.text.secondary }}
               >
                 Hasta
               </label>
               <input
+                id="promotion-valid-until"
                 type="datetime-local"
                 value={promotionForm.valid_until}
                 onChange={(e) =>
                   setPromotionForm((prev) => ({ ...prev, valid_until: e.target.value }))
                 }
-                className="w-full rounded-2xl px-4 py-3 font-bold outline-none"
+                className={`w-full rounded-2xl px-4 py-3 font-bold ${focusVisibleControlClassName}`}
                 style={inputStyle}
               />
             </div>
           </div>
 
           <div
-            className="flex items-center justify-between rounded-2xl p-4 bg-white"
+            className={`flex items-center justify-between rounded-2xl p-4 bg-white ${focusVisibleSwitchClassName}`}
             style={create2000sListCardStyle()}
           >
             <div>
@@ -394,7 +417,7 @@ const PromotionsPage: React.FC = () => {
                 setEditingPromotionId(null)
                 setPromotionForm(createEmptyPromotionForm())
               }}
-              className="w-full px-4 py-3 text-xs font-black uppercase tracking-widest"
+              className="min-h-11 w-full px-4 py-3 text-xs font-black uppercase tracking-widest"
               style={buttonStyles2000s.default}
             >
               Cancelar edición
@@ -488,7 +511,7 @@ const PromotionsPage: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => handleEditPromotion(promotion)}
-                    className="px-4 py-2 text-[10px] font-black uppercase tracking-widest"
+                    className="min-h-11 px-4 py-2 text-[10px] font-black uppercase tracking-widest"
                     style={buttonStyles2000s.default}
                   >
                     Editar
@@ -500,7 +523,7 @@ const PromotionsPage: React.FC = () => {
                     }}
                     disabled={writeAccess.readOnly}
                     title={readOnlyTitle}
-                    className="px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest disabled:opacity-50"
+                    className="min-h-11 px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest disabled:opacity-50"
                     style={
                       promotion.is_active ? buttonStyles2000s.selected : buttonStyles2000s.default
                     }

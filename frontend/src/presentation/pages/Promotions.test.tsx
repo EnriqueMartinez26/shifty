@@ -158,6 +158,61 @@ describe('PromotionsPage', () => {
     expect(valorDelContador('Totales')).toBe('3')
     expect(valorDelContador('Con límite')).toBe('1')
   })
+
+  it('asocia etiquetas con campos de texto, numericos, selector y vigencia', () => {
+    render(<PromotionsPage />)
+
+    expect(screen.getByLabelText('Código')).toHaveAttribute('id', 'promotion-code')
+    expect(screen.getByLabelText('Título')).toHaveAttribute('id', 'promotion-title')
+    expect(screen.getByLabelText('Descripción')).toHaveAttribute('id', 'promotion-description')
+    expect(screen.getByLabelText('Tipo')).toHaveAttribute('id', 'promotion-type')
+    expect(screen.getByLabelText('Valor')).toHaveAttribute('type', 'number')
+    expect(screen.getByLabelText('Compra mínima')).toHaveAttribute('type', 'number')
+    expect(screen.getByLabelText('Límite de usos')).toHaveAttribute('type', 'number')
+    expect(screen.getByLabelText('Desde')).toHaveAttribute('type', 'datetime-local')
+    expect(screen.getByLabelText('Hasta')).toHaveAttribute('type', 'datetime-local')
+    expect(screen.getByRole('switch', { name: 'Promoción activa' })).toHaveAttribute(
+      'aria-checked',
+      'true'
+    )
+  })
+
+  it('muestra foco visible en los campos y en el interruptor', () => {
+    render(<PromotionsPage />)
+
+    for (const label of ['Código', 'Tipo', 'Valor', 'Desde']) {
+      expect(screen.getByLabelText(label)).toHaveClass(
+        'focus-visible:ring-2',
+        'focus-visible:ring-[#9a4507]',
+        'focus-visible:ring-offset-2'
+      )
+    }
+
+    const activeSwitch = screen.getByRole('switch', { name: 'Promoción activa' })
+    expect(activeSwitch.parentElement).toHaveClass(
+      '[&>button]:focus-visible:ring-2',
+      '[&>button]:focus-visible:ring-[#9a4507]',
+      '[&>button]:focus-visible:ring-offset-2'
+    )
+  })
+
+  it('mantiene objetivos táctiles de 44 px en las acciones de promoción', () => {
+    mockPromotions = [
+      buildPromotion(),
+      buildPromotion({ public_id: 'promo-2', code: 'OTRA', is_active: false })
+    ]
+    render(<PromotionsPage />)
+
+    for (const name of ['Crear', 'Editar', 'Pausar', 'Reactivar']) {
+      const buttons = screen.getAllByRole('button', { name })
+      expect(buttons.length).toBeGreaterThan(0)
+      for (const button of buttons) expect(button).toHaveClass('min-h-11')
+    }
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Editar' })[0]!)
+    expect(screen.getByRole('button', { name: 'Actualizar' })).toHaveClass('min-h-11')
+    expect(screen.getByRole('button', { name: 'Cancelar edición' })).toHaveClass('min-h-11')
+  })
 })
 
 // 2026-10-01: con la tienda suspendida cada accion fallaba con 402 en vez de
