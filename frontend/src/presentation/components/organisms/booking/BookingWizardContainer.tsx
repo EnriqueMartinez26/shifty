@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 
 import { Check } from 'lucide-react'
 
@@ -123,6 +123,18 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
   useEffect(() => {
     if (currentStep !== step) onStepChange({ to: currentStep, from: step, mode: 'replace' })
   }, [currentStep, step, onStepChange])
+
+  const stepRegionRef = useRef<HTMLDivElement>(null)
+  const previousStepRef = useRef(currentStep)
+
+  // Al avanzar, retroceder o saltar automaticamente el servicio unico, el
+  // control activo anterior se desmonta. Lleva el foco al nuevo paso para que
+  // teclado y lector de pantalla no queden en el body.
+  useEffect(() => {
+    if (previousStepRef.current === currentStep) return
+    previousStepRef.current = currentStep
+    stepRegionRef.current?.focus()
+  }, [currentStep])
 
   // Un solo servicio no es una eleccion: se elige solo y el wizard arranca
   // en el horario. Sincroniza con la lista publica (dato externo): cuando
@@ -369,7 +381,11 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
       {renderStepIndicator()}
 
       <div
-        className="min-h-[400px] p-3 sm:p-6 rounded-lg relative"
+        ref={stepRegionRef}
+        role="region"
+        aria-label={`Paso ${currentStep + 1} de ${steps.length}: ${steps[currentStep]}`}
+        tabIndex={-1}
+        className="min-h-[400px] p-3 sm:p-6 rounded-lg relative focus:outline-none focus:ring-2 focus:ring-orange-500 focus:ring-offset-2"
         style={{
           background: 'rgba(255, 255, 255, 0.4)',
           border: '1px solid rgba(255, 255, 255, 0.5)',
