@@ -736,7 +736,7 @@ const SuperAdminPage: React.FC = () => {
         openRedeemCouponModal={openRedeemCouponModal}
       />
 
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1.45fr)_420px]">
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1.45fr)_420px]">
         <div className="space-y-6">
           <StoresSection
             search={draftSearch}
