@@ -177,6 +177,16 @@ describe('BookingWizardContainer', () => {
     expect(screen.getByText(SERVICIO)).toBeInTheDocument()
   })
 
+  it('no mueve el foco al montar el paso inicial', () => {
+    mockServices.mockReturnValue({ data: [servicio('a'), servicio('b')], isLoading: false })
+    const focoInicial = document.activeElement
+
+    render(<WizardEnRuta store={tienda(false)} />)
+
+    expect(document.activeElement).toBe(focoInicial)
+    expect(screen.getByRole('region', { name: 'Paso 1 de 3: Servicio' })).not.toHaveFocus()
+  })
+
   it('mueve el foco al paso nuevo al avanzar y retroceder', async () => {
     mockServices.mockReturnValue({ data: [servicio('a'), servicio('b')], isLoading: false })
     render(<WizardEnRuta store={tienda(false)} />)
