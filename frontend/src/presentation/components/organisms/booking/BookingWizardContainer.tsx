@@ -117,7 +117,6 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
   // El paso pedido solo se muestra si lo anterior esta elegido: tras recargar
   // con ?step=2 el estado arranca vacio (F4-15).
   const currentStep = clampStep(step, bookingState)
-
   // La URL pide un paso que no se puede mostrar: se corrige sin dejar una
   // entrada en el historial a la que "atras" volveria. Sincroniza la URL.
   useEffect(() => {
@@ -127,12 +126,21 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
   const stepRegionRef = useRef<HTMLDivElement>(null)
   const previousStepRef = useRef(currentStep)
 
-  // Al avanzar, retroceder o saltar automaticamente el servicio unico, el
-  // control activo anterior se desmonta. Lleva el foco al nuevo paso para que
-  // teclado y lector de pantalla no queden en el body.
+  // Al cambiar de paso, lleva el foco a la región. Al entrar en Datos y
+  // Confirmación, prioriza el nombre para que se pueda empezar a completar.
   useEffect(() => {
-    if (previousStepRef.current === currentStep) return
+    const previousStep = previousStepRef.current
+    if (previousStep === currentStep) return
     previousStepRef.current = currentStep
+    if (previousStep === 1 && currentStep === 2) {
+      const nameInput = stepRegionRef.current?.querySelector<HTMLInputElement>(
+        'input[autocomplete="name"]'
+      )
+      if (nameInput) {
+        nameInput.focus()
+        return
+      }
+    }
     stepRegionRef.current?.focus()
   }, [currentStep])
 

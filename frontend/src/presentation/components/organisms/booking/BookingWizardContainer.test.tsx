@@ -248,6 +248,18 @@ describe('BookingWizardContainer', () => {
       expect(url()).toBe('/booking/tienda?ref=ig&step=2')
     })
 
+    it('al elegir un horario lleva el foco al primer dato del paso nuevo', async () => {
+      mockServices.mockReturnValue({ data: [servicio('a'), servicio('b')], isLoading: false })
+      render(<WizardEnRuta store={tienda(false)} />)
+      fireEvent.click(screen.getByText('Servicio a'))
+      await waitFor(() => expect(screen.getByText(HORARIO)).toBeInTheDocument())
+
+      fireEvent.click(screen.getByText('09:00'))
+
+      const nameInput = await screen.findByPlaceholderText('Ej: Juan Perez')
+      await waitFor(() => expect(document.activeElement).toBe(nameInput))
+    })
+
     it('"atras" del navegador vuelve al paso anterior con lo elegido', () => {
       render(<WizardEnRuta store={tienda(false)} />)
       elegirServicioYHorario()

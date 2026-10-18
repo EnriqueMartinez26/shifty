@@ -889,7 +889,11 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
               <dt className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-1">
                 {item.label}
               </dt>
-              <dd className="text-lg font-black text-gray-800 break-words">{item.value}</dd>
+              <dd
+                className={`text-lg font-black text-gray-800 ${item.label === 'Fecha' ? 'whitespace-nowrap' : 'break-words'}`}
+              >
+                {item.value}
+              </dd>
             </div>
           ))}
         </dl>

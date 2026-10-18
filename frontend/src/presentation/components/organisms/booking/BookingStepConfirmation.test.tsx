@@ -158,6 +158,14 @@ describe('BookingStepConfirmation', () => {
       expect(screen.getByPlaceholderText('Ej: 351 1234567')).toBeInTheDocument()
     })
 
+    it('mantiene la fecha completa en una sola línea en el resumen angosto', () => {
+      render(<BookingStepConfirmation {...props()} />)
+
+      const fecha = screen.getByText('25/09/2026')
+      expect(fecha).toHaveClass('whitespace-nowrap')
+      expect(fecha).not.toHaveClass('break-words')
+    })
+
     it('mantiene el formulario y las acciones utilizables en pantallas angostas', () => {
       render(<BookingStepConfirmation {...props()} />)
 
