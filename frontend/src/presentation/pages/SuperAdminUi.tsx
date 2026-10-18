@@ -44,6 +44,9 @@ const dangerActionStyle = {
   background: 'rgba(239,68,68,0.06)'
 }
 
+export const buttonFocusVisibleClassName =
+  'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-solid focus-visible:outline-[#9a4507]'
+
 export const FieldLabel: React.FC<{ children: React.ReactNode }> = ({ children }) => (
   <label
     className="mb-1 block text-[10px] font-black uppercase tracking-widest"
@@ -131,7 +134,7 @@ export const ActionButton: React.FC<{
       type="button"
       onClick={onClick}
       disabled={disabled}
-      className="disabled:opacity-50"
+      className={`min-h-11 disabled:opacity-50 ${buttonFocusVisibleClassName}`}
       style={style}
     >
       {label}
@@ -156,7 +159,7 @@ export const MiniButton: React.FC<{
       type="button"
       onClick={onClick}
       disabled={disabled}
-      className="px-3 py-2 text-[10px] font-black uppercase tracking-widest disabled:opacity-50"
+      className={`min-h-11 px-3 py-2 text-[10px] font-black uppercase tracking-widest disabled:opacity-50 ${buttonFocusVisibleClassName}`}
       style={{ ...style, padding: '8px 12px' }}
     >
       {label}
