@@ -44,8 +44,12 @@ const dangerActionStyle = {
   background: 'rgba(239,68,68,0.06)'
 }
 
-export const FieldLabel: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+export const FieldLabel: React.FC<{ children: React.ReactNode; htmlFor: string }> = ({
+  children,
+  htmlFor
+}) => (
   <label
+    htmlFor={htmlFor}
     className="mb-1 block text-[10px] font-black uppercase tracking-widest"
     style={{ color: colors2000s.text.secondary }}
   >
