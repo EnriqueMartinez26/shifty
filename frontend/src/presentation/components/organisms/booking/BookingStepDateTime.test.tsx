@@ -547,10 +547,10 @@ describe('BookingStepDateTime', () => {
       />
     )
 
-    expect(screen.getByText('No hay turnos disponibles.').style.color).toBe(
+    expect(screen.getByText('Este día no hay atención.').style.color).toBe(
       asRgb(colors2000s.text.secondary)
     )
-    expect(screen.getByText('Probá seleccionando otro día.').style.color).toBe(
+    expect(screen.getByText('Probá con otro día.').style.color).toBe(
       asRgb(colors2000s.text.secondary)
     )
   })
@@ -719,6 +719,35 @@ describe('BookingStepDateTime', () => {
 
       expect(screen.getByText('Este día no hay atención.')).toBeInTheDocument()
       expect(screen.getByText('Probá con otro día.')).toBeInTheDocument()
+      expect(screen.queryByText('No hay turnos disponibles.')).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: AVISAME })).not.toBeInTheDocument()
+    })
+
+    it('sin franjas de atencion no ofrece lista de espera aunque haya profesionales asignados', () => {
+      mockAvailability.mockReturnValue({ isLoading: false, data: [] })
+      mockStaff.mockReturnValue({
+        isLoading: false,
+        data: [
+          { public_id: 'st-1', kind: 'person', display_name: 'Ana', service_ids: ['svc-1'] },
+          { public_id: 'st-2', kind: 'person', display_name: 'Bruno', service_ids: ['svc-1'] }
+        ]
+      })
+
+      montarCon(null)
+
+      expect(screen.getByText('Este día no hay atención.')).toBeInTheDocument()
+      expect(screen.queryByText('No hay turnos disponibles.')).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: AVISAME })).not.toBeInTheDocument()
+    })
+
+    it('mantiene la carga mientras se resuelve la lista de profesionales', () => {
+      mockAvailability.mockReturnValue({ isLoading: false, data: [] })
+      mockStaff.mockReturnValue({ isLoading: true, data: undefined })
+
+      montarCon(null)
+
+      expect(screen.getByRole('status', { name: 'Cargando horarios' })).toBeInTheDocument()
+      expect(screen.queryByText('Este día no hay atención.')).not.toBeInTheDocument()
       expect(screen.queryByText('No hay turnos disponibles.')).not.toBeInTheDocument()
       expect(screen.queryByRole('button', { name: AVISAME })).not.toBeInTheDocument()
     })

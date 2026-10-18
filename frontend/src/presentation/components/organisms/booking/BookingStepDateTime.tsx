@@ -160,15 +160,15 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
     )
   }, [availability, staffFilterId])
 
-  // El backend solo genera horarios dentro de las franjas del profesional: un
-  // dia sin ninguno (para el profesional elegido, si hay uno) es un dia sin
-  // atencion. Un dia con horarios pero ninguno libre esta lleno, bloqueado o
-  // dentro del aviso minimo: ahi si tiene sentido la lista de espera.
+  // El backend solo genera horarios dentro de las franjas de atención: si no
+  // devuelve ninguno para el dia, no hay atención aunque haya profesionales
+  // asignados al servicio. Un día con horarios pero ninguno libre está lleno,
+  // bloqueado o dentro del aviso mínimo: ahí sí tiene sentido la lista de espera.
   const diaSinAtencion =
     availability !== undefined &&
     (staffFilterId
       ? !availability.some((slot) => slot.staff_id === staffFilterId)
-      : availability.length === 0 && (staffList?.length ?? 0) === 0)
+      : availability.length === 0)
 
   const emptyReported = useRef<string | null>(null)
   useEffect(() => {
@@ -420,8 +420,12 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
           </div>
         )}
 
-        {isLoading ? (
-          <div className="flex flex-col items-center justify-center py-10">
+        {isLoading || (isStaffLoading && visibleSlots.length === 0) ? (
+          <div
+            role="status"
+            aria-label="Cargando horarios"
+            className="flex flex-col items-center justify-center py-10"
+          >
             <Loader2 className="w-8 h-8 animate-spin text-orange-500 mb-4" />
           </div>
         ) : isError && !availability ? (
