@@ -1007,14 +1007,21 @@ describe('BookingStepConfirmation', () => {
 
     it('si la reserva falla vuelve al formulario con el aviso de horario ocupado', async () => {
       const base = completo()
-      base.onConfirm = jest
-        .fn()
-        .mockRejectedValue(new ConflictError('Horario ocupado', { statusCode: 409 }))
+      base.onConfirm = jest.fn().mockRejectedValue(
+        new ConflictError('Horario ocupado', {
+          errorCode: 'APPOINTMENT_CONFLICT',
+          statusCode: 409
+        })
+      )
       render(<BookingStepConfirmation {...base} />)
       aceptarTerminos()
       fireEvent.click(botonReservar())
 
-      await waitFor(() => expect(screen.getByText('Horario ocupado')).toBeInTheDocument())
+      await waitFor(() =>
+        expect(
+          screen.getByText('Ese horario ya no está disponible. Elegí otro.')
+        ).toBeInTheDocument()
+      )
       expect(
         screen.getByText(/El horario podria haberse ocupado mientras completabas el formulario/)
       ).toBeInTheDocument()
@@ -1059,6 +1066,40 @@ describe('BookingStepConfirmation', () => {
         )
       ).toBeInTheDocument()
       expect(screen.queryByText(/horario.*ocupad/i)).not.toBeInTheDocument()
+    })
+
+    it('un 409 de otra causa no se presenta como horario ocupado', async () => {
+      const base = completo()
+      base.onConfirm = jest.fn().mockRejectedValue(
+        new ConflictError('El proveedor de pago no está disponible.', {
+          errorCode: 'PAYMENT_GATEWAY_NOT_CONNECTED',
+          statusCode: 409
+        })
+      )
+      render(<BookingStepConfirmation {...base} />)
+      aceptarTerminos()
+      fireEvent.click(botonReservar())
+
+      expect(
+        await screen.findByText('El proveedor de pago no está disponible.')
+      ).toBeInTheDocument()
+      expect(screen.queryByText(/El horario podria haberse ocupado/)).not.toBeInTheDocument()
+    })
+
+    it('un código 409 desconocido no atribuye el error al horario', async () => {
+      const base = completo()
+      base.onConfirm = jest.fn().mockRejectedValue(
+        new ConflictError('No se pudo confirmar la operación.', {
+          errorCode: 'FUTURE_CONFLICT_REASON',
+          statusCode: 409
+        })
+      )
+      render(<BookingStepConfirmation {...base} />)
+      aceptarTerminos()
+      fireEvent.click(botonReservar())
+
+      expect(await screen.findByText('No se pudo confirmar la operación.')).toBeInTheDocument()
+      expect(screen.queryByText(/El horario podria haberse ocupado/)).not.toBeInTheDocument()
     })
 
     it('un 503 transitorio no culpa al horario y permite reintentar con los datos intactos', async () => {

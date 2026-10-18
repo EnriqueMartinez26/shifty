@@ -587,9 +587,6 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
       }
       dispatchSubmission({ type: 'succeed', confirmation: result })
     } catch (error: unknown) {
-      // Sin canal para cobrar la seña (409 DEPOSIT_CHANNEL_UNAVAILABLE), con
-      // una operación idempotente todavía en curso, o con un adicional que ya
-      // no existe (422 ADDON_UNAVAILABLE), el horario no tiene nada que ver.
       const code = getErrorCode(error)
       const status = getHttpStatus(error)
       // El catalogo cacheado (edge y navegador) puede ser el viejo: se pide
@@ -597,12 +594,9 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
       if (code === ADDON_UNAVAILABLE) void refreshServices()
       dispatchSubmission({
         type: 'fail',
-        slotMayBeTaken:
-          status === 409 &&
-          code !== 'DEPOSIT_CHANNEL_UNAVAILABLE' &&
-          code !== 'IDEMPOTENCY_IN_PROGRESS' &&
-          code !== ADDON_UNAVAILABLE &&
-          !SERVICE_COMBO_MESSAGES[code ?? '']
+        // Solo el código de conflicto emitido al reservar puede indicar que
+        // otra persona tomó el horario; otros 409 describen causas distintas.
+        slotMayBeTaken: status === 409 && code === 'APPOINTMENT_CONFLICT'
       })
       setErrorMessage(
         getErrorMessage(
