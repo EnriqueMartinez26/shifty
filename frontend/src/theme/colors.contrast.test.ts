@@ -16,6 +16,7 @@ const { resolve } = jest.requireActual<{ resolve: (...paths: string[]) => string
 // solo se usa en controles deshabilitados, que WCAG exime (1.4.3).
 
 const AA_NORMAL = 4.5
+const AA_LARGE = 3
 
 const channel = (hex: string, offset: number): number => {
   const value = parseInt(hex.slice(offset, offset + 2), 16) / 255
@@ -101,6 +102,15 @@ describe('contraste de los tokens de texto (WCAG 2.1 AA)', () => {
       expect(contrast(fg, bg)).toBeGreaterThanOrEqual(AA_NORMAL)
     }
   )
+
+  it('mantiene contraste AA para títulos grandes sobre el fondo de página', () => {
+    expect(contrast(colors2000s.orange.heading, colors2000s.bg.primary)).toBeGreaterThanOrEqual(
+      AA_LARGE
+    )
+    expect(contrast(colors2000s.orange.heading, colors2000s.bg.secondary)).toBeGreaterThanOrEqual(
+      AA_LARGE
+    )
+  })
 
   it('mantiene el tema activo de Tailwind alineado con los tokens canónicos', () => {
     const activeTheme = readFileSync(resolve(__dirname, '../index.css'), 'utf8')
