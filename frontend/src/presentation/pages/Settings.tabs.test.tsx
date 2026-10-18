@@ -105,6 +105,23 @@ const openTab = (name: string) => fireEvent.click(screen.getByRole('button', { n
 
 const saveChanges = () => fireEvent.click(screen.getByRole('button', { name: 'Guardar Cambios' }))
 
+describe('Settings - estado accesible de pestanas', () => {
+  it('expone la pestana activa como pulsada y conserva los botones nativos', () => {
+    renderSettings()
+
+    const identityTab = screen.getByRole('button', { name: 'Identidad' })
+    const scheduleTab = screen.getByRole('button', { name: 'Horarios' })
+    expect(identityTab).toHaveAttribute('aria-pressed', 'true')
+    expect(scheduleTab).toHaveAttribute('aria-pressed', 'false')
+
+    fireEvent.click(scheduleTab)
+
+    expect(scheduleTab).toHaveAttribute('aria-pressed', 'true')
+    expect(identityTab).toHaveAttribute('aria-pressed', 'false')
+    expect(screen.getByRole('heading', { name: 'Horarios de Atención' })).toBeInTheDocument()
+  })
+})
+
 beforeEach(() => {
   jest.resetAllMocks()
   updateStore.mockResolvedValue(store)
