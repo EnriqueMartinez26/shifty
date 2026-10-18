@@ -212,3 +212,52 @@ describe('ServiceManagementContainer: servicios sin profesional', () => {
     expect(getByTestId('card-without-staff')).toHaveTextContent('ok')
   })
 })
+
+describe('ServiceManagementContainer: búsqueda y catálogo vacío', () => {
+  afterEach(() => {
+    mockListCatalog.mockImplementation(() => ({
+      data: [{ id: 'svc-1', name: 'Corte' }],
+      isLoading: false,
+      error: null
+    }))
+  })
+
+  it('da un nombre accesible al buscador y conserva un foco de teclado visible', () => {
+    const { getByRole } = render(<ServiceManagementContainer />)
+    const search = getByRole('textbox', { name: 'Buscar servicio' })
+
+    expect(search).toHaveClass(
+      'focus-visible:outline-2',
+      'focus-visible:outline-offset-2',
+      'focus-visible:outline-[#FF6B35]'
+    )
+    expect(search.style.outline).toBe('')
+    search.focus()
+    expect(search).toHaveFocus()
+  })
+
+  it('anuncia cuando el catálogo todavía no tiene servicios', () => {
+    mockListCatalog.mockReturnValue({ data: [], isLoading: false, error: null })
+    const { getByRole } = render(<ServiceManagementContainer />)
+
+    const status = getByRole('status')
+    expect(status).toHaveAttribute('aria-live', 'polite')
+    expect(status).toHaveTextContent(
+      'Todavía no hay servicios en el catálogo. Agregá el primero con «Nuevo servicio».'
+    )
+  })
+
+  it('anuncia por separado cuando la búsqueda no encuentra coincidencias', () => {
+    const { getByRole } = render(<ServiceManagementContainer />)
+
+    fireEvent.change(getByRole('textbox', { name: 'Buscar servicio' }), {
+      target: { value: 'Barba' }
+    })
+
+    const status = getByRole('status')
+    expect(status).toHaveAttribute('aria-live', 'polite')
+    expect(status).toHaveTextContent(
+      'No hay servicios que coincidan con tu búsqueda. Probá con otro término.'
+    )
+  })
+})
