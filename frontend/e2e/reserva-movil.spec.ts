@@ -38,7 +38,7 @@ test.describe('reserva publica desde el celular', () => {
     // Paso 1: servicio. Con un solo servicio el wizard lo elige solo y ya
     // muestra el horario; con varios, se toca el primero.
     const tituloServicio = page.getByText('¿Qué servicio necesitás?')
-    const tituloHorario = page.getByText('Elegi fecha y hora')
+    const tituloHorario = page.getByText('Elegí fecha y hora')
     await expect(tituloServicio.or(tituloHorario)).toBeVisible()
     if (await tituloServicio.isVisible()) {
       await sinScrollHorizontal(page, 'servicio')
@@ -55,12 +55,14 @@ test.describe('reserva publica desde el celular', () => {
     const dias = page.locator('[data-testid^="date-"]')
     const cantidad = await dias.count()
     const slot = page.locator('button:not([disabled])', { hasText: /^\d{2}:\d{2}/ }).first()
-    const sinTurnos = page.getByText('No hay turnos disponibles.')
+    const estadoSinSlots = page.getByText(
+      /^(No hay turnos disponibles\.|Este día no hay atención\.)$/
+    )
     for (let i = 0; i < cantidad; i += 1) {
       await dias.nth(i).click()
-      // Esperar a que ese dia termine de cargar: o hay un slot o dice que no
-      // hay (isVisible() no espera; revisar antes de la carga miraba vacio).
-      await expect(slot.or(sinTurnos).first()).toBeVisible({ timeout: 10_000 })
+      // Esperar a que ese dia termine de cargar: o hay un slot o un estado de
+      // agenda vacia (isVisible() no espera; revisar antes miraba antes de carga).
+      await expect(slot.or(estadoSinSlots).first()).toBeVisible({ timeout: 10_000 })
       if ((await slot.count()) > 0) break
     }
     await expect(slot, 'ningun dia de la tira tiene un horario disponible').toBeVisible()
