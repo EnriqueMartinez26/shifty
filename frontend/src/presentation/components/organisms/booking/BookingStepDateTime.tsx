@@ -1,15 +1,23 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 
-import { addDays, format, parseISO } from 'date-fns'
+import { addDays, differenceInCalendarDays, format, parseISO } from 'date-fns'
 import { es } from 'date-fns/locale'
-import { Calendar as CalendarIcon, Clock, Loader2, Sparkles, Users } from 'lucide-react'
+import {
+  Calendar as CalendarIcon,
+  ChevronLeft,
+  ChevronRight,
+  Clock,
+  Loader2,
+  Sparkles,
+  Users
+} from 'lucide-react'
 
 import { staffForAllServices } from '@application/mappers/PublicServiceOptionMapper'
 
 import { usePublicAvailability, usePublicStaff } from '@presentation/hooks/usePublic'
 
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
-import { formatArgentinaTime } from '@shared/utils/argentinaTime'
+import { formatArgentinaDate, formatArgentinaTime } from '@shared/utils/argentinaTime'
 
 import { BookingBackButton } from './BookingBackButton'
 import type { BookingSlotStaff } from './types'
@@ -50,6 +58,19 @@ interface BookingStepDateTimeProps {
 }
 
 const NO_EXTRA_SERVICES: readonly string[] = []
+const PUBLIC_AVAILABILITY_DAYS_AHEAD = 120
+const PUBLIC_AVAILABILITY_DATE_COUNT = PUBLIC_AVAILABILITY_DAYS_AHEAD + 1
+const DATE_PAGE_SIZE = 14
+const DATE_PAGE_COUNT = Math.ceil(PUBLIC_AVAILABILITY_DATE_COUNT / DATE_PAGE_SIZE)
+
+const getPublicDate = (value: string | null, today: Date): Date => {
+  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return today
+  const parsed = parseISO(value)
+  if (isNaN(parsed.getTime()) || format(parsed, 'yyyy-MM-dd') !== value) return today
+
+  const daysFromToday = differenceInCalendarDays(parsed, today)
+  return daysFromToday >= 0 && daysFromToday < PUBLIC_AVAILABILITY_DATE_COUNT ? parsed : today
+}
 
 // Un 422 de la grilla con varios servicios (revision de #194): se dice por
 // que en vez de mostrar una grilla vacia como si no hubiera lugar.
@@ -75,27 +96,36 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
   heading = 'Elegí fecha y hora',
   onEmptyAvailability
 }) => {
-  const [activeDate, setActiveDate] = useState<Date>(() => {
-    if (!selectedDate || selectedDate === 'invalid') return new Date()
-    const parsed = parseISO(selectedDate)
-    return isNaN(parsed.getTime()) ? new Date() : parsed
-  })
+  // `yyyy-MM-dd` representa el día del calendario argentino, no una fecha UTC.
+  const [today] = useState(() => parseISO(formatArgentinaDate(new Date().toISOString())))
+  const initialDate = getPublicDate(selectedDate, today)
+  const [activeDate, setActiveDate] = useState<Date>(initialDate)
+  const [datePage, setDatePage] = useState(() =>
+    Math.floor(differenceInCalendarDays(initialDate, today) / DATE_PAGE_SIZE)
+  )
   const [forceAll, setForceAll] = useState(false)
   // Semilla desde la prop `staffId` (el ultimo pedido guardado en el estado
   // del wizard) para que volver desde el paso de confirmacion conserve la
   // seleccion en vez de resetear a "Cualquiera". Un profesional fijo manda.
   const [selectedStaffId, setSelectedStaffId] = useState<string | null>(lockedStaffId ?? staffId)
 
-  // 14 dias a partir de hoy, mas la fecha que vino por deep-link si cae mas
-  // lejos: si no, el dia elegido cargaba sus horarios pero no se veia en la tira.
+  // La disponibilidad publica permite desde hoy hasta 120 dias adelante.
   const dates = useMemo(() => {
-    const base = Array.from({ length: 14 }).map((_, i) => addDays(new Date(), i))
-    if (!selectedDate || !/^\d{4}-\d{2}-\d{2}$/.test(selectedDate)) return base
-    const wanted = parseISO(selectedDate)
-    const ultimo = base[base.length - 1] ?? new Date()
-    if (isNaN(wanted.getTime()) || wanted <= ultimo) return base
-    return [...base, wanted]
-  }, [selectedDate])
+    const firstDayIndex = datePage * DATE_PAGE_SIZE
+    const pageLength = Math.min(DATE_PAGE_SIZE, PUBLIC_AVAILABILITY_DATE_COUNT - firstDayIndex)
+    return Array.from({ length: pageLength }, (_, index) => addDays(today, firstDayIndex + index))
+  }, [datePage, today])
+  const firstDayNumber = datePage * DATE_PAGE_SIZE + 1
+  const lastDayNumber = Math.min((datePage + 1) * DATE_PAGE_SIZE, PUBLIC_AVAILABILITY_DATE_COUNT)
+  const nextPageDateCount = Math.min(
+    DATE_PAGE_SIZE,
+    Math.max(0, PUBLIC_AVAILABILITY_DATE_COUNT - (datePage + 1) * DATE_PAGE_SIZE)
+  )
+  const changeDatePage = (offset: number) => {
+    const nextPage = Math.max(0, Math.min(datePage + offset, DATE_PAGE_COUNT - 1))
+    setDatePage(nextPage)
+    setActiveDate(addDays(today, nextPage * DATE_PAGE_SIZE))
+  }
   const dateStr = format(activeDate, 'yyyy-MM-dd')
 
   const { data: serviceStaff, isLoading: isStaffLoading } = usePublicStaff(storePublicId, serviceId)
@@ -318,6 +348,53 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
           </span>
         </div>
 
+        <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <p
+            aria-live="polite"
+            className="whitespace-nowrap text-xs font-black uppercase tracking-widest text-gray-500"
+          >
+            Días {firstDayNumber}–{lastDayNumber} de {PUBLIC_AVAILABILITY_DATE_COUNT}
+          </p>
+          <div className="flex w-full items-center justify-between gap-2 sm:w-auto sm:justify-end">
+            <button
+              type="button"
+              aria-label="Mostrar los 14 días anteriores"
+              onClick={() => changeDatePage(-1)}
+              disabled={datePage === 0}
+              className="inline-flex min-h-11 items-center justify-center gap-1 rounded-md border px-3 py-2 text-[10px] font-black uppercase tracking-wider transition-opacity hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-500 focus-visible:ring-offset-2"
+              style={{
+                background: colors2000s.bg.button,
+                borderColor: colors2000s.border.default,
+                boxShadow: colors2000s.shadows.insetLight,
+                color: colors2000s.text.primary
+              }}
+            >
+              <ChevronLeft size={14} aria-hidden="true" />
+              <span>Anterior</span>
+            </button>
+            <button
+              type="button"
+              aria-label={
+                datePage === DATE_PAGE_COUNT - 1
+                  ? 'No hay más fechas disponibles'
+                  : `Mostrar los ${nextPageDateCount} días siguientes`
+              }
+              onClick={() => changeDatePage(1)}
+              disabled={datePage === DATE_PAGE_COUNT - 1}
+              className="inline-flex min-h-11 items-center justify-center gap-1 rounded-md border px-3 py-2 text-[10px] font-black uppercase tracking-wider transition-opacity hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-500 focus-visible:ring-offset-2"
+              style={{
+                background: colors2000s.bg.button,
+                borderColor: colors2000s.border.default,
+                boxShadow: colors2000s.shadows.insetLight,
+                color: colors2000s.text.primary
+              }}
+            >
+              <span>Siguiente</span>
+              <ChevronRight size={14} aria-hidden="true" />
+            </button>
+          </div>
+        </div>
+
         <div
           role="group"
           aria-label="Fechas disponibles. Deslizá horizontalmente para ver más días"
@@ -327,7 +404,7 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
           {dates.map((date) => {
             const formattedDate = format(date, 'yyyy-MM-dd')
             const isSelected = format(activeDate, 'yyyy-MM-dd') === formattedDate
-            const isToday = format(date, 'yyyy-MM-dd') === format(new Date(), 'yyyy-MM-dd')
+            const isToday = format(date, 'yyyy-MM-dd') === format(today, 'yyyy-MM-dd')
 
             return (
               <button
