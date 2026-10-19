@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 
 import { ValidationError } from '@shared/errors'
+import { formatArgentinaDate } from '@shared/utils/argentinaTime'
 
 import { BookingStepDateTime } from './BookingStepDateTime'
 
@@ -9,6 +10,7 @@ import { BookingStepDateTime } from './BookingStepDateTime'
 
 const mockAvailability = jest.fn()
 const mockStaff = jest.fn()
+const bookingDate = formatArgentinaDate(new Date().toISOString())
 
 jest.mock('@presentation/hooks/usePublic', () => ({
   usePublicAvailability: (...args: unknown[]) => mockAvailability(...args),
@@ -32,7 +34,7 @@ const renderPaso = (extraServiceIds?: string[]) =>
       serviceId="corte"
       extraServiceIds={extraServiceIds}
       staffId={null}
-      selectedDate="2026-09-25"
+      selectedDate={bookingDate}
       selectedTime={null}
       onSelect={jest.fn()}
       onBack={jest.fn()}
@@ -63,9 +65,7 @@ describe('BookingStepDateTime con varios servicios', () => {
     mockStaff.mockReturnValue({ data: [profesional('ana', ['corte', 'barba'])], isLoading: false })
     renderPaso(['barba'])
 
-    expect(mockAvailability).toHaveBeenCalledWith('store-1', 'corte', '2026-09-25', false, [
-      'barba'
-    ])
+    expect(mockAvailability).toHaveBeenCalledWith('store-1', 'corte', bookingDate, false, ['barba'])
   })
 
   it('el selector ofrece solo a quien hace todos; con uno solo no hay "Cualquiera"', () => {
