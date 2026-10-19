@@ -120,6 +120,65 @@ describe('PromotionsPage', () => {
     expect(cuerpo).toMatchObject({ code: 'NUEVA5', title: 'Promo nueva', value: 5 })
   })
 
+  it('valida antes de guardar, muestra errores junto a los campos y enfoca el primero', () => {
+    render(<PromotionsPage />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Crear' }))
+
+    expect(screen.getByText('Ingresá un código para la promoción.')).toBeInTheDocument()
+    expect(screen.getByText('Ingresá un título para la promoción.')).toBeInTheDocument()
+    expect(screen.getByText('Ingresá un valor mayor que 0.')).toBeInTheDocument()
+    expect(screen.getByLabelText('Código')).toHaveAttribute('aria-invalid', 'true')
+    expect(screen.getByLabelText('Código')).toHaveAttribute(
+      'aria-describedby',
+      'promotion-code-error'
+    )
+    expect(screen.getByLabelText('Código')).toHaveFocus()
+    expect(mockCreateMutateAsync).not.toHaveBeenCalled()
+  })
+
+  it('explica las restricciones del porcentaje, los opcionales y el rango de vigencia', () => {
+    const { container } = render(<PromotionsPage />)
+    fireEvent.change(screen.getByLabelText('Código'), { target: { value: 'REGALO10' } })
+    fireEvent.change(screen.getByLabelText('Título'), { target: { value: 'Regalo' } })
+    fireEvent.change(screen.getByLabelText('Valor'), { target: { value: '101' } })
+    fireEvent.change(screen.getByLabelText('Límite de usos'), { target: { value: '1.5' } })
+    const [desde, hasta] = inputsDeFecha(container)
+    fireEvent.change(desde!, { target: { value: '2026-10-20T12:00' } })
+    fireEvent.change(hasta!, { target: { value: '2026-10-20T11:00' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Crear' }))
+
+    expect(screen.getByText('El descuento porcentual no puede superar 100.')).toBeInTheDocument()
+    expect(screen.getByText(/número entero entre 1 y/)).toBeInTheDocument()
+    expect(screen.getByText('La fecha “Hasta” debe ser posterior a “Desde”.')).toBeInTheDocument()
+    expect(screen.getByLabelText('Límite de usos')).toHaveAttribute(
+      'aria-describedby',
+      'promotion-maximum-uses-error'
+    )
+    expect(screen.getByLabelText('Valor')).toHaveFocus()
+    expect(mockCreateMutateAsync).not.toHaveBeenCalled()
+  })
+
+  it('limpia errores anteriores al editar y al cancelar la edición', () => {
+    mockPromotions = [buildPromotion()]
+    render(<PromotionsPage />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Crear' }))
+    expect(screen.getByText('Ingresá un código para la promoción.')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Editar' }))
+    expect(screen.queryByText('Ingresá un código para la promoción.')).not.toBeInTheDocument()
+    expect(screen.getByLabelText('Código')).not.toHaveAttribute('aria-invalid', 'true')
+
+    fireEvent.change(screen.getByLabelText('Código'), { target: { value: '' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Actualizar' }))
+    expect(screen.getByText('Ingresá un código para la promoción.')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancelar edición' }))
+    expect(screen.queryByText('Ingresá un código para la promoción.')).not.toBeInTheDocument()
+    expect(screen.getByLabelText('Código')).not.toHaveAttribute('aria-invalid', 'true')
+  })
+
   it('vaciar solo el vencimiento conserva el inicio de la vigencia', async () => {
     // 2026-09-30: vaciar un campo de una promocion no lo borraba: axios omite
     // undefined. Borrar "Hasta" no puede arrastrar a "Desde".

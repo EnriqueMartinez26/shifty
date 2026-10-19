@@ -41,6 +41,73 @@ const focusVisibleControlClassName =
 const focusVisibleSwitchClassName =
   '[&>button]:focus-visible:outline-none [&>button]:focus-visible:ring-2 [&>button]:focus-visible:ring-[#9a4507] [&>button]:focus-visible:ring-offset-2'
 
+type PromotionField = 'code' | 'title' | 'value' | 'min_service_amount' | 'max_uses' | 'valid_until'
+
+type PromotionFieldErrors = Partial<Record<PromotionField, string>>
+
+const promotionFieldControlIds: Record<PromotionField, string> = {
+  code: 'promotion-code',
+  title: 'promotion-title',
+  value: 'promotion-value',
+  min_service_amount: 'promotion-minimum-amount',
+  max_uses: 'promotion-maximum-uses',
+  valid_until: 'promotion-valid-until'
+}
+
+const MAX_PROMOTION_AMOUNT = 10_000_000
+const MAX_PROMOTION_USES = 1_000_000
+
+const validatePromotionForm = (form: ReturnType<typeof createEmptyPromotionForm>) => {
+  const errors: PromotionFieldErrors = {}
+  const code = form.code.trim()
+  const title = form.title.trim()
+
+  if (!code) errors.code = 'Ingresá un código para la promoción.'
+  else if (code.length < 3 || code.length > 30 || !/^[A-Z0-9_-]+$/.test(code)) {
+    errors.code = 'Usá entre 3 y 30 letras, números, guiones o guiones bajos.'
+  }
+
+  if (!title) errors.title = 'Ingresá un título para la promoción.'
+  else if (title.length < 2 || title.length > 120) {
+    errors.title = 'El título debe tener entre 2 y 120 caracteres.'
+  }
+
+  const value = Number(form.value)
+  if (!form.value.trim() || !Number.isFinite(value) || value <= 0) {
+    errors.value = 'Ingresá un valor mayor que 0.'
+  } else if (value > MAX_PROMOTION_AMOUNT) {
+    errors.value = `El valor no puede superar ${MAX_PROMOTION_AMOUNT.toLocaleString('es-AR')}.`
+  } else if ((form.value.split('.')[1]?.length ?? 0) > 2) {
+    errors.value = 'Usá hasta 2 decimales.'
+  } else if (form.promotion_type === 'percent' && value > 100) {
+    errors.value = 'El descuento porcentual no puede superar 100.'
+  }
+
+  const minimum = form.min_service_amount.trim()
+  if (minimum) {
+    const amount = Number(minimum)
+    if (!Number.isFinite(amount) || amount < 0 || amount > MAX_PROMOTION_AMOUNT) {
+      errors.min_service_amount = `Ingresá un monto entre 0 y ${MAX_PROMOTION_AMOUNT.toLocaleString('es-AR')}.`
+    } else if ((minimum.split('.')[1]?.length ?? 0) > 2) {
+      errors.min_service_amount = 'Usá hasta 2 decimales.'
+    }
+  }
+
+  const maxUses = form.max_uses.trim()
+  if (maxUses) {
+    const uses = Number(maxUses)
+    if (!Number.isInteger(uses) || uses < 1 || uses > MAX_PROMOTION_USES) {
+      errors.max_uses = `Ingresá un número entero entre 1 y ${MAX_PROMOTION_USES.toLocaleString('es-AR')}.`
+    }
+  }
+
+  if (form.valid_from && form.valid_until && form.valid_from >= form.valid_until) {
+    errors.valid_until = 'La fecha “Hasta” debe ser posterior a “Desde”.'
+  }
+
+  return errors
+}
+
 const PromotionsPage: React.FC = () => {
   useDocumentTitle('Promociones · Shifty')
   const promotionsQuery = usePromotions(true, true)
@@ -56,6 +123,7 @@ const PromotionsPage: React.FC = () => {
   const [promotionForm, setPromotionForm] = useState(createEmptyPromotionForm())
   const [editingPromotionId, setEditingPromotionId] = useState<string | null>(null)
   const [message, setMessage] = useState('')
+  const [fieldErrors, setFieldErrors] = useState<PromotionFieldErrors>({})
 
   const cardStyle = create2000sPanelStyle()
   const inputStyle = create2000sInputStyle()
@@ -72,6 +140,13 @@ const PromotionsPage: React.FC = () => {
 
   const handleSavePromotion = async () => {
     if (isSaving) return
+    const errors = validatePromotionForm(promotionForm)
+    setFieldErrors(errors)
+    const firstInvalidField = Object.keys(errors)[0] as PromotionField | undefined
+    if (firstInvalidField) {
+      document.getElementById(promotionFieldControlIds[firstInvalidField])?.focus()
+      return
+    }
     try {
       // Al editar, un opcional vaciado viaja en null: axios omite undefined y
       // el PATCH (exclude_unset) dejaba el valor viejo guardado (2026-09-30).
@@ -109,12 +184,38 @@ const PromotionsPage: React.FC = () => {
 
       setEditingPromotionId(null)
       setPromotionForm(createEmptyPromotionForm())
+      setFieldErrors({})
     } catch (error: unknown) {
       setMessage(getErrorMessage(error, 'No se pudo guardar la promoción'))
     }
   }
 
+  const updatePromotionField = <K extends keyof ReturnType<typeof createEmptyPromotionForm>>(
+    field: K,
+    value: ReturnType<typeof createEmptyPromotionForm>[K]
+  ) => {
+    setPromotionForm((previous) => ({ ...previous, [field]: value }))
+    setFieldErrors((previous) => {
+      const next = { ...previous }
+      if (field === 'valid_from' || field === 'valid_until') delete next.valid_until
+      else delete next[field as PromotionField]
+      return next
+    })
+  }
+
+  const fieldError = (field: PromotionField) =>
+    fieldErrors[field] ? (
+      <p
+        id={`${promotionFieldControlIds[field]}-error`}
+        role="alert"
+        className="text-xs font-bold text-red-700"
+      >
+        {fieldErrors[field]}
+      </p>
+    ) : null
+
   const handleEditPromotion = (promotion: PromotionRecord) => {
+    setFieldErrors({})
     setEditingPromotionId(promotion.public_id)
     setPromotionForm({
       code: promotion.code,
@@ -208,14 +309,15 @@ const PromotionsPage: React.FC = () => {
               </label>
               <input
                 id="promotion-code"
+                aria-invalid={Boolean(fieldErrors.code)}
+                aria-describedby={fieldErrors.code ? 'promotion-code-error' : undefined}
                 value={promotionForm.code}
-                onChange={(e) =>
-                  setPromotionForm((prev) => ({ ...prev, code: e.target.value.toUpperCase() }))
-                }
+                onChange={(e) => updatePromotionField('code', e.target.value.toUpperCase())}
                 className={`w-full rounded-2xl px-4 py-3 font-bold ${focusVisibleControlClassName}`}
                 style={inputStyle}
                 placeholder="BIENVENIDA10"
               />
+              {fieldError('code')}
             </div>
             <div className="space-y-2">
               <label
@@ -227,12 +329,15 @@ const PromotionsPage: React.FC = () => {
               </label>
               <input
                 id="promotion-title"
+                aria-invalid={Boolean(fieldErrors.title)}
+                aria-describedby={fieldErrors.title ? 'promotion-title-error' : undefined}
                 value={promotionForm.title}
-                onChange={(e) => setPromotionForm((prev) => ({ ...prev, title: e.target.value }))}
+                onChange={(e) => updatePromotionField('title', e.target.value)}
                 className={`w-full rounded-2xl px-4 py-3 font-bold ${focusVisibleControlClassName}`}
                 style={inputStyle}
                 placeholder="Descuento primera visita"
               />
+              {fieldError('title')}
             </div>
           </div>
 
@@ -269,10 +374,7 @@ const PromotionsPage: React.FC = () => {
                 id="promotion-type"
                 value={promotionForm.promotion_type}
                 onChange={(e) =>
-                  setPromotionForm((prev) => ({
-                    ...prev,
-                    promotion_type: e.target.value as 'percent' | 'fixed'
-                  }))
+                  updatePromotionField('promotion_type', e.target.value as 'percent' | 'fixed')
                 }
                 className={`w-full rounded-2xl px-4 py-3 font-bold ${focusVisibleControlClassName}`}
                 style={inputStyle}
@@ -293,13 +395,16 @@ const PromotionsPage: React.FC = () => {
                 id="promotion-value"
                 type="number"
                 min="0"
+                aria-invalid={Boolean(fieldErrors.value)}
+                aria-describedby={fieldErrors.value ? 'promotion-value-error' : undefined}
                 step="0.01"
                 value={promotionForm.value}
-                onChange={(e) => setPromotionForm((prev) => ({ ...prev, value: e.target.value }))}
+                onChange={(e) => updatePromotionField('value', e.target.value)}
                 className={`w-full rounded-2xl px-4 py-3 font-bold ${focusVisibleControlClassName}`}
                 style={inputStyle}
                 placeholder={promotionForm.promotion_type === 'percent' ? '10' : '2000'}
               />
+              {fieldError('value')}
             </div>
           </div>
 
@@ -317,14 +422,17 @@ const PromotionsPage: React.FC = () => {
                 type="number"
                 min="0"
                 step="0.01"
-                value={promotionForm.min_service_amount}
-                onChange={(e) =>
-                  setPromotionForm((prev) => ({ ...prev, min_service_amount: e.target.value }))
+                aria-invalid={Boolean(fieldErrors.min_service_amount)}
+                aria-describedby={
+                  fieldErrors.min_service_amount ? 'promotion-minimum-amount-error' : undefined
                 }
+                value={promotionForm.min_service_amount}
+                onChange={(e) => updatePromotionField('min_service_amount', e.target.value)}
                 className={`w-full rounded-2xl px-4 py-3 font-bold ${focusVisibleControlClassName}`}
                 style={inputStyle}
                 placeholder="Opcional"
               />
+              {fieldError('min_service_amount')}
             </div>
             <div className="space-y-2">
               <label
@@ -339,14 +447,15 @@ const PromotionsPage: React.FC = () => {
                 type="number"
                 min="1"
                 step="1"
+                aria-invalid={Boolean(fieldErrors.max_uses)}
+                aria-describedby={fieldErrors.max_uses ? 'promotion-maximum-uses-error' : undefined}
                 value={promotionForm.max_uses}
-                onChange={(e) =>
-                  setPromotionForm((prev) => ({ ...prev, max_uses: e.target.value }))
-                }
+                onChange={(e) => updatePromotionField('max_uses', e.target.value)}
                 className={`w-full rounded-2xl px-4 py-3 font-bold ${focusVisibleControlClassName}`}
                 style={inputStyle}
                 placeholder="Opcional"
               />
+              {fieldError('max_uses')}
             </div>
           </div>
 
@@ -363,9 +472,7 @@ const PromotionsPage: React.FC = () => {
                 id="promotion-valid-from"
                 type="datetime-local"
                 value={promotionForm.valid_from}
-                onChange={(e) =>
-                  setPromotionForm((prev) => ({ ...prev, valid_from: e.target.value }))
-                }
+                onChange={(e) => updatePromotionField('valid_from', e.target.value)}
                 className={`w-full rounded-2xl px-4 py-3 font-bold ${focusVisibleControlClassName}`}
                 style={inputStyle}
               />
@@ -381,13 +488,16 @@ const PromotionsPage: React.FC = () => {
               <input
                 id="promotion-valid-until"
                 type="datetime-local"
-                value={promotionForm.valid_until}
-                onChange={(e) =>
-                  setPromotionForm((prev) => ({ ...prev, valid_until: e.target.value }))
+                aria-invalid={Boolean(fieldErrors.valid_until)}
+                aria-describedby={
+                  fieldErrors.valid_until ? 'promotion-valid-until-error' : undefined
                 }
+                value={promotionForm.valid_until}
+                onChange={(e) => updatePromotionField('valid_until', e.target.value)}
                 className={`w-full rounded-2xl px-4 py-3 font-bold ${focusVisibleControlClassName}`}
                 style={inputStyle}
               />
+              {fieldError('valid_until')}
             </div>
           </div>
 
@@ -416,6 +526,7 @@ const PromotionsPage: React.FC = () => {
               onClick={() => {
                 setEditingPromotionId(null)
                 setPromotionForm(createEmptyPromotionForm())
+                setFieldErrors({})
               }}
               className="min-h-11 w-full px-4 py-3 text-xs font-black uppercase tracking-widest"
               style={buttonStyles2000s.default}
