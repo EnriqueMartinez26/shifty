@@ -7,7 +7,7 @@ import type {
   PromotionPreview
 } from '@application/services/PublicBookingService'
 
-import { ConflictError, ValidationError } from '@shared/errors'
+import { ConflictError, ServiceUnavailableError, ValidationError } from '@shared/errors'
 
 import { BookingStepConfirmation } from './BookingStepConfirmation'
 import type { BookingClientData, BookingOtpState, BookingWizardState } from './types'
@@ -269,6 +269,7 @@ describe('BookingStepConfirmation', () => {
       const aviso = (await screen.findByText(/Revisá el teléfono/)).closest('[role="alert"]')
       expect(aviso).toHaveTextContent(/al menos 6 dígitos/)
       expect(aviso).not.toHaveTextContent(/ocupado/)
+      expect(screen.queryByText(/El horario podria haberse ocupado/)).not.toBeInTheDocument()
     })
 
     // Propuesta por Mateo (2026-10-16): el email vuelve a ser opcional, salvo
@@ -1006,14 +1007,21 @@ describe('BookingStepConfirmation', () => {
 
     it('si la reserva falla vuelve al formulario con el aviso de horario ocupado', async () => {
       const base = completo()
-      base.onConfirm = jest
-        .fn()
-        .mockRejectedValue(new ConflictError('Horario ocupado', { statusCode: 409 }))
+      base.onConfirm = jest.fn().mockRejectedValue(
+        new ConflictError('Horario ocupado', {
+          errorCode: 'APPOINTMENT_CONFLICT',
+          statusCode: 409
+        })
+      )
       render(<BookingStepConfirmation {...base} />)
       aceptarTerminos()
       fireEvent.click(botonReservar())
 
-      await waitFor(() => expect(screen.getByText('Horario ocupado')).toBeInTheDocument())
+      await waitFor(() =>
+        expect(
+          screen.getByText('Ese horario ya no está disponible. Elegí otro.')
+        ).toBeInTheDocument()
+      )
       expect(
         screen.getByText(/El horario podria haberse ocupado mientras completabas el formulario/)
       ).toBeInTheDocument()
@@ -1038,6 +1046,93 @@ describe('BookingStepConfirmation', () => {
 
       await waitFor(() => expect(screen.getByText(aviso)).toBeInTheDocument())
       expect(screen.queryByText(/El horario podria haberse ocupado/)).not.toBeInTheDocument()
+    })
+
+    it('un 409 IDEMPOTENCY_IN_PROGRESS pide esperar sin culpar al horario', async () => {
+      const base = completo()
+      base.onConfirm = jest.fn().mockRejectedValue(
+        new ConflictError('La operación ya se está procesando.', {
+          errorCode: 'IDEMPOTENCY_IN_PROGRESS',
+          statusCode: 409
+        })
+      )
+      render(<BookingStepConfirmation {...base} />)
+      aceptarTerminos()
+      fireEvent.click(botonReservar())
+
+      expect(
+        await screen.findByText(
+          'La operación ya se está procesando. Esperá unos segundos y revisá antes de reintentar.'
+        )
+      ).toBeInTheDocument()
+      expect(screen.queryByText(/horario.*ocupad/i)).not.toBeInTheDocument()
+    })
+
+    it('un 409 de otra causa no se presenta como horario ocupado', async () => {
+      const base = completo()
+      base.onConfirm = jest.fn().mockRejectedValue(
+        new ConflictError('El proveedor de pago no está disponible.', {
+          errorCode: 'PAYMENT_GATEWAY_NOT_CONNECTED',
+          statusCode: 409
+        })
+      )
+      render(<BookingStepConfirmation {...base} />)
+      aceptarTerminos()
+      fireEvent.click(botonReservar())
+
+      expect(
+        await screen.findByText('El proveedor de pago no está disponible.')
+      ).toBeInTheDocument()
+      expect(screen.queryByText(/El horario podria haberse ocupado/)).not.toBeInTheDocument()
+    })
+
+    it('un código 409 desconocido no atribuye el error al horario', async () => {
+      const base = completo()
+      base.onConfirm = jest.fn().mockRejectedValue(
+        new ConflictError('No se pudo confirmar la operación.', {
+          errorCode: 'FUTURE_CONFLICT_REASON',
+          statusCode: 409
+        })
+      )
+      render(<BookingStepConfirmation {...base} />)
+      aceptarTerminos()
+      fireEvent.click(botonReservar())
+
+      expect(await screen.findByText('No se pudo confirmar la operación.')).toBeInTheDocument()
+      expect(screen.queryByText(/El horario podria haberse ocupado/)).not.toBeInTheDocument()
+    })
+
+    it('un 503 transitorio no culpa al horario y permite reintentar con los datos intactos', async () => {
+      const base = completo()
+      base.onConfirm = jest
+        .fn()
+        .mockRejectedValueOnce(
+          new ServiceUnavailableError('Servicio temporalmente no disponible', {
+            errorCode: 'SERVICE_UNAVAILABLE',
+            statusCode: 503
+          })
+        )
+        .mockResolvedValue(confirmacion())
+      render(<BookingStepConfirmation {...base} />)
+      aceptarTerminos()
+      fireEvent.click(botonReservar())
+
+      expect(
+        await screen.findByText('No pudimos procesar tu reserva. Probá de nuevo.')
+      ).toBeInTheDocument()
+      expect(screen.queryByText(/horario.*ocupad/i)).not.toBeInTheDocument()
+      expect((screen.getByPlaceholderText('Ej: Juan Perez') as HTMLInputElement).value).toBe(
+        'Lucia'
+      )
+      expect((screen.getByPlaceholderText('Ej: 351 1234567') as HTMLInputElement).value).toBe(
+        '1155550101'
+      )
+
+      fireEvent.click(botonReservar())
+      await waitFor(() => expect(screen.getByText('Reserva Confirmada')).toBeInTheDocument())
+
+      expect(base.onConfirm).toHaveBeenNthCalledWith(1, 'manual', true, [])
+      expect(base.onConfirm).toHaveBeenNthCalledWith(2, 'manual', true, [])
     })
 
     it('un 400 BOOKING_NOTICE_REQUIRED muestra el texto del servidor con las horas de anticipacion', async () => {
