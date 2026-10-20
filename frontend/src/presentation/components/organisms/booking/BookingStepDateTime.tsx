@@ -334,7 +334,7 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
                 key={formattedDate}
                 type="button"
                 data-testid={`date-${formattedDate}`}
-                aria-label={format(date, "EEEE d 'de' MMMM 'de' yyyy", { locale: es })}
+                aria-label={`${isToday ? 'Hoy, ' : ''}${format(date, "EEEE d 'de' MMMM 'de' yyyy", { locale: es })}`}
                 aria-pressed={isSelected}
                 onClick={() => setActiveDate(date)}
                 className="min-h-11 min-w-[72px] flex flex-col items-center justify-center py-3 rounded-md border transition-all snap-center active:scale-95"
