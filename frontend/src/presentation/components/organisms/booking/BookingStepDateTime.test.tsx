@@ -23,6 +23,25 @@ describe('BookingStepDateTime', () => {
     mockStaff.mockReturnValue({ data: [], isLoading: false })
   })
 
+  it('incluye el texto visible "Hoy" al principio del nombre accesible de la fecha actual', () => {
+    mockAvailability.mockReturnValue({ isLoading: false, data: [] })
+
+    render(
+      <BookingStepDateTime
+        storePublicId="store-1"
+        serviceId="svc-1"
+        staffId={null}
+        selectedDate={null}
+        selectedTime={null}
+        onSelect={() => undefined}
+        onBack={() => undefined}
+      />
+    )
+
+    const fechaDeHoy = screen.getByRole('button', { name: /^Hoy,/ })
+    expect(fechaDeHoy).toHaveTextContent('Hoy')
+  })
+
   it('muestra los slots en hora argentina y entrega el instante UTC al elegir', () => {
     // Regresion 2026-09-10: se mostraba la hora UTC del slot ("00:00" para un
     // turno de 21:00) y al reservar se recomponia fecha local + esa hora, con lo
