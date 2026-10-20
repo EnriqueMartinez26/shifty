@@ -26,28 +26,32 @@ const ClientAppointmentsPage: React.FC = () => {
 
   if (isLoading) {
     return (
-      <div
+      <main
         className="min-h-screen grid place-items-center text-sm font-black uppercase tracking-widest"
         style={{ background: colors2000s.bg.primary, color: colors2000s.text.secondary }}
       >
         Cargando...
-      </div>
+      </main>
     )
   }
 
   // 2026-10-02: sin red o con un 5xx tambien decia "Negocio no encontrado".
   if (!ref && isError && !isStoreMissing(refQuery.error)) {
-    return <StoreLoadError onRetry={() => void refQuery.refetch()} retrying={refQuery.isFetching} />
+    return (
+      <main>
+        <StoreLoadError onRetry={() => void refQuery.refetch()} retrying={refQuery.isFetching} />
+      </main>
+    )
   }
 
   if (!ref) {
     return (
-      <div
+      <main
         className="min-h-screen grid place-items-center text-sm font-black uppercase tracking-widest"
         style={{ background: colors2000s.bg.primary, color: colors2000s.status.danger.text }}
       >
         Negocio no encontrado
-      </div>
+      </main>
     )
   }
 
@@ -56,7 +60,10 @@ const ClientAppointmentsPage: React.FC = () => {
   const store = { public_id: ref.store_public_id, name: ref.name, slug: slug.toLowerCase() }
 
   return (
-    <div className="min-h-screen py-8 px-4 sm:py-10" style={{ background: colors2000s.bg.primary }}>
+    <main
+      className="min-h-screen py-8 px-4 sm:py-10"
+      style={{ background: colors2000s.bg.primary }}
+    >
       <header className="max-w-2xl mx-auto mb-6 text-center sm:mb-8">
         <h1
           className="break-words text-3xl font-black tracking-tighter uppercase"
@@ -80,14 +87,12 @@ const ClientAppointmentsPage: React.FC = () => {
         )}
       </header>
 
-      <main>
-        <ClientAppointmentsContainer store={store} />
-      </main>
+      <ClientAppointmentsContainer store={store} />
 
       <div className="max-w-2xl mx-auto mt-10 text-center">
         <LegalFooterLinks depositPolicy={vitrina?.deposit_policy} />
       </div>
-    </div>
+    </main>
   )
 }
 

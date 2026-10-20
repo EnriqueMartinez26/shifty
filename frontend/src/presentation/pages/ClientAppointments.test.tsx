@@ -64,6 +64,9 @@ describe('ClientAppointmentsPage', () => {
     renderEn('/b/Sol/mis-turnos')
 
     expect(await screen.findByText('Mis turnos de Peluqueria Sol')).toBeInTheDocument()
+    expect(
+      screen.getByRole('main').contains(screen.getByText('Mis turnos de Peluqueria Sol'))
+    ).toBe(true)
     expect(mockGetStoreRef).toHaveBeenCalledWith('Sol')
     expect(mockContainer).toHaveBeenLastCalledWith({
       store: { public_id: 'store-1', name: 'Peluqueria Sol', slug: 'sol' }
@@ -85,6 +88,7 @@ describe('ClientAppointmentsPage', () => {
     renderEn('/b/nadie/mis-turnos')
 
     expect(await screen.findByText('Negocio no encontrado')).toBeInTheDocument()
+    expect(screen.getByRole('main').contains(screen.getByText('Negocio no encontrado'))).toBe(true)
     expect(mockContainer).not.toHaveBeenCalled()
     expect(mockGetStore).not.toHaveBeenCalled()
   })
@@ -105,12 +109,25 @@ describe('ClientAppointmentsPage', () => {
     expect(
       await screen.findByRole('heading', { level: 1, name: 'No pudimos cargar la tienda' })
     ).toBeInTheDocument()
+    expect(
+      screen
+        .getByRole('main')
+        .contains(screen.getByRole('heading', { level: 1, name: 'No pudimos cargar la tienda' }))
+    ).toBe(true)
     expect(screen.queryByText('Negocio no encontrado')).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'Reintentar' }))
 
     expect(await screen.findByText('Mis turnos de Peluqueria Sol')).toBeInTheDocument()
     expect(mockGetStoreRef).toHaveBeenCalledTimes(2)
+  })
+
+  it('expone el estado de carga dentro del landmark principal', () => {
+    mockGetStoreRef.mockImplementation(() => new Promise(() => undefined))
+
+    renderEn('/b/sol/mis-turnos')
+
+    expect(screen.getByRole('main').contains(screen.getByText('Cargando...'))).toBe(true)
   })
 
   it('una tienda que toma reservas muestra el link y la politica de sena (FF-16)', async () => {
