@@ -28,6 +28,9 @@ describe('UserCard', () => {
     createdAt: '2026-09-10T12:00:00.000Z'
   })
 
+  // 2026-10-14: una tarjeta con botones no se escala. Al apretar, `active:scale`
+  // la achica hacia el centro y corre los botones: el mouseup cae afuera y el
+  // click se pierde (mismo bug que la tarjeta de la agenda del dia).
   it('la tarjeta no se escala al pasar ni al apretar', () => {
     const { container } = render(
       <UserCard user={usuario} onEdit={jest.fn()} onDelete={jest.fn()} canDelete />
