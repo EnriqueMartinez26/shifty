@@ -446,6 +446,7 @@ describe('BookingStepDateTime', () => {
   it('pagina el horizonte argentino en bloques de 14 y conserva una ultima pagina de 9 fechas', () => {
     mockAvailability.mockReturnValue({ isLoading: false, data: [] })
     const today = parseISO(formatArgentinaDate(new Date().toISOString()))
+    const onEmptyAvailability = jest.fn()
 
     render(
       <BookingStepDateTime
@@ -456,6 +457,7 @@ describe('BookingStepDateTime', () => {
         selectedTime={null}
         onSelect={() => undefined}
         onBack={() => undefined}
+        onEmptyAvailability={onEmptyAvailability}
       />
     )
 
@@ -463,29 +465,44 @@ describe('BookingStepDateTime', () => {
     expect(counter).toHaveClass('whitespace-nowrap')
     expect(counter.parentElement).toHaveClass('flex-col', 'sm:flex-row')
     expect(screen.getAllByTestId(/^date-/)).toHaveLength(14)
-    expect(screen.getByRole('button', { name: 'Mostrar los 14 días anteriores' })).toBeDisabled()
+    expect(
+      screen.getByRole('button', { name: 'Anterior: mostrar los 14 días anteriores' })
+    ).toBeDisabled()
+    expect(onEmptyAvailability).toHaveBeenCalledTimes(1)
 
-    fireEvent.click(screen.getByRole('button', { name: 'Mostrar los 14 días siguientes' }))
-
-    expect(screen.getByText('Días 15–28 de 121')).toBeInTheDocument()
-    expect(mockAvailability).toHaveBeenLastCalledWith(
-      'store-1',
-      'svc-1',
-      format(addDays(today, 14), 'yyyy-MM-dd'),
-      false,
-      []
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Siguiente: mostrar los 14 días siguientes' })
     )
 
+    expect(screen.getByText('Días 15–28 de 121')).toBeInTheDocument()
+    expect(mockAvailability).toHaveBeenLastCalledWith('store-1', 'svc-1', undefined, false, [])
+    expect(screen.getByText('Elegí una fecha para ver los horarios.')).toBeInTheDocument()
+    expect(onEmptyAvailability).toHaveBeenCalledTimes(1)
+
+    const selectedDate = format(addDays(today, 15), 'yyyy-MM-dd')
+    fireEvent.click(screen.getByTestId(`date-${selectedDate}`))
+    expect(mockAvailability).toHaveBeenLastCalledWith('store-1', 'svc-1', selectedDate, false, [])
+    expect(onEmptyAvailability).toHaveBeenCalledTimes(2)
+
     for (let page = 2; page < 8; page += 1) {
-      fireEvent.click(screen.getByRole('button', { name: 'Mostrar los 14 días siguientes' }))
+      fireEvent.click(
+        screen.getByRole('button', { name: 'Siguiente: mostrar los 14 días siguientes' })
+      )
     }
 
-    expect(screen.getByRole('button', { name: 'Mostrar los 9 días siguientes' })).not.toBeDisabled()
-    fireEvent.click(screen.getByRole('button', { name: 'Mostrar los 9 días siguientes' }))
+    expect(
+      screen.getByRole('button', { name: 'Siguiente: mostrar los 9 días siguientes' })
+    ).not.toBeDisabled()
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Siguiente: mostrar los 9 días siguientes' })
+    )
 
     expect(screen.getByText('Días 113–121 de 121')).toBeInTheDocument()
     expect(screen.getAllByTestId(/^date-/)).toHaveLength(9)
-    expect(screen.getByRole('button', { name: 'No hay más fechas disponibles' })).toBeDisabled()
+    expect(
+      screen.getByRole('button', { name: 'Siguiente: no hay más fechas disponibles' })
+    ).toBeDisabled()
+    expect(onEmptyAvailability).toHaveBeenCalledTimes(2)
   })
 
   it('indica el desplazamiento de fechas y adapta los horarios a dos columnas angostas', () => {
