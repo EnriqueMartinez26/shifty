@@ -51,6 +51,9 @@ export const StaffCard: React.FC<StaffCardProps> = ({
     ? `linear-gradient(180deg, ${colors2000s.status.info.dark} 0%, ${colors2000s.status.info.accent} 100%)`
     : orangeCtaGradient
 
+  // Sin `scale` en la tarjeta (2026-10-14): tiene botones adentro y al apretar
+  // `active:scale` los corria; el mouseup caia afuera y se perdia el click.
+  // Ver StaffColumn. La marca al pasar es un contorno, que no mueve nada.
   return (
     <div
       className="relative min-w-0 p-6 rounded-md transition-colors duration-200 hover:outline-2 hover:outline-orange-400 border-l-[6px]"
@@ -86,9 +89,10 @@ export const StaffCard: React.FC<StaffCardProps> = ({
         {/* Header Section: Avatar initials + Titles */}
         <div className="flex items-center gap-4 pr-20">
           <div
-            className="w-12 h-12 rounded-full text-white flex items-center justify-center font-black text-sm shadow-md flex-shrink-0"
+            className="w-12 h-12 rounded-full flex items-center justify-center font-black text-sm shadow-md flex-shrink-0"
             style={{
               background: avatarGradient,
+              color: isResource ? colors2000s.text.onOrange : colors2000s.text.onOrangeSelection,
               boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`
             }}
           >

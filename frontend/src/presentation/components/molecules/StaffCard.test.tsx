@@ -33,6 +33,10 @@ describe('StaffCard', () => {
       />
     )
 
+    const initials = screen.getByText('AP') as HTMLDivElement
+    const expectedOrangeText = document.createElement('span')
+    expectedOrangeText.style.color = colors2000s.text.onOrangeSelection
+    expect(initials.style.color).toBe(expectedOrangeText.style.color)
     expect(screen.getByText('Corte')).toBeInTheDocument()
     expect(screen.getByText('Color')).toBeInTheDocument()
     expect(screen.queryByText(/^S-\d/)).not.toBeInTheDocument()
