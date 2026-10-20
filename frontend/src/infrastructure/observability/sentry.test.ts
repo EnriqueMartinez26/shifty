@@ -65,7 +65,7 @@ describe('initSentry', () => {
     expect(options.dataCollection).toEqual({
       userInfo: false,
       cookies: false,
-      httpHeaders: { request: false, response: false },
+      httpHeaders: { request: { allow: ['user-agent'] }, response: false },
       httpBodies: [],
       urlQueryParams: false,
       genAI: { inputs: false, outputs: false },
@@ -158,7 +158,7 @@ describe('initSentry: sin secretos de la URL ni datos de usuario (F3)', () => {
     expect(cleaned.user).toBeUndefined()
   })
 
-  it('el Referer no llega: puede traer el token de la pagina anterior', async () => {
+  it('de los headers solo queda el User-Agent; el Referer puede traer un token', async () => {
     const { beforeSend } = await init()
     const cleaned = beforeSend({
       request: {
@@ -166,7 +166,10 @@ describe('initSentry: sin secretos de la URL ni datos de usuario (F3)', () => {
         headers: {
           Referer: 'https://app.example/reset-password?token=secreto',
           referer: 'https://app.example/reset-password?token=secreto',
+          Cookie: 'a=b',
           cookie: 'a=b',
+          Authorization: 'Bearer x',
+          authorization: 'Bearer x',
           'User-Agent': 'Mozilla/5.0'
         }
       }

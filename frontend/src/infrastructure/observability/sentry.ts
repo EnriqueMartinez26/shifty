@@ -42,7 +42,10 @@ export const initSentry = (): boolean => {
     dataCollection: {
       userInfo: false,
       cookies: false,
-      httpHeaders: { request: false, response: false },
+      // Solo el User-Agent de la request (navegador y sistema del error;
+      // decision de Mateo, 2026-10-19). El SDK deja los demas headers como
+      // "[Filtered]" y beforeSend igual borra Referer, Cookie y Authorization.
+      httpHeaders: { request: { allow: ['user-agent'] }, response: false },
       httpBodies: [],
       urlQueryParams: false,
       genAI: { inputs: false, outputs: false },
