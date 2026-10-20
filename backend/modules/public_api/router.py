@@ -47,7 +47,9 @@ from modules.notifications.tasks import enqueue_otp_email
 from modules.otp.client_token import CLIENT_TOKEN_HEADER
 from modules.otp.service import OtpService
 from modules.payments.deposit_channels import (
+    booking_blocked_code,
     deposit_channels_for,
+    is_far_booking,
     online_payment_mandatory,
 )
 from modules.payments.deposit_rules import (
@@ -70,6 +72,7 @@ from modules.public_api.service import (
     client_reschedule_denial,
     decide_selection,
     extra_service_items,
+    far_day_closed_by_deposit,
     gross_total,
     quote_addons,
     resolve_extra_services,
@@ -403,6 +406,15 @@ async def get_public_availability(
             raise StoreNotFoundException(identifier=store_public_id)
         # De lectura: sin el flag (``require_selection_size``).
         require_selection_size(extra_service_id)
+        # Un dia a mas de 30 que el alta rechazaria por la sena (decision de
+        # Mateo, 2026-10-20) no se ofrece; antes del cache, que no lo guarda.
+        if await far_day_closed_by_deposit(
+            db,
+            store_id=store.id,
+            service_public_ids=[service_id, *extra_service_id],
+            day=search_date,
+        ):
+            return []
         return list(
             await AvailabilityService(db, availability_cache).get_available_slots(
                 store.id,
@@ -482,6 +494,9 @@ async def preview_public_deposit(
         # Atajo de ``deposit_channels_for``: sin sena obligatoria no se lee la
         # config de MP (los canales no deciden nada).
         channels = await deposit_channels_for(db, store, deposit_mode=deposit_mode)
+        # La regla de la reserva lejana (decision de Mateo, 2026-10-20), con
+        # las mismas funciones que el alta: el cliente la ve antes de reservar.
+        lejana = is_far_booking(starts_at_utc)
         return PublicDepositPreviewResponse(
             amount=float(decision.amount),
             base_amount=float(decision.base_amount),
@@ -496,9 +511,18 @@ async def preview_public_deposit(
                 deposit_amount=decision.amount,
                 deposit_mode=deposit_mode,
                 allow_manual_coordination=store.allow_manual_coordination,
+                far_booking=lejana,
             ),
             addons_amount=float(addons.total),
             extra_services_amount=float(quote.amount),
+            far_booking=lejana,
+            booking_blocked_code=booking_blocked_code(
+                channels=channels,
+                deposit_amount=decision.amount,
+                deposit_mode=deposit_mode,
+                allow_manual_coordination=store.allow_manual_coordination,
+                far_booking=lejana,
+            ),
         )
 
 

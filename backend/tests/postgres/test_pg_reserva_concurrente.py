@@ -575,11 +575,21 @@ async def test_rafaga_de_liberaciones_libera_una_sola_vez(
     dia = datetime.now(timezone.utc) + timedelta(days=5)
     await add_staff_schedule(client, token, staff, target_date=dia)
     slot = dia.replace(hour=11, minute=0, second=0, microsecond=0)
+    # Un ``pending`` del panel (sin cliente): la reserva publica sin cobro ya
+    # nace confirmada (decision de Mateo, 2026-10-20) y el trigger no deja
+    # volverla a ``pending``.
     reserva = await client.post(
-        "/public/appointments",
-        json=_reserva(store, service, staff, slot, 1, "pg-release-rafaga"),
+        "/appointments/",
+        headers=auth_headers(token),
+        json={
+            "service_id": service,
+            "staff_id": staff,
+            "starts_at": slot.isoformat(),
+            "idempotency_key": "pg-release-rafaga",
+        },
     )
     assert reserva.status_code == 201, reserva.text
+    assert reserva.json()["status"] == "pending", reserva.text
     turno = reserva.json()["public_id"]
 
     respuestas = await asyncio.gather(

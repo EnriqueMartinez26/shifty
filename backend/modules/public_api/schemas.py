@@ -317,6 +317,15 @@ class PublicDepositPreviewResponse(BaseModel):
     # Aditivo (2026-10-16): la parte de ``price`` que son servicios extra (su
     # precio de lista, sin descuento).
     extra_services_amount: float = 0.0
+    # Aditivo (decision de Mateo, 2026-10-20): el turno empieza a mas de
+    # ``FAR_BOOKING_DAYS`` dias locales. Con sena obligatoria, ahi solo se
+    # paga por Mercado Pago (``online_payment_mandatory`` ya lo refleja).
+    far_booking: bool = False
+    # Aditivo (2026-10-20): el codigo con el que el alta rechazaria esta
+    # reserva por su canal de cobro, pague como pague el cliente
+    # (``FAR_BOOKING_UNAVAILABLE`` o ``DEPOSIT_CHANNEL_UNAVAILABLE``); None si
+    # se puede reservar.
+    booking_blocked_code: str | None = None
 
 
 class PublicPromotionPreviewResponse(BaseModel):

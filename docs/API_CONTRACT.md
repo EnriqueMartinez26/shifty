@@ -4049,6 +4049,8 @@ Type: `enum("efectivo", "transferencia", "mercadopago", "otro")`
 | `online_payment_mandatory` | boolean | yes |  |
 | `addons_amount` | number | no | default=0.0 |
 | `extra_services_amount` | number | no | default=0.0 |
+| `far_booking` | boolean | no | default=false |
+| `booking_blocked_code` | string \| null | no |  |
 
 ### PublicPaymentStatusResponse
 
@@ -4978,4 +4980,4 @@ Type: `enum("admin", "staff", "receptionist", "client")`
 | `terms_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 | `privacy_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 
-Generado desde app.openapi() el 2026-10-16, commit c739efef
+Generado desde app.openapi() el 2026-10-20, commit 27ab7f01

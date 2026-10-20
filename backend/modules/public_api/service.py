@@ -51,7 +51,12 @@ from core.exceptions import (
     ValidationException,
 )
 from core.feature_flags import is_store_feature_enabled
-from core.utils import BOOKING_HORIZON_DAYS, ensure_utc_aware, today_local
+from core.utils import (
+    BOOKING_HORIZON_DAYS,
+    ensure_utc_aware,
+    local_day_start,
+    today_local,
+)
 from modules.appointments.guards import (
     awaits_payment,
     is_active,
@@ -71,8 +76,13 @@ from modules.otp.service import OtpService, mask_phone
 from modules.payments.deposit_channels import (
     DepositChannel,
     DepositChannels,
+    FAR_WHATSAPP_RESCHEDULE_DENIED,
     DepositChannelUnavailableError,
+    FarBookingRequiresMercadoPagoError,
     deposit_channels_for,
+    deposit_channels_of,
+    is_far_booking,
+    is_far_day,
     provider_for,
     report_deposit_channel_unavailable,
     resolve_deposit_channel,
@@ -275,6 +285,54 @@ def require_public_availability_day(day: date) -> date:
             f"y los proximos {PUBLIC_AVAILABILITY_FUTURE_DAYS} dias"
         )
     return day
+
+
+async def far_day_closed_by_deposit(
+    db: AsyncSession,
+    *,
+    store_id: str,
+    service_public_ids: Sequence[str],
+    day: date,
+) -> bool:
+    """El dia lejano no se ofrece en la grilla publica: la seleccion pide
+    sena obligatoria y la tienda no tiene Mercado Pago usable, asi que el alta
+    lo rechazaria con 422 ``FAR_BOOKING_UNAVAILABLE`` (decision de Mateo,
+    2026-10-20).
+
+    Solo consulta la base para un dia lejano (``is_far_day``): la grilla de
+    los proximos 30 dias no paga nada. La sena se estima con el precio de
+    lista y sin historial (un recargo solo la sube; un codigo de promo que la
+    deje en cero no se conoce aca); la garantia sigue siendo el alta.
+    """
+    if not is_far_day(day):
+        return False
+    services = list(
+        (
+            await db.execute(
+                select(Service).where(
+                    Service.store_id == store_id,
+                    Service.public_id.in_(sorted(set(service_public_ids))),
+                    Service.is_active.is_(True),
+                )
+            )
+        ).scalars()
+    )
+    if selection_deposit_mode(services) != "required":
+        return False
+    store = await PublicRepository(db).get_store_by_id(store_id)
+    if store is None or (await deposit_channels_of(db, store)).mercadopago:
+        return False
+    precio = sum(
+        (Decimal(str(service.price or 0)) for service in services), Decimal("0")
+    )
+    deposit = decide_selection(
+        services,
+        store,
+        price=precio,
+        starts_at=local_day_start(day),
+        history=UNKNOWN_HISTORY,
+    )
+    return deposit.decision.amount > 0
 
 
 # ---------------------------------------------------------------------------
@@ -1031,6 +1089,9 @@ class PublicBookingService:
                 deposit_amount=deposit.decision.amount,
                 deposit_mode=selection_deposit_mode(services),
                 allow_manual_coordination=store.allow_manual_coordination,
+                # Un turno lejano con sena obligatoria solo se cobra por MP
+                # (decision de Mateo, 2026-10-20): 422 antes de escribir.
+                far_booking=is_far_booking(starts_at_utc),
             )
         except DepositChannelUnavailableError:
             # El 409 es neutro y el dueno no lo ve: queda rastro con ids.
@@ -1092,10 +1153,13 @@ class PublicBookingService:
             notes=data.notes,
             intake_answers=request.custom_fields,
             idempotency_key=idempotency_key,
+            # Sin cobro nace confirmado (decision de Mateo, 2026-10-20): no
+            # hay nada que esperar, y el ``pending`` de antes lo levantaba el
+            # job de expiracion a la hora del turno si nadie lo confirmaba.
             initial_status=(
                 AppointmentStatus.PENDING_PAYMENT.value
                 if request.payment_required
-                else AppointmentStatus.PENDING.value
+                else AppointmentStatus.CONFIRMED.value
             ),
             buffer_minutes=request.store.buffer_minutes or 0,
             # El total congelado: servicio + adicionales, con la promo.
@@ -1103,12 +1167,12 @@ class PublicBookingService:
             client_email=_booking_contact_email(data, store_id),
             # Un turno esperando la seña retiene el slot hasta su plazo de pago
             # (por MP una ventana corta, por WhatsApp hasta 2 h antes): si no
-            # se paga, el horario vuelve a estar libre. Sin seña retiene hasta
-            # el horario, porque lo confirma la tienda.
+            # se paga, el horario vuelve a estar libre. Sin seña nace
+            # confirmado y sin retencion que vencer (como el alta del panel).
             expires_at=(
                 deposit_hold_deadline(request.deposit_channel, request.starts_at_utc)
                 if request.deposit_channel is not None
-                else request.starts_at_utc
+                else None
             ),
             # El schema ya exige accepts_terms (PV-09): todo turno publico nace
             # con el instante del consentimiento, y con las versiones aceptadas
@@ -1129,21 +1193,43 @@ class PublicBookingService:
         booking = _Booking(appointment, service, staff, None, promotion_quote)
         if request.payment_required:
             booking.payment = await self._create_pending_payment(request, booking)
-        # A MP lo acredita el webhook; por WhatsApp o sin sena, la tienda.
-        if request.deposit_channel != "mercadopago":
+        self._notify_owner_of_booking(data, request, booking)
+        return booking
+
+    def _notify_owner_of_booking(
+        self, data: PublicBookingCreate, request: _BookingRequest, booking: _Booking
+    ) -> None:
+        """Aviso al dueno por el outbox, en la transaccion del alta.
+
+        A MP lo acredita el webhook (su aviso es ``payment.approved``). Una
+        sena por WhatsApp espera que la tienda la confirme desde Cobros. Sin
+        cobro el turno ya nacio confirmado (decision de Mateo, 2026-10-20): el
+        aviso es informativo y no le pide confirmar nada.
+        """
+        if request.deposit_channel == "mercadopago":
+            return
+        service_name = service_label(
+            booking.service.name,
+            booking.appointment.addons_snapshot,
+            booking.appointment.extra_services_snapshot,
+        )
+        if request.deposit_channel is None:
             self.db.add(
-                _pending_confirmation_message(
+                _booked_online_message(
                     booking.appointment,
                     client_name=data.client_name,
-                    service_name=service_label(
-                        booking.service.name,
-                        booking.appointment.addons_snapshot,
-                        booking.appointment.extra_services_snapshot,
-                    ),
-                    deposit=booking.payment,
+                    service_name=service_name,
                 )
             )
-        return booking
+            return
+        self.db.add(
+            _pending_confirmation_message(
+                booking.appointment,
+                client_name=data.client_name,
+                service_name=service_name,
+                deposit=booking.payment,
+            )
+        )
 
     async def _redeem_promotion_code(
         self,
@@ -1405,6 +1491,13 @@ class PublicBookingService:
         )
         if denial is not None:
             raise denial
+        if live_charge_provider == PAYMENT_PROVIDER_MANUAL and is_far_booking(
+            data.new_starts_at
+        ):
+            # La sena por WhatsApp no viaja a un turno lejano (decision de
+            # Mateo, 2026-10-20): ahi solo se cobra por MP, y la autogestion no
+            # cambia el canal. 422 antes de escribir nada.
+            raise FarBookingRequiresMercadoPagoError(FAR_WHATSAPP_RESCHEDULE_DENIED)
         service, staff = await self._service_and_staff(original)
         # Duracion del principal de hoy + la de los extras congelados (decision
         # de Mateo, 2026-10-16): el turno movido conserva sus servicios.
@@ -1736,6 +1829,24 @@ def _pending_confirmation_message(
         store_id=appointment.store_id,
         event_type=NotificationType.APPOINTMENT_PENDING_CONFIRMATION.value,
         payload=payload,
+    )
+
+
+def _booked_online_message(
+    appointment: Appointment, *, client_name: str, service_name: str
+) -> OutboxMessage:
+    """Aviso al dueno de una reserva publica sin cobro: ya nacio confirmada
+    (decision de Mateo, 2026-10-20), asi que solo le cuenta quien, que y
+    cuando (``jobs._booked_online_notification``)."""
+    return OutboxMessage(
+        store_id=appointment.store_id,
+        event_type=NotificationType.APPOINTMENT_BOOKED_ONLINE.value,
+        payload={
+            "appointment_id": appointment.id,
+            "client_name": client_name,
+            "service_name": service_name,
+            "starts_at": ensure_utc_aware(appointment.starts_at).isoformat(),
+        },
     )
 
 
