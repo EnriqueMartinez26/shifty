@@ -575,15 +575,19 @@ pasos el profesional es un filtro del horario, no un paso), deep-links
 `?service=&staff=&date=` (arrancan en el horario y la fecha lejana aparece en
 la tira), wa.me en el encabezado y en todas las vistas del calendario, y links
 para compartir en Ajustes. El E2E con Playwright existe desde el 2026-09-16
-(`frontend/e2e/reserva-movil.spec.ts`, viewport Pixel 7, `npm run e2e`;
-`@playwright/test` 1.63.0 verificado en el registro: publica Microsoft desde
-2020) y el workflow manual `.github/workflows/e2e.yml` lo corre contra un
-entorno ya levantado con una tienda publicada. Corrió en verde el 2026-09-16
-contra el stack local detrás de nginx con la tienda de carga: recorre
-servicio → horario → datos → "Reserva Registrada" sin desborde horizontal en
-ningún paso (viewport Pixel 7). El estado del wizard sincronizado con la URL
-no se hizo: se resolvió el caso real (deep-link) sin reescribir la
-navegación.
+  (`frontend/e2e/reserva-movil.spec.ts`, viewport Pixel 7). La primera prueba,
+  del 2026-09-16, corría contra un stack ya levantado con una tienda de carga.
+  La PR #232 agrega `npm run e2e:isolated` y un workflow que crea su propio
+  proyecto Docker descartable, tienda y datos sintéticos; usa credenciales
+  aleatorias, desactiva pagos, imprime el correo en consola, publica puertos
+  solo en loopback y elimina contenedores y volúmenes al terminar. La suite
+  automatiza la reserva multi-servicio y un fallo 503: el primer pedido crea
+  la reserva en el backend sintético, el navegador recibe 503 y el reintento
+  conserva la clave idempotente y obtiene la misma reserva. La revisión de
+  #232 todavía debe confirmar ese contrato en el head final. OTP, “Mis
+  turnos” y recorridos autenticados del panel quedan fuera de esta suite. El
+  estado del wizard sincronizado con la URL no se hizo: se resolvió el caso
+  real (deep-link) sin reescribir la navegación.
 
 Del review de la Fase 4 se cerró el 2026-09-16 lo que había quedado como
 issue: topes anti-acaparamiento de la lista de espera (3 entradas abiertas
@@ -615,10 +619,11 @@ contenido útil queda en unos 216 (inferido).
   autogestión madura.
 - Botón "Copiar link / compartir" en ajustes, con links por servicio, para
   que el dueño los mande a mano.
-- Pruebas: tests Jest del wizard con los hooks simulados (hoy cobertura
-  cero) y un E2E con Playwright en viewport móvil contra el stack local.
-  Playwright es una dependencia nueva: verificación humana en el registro y
-  lockfile en el mismo commit; primero como script local, después como job.
+- Pruebas: los tests Jest del wizard complementan el E2E Playwright en
+  viewport móvil y el stack aislado descritos arriba. La suite permanente
+  cubre reserva pública multi-servicio y reintento; OTP, “Mis turnos” y rutas
+  autenticadas del panel requieren cobertura propia. Playwright está fijado
+  en el lockfile y el runner valida el toolchain del proyecto.
 
 **Decisiones del dueño.** "Recordarme en este teléfono" (nombre y teléfono
 en el dispositivo, opt-in): sí o no; es dato personal en celulares

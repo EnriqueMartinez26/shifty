@@ -195,6 +195,7 @@ test.describe('reserva pública aislada desde el celular', () => {
   }) => {
     const requestBodies: Array<Record<string, unknown>> = []
     let attempts = 0
+    let createdBooking: unknown
     await page.route('**/api/public/appointments', async (route) => {
       if (route.request().method() !== 'POST') {
         await route.continue()
@@ -204,7 +205,11 @@ test.describe('reserva pública aislada desde el celular', () => {
       attempts += 1
       requestBodies.push(route.request().postDataJSON() as Record<string, unknown>)
       if (attempts === 1) {
+        const upstreamResponse = await route.fetch()
+        expect(upstreamResponse.status()).toBe(201)
+        createdBooking = await upstreamResponse.json()
         await route.fulfill({
+          response: upstreamResponse,
           status: 503,
           contentType: 'application/json',
           body: JSON.stringify({
@@ -265,7 +270,15 @@ test.describe('reserva pública aislada desde el celular', () => {
     await expect(page.getByPlaceholder('Ej: 351 1234567')).toHaveValue(clientPhone)
     await expect(confirm).toBeEnabled()
 
+    const retryResponsePromise = page.waitForResponse(
+      (response) =>
+        response.request().method() === 'POST' &&
+        new URL(response.url()).pathname.endsWith('/public/appointments')
+    )
     await confirm.click()
+    const retryResponse = await retryResponsePromise
+    expect(retryResponse.status()).toBe(201)
+    expect(await retryResponse.json()).toEqual(createdBooking)
     await expect(
       page.getByRole('heading', { name: /^Reserva (Confirmada|Registrada|Pendiente de Pago)$/ })
     ).toBeVisible({ timeout: 20_000 })
