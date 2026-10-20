@@ -204,6 +204,8 @@ describe('BookingWizardContainer', () => {
         screen.getByRole('region', { name: 'Paso 3 de 3: Datos y Confirmación' })
       ).toHaveFocus()
     )
+    expect(screen.getByPlaceholderText('Ej: Juan Perez')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('Ej: Juan Perez')).not.toHaveFocus()
 
     fireEvent.click(volver())
     await waitFor(() =>
@@ -248,7 +250,7 @@ describe('BookingWizardContainer', () => {
       expect(url()).toBe('/booking/tienda?ref=ig&step=2')
     })
 
-    it('al elegir un horario lleva el foco al primer dato del paso nuevo', async () => {
+    it('al elegir un horario enfoca la región sin abrir el teclado del formulario', async () => {
       mockServices.mockReturnValue({ data: [servicio('a'), servicio('b')], isLoading: false })
       render(<WizardEnRuta store={tienda(false)} />)
       fireEvent.click(screen.getByText('Servicio a'))
@@ -257,7 +259,11 @@ describe('BookingWizardContainer', () => {
       fireEvent.click(screen.getByText('09:00'))
 
       const nameInput = await screen.findByPlaceholderText('Ej: Juan Perez')
-      await waitFor(() => expect(document.activeElement).toBe(nameInput))
+      const stepRegion = screen.getByRole('region', {
+        name: 'Paso 3 de 3: Datos y Confirmación'
+      })
+      await waitFor(() => expect(document.activeElement).toBe(stepRegion))
+      expect(nameInput).not.toHaveFocus()
     })
 
     it('"atras" del navegador vuelve al paso anterior con lo elegido', () => {

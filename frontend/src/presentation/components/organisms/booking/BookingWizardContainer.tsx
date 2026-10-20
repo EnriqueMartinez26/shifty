@@ -126,21 +126,13 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
   const stepRegionRef = useRef<HTMLDivElement>(null)
   const previousStepRef = useRef(currentStep)
 
-  // Al cambiar de paso, lleva el foco a la región. Al entrar en Datos y
-  // Confirmación, prioriza el nombre para que se pueda empezar a completar.
+  // Al cambiar de paso, lleva el foco a la región nombrada. En móvil esto
+  // evita abrir el teclado virtual automáticamente; el formulario queda
+  // disponible al avanzar con Tab.
   useEffect(() => {
     const previousStep = previousStepRef.current
     if (previousStep === currentStep) return
     previousStepRef.current = currentStep
-    if (previousStep === 1 && currentStep === 2) {
-      const nameInput = stepRegionRef.current?.querySelector<HTMLInputElement>(
-        'input[autocomplete="name"]'
-      )
-      if (nameInput) {
-        nameInput.focus()
-        return
-      }
-    }
     stepRegionRef.current?.focus()
   }, [currentStep])
 
