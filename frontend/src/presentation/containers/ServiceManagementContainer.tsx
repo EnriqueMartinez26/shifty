@@ -144,12 +144,13 @@ export const ServiceManagementContainer: React.FC = () => {
           type="text"
           placeholder="BUSCAR SERVICIO..."
           aria-label="Buscar servicio"
-          className="w-full pl-12 pr-4 py-3.5 rounded-xl border text-xs font-black uppercase tracking-widest transition-all placeholder-gray-400 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#FF6B35]"
+          className="w-full pl-12 pr-4 py-3.5 rounded-xl border text-xs font-black uppercase tracking-widest transition-all placeholder-gray-400 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
           style={{
             background: 'white',
             borderColor: colors2000s.border.default,
             boxShadow: colors2000s.shadows.insetDark,
-            color: colors2000s.text.primary
+            color: colors2000s.text.primary,
+            outlineColor: colors2000s.orange.heading
           }}
           value={searchTerm}
           onChange={(e) => setSearchTerm(e.target.value)}

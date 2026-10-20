@@ -4,6 +4,7 @@ import { toast } from 'sonner'
 import { ConflictError } from '@shared/errors'
 
 import { ServiceManagementContainer } from './ServiceManagementContainer'
+import { colors2000s } from '../../theme/colors'
 import { notifyError } from '../lib/notify'
 import type * as NotifyModule from '../lib/notify'
 
@@ -226,12 +227,9 @@ describe('ServiceManagementContainer: búsqueda y catálogo vacío', () => {
     const { getByRole } = render(<ServiceManagementContainer />)
     const search = getByRole('textbox', { name: 'Buscar servicio' })
 
-    expect(search).toHaveClass(
-      'focus-visible:outline-2',
-      'focus-visible:outline-offset-2',
-      'focus-visible:outline-[#FF6B35]'
-    )
-    expect(search.style.outline).toBe('')
+    expect(search).toHaveClass('focus-visible:outline-2', 'focus-visible:outline-offset-2')
+    expect(search.style.outlineColor).toBe('rgb(199, 90, 0)')
+    expect(contrastRatio(colors2000s.orange.heading, '#ffffff')).toBeGreaterThanOrEqual(3)
     search.focus()
     expect(search).toHaveFocus()
   })
@@ -261,3 +259,23 @@ describe('ServiceManagementContainer: búsqueda y catálogo vacío', () => {
     )
   })
 })
+
+const contrastRatio = (foreground: string, background: string): number => {
+  const luminance = (color: string): number => {
+    const channels = color
+      .replace('#', '')
+      .match(/.{2}/g)
+      ?.map((channel) => parseInt(channel, 16) / 255)
+
+    if (!channels || channels.length !== 3) throw new Error(`Invalid hex color: ${color}`)
+
+    const linear = channels.map((channel) =>
+      channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4
+    )
+    return 0.2126 * linear[0]! + 0.7152 * linear[1]! + 0.0722 * linear[2]!
+  }
+
+  const first = luminance(foreground)
+  const second = luminance(background)
+  return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05)
+}
