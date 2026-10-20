@@ -34,8 +34,25 @@ export const initSentry = (): boolean => {
     maxBreadcrumbs: 30,
     environment: env.sentryEnvironment || env.mode,
     tracesSampleRate: parseSampleRate(env.sentryTracesSampleRate),
-    // No mandar PII por defecto (queda en false, pero explicito) ni cookies/headers.
-    sendDefaultPii: false,
+    // Sentry 11 reemplazo `sendDefaultPii` por `dataCollection` y, sin
+    // configurarlo, recolecta MAS que la v10 (usuario e IP inferida, cookies,
+    // headers sin depurar, cuerpos HTTP). Se apaga cada categoria de forma
+    // explicita; `userInfo: false` ademas le pide a Sentry que no infiera la
+    // IP del cliente (`infer_ip: never`), tambien en los builds sin tunel.
+    dataCollection: {
+      userInfo: false,
+      cookies: false,
+      httpHeaders: { request: false, response: false },
+      httpBodies: [],
+      urlQueryParams: false,
+      genAI: { inputs: false, outputs: false },
+      databaseQueryData: false,
+      queues: false,
+      graphQL: { document: false, variables: false }
+    },
+    // En la v11 el default paso a true: un captureMessage llevaria un stack
+    // trace sintetico. Se conserva el comportamiento de la v10.
+    attachStacktrace: false,
     // Los breadcrumbs de consola arrastran lo que se loguea (datos de cliente,
     // respuestas del server): se descartan para no filtrar PII a la telemetria.
     beforeBreadcrumb: (breadcrumb) => {
@@ -63,6 +80,11 @@ export const initSentry = (): boolean => {
           delete event.request.headers.Authorization
           delete event.request.headers.authorization
           delete event.request.headers.Cookie
+          delete event.request.headers.cookie
+          // El Referer es la URL de la pagina anterior: puede traer un token
+          // en la query (`/reset-password?token=...`).
+          delete event.request.headers.Referer
+          delete event.request.headers.referer
         }
       }
       delete event.extra
