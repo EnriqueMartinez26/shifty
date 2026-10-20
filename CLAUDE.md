@@ -1005,8 +1005,10 @@ Una instrucción en lenguaje natural no es una garantía.
 - La suite E2E aislada de Playwright (`npm run e2e:isolated`,
   `frontend/e2e/run-isolated.mjs`, workflow `.github/workflows/e2e.yml`)
   crea una tienda sintética en un proyecto Compose propio, con credenciales
-  aleatorias, pagos desactivados, correo en consola, puertos publicados solo
-  en loopback y volúmenes propios; el `finally` baja contenedores y volúmenes.
+  aleatorias, pagos desactivados y SMTP dirigido a un puerto de loopback
+  cerrado; sin workers no se envía ni se imprime correo (solo el OTP usa
+  `console`). Los puertos publicados quedan solo en loopback y los volúmenes
+  son propios; el `finally` baja contenedores y volúmenes.
   El flujo cubre la reserva pública multi-servicio y el reintento después de
   un 503: el primer POST llega al backend de prueba, el browser recibe el 503,
   y el reintento con la misma clave de idempotencia debe devolver la misma

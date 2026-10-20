@@ -579,12 +579,14 @@ para compartir en Ajustes. El E2E con Playwright existe desde el 2026-09-16
   del 2026-09-16, corría contra un stack ya levantado con una tienda de carga.
   La PR #232 agrega `npm run e2e:isolated` y un workflow que crea su propio
   proyecto Docker descartable, tienda y datos sintéticos; usa credenciales
-  aleatorias, desactiva pagos, imprime el correo en consola, publica puertos
-  solo en loopback y elimina contenedores y volúmenes al terminar. La suite
+  aleatorias, desactiva pagos y apunta SMTP a un puerto de loopback cerrado;
+  no hay workers, así que no se envía ni se imprime correo (solo el OTP usa
+  `console`). Publica puertos solo en loopback y elimina contenedores y
+  volúmenes al terminar. La suite
   automatiza la reserva multi-servicio y un fallo 503: el primer pedido crea
   la reserva en el backend sintético, el navegador recibe 503 y el reintento
-  conserva la clave idempotente y obtiene la misma reserva. La revisión de
-  #232 todavía debe confirmar ese contrato en el head final. OTP, “Mis
+  conserva la clave idempotente y obtiene la misma reserva; el workflow E2E
+  pasó en el head revisado. OTP, “Mis
   turnos” y recorridos autenticados del panel quedan fuera de esta suite. El
   estado del wizard sincronizado con la URL no se hizo: se resolvió el caso
   real (deep-link) sin reescribir la navegación.
