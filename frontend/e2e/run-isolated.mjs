@@ -2,7 +2,7 @@ import { randomBytes, randomUUID } from 'node:crypto'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { mkdir, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
@@ -253,13 +253,24 @@ async function prepareFixture() {
 let composeStarted = false
 let cleanupError
 try {
-  if (process.versions.node !== '24.18.0') {
-    throw new Error(`Se requiere Node 24.18.0; se encontró ${process.versions.node}`)
+  const packageJson = JSON.parse(await readFile(join(frontendDir, 'package.json'), 'utf8'))
+  const supportedVersions = (range) =>
+    typeof range === 'string' ? range.split('||').map((version) => version.trim()) : []
+  const supportedNodeVersions = supportedVersions(packageJson.engines?.node)
+  if (!supportedNodeVersions.includes(process.versions.node)) {
+    throw new Error(
+      `Se requiere una versión de Node declarada en package.json (${supportedNodeVersions.join(' o ')}); ` +
+        `se encontró ${process.versions.node}`
+    )
   }
   const npmVersion = process.env.npm_config_user_agent?.match(/(?:^|\s)npm\/([^\s]+)/)?.[1]
   if (!npmVersion) throw new Error('Ejecutá el E2E con npm run e2e:isolated para verificar npm')
-  if (npmVersion !== '11.16.0' && npmVersion !== '11.17.0') {
-    throw new Error(`Se requiere npm 11.16.0 o 11.17.0; se encontró ${npmVersion}`)
+  const supportedNpmVersions = supportedVersions(packageJson.engines?.npm)
+  if (!supportedNpmVersions.includes(npmVersion)) {
+    throw new Error(
+      `Se requiere una versión de npm declarada en package.json (${supportedNpmVersions.join(' o ')}); ` +
+        `se encontró ${npmVersion}`
+    )
   }
 
   await assertLoopbackPortFree(13000)
