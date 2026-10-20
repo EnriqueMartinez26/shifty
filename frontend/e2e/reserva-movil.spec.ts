@@ -38,7 +38,7 @@ test.describe('reserva publica desde el celular', () => {
     // Paso 1: servicio. Con un solo servicio el wizard lo elige solo y ya
     // muestra el horario; con varios, se toca el primero.
     const tituloServicio = page.getByText('¿Qué servicio necesitás?')
-    const tituloHorario = page.getByText('Elegi fecha y hora')
+    const tituloHorario = page.getByRole('heading', { name: 'Elegí fecha y hora' })
     await expect(tituloServicio.or(tituloHorario)).toBeVisible()
     if (await tituloServicio.isVisible()) {
       await sinScrollHorizontal(page, 'servicio')
@@ -55,7 +55,7 @@ test.describe('reserva publica desde el celular', () => {
     const dias = page.locator('[data-testid^="date-"]')
     const cantidad = await dias.count()
     const slot = page.locator('button:not([disabled])', { hasText: /^\d{2}:\d{2}/ }).first()
-    const sinTurnos = page.getByText('No hay turnos disponibles.')
+    const sinTurnos = page.getByText(/^(No hay turnos disponibles\.|Este día no hay atención\.)$/)
     for (let i = 0; i < cantidad; i += 1) {
       await dias.nth(i).click()
       // Esperar a que ese dia termine de cargar: o hay un slot o dice que no
@@ -88,5 +88,92 @@ test.describe('reserva publica desde el celular', () => {
     ).toBeVisible({ timeout: 20_000 })
     await expect(page.getByText('Detalles del Turno')).toBeVisible()
     await sinScrollHorizontal(page, 'confirmacion')
+  })
+
+  test('conserva el formulario y permite reintentar si el servidor responde 503', async ({
+    page
+  }) => {
+    const requestBodies: Array<Record<string, unknown>> = []
+    let attempts = 0
+    await page.route('**/api/public/appointments', async (route) => {
+      if (route.request().method() !== 'POST') {
+        await route.continue()
+        return
+      }
+
+      attempts += 1
+      requestBodies.push(route.request().postDataJSON() as Record<string, unknown>)
+      if (attempts === 1) {
+        await route.fulfill({
+          status: 503,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            success: false,
+            error_code: 'SERVICE_UNAVAILABLE',
+            message: 'Servicio temporalmente no disponible.'
+          })
+        })
+        return
+      }
+
+      await route.continue()
+    })
+
+    await page.goto(`/b/${slug}`)
+
+    const tituloServicio = page.getByText('¿Qué servicio necesitás?')
+    const tituloHorario = page.getByRole('heading', { name: 'Elegí fecha y hora' })
+    await expect(tituloServicio.or(tituloHorario)).toBeVisible()
+    if (await tituloServicio.isVisible()) {
+      await page
+        .getByRole('button', { name: /\d+ min/ })
+        .first()
+        .click()
+    }
+
+    await expect(tituloHorario).toBeVisible()
+    const dias = page.locator('[data-testid^="date-"]')
+    const cantidad = await dias.count()
+    const slot = page.locator('button:not([disabled])', { hasText: /^\d{2}:\d{2}/ }).first()
+    const sinTurnos = page.getByText(/^(No hay turnos disponibles\.|Este día no hay atención\.)$/)
+    for (let i = 0; i < cantidad; i += 1) {
+      await dias.nth(i).click()
+      await expect(slot.or(sinTurnos).first()).toBeVisible({ timeout: 10_000 })
+      if ((await slot.count()) > 0) break
+    }
+    await expect(slot).toBeVisible()
+    await slot.click()
+
+    await expect(page.getByPlaceholder('Ej: 351 1234567')).toBeVisible()
+    const sufijo = `${Date.now()}`.slice(-6)
+    await page.getByPlaceholder('Ej: Juan Perez').fill('Prueba E2E Reintento')
+    await page.getByPlaceholder('juan@email.com').fill(`e2e-retry-${sufijo}@example.com`)
+    await page.getByPlaceholder('Ej: 351 1234567').fill(`+54911${sufijo}00`)
+    await page.getByRole('checkbox').first().check()
+
+    const confirmar = page.getByRole('button', {
+      name: /^(confirmar reserva|reservar y pagar la seña por whatsapp)$/i
+    })
+    await confirmar.click()
+
+    await expect(page.getByText('No pudimos procesar tu reserva. Probá de nuevo.')).toBeVisible()
+    await expect(page.getByText(/horario.*ocupad/i)).toHaveCount(0)
+    await expect(page.getByPlaceholder('Ej: Juan Perez')).toHaveValue('Prueba E2E Reintento')
+    await expect(page.getByPlaceholder('Ej: 351 1234567')).toHaveValue(`+54911${sufijo}00`)
+    await expect(confirmar).toBeEnabled()
+
+    await confirmar.click()
+    await expect(
+      page.getByRole('heading', {
+        name: /^Reserva (Confirmada|Registrada|Pendiente de Pago)$/
+      })
+    ).toBeVisible({ timeout: 20_000 })
+    await expect(page.getByText('Detalles del Turno')).toBeVisible()
+
+    expect(attempts).toBe(2)
+    expect(requestBodies).toHaveLength(2)
+    const firstRequestBody = requestBodies[0]
+    expect(firstRequestBody?.idempotency_key).toBeTruthy()
+    expect(requestBodies[1]).toEqual(firstRequestBody)
   })
 })
