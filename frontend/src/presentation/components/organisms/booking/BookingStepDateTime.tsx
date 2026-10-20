@@ -55,6 +55,8 @@ interface BookingStepDateTimeProps {
   showWaitlist?: boolean
   heading?: string
   onEmptyAvailability?: () => void
+  /** Invalida el horario elegido cuando se navega a otra página de fechas. */
+  onDatePageChange?: () => void
 }
 
 const NO_EXTRA_SERVICES: readonly string[] = []
@@ -94,7 +96,8 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
   lockedStaffId,
   showWaitlist = true,
   heading = 'Elegí fecha y hora',
-  onEmptyAvailability
+  onEmptyAvailability,
+  onDatePageChange
 }) => {
   // `yyyy-MM-dd` representa el día del calendario argentino, no una fecha UTC.
   const [today] = useState(() => parseISO(formatArgentinaDate(new Date().toISOString())))
@@ -123,8 +126,10 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
   )
   const changeDatePage = (offset: number) => {
     const nextPage = Math.max(0, Math.min(datePage + offset, DATE_PAGE_COUNT - 1))
+    if (nextPage === datePage) return
     setDatePage(nextPage)
     setActiveDate(null)
+    onDatePageChange?.()
   }
   const dateStr = activeDate ? format(activeDate, 'yyyy-MM-dd') : ''
 
@@ -550,7 +555,10 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
                 >
                   {diaSinAtencion ? 'Este día no hay atención.' : 'No hay turnos disponibles.'}
                 </p>
-                <p className="text-xs mt-2 font-medium" style={{ color: colors2000s.text.secondary }}>
+                <p
+                  className="text-xs mt-2 font-medium"
+                  style={{ color: colors2000s.text.secondary }}
+                >
                   {diaSinAtencion ? 'Probá con otro día.' : 'Probá seleccionando otro día.'}
                 </p>
                 {waitlistAvailable && !diaSinAtencion && (
@@ -576,10 +584,17 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
                       type="button"
                       aria-pressed={isSelected}
                       onClick={() =>
-                        onSelect(dateStr, timeString, slot.staff_id, staffFilterId, slot.starts_at, {
-                          name: slot.staff_name,
-                          isResource: resourceIds.has(slot.staff_id)
-                        })
+                        onSelect(
+                          dateStr,
+                          timeString,
+                          slot.staff_id,
+                          staffFilterId,
+                          slot.starts_at,
+                          {
+                            name: slot.staff_name,
+                            isResource: resourceIds.has(slot.staff_id)
+                          }
+                        )
                       }
                       className="min-h-11 min-w-0 py-2 sm:py-3 rounded-md font-black text-base sm:text-lg transition-all active:scale-95 border"
                       style={{
