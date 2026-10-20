@@ -1,32 +1,33 @@
-name: E2E (reserva publica, movil)
+name: E2E (reserva multi-servicio aislada)
 
-# Manual a proposito: la reserva completa necesita un stack real (Postgres,
-# Redis, API, worker) con una tienda publicada, y el alta de tiendas es solo
-# desde el superadmin. Este job no levanta ni siembra nada: corre Playwright
-# con viewport de telefono contra un entorno que ya existe (staging, o un
-# stack local expuesto), apuntado por los inputs.
-# Ver frontend/e2e/reserva-movil.spec.ts y frontend/playwright.config.ts.
 on:
   workflow_dispatch:
-    inputs:
-      base_url:
-        description: URL del front (ej. https://staging.shifty.app)
-        required: true
-      api_url:
-        description: URL de la API (ej. https://staging.shifty.app/api)
-        required: true
-      store_slug:
-        description: Slug de una tienda publicada sin OTP ni sena obligatoria
-        required: true
+  pull_request:
+    paths:
+      - '.github/workflows/e2e.yml'
+      - 'backend/**'
+      - 'docker-compose.yml'
+      - 'docker-compose.e2e.yml'
+      - 'frontend/e2e/**'
+      - 'frontend/playwright.config.ts'
+      - 'frontend/package.json'
+      - 'frontend/package-lock.json'
+      - 'frontend/src/application/services/PublicBookingService.ts'
+      - 'frontend/src/presentation/components/organisms/booking/**'
+
+permissions:
+  contents: read
 
 env:
-  NODE_VERSION: "26.5.0"
-  NPM_VERSION: "11.17.0"
+  NODE_VERSION: '24.18.0'
+  NPM_VERSION: '11.16.0'
+  E2E_ISOLATED_RUN_ID: '${{ github.run_id }}-${{ github.run_attempt }}'
+  E2E_COMPOSE_PROJECT: 'shifty-qa-${{ github.run_id }}-${{ github.run_attempt }}'
 
 jobs:
-  reserva-movil:
+  e2e:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
     defaults:
       run:
         working-directory: frontend
@@ -39,26 +40,35 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
           cache-dependency-path: frontend/package-lock.json
-      # frontend/.npmrc tiene engine-strict=true y package.json acota npm a
-      # "11.16.0 || 11.17.0": sin fijarlo, npm ci aborta con EBADENGINE.
       - name: Setup npm
         run: npm install --global "npm@${NPM_VERSION}"
       - name: Install dependencies
         run: npm ci
-      - name: Instalar Chromium
+      - name: Install Chromium
         run: npx playwright install --with-deps chromium
-      - name: Reserva desde el celular
-        env:
-          E2E_BASE_URL: ${{ inputs.base_url }}
-          E2E_API_URL: ${{ inputs.api_url }}
-          E2E_STORE_SLUG: ${{ inputs.store_slug }}
-          # Con base_url externa no hay que levantar vite.
-          E2E_NO_WEBSERVER: "1"
-        run: npm run e2e
-      - name: Reporte
+      - name: Run against newly provisioned disposable stack
+        run: npm run e2e:isolated
+      - name: Upload Playwright report
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: playwright-report
-          path: frontend/playwright-report
+          path: |
+            frontend/playwright-report
+            frontend/test-results
           retention-days: 7
+      - name: Remove isolated project and volumes
+        if: always()
+        working-directory: .
+        shell: bash
+        run: |
+          env_file="${RUNNER_TEMP}/${E2E_COMPOSE_PROJECT}.env"
+          if [[ -f "$env_file" ]]; then
+            docker compose \
+              --project-name "$E2E_COMPOSE_PROJECT" \
+              --env-file "$env_file" \
+              -f docker-compose.yml \
+              -f docker-compose.e2e.yml \
+              down --volumes --remove-orphans >/dev/null
+            rm -f -- "$env_file"
+          fi

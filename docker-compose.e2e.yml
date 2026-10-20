@@ -1,0 +1,19 @@
+# Overrides for the disposable Playwright stack. Provider credentials and
+# workers are absent; only the front and API are published on loopback.
+services:
+  db:
+    ports: !reset []
+  redis_cache:
+    ports: !reset []
+  redis_state:
+    ports: !reset []
+  rabbitmq:
+    ports: !reset []
+  backend:
+    ports: !reset []
+  frontend:
+    ports: !reset []
+  nginx:
+    ports: !override
+      - 127.0.0.1:13000:80
+
