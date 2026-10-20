@@ -6,7 +6,6 @@ import { useNavigate } from 'react-router'
 import { totalCollected } from '@domain/value-objects/AppointmentCharge'
 
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
-import { parseAmountInput } from '@shared/utils/amountInput'
 import { formatCurrency } from '@shared/utils/currency'
 
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
@@ -28,19 +27,10 @@ import {
   create2000sPanelStyle
 } from '../lib/surfaceStyles'
 
-type RefundScope = 'total' | 'partial'
-
 type RefundReview = {
   paymentId: string
   reason?: string
-} & ({ scope: 'total' } | { scope: 'partial'; amount: number })
-
-const preciseAmount = new Intl.NumberFormat('es-AR', {
-  style: 'currency',
-  currency: 'ARS',
-  minimumFractionDigits: 2,
-  maximumFractionDigits: 2
-})
+}
 
 const PaymentsPage: React.FC = () => {
   useDocumentTitle('Cobros online · Shifty')
@@ -55,8 +45,6 @@ const PaymentsPage: React.FC = () => {
 
   const [refundForm, setRefundForm] = useState({
     paymentId: '',
-    scope: '' as RefundScope | '',
-    amount: '',
     reason: ''
   })
   const [refundReview, setRefundReview] = useState<RefundReview | null>(null)
@@ -93,27 +81,8 @@ const PaymentsPage: React.FC = () => {
       setRefundError('Ingresá el ID del cobro.')
       return
     }
-    if (!refundForm.scope) {
-      setRefundError('Elegí si la devolución fue total o parcial.')
-      return
-    }
     const reason = refundForm.reason.trim() || undefined
-    if (refundForm.scope === 'partial') {
-      // 2026-10-16: Number('3.200') registraba 3,20 y Number('3.200,50')
-      // enviaba NaN, que podia terminar interpretado como devolucion total.
-      const parsed = parseAmountInput(refundForm.amount)
-      if (!parsed.ok) {
-        setRefundError(parsed.error)
-        return
-      }
-      if (!Number.isFinite(parsed.value) || !Number.isSafeInteger(Math.round(parsed.value * 100))) {
-        setRefundError('El importe es demasiado grande para registrarlo con precisión.')
-        return
-      }
-      setRefundReview({ paymentId, scope: 'partial', amount: parsed.value, reason })
-    } else {
-      setRefundReview({ paymentId, scope: 'total', reason })
-    }
+    setRefundReview({ paymentId, reason })
     setRefundError('')
     setMessage('')
     setExternalRefundConfirmed(false)
@@ -126,7 +95,6 @@ const PaymentsPage: React.FC = () => {
     try {
       const response = await refundPayment.mutateAsync({
         paymentId: refundReview.paymentId,
-        amount: refundReview.scope === 'partial' ? refundReview.amount : undefined,
         reason: refundReview.reason,
         manual: true
       })
@@ -137,7 +105,7 @@ const PaymentsPage: React.FC = () => {
           ? `Devolución registrada: ${response.public_id}. Hay un resto de ${formatCurrency(Number(resto))} registrado en ese turno; revertilo desde Cobros si también lo devolviste.`
           : `Devolución registrada: ${response.public_id}`
       )
-      setRefundForm({ paymentId: '', scope: '', amount: '', reason: '' })
+      setRefundForm({ paymentId: '', reason: '' })
       setRefundReview(null)
       setExternalRefundConfirmed(false)
     } catch (error: unknown) {
@@ -302,51 +270,10 @@ const PaymentsPage: React.FC = () => {
               style={inputStyle}
               placeholder="ID del cobro"
             />
-            <fieldset disabled={refundBusy} className="space-y-2">
-              <legend className="text-xs font-bold">¿Cuánto devolviste?</legend>
-              <label className="flex items-center gap-2 text-xs font-bold">
-                <input
-                  type="radio"
-                  name="refund-scope"
-                  value="total"
-                  checked={refundForm.scope === 'total'}
-                  onChange={() => updateRefundForm({ scope: 'total', amount: '' })}
-                />
-                Total: todo el importe del cobro
-              </label>
-              <label className="flex items-center gap-2 text-xs font-bold">
-                <input
-                  type="radio"
-                  name="refund-scope"
-                  value="partial"
-                  checked={refundForm.scope === 'partial'}
-                  onChange={() => updateRefundForm({ scope: 'partial' })}
-                />
-                Parcial: un importe específico
-              </label>
-            </fieldset>
-            {refundForm.scope === 'partial' && (
-              <>
-                <label htmlFor="refund-amount" className="block text-xs font-bold">
-                  Importe devuelto en pesos
-                </label>
-                <input
-                  id="refund-amount"
-                  type="text"
-                  inputMode="decimal"
-                  value={refundForm.amount}
-                  onChange={(e) => updateRefundForm({ amount: e.target.value })}
-                  disabled={refundBusy}
-                  className="w-full rounded-2xl px-4 py-3 font-bold outline-none"
-                  style={inputStyle}
-                  placeholder="Ejemplo: 3.200,50"
-                  aria-describedby="refund-amount-help"
-                />
-                <p id="refund-amount-help" className="text-xs font-bold">
-                  Usá punto para miles y coma para centavos.
-                </p>
-              </>
-            )}
+            <p className="text-xs font-bold" style={{ color: colors2000s.text.secondary }}>
+              Esta pantalla registra únicamente devoluciones totales del cobro. Las devoluciones
+              parciales estarán disponibles cuando puedan reflejarse correctamente en los reportes.
+            </p>
             <label htmlFor="refund-reason" className="block text-xs font-bold">
               Motivo de la devolución (opcional)
             </label>
@@ -378,10 +305,7 @@ const PaymentsPage: React.FC = () => {
                 <h4 className="text-sm font-black">Revisá antes de registrar</h4>
                 <p className="text-xs font-bold">Cobro: {refundReview.paymentId}</p>
                 <p className="text-xs font-bold">
-                  Devolución:{' '}
-                  {refundReview.scope === 'total'
-                    ? 'total del cobro, según el importe registrado en Shifty'
-                    : `parcial de ${preciseAmount.format(refundReview.amount)}`}
+                  Devolución total del cobro, según el importe registrado en Shifty.
                 </p>
                 <p className="text-xs font-bold">
                   El cobro quedará marcado como devuelto. Esta acción no envía dinero y no admite
