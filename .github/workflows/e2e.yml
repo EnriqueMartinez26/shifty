@@ -19,8 +19,8 @@ permissions:
   contents: read
 
 env:
-  NODE_VERSION: '24.18.0'
-  NPM_VERSION: '11.16.0'
+  NODE_VERSION: '26.5.0'
+  NPM_VERSION: '11.17.0'
   E2E_ISOLATED_RUN_ID: '${{ github.run_id }}-${{ github.run_attempt }}'
   E2E_COMPOSE_PROJECT: 'shifty-qa-${{ github.run_id }}-${{ github.run_attempt }}'
 
