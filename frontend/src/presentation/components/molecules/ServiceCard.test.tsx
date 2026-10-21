@@ -131,6 +131,39 @@ describe('ServiceCard', () => {
     expect(queryByText(/Sin profesionales asignados/)).not.toBeInTheDocument()
   })
 
+  it('elige texto accesible sobre el color configurable del servicio', () => {
+    const { getByTestId } = renderCard(true)
+    const chip = getByTestId('service-color-chip')
+    const icon = getByTestId('service-color-icon')
+
+    // jsdom serializa los colores CSS al formato rgb.
+    expect(chip.style.background).toBe('rgb(59, 130, 246)')
+    expect(chip.style.color).toBe('rgb(0, 0, 0)')
+    expect(icon).toHaveAttribute('aria-hidden', 'true')
+  })
+
+  it('mantiene legibles nombres y descripciones extensos sin truncarlos', () => {
+    const longName = 'Tratamiento de color y restauración profunda para cabello largo'
+    const longDescription =
+      'Incluye diagnóstico, tratamiento nutritivo y recomendaciones de cuidado para después del servicio.'
+    const { getByRole, getByText } = render(
+      <ServiceCard
+        service={ServiceMapper.toDomain({ ...dto, name: longName, description: longDescription })}
+        onEdit={jest.fn()}
+        onDelete={jest.fn()}
+        onReactivate={jest.fn()}
+      />
+    )
+
+    const heading = getByRole('heading', { name: longName })
+    const description = getByText(longDescription)
+
+    expect(heading).toHaveClass('whitespace-normal', 'break-words')
+    expect(heading).not.toHaveClass('truncate')
+    expect(description).toHaveClass('whitespace-normal', 'break-words')
+    expect(description).not.toHaveClass('truncate')
+  })
+
   // 2026-10-14: una tarjeta con botones no se escala. Al apretar, `active:scale`
   // la achica hacia el centro y corre los botones: el mouseup cae afuera y el
   // click se pierde (mismo bug que la tarjeta de la agenda del dia).
