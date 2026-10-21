@@ -20,7 +20,7 @@ import { buttonStyles2000s, colors2000s } from '../../../theme/colors'
 import { subscriptionStatusLabel } from '../../lib/enumLabels'
 import { formatDateEsAr } from '../../lib/formatters'
 import { create2000sInputStyle } from '../../lib/surfaceStyles'
-import { MiniButton } from '../SuperAdminUi'
+import { buttonFocusVisibleClassName, MiniButton } from '../SuperAdminUi'
 
 /**
  * Seccion del panel SuperAdmin (descompuesto por dominio).
@@ -108,8 +108,17 @@ export const StoresSection: React.FC<StoresSectionProps> = ({
           />
         </div>
 
-        <div className="flex flex-wrap items-center gap-2 rounded-2xl p-2" style={innerCardStyle}>
-          <Filter className="h-4 w-4" style={{ color: colors2000s.text.secondary }} />
+        <div
+          role="group"
+          aria-label="Filtrar tiendas por estado"
+          className="flex flex-wrap items-center gap-2 rounded-2xl p-2"
+          style={innerCardStyle}
+        >
+          <Filter
+            aria-hidden="true"
+            className="h-4 w-4"
+            style={{ color: colors2000s.text.secondary }}
+          />
           {[
             { value: 'active', label: 'Activas' },
             { value: 'inactive', label: 'Inactivas' },
@@ -119,7 +128,8 @@ export const StoresSection: React.FC<StoresSectionProps> = ({
               key={item.value}
               type="button"
               onClick={() => setActivityFilter(item.value as ActivityFilter)}
-              className="rounded-xl px-3 py-2 text-[10px] font-black uppercase tracking-widest"
+              aria-pressed={activityFilter === item.value}
+              className={`min-h-11 rounded-xl px-3 py-2 text-[10px] font-black uppercase tracking-widest ${buttonFocusVisibleClassName}`}
               style={
                 activityFilter === item.value
                   ? buttonStyles2000s.selected
@@ -131,7 +141,12 @@ export const StoresSection: React.FC<StoresSectionProps> = ({
           ))}
         </div>
 
-        <div className="flex flex-wrap items-center gap-2 rounded-2xl p-2" style={innerCardStyle}>
+        <div
+          role="group"
+          aria-label="Filtrar tiendas por suscripción"
+          className="flex flex-wrap items-center gap-2 rounded-2xl p-2"
+          style={innerCardStyle}
+        >
           {[
             { value: 'all', label: 'Todas' },
             { value: 'with', label: 'Con suscripción' },
@@ -141,7 +156,8 @@ export const StoresSection: React.FC<StoresSectionProps> = ({
               key={item.value}
               type="button"
               onClick={() => setSubscriptionFilter(item.value as SubscriptionFilter)}
-              className="rounded-xl px-3 py-2 text-[10px] font-black uppercase tracking-widest"
+              aria-pressed={subscriptionFilter === item.value}
+              className={`min-h-11 rounded-xl px-3 py-2 text-[10px] font-black uppercase tracking-widest ${buttonFocusVisibleClassName}`}
               style={
                 subscriptionFilter === item.value
                   ? buttonStyles2000s.selected
