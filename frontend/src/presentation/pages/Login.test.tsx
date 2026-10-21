@@ -86,8 +86,9 @@ describe('LoginPage shell', () => {
 
     const forgot = screen.getByRole('link', { name: '¿Olvidaste tu contraseña?' })
     expect(forgot).toHaveAttribute('href', '/forgot-password')
-    expect(forgot.className).toBe('text-xs transition-colors font-medium')
+    expect(forgot).toHaveClass('min-h-11')
     expect(forgot.style.color).toBe(cssValue('color', colors2000s.orange.accent))
+    expect(screen.getByRole('link', { name: /términos y condiciones/i })).toHaveClass('min-h-11')
     expect(screen.queryByRole('link', { name: 'Volver a iniciar sesión' })).not.toBeInTheDocument()
 
     const copyright = screen.getByText('Copyright 2026 Shifty SaaS. Todos los derechos reservados.')

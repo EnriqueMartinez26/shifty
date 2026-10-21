@@ -72,8 +72,9 @@ export const PlanModals: React.FC<PlanModalsProps> = ({
     >
       <div className={formGridClass}>
         <div>
-          <FieldLabel>Nombre</FieldLabel>
+          <FieldLabel htmlFor="plan-name">Nombre</FieldLabel>
           <TextInput
+            id="plan-name"
             value={planForm.name}
             onChange={(event) =>
               setPlanForm((current) => ({ ...current, name: event.target.value }))
@@ -82,8 +83,9 @@ export const PlanModals: React.FC<PlanModalsProps> = ({
           />
         </div>
         <div>
-          <FieldLabel>Intervalo</FieldLabel>
+          <FieldLabel htmlFor="plan-billing-interval">Intervalo</FieldLabel>
           <SelectInput
+            id="plan-billing-interval"
             value={planForm.billing_interval}
             onChange={(event) =>
               setPlanForm((current) => ({ ...current, billing_interval: event.target.value }))
@@ -98,8 +100,9 @@ export const PlanModals: React.FC<PlanModalsProps> = ({
       </div>
 
       <div>
-        <FieldLabel>Descripción</FieldLabel>
+        <FieldLabel htmlFor="plan-description">Descripción</FieldLabel>
         <TextArea
+          id="plan-description"
           value={planForm.description}
           onChange={(event) =>
             setPlanForm((current) => ({ ...current, description: event.target.value }))
@@ -109,8 +112,9 @@ export const PlanModals: React.FC<PlanModalsProps> = ({
 
       <div className={formGridClass}>
         <div>
-          <FieldLabel>Precio</FieldLabel>
+          <FieldLabel htmlFor="plan-price">Precio</FieldLabel>
           <TextInput
+            id="plan-price"
             type="number"
             min="0"
             step="0.01"
@@ -122,8 +126,9 @@ export const PlanModals: React.FC<PlanModalsProps> = ({
           />
         </div>
         <div>
-          <FieldLabel>Moneda</FieldLabel>
+          <FieldLabel htmlFor="plan-currency">Moneda</FieldLabel>
           <TextInput
+            id="plan-currency"
             value={planForm.currency}
             onChange={(event) =>
               setPlanForm((current) => ({
@@ -138,8 +143,9 @@ export const PlanModals: React.FC<PlanModalsProps> = ({
 
       <div className={formGridClass}>
         <div>
-          <FieldLabel>Max staff</FieldLabel>
+          <FieldLabel htmlFor="plan-max-staff">Max staff</FieldLabel>
           <TextInput
+            id="plan-max-staff"
             type="number"
             min="0"
             value={planForm.max_staff}
@@ -150,8 +156,9 @@ export const PlanModals: React.FC<PlanModalsProps> = ({
           />
         </div>
         <div>
-          <FieldLabel>Max services</FieldLabel>
+          <FieldLabel htmlFor="plan-max-services">Max services</FieldLabel>
           <TextInput
+            id="plan-max-services"
             type="number"
             min="0"
             value={planForm.max_services}
@@ -192,8 +199,9 @@ export const PlanModals: React.FC<PlanModalsProps> = ({
 
       <div className={formGridClass}>
         <div>
-          <FieldLabel>Plan</FieldLabel>
+          <FieldLabel htmlFor="subscription-plan">Plan</FieldLabel>
           <SelectInput
+            id="subscription-plan"
             value={subscriptionForm.plan_id}
             onChange={(event) =>
               setSubscriptionForm((current) => ({ ...current, plan_id: event.target.value }))
@@ -209,8 +217,9 @@ export const PlanModals: React.FC<PlanModalsProps> = ({
           </SelectInput>
         </div>
         <div>
-          <FieldLabel>Status</FieldLabel>
+          <FieldLabel htmlFor="subscription-status">Status</FieldLabel>
           <SelectInput
+            id="subscription-status"
             value={subscriptionForm.status}
             onChange={(event) =>
               setSubscriptionForm((current) => ({ ...current, status: event.target.value }))
@@ -227,8 +236,9 @@ export const PlanModals: React.FC<PlanModalsProps> = ({
 
       <div className={formGridClass}>
         <div>
-          <FieldLabel>Monto base</FieldLabel>
+          <FieldLabel htmlFor="subscription-base-amount">Monto base</FieldLabel>
           <TextInput
+            id="subscription-base-amount"
             type="number"
             min="0"
             step="0.01"
@@ -240,8 +250,9 @@ export const PlanModals: React.FC<PlanModalsProps> = ({
           />
         </div>
         <div>
-          <FieldLabel>Moneda</FieldLabel>
+          <FieldLabel htmlFor="subscription-currency">Moneda</FieldLabel>
           <TextInput
+            id="subscription-currency"
             value={subscriptionForm.currency}
             onChange={(event) =>
               setSubscriptionForm((current) => ({
@@ -255,8 +266,9 @@ export const PlanModals: React.FC<PlanModalsProps> = ({
 
       <div className={formGridClass}>
         <div>
-          <FieldLabel>Período desde</FieldLabel>
+          <FieldLabel htmlFor="subscription-period-start">Período desde</FieldLabel>
           <TextInput
+            id="subscription-period-start"
             type="datetime-local"
             value={subscriptionForm.current_period_start}
             onChange={(event) =>
@@ -268,8 +280,9 @@ export const PlanModals: React.FC<PlanModalsProps> = ({
           />
         </div>
         <div>
-          <FieldLabel>Período hasta</FieldLabel>
+          <FieldLabel htmlFor="subscription-period-end">Período hasta</FieldLabel>
           <TextInput
+            id="subscription-period-end"
             type="datetime-local"
             value={subscriptionForm.current_period_end}
             onChange={(event) =>

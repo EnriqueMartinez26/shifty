@@ -75,8 +75,12 @@ test.describe('reserva pública aislada desde el celular', () => {
     })
     await page.goto(`/b/${fixture.storeSlug}`)
     const tituloServicio = page.getByText('¿Qué servicio necesitás?')
-    const tituloHorario = page.getByRole('heading', { name: /elegí fecha y hora/i })
+    const tituloHorario = page.getByRole('heading', { name: /eleg[ií] fecha y hora/i })
     await expect(tituloServicio).toBeVisible()
+    await expect(page.getByRole('link', { name: 'Mis turnos' })).toHaveCSS('min-height', '44px')
+    for (const nombre of ['Términos y condiciones', 'Privacidad']) {
+      await expect(page.getByRole('link', { name: nombre })).toHaveCSS('min-height', '44px')
+    }
     await sinScrollHorizontal(page, 'servicios')
 
     for (const service of fixture.services) {
@@ -101,11 +105,13 @@ test.describe('reserva pública aislada desde el celular', () => {
     await expect(tituloHorario).toBeVisible()
     await sinScrollHorizontal(page, 'horario')
     const days = page.locator('[data-testid^="date-"]')
-    const slots = page.locator('button:not([disabled])', { hasText: /^\d{2}:\d{2}/ })
-    const empty = page.getByText('No hay turnos disponibles.')
+    const slots = page.locator('button:not([disabled])', { hasText: /^d{2}:d{2}/ })
+    const empty = page.getByText(/^(No hay turnos disponibles.|Este día no hay atención.)$/)
     for (let index = 0; index < (await days.count()); index += 1) {
       await days.nth(index).click()
-      await expect(slots.first().or(empty)).toBeVisible({ timeout: 10_000 })
+      // Esperar a que ese dia termine de cargar: aparece un slot o uno de los
+      // estados vacios (dia sin atencion o agenda completa).
+      await expect(slots.first().or(empty).first()).toBeVisible({ timeout: 10_000 })
       if ((await slots.count()) > 0) break
     }
     await expect(slots.first(), 'el fixture debe ofrecer al menos un horario').toBeVisible()

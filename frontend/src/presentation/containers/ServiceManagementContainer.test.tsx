@@ -4,6 +4,7 @@ import { toast } from 'sonner'
 import { ConflictError } from '@shared/errors'
 
 import { ServiceManagementContainer } from './ServiceManagementContainer'
+import { colors2000s } from '../../theme/colors'
 import { notifyError } from '../lib/notify'
 import type * as NotifyModule from '../lib/notify'
 
@@ -212,3 +213,69 @@ describe('ServiceManagementContainer: servicios sin profesional', () => {
     expect(getByTestId('card-without-staff')).toHaveTextContent('ok')
   })
 })
+
+describe('ServiceManagementContainer: búsqueda y catálogo vacío', () => {
+  afterEach(() => {
+    mockListCatalog.mockImplementation(() => ({
+      data: [{ id: 'svc-1', name: 'Corte' }],
+      isLoading: false,
+      error: null
+    }))
+  })
+
+  it('da un nombre accesible al buscador y conserva un foco de teclado visible', () => {
+    const { getByRole } = render(<ServiceManagementContainer />)
+    const search = getByRole('textbox', { name: 'Buscar servicio' })
+
+    expect(search).toHaveClass('focus-visible:outline-2', 'focus-visible:outline-offset-2')
+    expect(search.style.outlineColor).toBe('rgb(199, 90, 0)')
+    expect(contrastRatio(colors2000s.orange.heading, '#ffffff')).toBeGreaterThanOrEqual(3)
+    search.focus()
+    expect(search).toHaveFocus()
+  })
+
+  it('anuncia cuando el catálogo todavía no tiene servicios', () => {
+    mockListCatalog.mockReturnValue({ data: [], isLoading: false, error: null })
+    const { getByRole } = render(<ServiceManagementContainer />)
+
+    const status = getByRole('status')
+    expect(status).toHaveAttribute('aria-live', 'polite')
+    expect(status).toHaveTextContent(
+      'Todavía no hay servicios en el catálogo. Agregá el primero con «Nuevo servicio».'
+    )
+  })
+
+  it('anuncia por separado cuando la búsqueda no encuentra coincidencias', () => {
+    const { getByRole } = render(<ServiceManagementContainer />)
+
+    fireEvent.change(getByRole('textbox', { name: 'Buscar servicio' }), {
+      target: { value: 'Barba' }
+    })
+
+    const status = getByRole('status')
+    expect(status).toHaveAttribute('aria-live', 'polite')
+    expect(status).toHaveTextContent(
+      'No hay servicios que coincidan con tu búsqueda. Probá con otro término.'
+    )
+  })
+})
+
+const contrastRatio = (foreground: string, background: string): number => {
+  const luminance = (color: string): number => {
+    const channels = color
+      .replace('#', '')
+      .match(/.{2}/g)
+      ?.map((channel) => parseInt(channel, 16) / 255)
+
+    if (!channels || channels.length !== 3) throw new Error(`Invalid hex color: ${color}`)
+
+    const linear = channels.map((channel) =>
+      channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4
+    )
+    return 0.2126 * linear[0]! + 0.7152 * linear[1]! + 0.0722 * linear[2]!
+  }
+
+  const first = luminance(foreground)
+  const second = luminance(background)
+  return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05)
+}

@@ -79,12 +79,12 @@ const ACTION_VIEWS: Record<AppointmentAction, ActionView> = {
 }
 
 /**
- * Blanco tactil de 44x44 (QA movil 2026-10-08: median 30x22 compactos y 24 de
- * alto con texto). En pantallas grandes los compactos de la grilla del dia y
- * del mes vuelven a su tamano: ahi no hay dedo y no entran.
+ * Blanco tactil minimo de 44x44 (QA movil 2026-10-08: median 30x22 compactos y
+ * 24 de alto con texto). Los botones compactos de las grillas de dia y mes
+ * conservan ese minimo tambien en escritorio.
  */
 export const TAP_TARGET = 'min-h-11 min-w-11'
-export const COMPACT_ON_DESKTOP = 'md:min-h-0 md:min-w-0'
+export const COMPACT_ON_DESKTOP = 'md:min-h-11 md:min-w-11'
 
 export const AppointmentActions: React.FC<AppointmentActionsProps> = ({
   status,

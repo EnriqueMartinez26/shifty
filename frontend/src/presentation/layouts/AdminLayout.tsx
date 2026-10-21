@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 
 import { Menu } from 'lucide-react'
 import { Outlet } from 'react-router'
@@ -29,6 +29,9 @@ const AdminLayout: React.FC = () => {
   // El sidebar es fixed+off-canvas por debajo de `lg`; a partir de ahi queda
   // siempre visible y este estado no se lee (Sidebar fuerza lg:translate-x-0).
   const [isSidebarOpen, setIsSidebarOpen] = useState(false)
+  const sidebarRef = useRef<HTMLElement>(null)
+  const navigationRef = useRef<HTMLElement>(null)
+  const menuTriggerRef = useRef<HTMLButtonElement>(null)
   // Un elemento con `translate-x-full` sigue siendo tabulable aunque no se
   // vea: sin esto, un usuario de teclado con el drawer cerrado en mobile
   // podia tabular hacia links invisibles. `inert` los saca del arbol de
@@ -38,30 +41,69 @@ const AdminLayout: React.FC = () => {
   const [isDesktop, setIsDesktop] = useState(
     () => typeof window !== 'undefined' && window.matchMedia(DESKTOP_QUERY).matches
   )
+  const isMobileDrawerOpen = isSidebarOpen && !isDesktop
 
   useEffect(() => {
     const query = window.matchMedia(DESKTOP_QUERY)
-    const onChange = () => setIsDesktop(query.matches)
+    const onChange = () => {
+      setIsDesktop(query.matches)
+      if (query.matches) setIsSidebarOpen(false)
+    }
     onChange()
     query.addEventListener('change', onChange)
     return () => query.removeEventListener('change', onChange)
   }, [])
 
   useEffect(() => {
-    if (!isSidebarOpen) return
+    if (!isMobileDrawerOpen) return
+    const navigation = navigationRef.current
+    const firstNavigationControl = navigation?.querySelector<HTMLElement>(
+      'a[href], button:not([disabled])'
+    )
+    if (firstNavigationControl) firstNavigationControl.focus()
+    else navigation?.focus()
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setIsSidebarOpen(false)
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        setIsSidebarOpen(false)
+        return
+      }
+      if (event.key !== 'Tab') return
+      const sidebar = sidebarRef.current
+      if (!sidebar) return
+      const controls = Array.from(
+        sidebar.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])'
+        )
+      )
+      const first = controls[0]
+      const last = controls[controls.length - 1]
+      if (!first || !last) return
+      const active = document.activeElement
+      if (active === navigation || !sidebar.contains(active)) {
+        event.preventDefault()
+        const target = event.shiftKey ? last : first
+        target.focus()
+      } else if (event.shiftKey && active === first) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && active === last) {
+        event.preventDefault()
+        first.focus()
+      }
     }
     document.addEventListener('keydown', onKeyDown)
     // Bloquea el scroll de fondo mientras el drawer esta abierto, patron
     // estandar de menus off-canvas.
     const previousOverflow = document.body.style.overflow
+    const trigger = menuTriggerRef.current
     document.body.style.overflow = 'hidden'
     return () => {
       document.removeEventListener('keydown', onKeyDown)
       document.body.style.overflow = previousOverflow
+      if (!window.matchMedia(DESKTOP_QUERY).matches) trigger?.focus()
     }
-  }, [isSidebarOpen])
+  }, [isMobileDrawerOpen])
 
   return (
     <div
@@ -71,7 +113,7 @@ const AdminLayout: React.FC = () => {
         color: colors2000s.text.primary
       }}
     >
-      {isSidebarOpen && (
+      {isMobileDrawerOpen && (
         <div
           className="fixed inset-0 z-40 bg-black/40 lg:hidden"
           onClick={() => setIsSidebarOpen(false)}
@@ -82,18 +124,27 @@ const AdminLayout: React.FC = () => {
       <Sidebar
         isOpen={isSidebarOpen}
         onNavigate={() => setIsSidebarOpen(false)}
-        inert={!isSidebarOpen && !isDesktop}
+        inert={!isMobileDrawerOpen && !isDesktop}
+        isModal={isMobileDrawerOpen}
+        containerRef={sidebarRef}
+        navigationRef={navigationRef}
       />
 
-      <main className="flex-1 lg:ml-64 p-4 sm:p-6 lg:p-8 min-w-0">
+      <main
+        inert={isMobileDrawerOpen || undefined}
+        className="flex-1 lg:ml-64 p-4 sm:p-6 lg:p-8 min-w-0"
+      >
         {/* `relative`: en el telefono el panel de la campana se ancla aca. */}
         <header className="relative mb-6 lg:mb-10 flex flex-wrap justify-between items-center gap-4">
           <div className="flex items-center gap-3">
             <button
+              ref={menuTriggerRef}
               type="button"
               onClick={() => setIsSidebarOpen(true)}
               aria-label="Abrir menú de navegación"
-              className="lg:hidden p-2.5 rounded-xl flex-shrink-0"
+              aria-expanded={isMobileDrawerOpen}
+              aria-controls="admin-sidebar"
+              className="lg:hidden min-h-11 min-w-11 p-2.5 rounded-xl flex-shrink-0 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-orange-600"
               style={{
                 background: 'white',
                 border: `1px solid ${colors2000s.border.default}`,

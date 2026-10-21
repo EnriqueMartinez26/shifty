@@ -78,9 +78,7 @@ describe('AuthShell', () => {
 
     const back = screen.getByRole('link', { name: 'Volver a iniciar sesión' })
     expect(back).toHaveAttribute('href', '/login')
-    expect(back.className).toBe(
-      'inline-flex items-center gap-2 text-sm font-bold transition-colors'
-    )
+    expect(back).toHaveClass('min-h-11')
     expect(back.style.color).toBe(cssValue('color', colors2000s.orange.accent))
 
     const footer = back.parentElement as HTMLElement

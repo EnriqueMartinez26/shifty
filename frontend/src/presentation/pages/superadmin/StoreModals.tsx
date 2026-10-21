@@ -71,8 +71,9 @@ export const StoreModals: React.FC<StoreModalsProps> = ({
     >
       <div className={formGridClass}>
         <div>
-          <FieldLabel>Nombre</FieldLabel>
+          <FieldLabel htmlFor="store-name">Nombre</FieldLabel>
           <TextInput
+            id="store-name"
             value={storeForm.name}
             onChange={(event) =>
               setStoreForm((current) => ({ ...current, name: event.target.value }))
@@ -81,8 +82,9 @@ export const StoreModals: React.FC<StoreModalsProps> = ({
           />
         </div>
         <div>
-          <FieldLabel>Slug</FieldLabel>
+          <FieldLabel htmlFor="store-slug">Slug</FieldLabel>
           <TextInput
+            id="store-slug"
             value={storeForm.slug}
             onChange={(event) =>
               setStoreForm((current) => ({ ...current, slug: event.target.value }))
@@ -94,9 +96,10 @@ export const StoreModals: React.FC<StoreModalsProps> = ({
 
       <div className={formGridClass}>
         <div>
-          <FieldLabel>Color principal</FieldLabel>
+          <FieldLabel htmlFor="store-primary-color-picker">Color principal</FieldLabel>
           <div className="flex gap-3">
             <TextInput
+              id="store-primary-color-picker"
               type="color"
               value={storeForm.primary_color}
               onChange={(event) =>
@@ -104,7 +107,11 @@ export const StoreModals: React.FC<StoreModalsProps> = ({
               }
               className="h-12 w-20 p-2"
             />
+            <label className="sr-only" htmlFor="store-primary-color-hex">
+              Código hexadecimal del color principal
+            </label>
             <TextInput
+              id="store-primary-color-hex"
               value={storeForm.primary_color}
               onChange={(event) =>
                 setStoreForm((current) => ({ ...current, primary_color: event.target.value }))
@@ -113,8 +120,9 @@ export const StoreModals: React.FC<StoreModalsProps> = ({
           </div>
         </div>
         <div>
-          <FieldLabel>Logo URL</FieldLabel>
+          <FieldLabel htmlFor="store-logo-url">Logo URL</FieldLabel>
           <TextInput
+            id="store-logo-url"
             value={storeForm.logo_url}
             onChange={(event) =>
               setStoreForm((current) => ({ ...current, logo_url: event.target.value }))
@@ -126,8 +134,9 @@ export const StoreModals: React.FC<StoreModalsProps> = ({
 
       <div className={formGridClass}>
         <div>
-          <FieldLabel>Horas de cancelación</FieldLabel>
+          <FieldLabel htmlFor="store-cancellation-hours">Horas de cancelación</FieldLabel>
           <TextInput
+            id="store-cancellation-hours"
             type="number"
             min="0"
             value={storeForm.cancellation_hours}
@@ -138,8 +147,9 @@ export const StoreModals: React.FC<StoreModalsProps> = ({
           />
         </div>
         <div>
-          <FieldLabel>Buffer (minutos)</FieldLabel>
+          <FieldLabel htmlFor="store-buffer-minutes">Buffer (minutos)</FieldLabel>
           <TextInput
+            id="store-buffer-minutes"
             type="number"
             min="0"
             value={storeForm.buffer_minutes}
@@ -199,8 +209,9 @@ export const StoreModals: React.FC<StoreModalsProps> = ({
     >
       <div className={formGridClass}>
         <div>
-          <FieldLabel>Nombre</FieldLabel>
+          <FieldLabel htmlFor="admin-first-name">Nombre</FieldLabel>
           <TextInput
+            id="admin-first-name"
             value={adminForm.first_name}
             onChange={(event) =>
               setAdminForm((current) => ({ ...current, first_name: event.target.value }))
@@ -209,8 +220,9 @@ export const StoreModals: React.FC<StoreModalsProps> = ({
           />
         </div>
         <div>
-          <FieldLabel>Apellido</FieldLabel>
+          <FieldLabel htmlFor="admin-last-name">Apellido</FieldLabel>
           <TextInput
+            id="admin-last-name"
             value={adminForm.last_name}
             onChange={(event) =>
               setAdminForm((current) => ({ ...current, last_name: event.target.value }))
@@ -222,8 +234,9 @@ export const StoreModals: React.FC<StoreModalsProps> = ({
 
       <div className={formGridClass}>
         <div>
-          <FieldLabel>Email</FieldLabel>
+          <FieldLabel htmlFor="admin-email">Email</FieldLabel>
           <TextInput
+            id="admin-email"
             type="email"
             value={adminForm.email}
             onChange={(event) =>
@@ -233,8 +246,9 @@ export const StoreModals: React.FC<StoreModalsProps> = ({
           />
         </div>
         <div>
-          <FieldLabel>Teléfono</FieldLabel>
+          <FieldLabel htmlFor="admin-phone">Teléfono</FieldLabel>
           <TextInput
+            id="admin-phone"
             value={adminForm.phone}
             onChange={(event) =>
               setAdminForm((current) => ({ ...current, phone: event.target.value }))
@@ -244,8 +258,9 @@ export const StoreModals: React.FC<StoreModalsProps> = ({
       </div>
 
       <div>
-        <FieldLabel>Password</FieldLabel>
+        <FieldLabel htmlFor="admin-password">Password</FieldLabel>
         <TextInput
+          id="admin-password"
           type="password"
           value={adminForm.password}
           onChange={(event) =>

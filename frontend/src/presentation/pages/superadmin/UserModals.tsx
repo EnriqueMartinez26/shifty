@@ -61,8 +61,9 @@ export const UserModals: React.FC<UserModalsProps> = ({
 
       <div className={formGridClass}>
         <div>
-          <FieldLabel>Nombre</FieldLabel>
+          <FieldLabel htmlFor="user-first-name">Nombre</FieldLabel>
           <TextInput
+            id="user-first-name"
             value={userForm.first_name}
             onChange={(event) =>
               setUserForm((current) => ({ ...current, first_name: event.target.value }))
@@ -70,8 +71,9 @@ export const UserModals: React.FC<UserModalsProps> = ({
           />
         </div>
         <div>
-          <FieldLabel>Apellido</FieldLabel>
+          <FieldLabel htmlFor="user-last-name">Apellido</FieldLabel>
           <TextInput
+            id="user-last-name"
             value={userForm.last_name}
             onChange={(event) =>
               setUserForm((current) => ({ ...current, last_name: event.target.value }))
@@ -82,8 +84,9 @@ export const UserModals: React.FC<UserModalsProps> = ({
 
       <div className={formGridClass}>
         <div>
-          <FieldLabel>Rol</FieldLabel>
+          <FieldLabel htmlFor="user-role">Rol</FieldLabel>
           <SelectInput
+            id="user-role"
             value={userForm.role}
             onChange={(event) =>
               setUserForm((current) => ({
@@ -99,8 +102,9 @@ export const UserModals: React.FC<UserModalsProps> = ({
           </SelectInput>
         </div>
         <div>
-          <FieldLabel>Teléfono</FieldLabel>
+          <FieldLabel htmlFor="user-phone">Teléfono</FieldLabel>
           <TextInput
+            id="user-phone"
             value={userForm.phone}
             onChange={(event) =>
               setUserForm((current) => ({ ...current, phone: event.target.value }))
@@ -110,8 +114,9 @@ export const UserModals: React.FC<UserModalsProps> = ({
       </div>
 
       <div>
-        <FieldLabel>Nueva password (opcional)</FieldLabel>
+        <FieldLabel htmlFor="user-new-password">Nueva password (opcional)</FieldLabel>
         <TextInput
+          id="user-new-password"
           type="password"
           value={userForm.password}
           onChange={(event) =>

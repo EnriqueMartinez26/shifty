@@ -148,6 +148,18 @@ describe('CollectionsPage: cuando no se puede cobrar', () => {
 
     for (const boton of botones()) expect(boton).not.toBeDisabled()
   })
+
+  it('da a las acciones de cobro un area tactil minima de 44 px en movil', () => {
+    render(<CollectionsPage />)
+
+    const crear = crearLink()
+    const confirmar = confirmarPago()
+    const accionesMoviles = crear.closest('.collections-mobile-actions')
+
+    expect(accionesMoviles?.contains(confirmar)).toBe(true)
+    expect(accionesMoviles).toHaveClass('max-sm:[&_button]:min-h-[44px]')
+    expect(accionesMoviles).toHaveClass('max-sm:[&_button]:min-w-[44px]')
+  })
 })
 
 // 2026-10-08, QA en el celular (decision de Mateo):
