@@ -118,6 +118,15 @@ export const brandCssVariables = (theme: BrandTheme): React.CSSProperties =>
   }) as React.CSSProperties
 
 /**
+ * Portada sin imagen (S9): un degradado suave del color de la tienda sobre el
+ * fondo gris de la pagina. rgba precalculado, sin color-mix() (Safari < 16.2).
+ */
+export const brandCoverWash = (theme: BrandTheme): string => {
+  const rgb = toRgb(theme.fill).join(', ')
+  return `linear-gradient(135deg, rgba(${rgb}, 0.35) 0%, rgba(${rgb}, 0.75) 100%)`
+}
+
+/**
  * `var()` references to the variables `brandCssVariables` sets at the portal
  * root. Components paint with these and never compute colors themselves: the
  * contrast is already resolved by `resolveBrandTheme`.

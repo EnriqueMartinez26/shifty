@@ -5,38 +5,35 @@ import { resolveBrandTheme } from '../../../lib/brandTheme'
 
 // 2026-10-21 (S2, portal publico): portada ancha debajo del encabezado; sin
 // portada, una franja del color de la tienda.
+// 2026-10-22 (S9): la portada va arriba de todo, de borde a borde en el
+// celular; sin portada, un degradado suave del color de la tienda.
 
 const brand = resolveBrandTheme('#123456')
-// jsdom guarda los colores como rgb(); se normaliza igual para comparar.
-const css = (color: string) => {
-  const probe = document.createElement('div')
-  probe.style.color = color
-  return probe.style.color
-}
 
 describe('StoreCover', () => {
-  it('con portada muestra la imagen decorativa, recortada y con alto acotado', () => {
+  it('con portada muestra la imagen decorativa, recortada, mas baja en el celular', () => {
     const { container } = render(<StoreCover coverUrl="/media/cover.webp" brand={brand} />)
 
     const img = container.querySelector('img')
     expect(img).toHaveAttribute('src', '/media/cover.webp')
     expect(img).toHaveAttribute('alt', '')
-    expect(img).toHaveClass('object-cover')
-    expect(img?.parentElement).toHaveClass('aspect-[3/1]', 'max-h-48')
+    expect(img).toHaveClass('h-full', 'w-full', 'object-cover')
+    expect(img?.parentElement).toHaveClass('h-[140px]', 'sm:h-[232px]', 'w-full')
     expect(screen.queryByTestId('store-cover-band')).not.toBeInTheDocument()
   })
 
-  it('sin portada pinta una franja fina del color de marca', () => {
+  it('sin portada pinta un degradado suave del color de marca, mas bajo', () => {
     const { container } = render(<StoreCover coverUrl={null} brand={brand} />)
 
     expect(container.querySelector('img')).toBeNull()
     const franja = screen.getByTestId('store-cover-band')
-    expect(franja).toHaveClass('h-2.5')
+    expect(franja).toHaveClass('h-24', 'sm:h-40', 'w-full')
     expect(franja).toHaveAttribute('aria-hidden', 'true')
-    expect(franja.style.background).toBe(css(brand.fill))
+    expect(franja.getAttribute('style')).toContain('linear-gradient(')
+    expect(franja.getAttribute('style')).toContain('rgba(18, 52, 86,')
   })
 
-  it('si la portada no carga cae a la franja', () => {
+  it('si la portada no carga cae al degradado', () => {
     const { container } = render(
       <StoreCover coverUrl="https://otro-sitio.test/cover.png" brand={brand} />
     )
@@ -44,6 +41,8 @@ describe('StoreCover', () => {
     fireEvent.error(container.querySelector('img') as HTMLImageElement)
 
     expect(container.querySelector('img')).toBeNull()
-    expect(screen.getByTestId('store-cover-band').style.background).toBe(css(brand.fill))
+    expect(screen.getByTestId('store-cover-band').getAttribute('style')).toContain(
+      'rgba(18, 52, 86,'
+    )
   })
 })

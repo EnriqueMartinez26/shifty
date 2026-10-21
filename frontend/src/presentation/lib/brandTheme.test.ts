@@ -1,5 +1,6 @@
 import {
   brandColor,
+  brandCoverWash,
   brandCssVariables,
   brandCtaStyle,
   brandGlowShadow,
@@ -81,6 +82,16 @@ describe('resolveBrandTheme', () => {
 
   it('without a store color sets no glow, so the orange shadow stays', () => {
     expect(brandCssVariables(DEFAULT_BRAND_THEME)).not.toHaveProperty('--brand-glow')
+  })
+
+  // 2026-10-22 (S9): sin portada, un degradado suave del color de la tienda.
+  // rgba precalculado, sin color-mix() (Safari < 16.2).
+  it('builds the soft cover wash from the fill as precomputed rgba', () => {
+    expect(brandCoverWash(resolveBrandTheme('#3b82f6'))).toBe(
+      'linear-gradient(135deg, rgba(59, 130, 246, 0.35) 0%, rgba(59, 130, 246, 0.75) 100%)'
+    )
+    expect(brandCoverWash(DEFAULT_BRAND_THEME)).toContain('rgba(192, 79, 0, 0.35)')
+    expect(brandCoverWash(DEFAULT_BRAND_THEME)).not.toContain('color-mix')
   })
 })
 

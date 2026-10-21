@@ -150,6 +150,10 @@ describe('PublicBooking al volver del pago', () => {
       '/b/sol/mis-turnos'
     )
     expect(screen.getByRole('main').style.getPropertyValue('--brand-fill')).toBe('#ff70fa')
+    // S9: la misma vidriera que la reserva, con la portada arriba.
+    expect(screen.getByRole('banner').firstElementChild).toBe(
+      screen.getByTestId('store-cover-band')
+    )
     const volver = screen.getByRole('button', { name: 'Volver a la tienda' })
     expect(volver.getAttribute('style')).toContain('var(--brand-fill,')
     expect(volver.getAttribute('style')).toContain('var(--brand-on-fill,')
@@ -315,12 +319,29 @@ describe('PublicBooking: encabezado y portada de la tienda', () => {
     expect(container.querySelector('img[src="/media/cover.webp"]')).toHaveAttribute('alt', '')
   })
 
-  it('sin logo ni portada usa la inicial y la franja con el color de la tienda', () => {
+  it('sin logo ni portada usa la inicial y el degradado con el color de la tienda', () => {
     conTienda({ primary_color: '#123456' })
     renderEn('/booking/sol')
 
     expect(screen.getByText('P').style.background).toBe('rgb(18, 52, 86)')
-    expect(screen.getByTestId('store-cover-band').style.background).toBe('rgb(18, 52, 86)')
+    expect(screen.getByTestId('store-cover-band').getAttribute('style')).toContain(
+      'rgba(18, 52, 86,'
+    )
+  })
+
+  // S9 (2026-10-22): la portada va arriba de todo, de borde a borde en el
+  // celular; el resto de la pagina conserva su margen lateral.
+  it('la portada va arriba de todo y el contenido conserva el margen lateral', () => {
+    conTienda({ cover_url: '/media/cover.webp', description: 'Cortes y color.' })
+    const { container } = renderEn('/booking/sol')
+
+    const main = screen.getByRole('main')
+    expect(main).not.toHaveClass('px-4')
+    expect(main).not.toHaveClass('pt-8')
+    expect(main.firstElementChild).toBe(screen.getByRole('banner'))
+    const portada = container.querySelector('img[src="/media/cover.webp"]') as HTMLElement
+    expect(screen.getByRole('banner').contains(portada)).toBe(true)
+    expect(screen.getByText('Cortes y color.').closest('.px-4')).not.toBeNull()
   })
 
   it('sin WhatsApp no dice "Reserva por web disponible"', () => {
@@ -377,7 +398,7 @@ describe('PublicBooking: objetivos táctiles', () => {
     renderEn('/booking/sol?step=1')
 
     expect(screen.getByRole('main')).not.toHaveClass('pb-[calc(8rem+env(safe-area-inset-bottom))]')
-    expect(screen.getByRole('main')).toHaveClass('py-8')
+    expect(screen.getByRole('main')).toHaveClass('pb-8')
   })
 })
 
