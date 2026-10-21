@@ -42,10 +42,37 @@ describe('initSentry', () => {
       expect.objectContaining({
         dsn: 'https://dsn.example/1',
         environment: 'staging',
-        tracesSampleRate: 0.5,
-        sendDefaultPii: false
+        tracesSampleRate: 0.5
       })
     )
+  })
+
+  it('apaga de forma explicita cada categoria de datos de Sentry 11', async () => {
+    // Sentry 11 sin `dataCollection` recolecta usuario (con IP inferida),
+    // cookies, headers y cuerpos HTTP: mas que la v10 con sendDefaultPii off.
+    mockGetRuntimeEnv.mockReturnValue({
+      dev: false,
+      mode: 'production',
+      sentryDsn: 'https://dsn.example/1'
+    })
+    const { initSentry } = await import('./sentry')
+
+    initSentry()
+    const options = mockInit.mock.calls[0][0]
+
+    expect(options.sendDefaultPii).toBeUndefined()
+    expect(options.attachStacktrace).toBe(false)
+    expect(options.dataCollection).toEqual({
+      userInfo: false,
+      cookies: false,
+      httpHeaders: { request: { allow: ['user-agent'] }, response: false },
+      httpBodies: [],
+      urlQueryParams: false,
+      genAI: { inputs: false, outputs: false },
+      databaseQueryData: false,
+      queues: false,
+      graphQL: { document: false, variables: false }
+    })
   })
 
   it('cae al MODE cuando no hay VITE_SENTRY_ENVIRONMENT', async () => {
@@ -129,6 +156,26 @@ describe('initSentry: sin secretos de la URL ni datos de usuario (F3)', () => {
     expect(cleaned.request.url).toBe('https://app.example/reset-password')
     expect(cleaned.request.query_string).toBeUndefined()
     expect(cleaned.user).toBeUndefined()
+  })
+
+  it('de los headers solo queda el User-Agent; el Referer puede traer un token', async () => {
+    const { beforeSend } = await init()
+    const cleaned = beforeSend({
+      request: {
+        url: 'https://app.example/login',
+        headers: {
+          Referer: 'https://app.example/reset-password?token=secreto',
+          referer: 'https://app.example/reset-password?token=secreto',
+          Cookie: 'a=b',
+          cookie: 'a=b',
+          Authorization: 'Bearer x',
+          authorization: 'Bearer x',
+          'User-Agent': 'Mozilla/5.0'
+        }
+      }
+    })
+
+    expect(cleaned.request.headers).toEqual({ 'User-Agent': 'Mozilla/5.0' })
   })
 
   it('una consulta cancelada a proposito no se manda; cualquier otro error si', async () => {
