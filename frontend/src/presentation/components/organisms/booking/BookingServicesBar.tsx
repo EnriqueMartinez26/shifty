@@ -4,6 +4,7 @@ import { ArrowRight } from 'lucide-react'
 
 import { formatCurrency } from '@shared/utils/currency'
 
+import { sumAmounts } from './addonGroups'
 import { colors2000s } from '../../../../theme/colors'
 import { brandCtaStyle } from '../../../lib/brandTheme'
 
@@ -12,21 +13,24 @@ interface BookingServicesBarProps {
   count: number
   durationMinutes: number
   /**
-   * Suma de los precios de lista. El total a cobrar (promo, adicionales) lo
+   * Suma de los precios de lista. El total a cobrar (promo incluida) lo
    * confirma el backend en el ultimo paso.
    */
   listPrice: number
+  /** Suma de los adicionales elegidos; entra en el total que se muestra. */
+  addonsTotal?: number
   onContinue: () => void
 }
 
 /**
- * Barra de "varios servicios en un turno": cuantos, cuanto dura y cuanto
- * suman, con el boton para seguir al horario. Solo pinta.
+ * Barra del paso del servicio: cuantos servicios, cuanto dura y cuanto suman
+ * (con los adicionales), con el boton para seguir al horario. Solo pinta.
  */
 export const BookingServicesBar: React.FC<BookingServicesBarProps> = ({
   count,
   durationMinutes,
   listPrice,
+  addonsTotal = 0,
   onContinue
 }) => (
   <div
@@ -45,7 +49,7 @@ export const BookingServicesBar: React.FC<BookingServicesBarProps> = ({
       style={{ color: colors2000s.text.primary }}
     >
       {count === 1 ? '1 servicio' : `${count} servicios`} · {durationMinutes} min ·{' '}
-      {formatCurrency(listPrice)}
+      {formatCurrency(sumAmounts(listPrice, addonsTotal))}
     </p>
     <button
       type="button"

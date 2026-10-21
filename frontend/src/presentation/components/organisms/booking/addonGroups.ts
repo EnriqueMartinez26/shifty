@@ -54,3 +54,31 @@ export const toSelectedAddons = (
       .lines()
       .map((line) => (index === 0 ? line : { ...line, serviceId: group.serviceId }))
   )
+
+/**
+ * Lo elegido con la cantidad de UN adicional de UN servicio cambiada; los
+ * demas servicios quedan como estaban. Arma las lineas con `toSelectedAddons`.
+ */
+export const withAddonQuantity = (
+  groups: readonly ServiceAddonsGroup[],
+  serviceId: string,
+  addonId: string,
+  quantity: number
+): SelectedAddon[] =>
+  toSelectedAddons(
+    groups.map((group) =>
+      group.serviceId === serviceId
+        ? {
+            serviceId,
+            selection: AddonSelection.create(group.options, {
+              ...group.selection.toQuantities(),
+              [addonId]: quantity
+            })
+          }
+        : group
+    )
+  )
+
+/** Suma de los adicionales elegidos de todos los servicios. */
+export const addonsTotalOf = (groups: readonly Pick<ServiceAddonsGroup, 'selection'>[]): number =>
+  groups.reduce((sum, group) => sumAmounts(sum, group.selection.total()), 0)

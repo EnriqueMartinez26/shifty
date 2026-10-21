@@ -6,6 +6,7 @@ import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-rou
 import { forgetClientToken, rememberClientToken } from '@application/services/clientToken'
 
 import { NetworkError, RateLimitError } from '@shared/errors'
+import { formatCurrency } from '@shared/utils/currency'
 import { forgetOtpVerification, rememberOtpVerification } from '@shared/utils/otpSession'
 
 import { BookingWizardContainer } from './BookingWizardContainer'
@@ -21,6 +22,7 @@ const mockAvailability = jest.fn()
 const mockRequestOtp = jest.fn()
 const mockVerifyOtp = jest.fn()
 const mockCreateBooking = jest.fn()
+const mockPreviewPromotion = jest.fn()
 
 jest.mock('../../../hooks/usePublic', () => ({
   usePublicServices: (...args: unknown[]) => mockServices(...args),
@@ -41,7 +43,7 @@ jest.mock('../../../hooks/usePublic', () => ({
     },
     isLoading: false
   }),
-  usePreviewPublicPromotion: () => ({ mutateAsync: jest.fn(), isPending: false }),
+  usePreviewPublicPromotion: () => ({ mutateAsync: mockPreviewPromotion, isPending: false }),
   useJoinWaitlist: () => ({ mutateAsync: jest.fn(), isPending: false, isSuccess: false }),
   useCreatePublicBooking: () => ({ mutateAsync: mockCreateBooking, isPending: false }),
   useRequestPublicOtp: () => ({ mutateAsync: mockRequestOtp, isPending: false }),
@@ -627,10 +629,12 @@ describe('BookingWizardContainer', () => {
       })
       mockCreateBooking.mockRejectedValue(new NetworkError('No se pudo conectar con el servidor.'))
       render(<WizardEnRuta store={tienda(false)} />)
-      await waitFor(() => expect(screen.getByText(HORARIO)).toBeInTheDocument())
+      // S4 (2026-10-21): los adicionales se eligen en el paso del servicio.
+      fireEvent.click(screen.getByText('Servicio a'))
+      fireEvent.click(screen.getByRole('button', { name: 'Agregar uno de Strass' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Agregar uno de Strass' }))
+      fireEvent.click(screen.getByRole('button', { name: /Continuar/ }))
       fireEvent.click(screen.getByText('09:00'))
-      fireEvent.click(screen.getByRole('button', { name: 'Agregar uno de Strass' }))
-      fireEvent.click(screen.getByRole('button', { name: 'Agregar uno de Strass' }))
       fireEvent.change(screen.getByPlaceholderText('Ej: Juan Perez'), {
         target: { value: 'Lucia' }
       })
@@ -650,7 +654,13 @@ describe('BookingWizardContainer', () => {
         addons: [{ addon_id: 'strass', quantity: 2 }]
       })
 
+      // Del pedido al horario y del horario al servicio, con lo elegido.
+      atrasDelNavegador()
+      atrasDelNavegador()
       fireEvent.click(screen.getByRole('button', { name: 'Quitar uno de Strass' }))
+      fireEvent.click(screen.getByRole('button', { name: /Continuar/ }))
+      fireEvent.click(screen.getByText('09:00'))
+      fireEvent.click(screen.getByRole('checkbox'))
       await waitFor(() => expect(screen.getByText('Confirmar reserva')).not.toBeDisabled())
       await enviar()
 
@@ -1037,6 +1047,203 @@ describe('BookingWizardContainer', () => {
         expect(screen.getByText('10:00')).toBeInTheDocument()
       })
     })
+  })
+})
+
+// S4 (2026-10-21): los adicionales se eligen en el paso del servicio, debajo
+// de cada servicio elegido, y la barra suma el total al momento.
+describe('BookingWizardContainer con adicionales en el paso del servicio', () => {
+  const adicional = (id: string, name: string, unit_price: number) => ({
+    id,
+    name,
+    unit_price,
+    max_quantity: 5,
+    position: 0
+  })
+  const conAdicionales = (public_id: string, addons: ReturnType<typeof adicional>[]) => ({
+    ...servicio(public_id),
+    addons
+  })
+  const corteConStrass = conAdicionales('a', [adicional('strass', 'Strass', 500)])
+  const barbaConBrillo = conAdicionales('b', [adicional('brillo', 'Brillo', 300)])
+  const tiendaMulti = (): PublicStore => {
+    const base = tienda(false)
+    return { ...base, feature_flags: { ...base.feature_flags, multi_service_booking: true } }
+  }
+  const agregar = (name: string) =>
+    fireEvent.click(screen.getByRole('button', { name: `Agregar uno de ${name}` }))
+  const continuar = () => fireEvent.click(screen.getByRole('button', { name: /Continuar/ }))
+
+  const reservar = async () => {
+    fireEvent.click(screen.getByText('09:00'))
+    fireEvent.change(screen.getByPlaceholderText('Ej: Juan Perez'), {
+      target: { value: 'Lucia' }
+    })
+    fireEvent.change(screen.getByPlaceholderText('Ej: 351 1234567'), {
+      target: { value: '+5491155550101' }
+    })
+    fireEvent.change(screen.getByPlaceholderText('juan@email.com'), {
+      target: { value: 'lucia@example.com' }
+    })
+    fireEvent.click(screen.getByRole('checkbox'))
+    await waitFor(() => expect(screen.getByText('Confirmar reserva')).not.toBeDisabled())
+    await act(async () => {
+      fireEvent.click(screen.getByText('Confirmar reserva'))
+    })
+    await waitFor(() => expect(mockCreateBooking).toHaveBeenCalledTimes(1))
+    return mockCreateBooking.mock.calls[0]?.[0] as Record<string, unknown>
+  }
+
+  beforeEach(() => {
+    mockServices.mockReset()
+    mockAvailability.mockReset()
+    mockCreateBooking.mockReset()
+    mockPreviewPromotion.mockReset()
+    mockStaff.mockReturnValue({
+      data: [
+        { public_id: 'st-1', kind: 'person', display_name: 'Pro', service_ids: ['a', 'b', 'c'] }
+      ],
+      isLoading: false
+    })
+    mockAvailability.mockReturnValue({ data: [slot], isLoading: false })
+    mockCreateBooking.mockRejectedValue(new NetworkError('No se pudo conectar con el servidor.'))
+    forgetOtpVerification('tienda')
+    forgetClientToken()
+    window.sessionStorage.clear()
+  })
+
+  it('un solo servicio con adicionales muestra el paso; tocarlo abre el contador sin avanzar', async () => {
+    mockServices.mockReturnValue({ data: [corteConStrass], isLoading: false })
+    render(<WizardEnRuta store={tienda(false)} />)
+
+    expect(screen.getByText(SERVICIO)).toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: 'Adicionales de Servicio a' })).toBeNull()
+
+    fireEvent.click(screen.getByText('Servicio a'))
+
+    expect(screen.getByText(SERVICIO)).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'Adicionales de Servicio a' })).toBeInTheDocument()
+    expect(screen.getByTestId('booking-services-bar')).toHaveTextContent(
+      `1 servicio · 30 min · ${formatCurrency(1000)}`
+    )
+    agregar('Strass')
+    agregar('Strass')
+    expect(screen.getByTestId('booking-services-bar')).toHaveTextContent(
+      `1 servicio · 30 min · ${formatCurrency(2000)}`
+    )
+
+    continuar()
+    expect(screen.getByText(HORARIO)).toBeInTheDocument()
+    const pedido = await reservar()
+    expect(pedido).toMatchObject({ service_id: 'a', addons: [{ addon_id: 'strass', quantity: 2 }] })
+  })
+
+  it('sin el flag, un servicio sin adicionales sigue eligiendo y avanzando', () => {
+    mockServices.mockReturnValue({ data: [corteConStrass, servicio('c')], isLoading: false })
+    render(<WizardEnRuta store={tienda(false)} />)
+
+    fireEvent.click(screen.getByText('Servicio a'))
+    expect(screen.getByText(SERVICIO)).toBeInTheDocument()
+    fireEvent.click(screen.getByText('Servicio c'))
+
+    expect(screen.getByText(HORARIO)).toBeInTheDocument()
+  })
+
+  it('con varios servicios cada uno lleva sus adicionales al pedido', async () => {
+    mockServices.mockReturnValue({ data: [corteConStrass, barbaConBrillo], isLoading: false })
+    render(<WizardEnRuta store={tiendaMulti()} />)
+
+    fireEvent.click(screen.getByText('Servicio a'))
+    fireEvent.click(screen.getByText('Servicio b'))
+    agregar('Strass')
+    agregar('Brillo')
+    agregar('Brillo')
+    // 1000 + 1000 + 500 + 2 x 300
+    expect(screen.getByTestId('booking-services-bar')).toHaveTextContent(
+      `2 servicios · 60 min · ${formatCurrency(3100)}`
+    )
+    continuar()
+
+    const pedido = await reservar()
+    expect(pedido).toMatchObject({
+      service_id: 'a',
+      extra_service_ids: ['b'],
+      addons: [
+        { addon_id: 'strass', quantity: 1 },
+        { addon_id: 'brillo', quantity: 2 }
+      ]
+    })
+  })
+
+  it('quitar un servicio se lleva sus adicionales', async () => {
+    mockServices.mockReturnValue({ data: [corteConStrass, barbaConBrillo], isLoading: false })
+    render(<WizardEnRuta store={tiendaMulti()} />)
+
+    fireEvent.click(screen.getByText('Servicio a'))
+    fireEvent.click(screen.getByText('Servicio b'))
+    agregar('Strass')
+    agregar('Brillo')
+    fireEvent.click(screen.getByText('Servicio b'))
+
+    expect(screen.queryByRole('region', { name: 'Adicionales de Servicio b' })).toBeNull()
+    expect(screen.getByTestId('booking-services-bar')).toHaveTextContent(
+      `1 servicio · 30 min · ${formatCurrency(1500)}`
+    )
+    continuar()
+    const pedido = await reservar()
+    expect(pedido).not.toHaveProperty('extra_service_ids')
+    expect(pedido.addons).toEqual([{ addon_id: 'strass', quantity: 1 }])
+  })
+
+  it('un deep-link a un servicio con adicionales arranca en el horario y "Volver" los ofrece', () => {
+    mockServices.mockReturnValue({ data: [corteConStrass], isLoading: false })
+    render(
+      <WizardEnRuta
+        store={tienda(false)}
+        preselect={{ serviceId: 'a', staffId: null, date: null }}
+      />
+    )
+    expect(screen.getByText(HORARIO)).toBeInTheDocument()
+
+    fireEvent.click(volver())
+
+    expect(screen.getByText(SERVICIO)).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'Adicionales de Servicio a' })).toBeInTheDocument()
+  })
+
+  // La promo se mide contra el total: con otros adicionales el codigo aplicado
+  // ya no es seguro y se vuelve a cargar en el pedido.
+  it('cambiar los adicionales en el servicio quita el codigo aplicado', async () => {
+    mockServices.mockReturnValue({ data: [corteConStrass], isLoading: false })
+    mockPreviewPromotion.mockResolvedValue({
+      code: 'BIENVENIDA10',
+      title: 'Bienvenida',
+      promotion_type: 'percent',
+      base_amount: 1000,
+      discount_amount: 100,
+      final_amount: 900
+    })
+    render(<WizardEnRuta store={tienda(false)} />)
+    fireEvent.click(screen.getByText('Servicio a'))
+    continuar()
+    fireEvent.click(screen.getByText('09:00'))
+    fireEvent.click(screen.getByText('¿Tenés un código de descuento?'))
+    fireEvent.change(screen.getByPlaceholderText('Ej: BIENVENIDA10'), {
+      target: { value: 'bienvenida10' }
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Aplicar' }))
+    })
+    await waitFor(() => expect(mockPreviewPromotion).toHaveBeenCalled())
+
+    atrasDelNavegador()
+    atrasDelNavegador()
+    agregar('Strass')
+    continuar()
+    const pedido = await reservar()
+
+    expect(pedido.promotion_code).toBeUndefined()
+    expect(pedido.addons).toEqual([{ addon_id: 'strass', quantity: 1 }])
   })
 })
 

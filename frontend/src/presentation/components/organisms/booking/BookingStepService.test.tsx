@@ -1,7 +1,13 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 
+import { AddonSelection } from '@domain/value-objects/AddonSelection'
+
+import { publicAddonOptions } from '@application/mappers/PublicAddonMapper'
+import type { PublicService } from '@application/services/PublicBookingService'
+
 import { formatCurrency } from '@shared/utils/currency'
 
+import type { ServiceAddonsGroup } from './addonGroups'
 import { BookingStepService } from './BookingStepService'
 
 // 2026-10-02 (F4-15): las fotos del primer paso de la reserva no tenian tamano
@@ -200,6 +206,144 @@ describe('BookingStepService', () => {
         screen.queryByText('Ningún profesional lo hace junto con lo que elegiste.')
       ).not.toBeInTheDocument()
     })
+  })
+})
+
+// S4 (2026-10-21): tocar un servicio lo elige y abre, debajo, el contador de
+// sus adicionales; la barra suma el total al momento.
+describe('BookingStepService con adicionales', () => {
+  const conAdicionales = (
+    public_id: string,
+    name: string,
+    price: number,
+    addons: { id: string; name: string; unit_price: number; max_quantity: number }[]
+  ) => ({
+    ...servicio(public_id, name, 30, price),
+    addons: addons.map((addon, position) => ({ ...addon, position }))
+  })
+  const catalogo = [
+    conAdicionales('corte', 'Corte', 10000, [
+      { id: 'strass', name: 'Strass', unit_price: 500, max_quantity: 10 }
+    ]),
+    conAdicionales('barba', 'Barba', 5000, [
+      { id: 'brillo', name: 'Brillo', unit_price: 1500, max_quantity: 2 }
+    ]),
+    servicio('lavado', 'Lavado', 10, 2000)
+  ]
+  // Lo que arma el contenedor con groupAddonsByService.
+  const grupos = (
+    elegidos: string[],
+    cantidades: Record<string, Record<string, number>> = {}
+  ): ServiceAddonsGroup[] =>
+    elegidos.map((id) => {
+      const service = catalogo.find((svc) => svc.public_id === id) as unknown as PublicService
+      const options = publicAddonOptions(service)
+      return {
+        serviceId: id,
+        service,
+        options,
+        selection: AddonSelection.create(options, cantidades[id] ?? {}),
+        changed: false,
+        hasChosen: false
+      }
+    })
+
+  const renderUno = (
+    selectedId: string | null,
+    cantidades: Record<string, Record<string, number>> = {}
+  ) => {
+    mockUsePublicServices.mockReturnValue({ isLoading: false, data: catalogo })
+    const onChange = jest.fn()
+    const onContinue = jest.fn()
+    const onSelect = jest.fn()
+    render(
+      <BookingStepService
+        storePublicId="store-1"
+        selectedId={selectedId}
+        onSelect={onSelect}
+        addons={{
+          groups: grupos(selectedId ? [selectedId] : [], cantidades),
+          onChange,
+          onContinue
+        }}
+      />
+    )
+    return { onChange, onContinue, onSelect }
+  }
+
+  const tarjeta = (name: string) => screen.getByRole('button', { name: new RegExp(name) })
+
+  it('el servicio elegido abre sus adicionales debajo, asociados a su tarjeta', () => {
+    renderUno('corte')
+
+    const region = screen.getByRole('region', { name: 'Adicionales de Corte' })
+    expect(tarjeta('Corte')).toHaveAttribute('aria-expanded', 'true')
+    expect(tarjeta('Corte')).toHaveAttribute('aria-controls', region.id)
+    expect(tarjeta('Corte').nextElementSibling).toBe(region)
+    expect(screen.getByLabelText('Cantidad de Strass')).toHaveTextContent('0')
+    // Lo que no esta elegido no se abre.
+    expect(tarjeta('Barba')).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByRole('region', { name: 'Adicionales de Barba' })).not.toBeInTheDocument()
+    // Un servicio sin adicionales no tiene nada que abrir.
+    expect(tarjeta('Lavado')).not.toHaveAttribute('aria-expanded')
+  })
+
+  it('el contador avisa el servicio, el adicional y la cantidad', () => {
+    const { onChange } = renderUno('corte', { corte: { strass: 2 } })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Agregar uno de Strass' }))
+    expect(onChange).toHaveBeenLastCalledWith('corte', 'strass', 3)
+    fireEvent.click(screen.getByRole('button', { name: 'Quitar uno de Strass' }))
+    expect(onChange).toHaveBeenLastCalledWith('corte', 'strass', 1)
+  })
+
+  it('con un servicio con adicionales elegido la barra suma el total y Continuar sigue', () => {
+    const { onContinue } = renderUno('corte', { corte: { strass: 3 } })
+
+    expect(screen.getByTestId('booking-services-bar')).toHaveTextContent(
+      `1 servicio · 30 min · ${formatCurrency(11500)}`
+    )
+    fireEvent.click(screen.getByRole('button', { name: /Continuar/ }))
+    expect(onContinue).toHaveBeenCalledTimes(1)
+  })
+
+  it('sin un servicio con adicionales elegido no hay barra ni contador', () => {
+    renderUno(null)
+
+    expect(screen.queryByTestId('booking-services-bar')).not.toBeInTheDocument()
+    expect(screen.queryByRole('region')).not.toBeInTheDocument()
+  })
+
+  it('con varios servicios cada elegido abre los suyos y la barra suma todo', () => {
+    mockUsePublicServices.mockReturnValue({ isLoading: false, data: catalogo })
+    const onChange = jest.fn()
+    render(
+      <BookingStepService
+        storePublicId="store-1"
+        selectedId="corte"
+        onSelect={jest.fn()}
+        multiService={{
+          selectedIds: ['corte', 'barba'],
+          onToggle: jest.fn(),
+          onContinue: jest.fn()
+        }}
+        addons={{
+          groups: grupos(['corte', 'barba'], { corte: { strass: 1 }, barba: { brillo: 2 } }),
+          onChange,
+          onContinue: jest.fn()
+        }}
+      />
+    )
+
+    const deBarba = screen.getByRole('region', { name: 'Adicionales de Barba' })
+    expect(tarjeta('Barba').nextElementSibling).toBe(deBarba)
+    expect(screen.getByRole('region', { name: 'Adicionales de Corte' })).toBeInTheDocument()
+    // 10000 + 5000 + 500 + 2 x 1500
+    expect(screen.getByTestId('booking-services-bar')).toHaveTextContent(
+      `2 servicios · 60 min · ${formatCurrency(18500)}`
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Quitar uno de Brillo' }))
+    expect(onChange).toHaveBeenLastCalledWith('barba', 'brillo', 1)
   })
 })
 
