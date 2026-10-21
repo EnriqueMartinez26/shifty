@@ -35,11 +35,12 @@ const CoverImage: React.FC<StoreCoverProps> = ({ coverUrl, coverPosition, brand 
       </div>
     )
   }
+  // Sin portada la franja solo anuncia el color: baja en el celular (S10.3).
   return (
     <div
       aria-hidden="true"
       data-testid="store-cover-band"
-      className={`${COVER_SHAPE} h-24 sm:h-40`}
+      className={`${COVER_SHAPE} h-12 sm:h-40`}
       style={{ background: brandCoverWash(brand) }}
     />
   )

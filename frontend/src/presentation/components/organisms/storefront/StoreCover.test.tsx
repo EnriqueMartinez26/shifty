@@ -9,6 +9,8 @@ import { resolveBrandTheme } from '../../../lib/brandTheme'
 // celular; sin portada, un degradado suave del color de la tienda.
 // 2026-10-22 (S10.1): con la foto real se veia el medio y se cortaba lo que
 // importaba; la tienda elige que parte se ve (arriba, centro o abajo).
+// 2026-10-22 (S10.3): sin portada, la franja de 96 px ocupaba media pantalla
+// del celular sin decir nada; queda en la mitad.
 
 const brand = resolveBrandTheme('#123456')
 
@@ -47,12 +49,13 @@ describe('StoreCover', () => {
     expect(container.querySelector('img')?.style.objectPosition).toBe('center 65%')
   })
 
-  it('sin portada pinta un degradado suave del color de marca, mas bajo', () => {
+  it('sin portada pinta un degradado suave del color de marca, la mitad de alto en el celular', () => {
     const { container } = render(<StoreCover coverUrl={null} brand={brand} />)
 
     expect(container.querySelector('img')).toBeNull()
     const franja = screen.getByTestId('store-cover-band')
-    expect(franja).toHaveClass('h-24', 'sm:h-40', 'w-full')
+    expect(franja).toHaveClass('h-12', 'sm:h-40', 'w-full')
+    expect(franja).not.toHaveClass('h-24')
     expect(franja).toHaveAttribute('aria-hidden', 'true')
     expect(franja.getAttribute('style')).toContain('linear-gradient(')
     expect(franja.getAttribute('style')).toContain('rgba(18, 52, 86,')
