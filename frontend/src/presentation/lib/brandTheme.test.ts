@@ -20,32 +20,25 @@ describe('resolveBrandTheme', () => {
   )
 
   it.each(['#ff70fa', '#ffff00', '#fff', '#3b82f6', '#777777', '#111111', '#e67e22', '#00ff88'])(
-    'keeps AA for text on the fill and for brand text on white (%s)',
+    'keeps AA for text on both ends of the fill (%s)',
     (value) => {
       const theme = resolveBrandTheme(value)
       expect(theme.isDefault).toBe(false)
       expect(contrastRatio(theme.onFill, theme.fill)).toBeGreaterThanOrEqual(4.5)
       expect(contrastRatio(theme.onFill, theme.fillBottom)).toBeGreaterThanOrEqual(4.5)
-      expect(contrastRatio(theme.ink, '#ffffff')).toBeGreaterThanOrEqual(4.5)
     }
   )
 
-  // QA 2026-10-21: el texto de marca sobre los botones grises (#f5f5f5 a
-  // #ebebeb) quedaba en 4.21:1 con rosa y 3.87:1 con amarillo.
-  it.each(['#ff70fa', '#ffff00', '#fff', '#3b82f6', '#777777', '#111111', '#e67e22', '#00ff88'])(
-    'keeps AA for brand text on the gray button surface (%s)',
-    (value) => {
-      const theme = resolveBrandTheme(value)
-      expect(contrastRatio(theme.ink, colors2000s.bg.button)).toBeGreaterThanOrEqual(4.5)
-      expect(contrastRatio(theme.ink, colors2000s.bg.buttonBottom)).toBeGreaterThanOrEqual(4.5)
-    }
-  )
-
-  it('the default ink already passes on white and on the gray surface', () => {
-    expect(contrastRatio(DEFAULT_BRAND_THEME.ink, '#ffffff')).toBeGreaterThanOrEqual(4.5)
-    expect(
-      contrastRatio(DEFAULT_BRAND_THEME.ink, colors2000s.bg.buttonBottom)
-    ).toBeGreaterThanOrEqual(4.5)
+  // S9 (2026-10-22): sin tinta de marca. El texto sobre blanco o gris es
+  // neutro, asi que el tema solo trae el relleno y su texto.
+  it('has no brand ink: only the fill and the text on it', () => {
+    expect(Object.keys(resolveBrandTheme('#ffff00')).sort()).toEqual([
+      'fill',
+      'fillBottom',
+      'isDefault',
+      'onFill'
+    ])
+    expect(Object.keys(brandColor)).not.toContain('ink')
   })
 
   // 2026-10-22 (#240): el naranja de CTA y seleccion paso a una rampa oscura
@@ -54,18 +47,12 @@ describe('resolveBrandTheme', () => {
     const theme = DEFAULT_BRAND_THEME
     expect(contrastRatio(theme.onFill, theme.fill)).toBeGreaterThanOrEqual(4.5)
     expect(contrastRatio(theme.onFill, theme.fillBottom)).toBeGreaterThanOrEqual(4.5)
-    expect(contrastRatio(theme.ink, '#ffffff')).toBeGreaterThanOrEqual(4.5)
   })
 
-  it('keeps the store color as the fill and darkens only the ink', () => {
+  it('keeps the store color as the fill, as is', () => {
     const theme = resolveBrandTheme('#FF70FA')
     expect(theme.fill).toBe('#ff70fa')
     expect(theme.onFill).toBe('#000000')
-    expect(theme.ink).not.toBe('#ff70fa')
-  })
-
-  it('keeps a dark color as its own ink', () => {
-    expect(resolveBrandTheme('#1d4ed8').ink).toBe('#1d4ed8')
   })
 
   it('exposes the theme as CSS custom properties', () => {
@@ -73,7 +60,6 @@ describe('resolveBrandTheme', () => {
       '--brand-fill': '#3b82f6',
       '--brand-fill-bottom': expect.stringMatching(/^#[\da-f]{6}$/),
       '--brand-on-fill': expect.stringMatching(/^#(000000|ffffff)$/),
-      '--brand-ink': expect.stringMatching(/^#[\da-f]{6}$/),
       // rgba precalculado: sin color-mix(), que Safari < 16.2 no entiende y
       // anulaba toda la sombra (QA visual 2026-10-21).
       '--brand-glow': 'rgba(59, 130, 246, 0.25)'
@@ -98,11 +84,10 @@ describe('resolveBrandTheme', () => {
 describe('brand variable references', () => {
   it('point at the custom properties the portal root sets, with the orange as fallback', () => {
     const defaults = brandCssVariables(DEFAULT_BRAND_THEME) as Record<string, string>
-    expect([brandColor.fill, brandColor.fillBottom, brandColor.onFill, brandColor.ink]).toEqual(
+    expect([brandColor.fill, brandColor.fillBottom, brandColor.onFill]).toEqual(
       Object.entries(defaults).map(([name, value]) => `var(${name}, ${value})`)
     )
     expect(brandColor.fill).toBe(`var(--brand-fill, ${colors2000s.orange.cta})`)
-    expect(brandColor.ink).toBe(`var(--brand-ink, ${colors2000s.orange.accent})`)
     expect(brandColor.fillGradient).toBe(
       `linear-gradient(180deg, ${brandColor.fill} 0%, ${brandColor.fillBottom} 100%)`
     )
