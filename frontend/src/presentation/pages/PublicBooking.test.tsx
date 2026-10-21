@@ -95,6 +95,7 @@ describe('PublicBooking al volver del pago', () => {
   it('con el pago aprobado y el turno confirmado muestra la reserva confirmada', () => {
     renderEn('/booking/sol?payment_id=p1')
 
+    expect(screen.getByRole('main')).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Reserva confirmada' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Volver a consultar' })).not.toBeInTheDocument()
   })
@@ -156,6 +157,7 @@ describe('PublicBooking: WhatsApp de la tienda', () => {
 
     const link = screen.getByRole('link', { name: '351 555-1234' })
     expect(link.getAttribute('href')).toMatch(/^https:\/\/wa\.me\/5493515551234\?text=/)
+    expect(link).toHaveClass('min-h-11', 'min-w-11', 'break-all')
   })
 
   it('un numero que no se puede leer se muestra sin link', () => {
@@ -163,6 +165,29 @@ describe('PublicBooking: WhatsApp de la tienda', () => {
     renderEn('/booking/sol')
 
     expect(screen.getByText('pedir en el local').closest('a')).toBeNull()
+  })
+})
+
+describe('PublicBooking: objetivos táctiles', () => {
+  it('expone el contenido de la reserva dentro de un landmark principal', () => {
+    renderEn('/booking/sol')
+
+    expect(screen.getByRole('main')).toBeInTheDocument()
+  })
+
+  it('mantiene Mis turnos y los enlaces legales con altura mínima de 44 px', () => {
+    renderEn('/booking/sol')
+
+    expect(screen.getByRole('link', { name: 'Mis turnos' })).toHaveClass('min-h-11')
+    expect(screen.getByRole('link', { name: 'Términos y condiciones' })).toHaveClass('min-h-11')
+    expect(screen.getByRole('link', { name: 'Privacidad' })).toHaveClass('min-h-11')
+  })
+
+  it('conserva objetivos legales en el retorno del pago', () => {
+    renderEn('/booking/sol?payment_id=p1')
+
+    expect(screen.getByRole('link', { name: 'Términos y condiciones' })).toHaveClass('min-h-11')
+    expect(screen.getByRole('link', { name: 'Privacidad' })).toHaveClass('min-h-11')
   })
 })
 
@@ -215,6 +240,7 @@ describe('PublicBooking con una tienda que no existe', () => {
     expect(
       screen.getByRole('heading', { level: 1, name: 'Negocio no encontrado' })
     ).toBeInTheDocument()
+    expect(screen.getByRole('main')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Ir al inicio' })).toHaveAttribute('href', '/')
     // Ya esta en la portada de esa tienda: "volver" a ella no saca de ningun lado.
     expect(screen.queryByRole('link', { name: 'Volver a la tienda' })).toBeNull()
@@ -238,6 +264,7 @@ describe('PublicBooking cuando la tienda no se pudo consultar', () => {
     renderEn('/booking/sol')
 
     expect(screen.queryByText('Negocio no encontrado')).not.toBeInTheDocument()
+    expect(screen.getByRole('main')).toBeInTheDocument()
     expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(
       'No pudimos cargar la tienda'
     )
