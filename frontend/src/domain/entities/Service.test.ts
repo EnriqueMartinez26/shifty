@@ -1,4 +1,4 @@
-import { Service } from './Service'
+import { normalizePriorDesignMessage, Service } from './Service'
 
 const primitives = {
   id: '01J8ZQ4Y7XKQ3M0B5N6P7R8S9T',
@@ -13,6 +13,8 @@ const primitives = {
   deposit_type: 'percent' as const,
   deposit_amount: 20,
   is_active: true,
+  requires_prior_design: true,
+  prior_design_message: 'Traé tu diseño',
   addons: [{ id: 'add-1', name: 'Strass', unit_price: 500, max_quantity: 10, position: 0 }]
 }
 
@@ -54,5 +56,37 @@ describe('Service: adicionales', () => {
 
   it('sin la lista de adicionales queda vacia', () => {
     expect(Service.fromPrimitives({ ...primitives, addons: undefined }).addons).toEqual([])
+  })
+})
+
+describe('Service: diseño previo (S7)', () => {
+  it('un servicio de un backend sin el campo no pide diseño previo', () => {
+    const viejo = {
+      ...primitives,
+      requires_prior_design: undefined,
+      prior_design_message: undefined
+    }
+    const service = Service.fromPrimitives(viejo)
+
+    expect(service.requiresPriorDesign).toBe(false)
+    expect(service.priorDesignMessage).toBeNull()
+  })
+
+  it('conserva el mensaje aunque la opcion este apagada', () => {
+    const service = Service.fromPrimitives({ ...primitives, requires_prior_design: false })
+
+    expect(service.requiresPriorDesign).toBe(false)
+    expect(service.priorDesignMessage).toBe('Traé tu diseño')
+  })
+})
+
+describe('normalizePriorDesignMessage', () => {
+  it.each([
+    ['recorta los espacios', '  Mandá tu diseño  ', 'Mandá tu diseño'],
+    ['vacio es null', '   ', null],
+    ['null sigue null', null, null],
+    ['ausente sigue ausente', undefined, undefined]
+  ])('%s', (_caso, entrada, esperado) => {
+    expect(normalizePriorDesignMessage(entrada)).toBe(esperado)
   })
 })

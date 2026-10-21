@@ -20,6 +20,8 @@ const dto: ServiceResponseDTO = {
   deposit_type: 'fixed',
   deposit_amount: 3000,
   is_active: true,
+  requires_prior_design: true,
+  prior_design_message: 'Traé tu diseño',
   addons: [
     { id: 'add-1', name: 'Strass', unit_price: 500, max_quantity: 10, position: 0 },
     { id: 'add-2', name: 'Diseño', unit_price: 1500.5, max_quantity: 2, position: 1 }
@@ -181,5 +183,35 @@ describe('ServiceMapper: id de los adicionales', () => {
       { id: 'add-1', name: 'Strass', unit_price: 500, max_quantity: 10 },
       { id: 'add-2', name: 'Diseño', unit_price: 1500.5, max_quantity: 2 }
     ])
+  })
+})
+
+describe('ServiceMapper: diseño previo (S7)', () => {
+  it('un DTO sin los campos (backend anterior) no pide diseño previo', () => {
+    // Un backend anterior al diseño previo no manda los campos.
+    const viejo = { ...dto, requires_prior_design: undefined, prior_design_message: undefined }
+    const service = ServiceMapper.toDomain(viejo)
+
+    expect(service.requiresPriorDesign).toBe(false)
+    expect(service.priorDesignMessage).toBeNull()
+  })
+
+  it('viajan en snake_case y el mensaje va recortado', () => {
+    expect(
+      ServiceMapper.toWritePayload({
+        requiresPriorDesign: true,
+        priorDesignMessage: '  Mandá tu diseño  '
+      })
+    ).toEqual({ requires_prior_design: true, prior_design_message: 'Mandá tu diseño' })
+  })
+
+  it('un mensaje vacio viaja como null (lo borra)', () => {
+    expect(ServiceMapper.toWritePayload({ priorDesignMessage: '   ' })).toEqual({
+      prior_design_message: null
+    })
+  })
+
+  it('ausentes no viajan', () => {
+    expect(ServiceMapper.toWritePayload({ name: 'Corte' })).toEqual({ name: 'Corte' })
   })
 })

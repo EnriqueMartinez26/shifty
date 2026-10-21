@@ -1,5 +1,6 @@
 import { z } from 'zod'
 
+import { MAX_PRIOR_DESIGN_MESSAGE_LENGTH } from '../../domain/entities/Service'
 import { MAX_ADDONS_PER_SERVICE, serviceAddonIssue } from '../../domain/entities/ServiceAddon'
 
 // Los valores espejan los `pattern` de `ServiceBase` y los CHECK
@@ -33,6 +34,16 @@ const depositAmountSchema = z
   .number()
   .min(0, 'El monto de la seña no puede ser negativo')
   .max(10_000_000, 'El monto de la seña es demasiado alto')
+  .nullable()
+  .optional()
+// Se valida ya recortado (`normalizePriorDesignMessage`), como lo guarda el
+// backend; los caracteres de control los rechaza el backend (regla 19).
+const priorDesignMessageSchema = z
+  .string()
+  .max(
+    MAX_PRIOR_DESIGN_MESSAGE_LENGTH,
+    `El mensaje del diseño previo no puede superar los ${MAX_PRIOR_DESIGN_MESSAGE_LENGTH} caracteres`
+  )
   .nullable()
   .optional()
 
@@ -134,6 +145,9 @@ export const createServiceSchema = z
     deposit_mode: z.enum(DEPOSIT_MODES).default('none'),
     deposit_type: z.enum(DEPOSIT_TYPES).default('percent'),
     deposit_amount: depositAmountSchema,
+    // Default del backend: un servicio nuevo no pide diseño previo.
+    requires_prior_design: z.boolean().default(false),
+    prior_design_message: priorDesignMessageSchema,
     addons: addonsSchema.default([])
   })
   .superRefine((data, ctx) => {
@@ -162,6 +176,9 @@ export const updateServiceSchema = z
     deposit_type: z.enum(DEPOSIT_TYPES).optional(),
     deposit_amount: depositAmountSchema,
     is_active: z.boolean().optional(),
+    // Un null explicito en la opcion es 422 en el backend; en el mensaje, la borra.
+    requires_prior_design: z.boolean().optional(),
+    prior_design_message: priorDesignMessageSchema,
     addons: addonsSchema.optional()
   })
   .superRefine((data, ctx) => {

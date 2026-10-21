@@ -18,6 +18,26 @@ export type ServiceDepositMode = 'none' | 'optional' | 'required'
 export type ServiceDepositType = 'percent' | 'fixed' | 'full'
 
 /**
+ * Diseño previo (S7): un aviso para la clienta, nada mas. No cambia el cobro
+ * ni el estado del turno. Tope y normalizacion espejan `ServiceBase` del
+ * backend (`prior_design_message`: hasta 500, recortado, vacio es null).
+ */
+export const MAX_PRIOR_DESIGN_MESSAGE_LENGTH = 500
+
+/** Lo que lee la clienta cuando la tienda no escribio un mensaje propio. */
+export const defaultPriorDesignMessage = (storeName: string): string =>
+  `Mandale tu diseño a ${storeName} por WhatsApp para que lo vea antes del turno.`
+
+/** Recorta el mensaje; vacio es null. `undefined` sigue siendo "no lo toques". */
+export const normalizePriorDesignMessage = (
+  message: string | null | undefined
+): string | null | undefined => {
+  if (message === undefined || message === null) return message
+  const trimmed = message.trim()
+  return trimmed === '' ? null : trimmed
+}
+
+/**
  * Forma de escritura hacia la API. Todo campo es opcional y solo los campos
  * PRESENTES se mandan: un `undefined` no viaja. Esto es lo que evita que
  * editar el nombre de un servicio apague una sena ya configurada.
@@ -35,6 +55,9 @@ export interface ServiceWriteInput {
   depositType?: ServiceDepositType
   depositAmount?: number | null
   isActive?: boolean
+  requiresPriorDesign?: boolean
+  /** `null` lo borra. Se guarda aunque la opcion este apagada. */
+  priorDesignMessage?: string | null
   /**
    * Conjunto COMPLETO de adicionales: si viene, el backend reemplaza los que
    * habia (el orden es la posicion). Ausente, no se tocan.
@@ -55,6 +78,9 @@ interface ServiceProps {
   depositType: ServiceDepositType
   depositAmount: number | null
   isActive: boolean
+  requiresPriorDesign: boolean
+  /** A la clienta se le muestra solo con `requiresPriorDesign`. */
+  priorDesignMessage: string | null
   /** Ordenados por posicion. */
   addons: readonly ServiceAddon[]
 }
@@ -86,6 +112,9 @@ export class Service {
     deposit_type: ServiceDepositType
     deposit_amount: number | null
     is_active: boolean
+    /** Opcionales: un backend anterior al diseño previo no los manda. */
+    requires_prior_design?: boolean
+    prior_design_message?: string | null
     /** Opcional: un servicio sin adicionales puede no traer la lista. */
     addons?: readonly ServiceAddonPrimitives[]
   }): Service {
@@ -102,6 +131,8 @@ export class Service {
       depositType: props.deposit_type,
       depositAmount: props.deposit_amount,
       isActive: props.is_active,
+      requiresPriorDesign: props.requires_prior_design ?? false,
+      priorDesignMessage: props.prior_design_message ?? null,
       addons: [...(props.addons ?? [])]
         .sort((a, b) => a.position - b.position)
         .map((addon) => ServiceAddon.fromPrimitives(addon))
@@ -144,6 +175,12 @@ export class Service {
   get isActive() {
     return this.props.isActive
   }
+  get requiresPriorDesign() {
+    return this.props.requiresPriorDesign
+  }
+  get priorDesignMessage() {
+    return this.props.priorDesignMessage
+  }
   get addons() {
     return this.props.addons
   }
@@ -162,6 +199,8 @@ export class Service {
       deposit_type: this.props.depositType,
       deposit_amount: this.props.depositAmount,
       is_active: this.props.isActive,
+      requires_prior_design: this.props.requiresPriorDesign,
+      prior_design_message: this.props.priorDesignMessage,
       addons: this.props.addons.map((addon) => addon.toPrimitives())
     }
   }

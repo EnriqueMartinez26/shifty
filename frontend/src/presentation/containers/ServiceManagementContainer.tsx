@@ -7,7 +7,10 @@ import { Service } from '@domain/entities/Service'
 import { colors2000s, buttonStyles2000s } from '../../theme/colors'
 import { QueryErrorNotice } from '../components/molecules/QueryErrorNotice'
 import { ServiceCard } from '../components/molecules/ServiceCard'
-import { ServiceFormModal } from '../components/organisms/ServiceFormModal'
+import {
+  ServiceFormModal,
+  type ServiceFormSubmitValues
+} from '../components/organisms/ServiceFormModal'
 import { useConfirm } from '../hooks/useConfirm'
 import {
   useCreateManagedService,
@@ -20,7 +23,6 @@ import {
 import { useManagedStaff } from '../hooks/useManagedStaff'
 import { useStoreWriteAccess } from '../hooks/useStoreWriteAccess'
 import { notifyError } from '../lib/notify'
-import type { ServiceFormValues } from '../types/forms'
 
 export const ServiceManagementContainer: React.FC = () => {
   const { confirm, confirmDialog } = useConfirm()
@@ -86,9 +88,9 @@ export const ServiceManagementContainer: React.FC = () => {
     setIsModalOpen(true)
   }
 
-  const handleFormSubmit = async (formData: ServiceFormValues) => {
+  const handleFormSubmit = async (formData: ServiceFormSubmitValues) => {
     if (editingService) {
-      // Sin cast: `ServiceFormValues` calza con `ServiceWriteInput`, asi que el
+      // Sin cast: `ServiceFormSubmitValues` calza con `ServiceWriteInput`, asi que el
       // compilador verifica que lo que manda el formulario sea exactamente lo
       // que el payload de escritura sabe traducir (antes iba por
       // `as unknown as` y cualquier campo nuevo pasaba de largo en silencio).
