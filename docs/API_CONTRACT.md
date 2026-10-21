@@ -4130,6 +4130,7 @@ Type: `enum("efectivo", "transferencia", "mercadopago", "otro")`
 | `deposit_policy` | string \| null | no |  |
 | `custom_client_fields` | array<StoreCustomField> | no |  |
 | `feature_flags` | object<string, boolean> | no |  |
+| `deposit_far_limit_days` | integer \| null | no |  |
 
 ### ReconciliationSummaryResponse
 
@@ -4980,4 +4981,4 @@ Type: `enum("admin", "staff", "receptionist", "client")`
 | `terms_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 | `privacy_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 
-Generado desde app.openapi() el 2026-10-20, commit 27ab7f01
+Generado desde app.openapi() el 2026-10-20, commit 0dd1091a

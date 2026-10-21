@@ -526,3 +526,252 @@ async def test_sin_cuenta_de_mp_el_flag_de_cobros_no_alcanza(
     ok = await _reservar(client, lejos, hora=12, metodo="auto")
     assert ok.status_code == 201, ok.text
     assert ok.json()["deposit_channel"] == "mercadopago"
+
+
+# ---------------------------------------------------------------------------
+# Revision de la PR #236
+# ---------------------------------------------------------------------------
+
+
+def _ventana(dia: datetime, *, horas: int = 4) -> tuple[str, str]:
+    inicio = dia.replace(hour=9, minute=0, second=0, microsecond=0)
+    return inicio.isoformat(), (inicio + timedelta(hours=horas)).isoformat()
+
+
+async def _anotarse(
+    client: AsyncClient, t: _Tienda, ventana: tuple[str, str], telefono: str
+) -> Any:
+    return await client.post(
+        "/public/waitlist",
+        json={
+            "store_public_id": t.store,
+            "service_id": t.servicio,
+            "window_starts_at": ventana[0],
+            "window_ends_at": ventana[1],
+            "client_name": "Cliente Espera",
+            "client_phone": telefono,
+            "client_email": f"c{telefono.lstrip('+')}@example.com",
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_la_lista_de_espera_no_toma_una_ventana_lejana_sin_mp(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import modules.waitlist.service as waitlist_service
+    from modules.waitlist.model import WaitlistEntry
+
+    rastros: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        waitlist_service,
+        "report_far_booking_unavailable",
+        lambda *, store_id, service_id: rastros.append((store_id, service_id)),
+    )
+    t = await _tienda(client, "w-lejos-sin-mp")
+
+    lejos = await _anotarse(client, t, _ventana(_lejos(t).dia), "+5491155544401")
+    # Empieza cerca y termina lejos: tambien, la lista ofreceria cupos lejanos.
+    cruza = await _anotarse(
+        client,
+        t,
+        (_ventana(t.dia)[0], _ventana(_lejos(t).dia)[1]),
+        "+5491155544402",
+    )
+
+    for res in (lejos, cruza):
+        assert res.status_code == 422, res.text
+        assert res.json()["error_code"] == "FAR_BOOKING_UNAVAILABLE"
+        assert "Mercado Pago" not in res.json()["message"]
+    assert await _cuantos(test_session, WaitlistEntry) == 0
+    assert await _cuantos(test_session, User, User.role == UserRole.CLIENT) == 0
+    assert len(rastros) == 2
+    # Cerca sigue como siempre.
+    cerca = await _anotarse(client, t, _ventana(t.dia), "+5491155544403")
+    assert cerca.status_code == 201, cerca.text
+
+
+@pytest.mark.asyncio
+async def test_la_lista_de_espera_lejana_si_con_mp_o_sin_sena(
+    client: AsyncClient, test_session: AsyncSession
+) -> None:
+    con_mp = await _tienda(client, "w-lejos-mp", mercadopago=True)
+    sin_sena = await _tienda_sin_sena(client, "w-lejos-sin-sena")
+
+    for i, t in enumerate((con_mp, sin_sena)):
+        res = await _anotarse(client, t, _ventana(_lejos(t).dia), f"+549115554441{i}")
+        assert res.status_code == 201, res.text
+
+
+@pytest.mark.asyncio
+async def test_el_rechazo_lejano_del_alta_deja_rastro(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import modules.public_api.service as public_service
+
+    rastros: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        public_service,
+        "report_far_booking_unavailable",
+        lambda *, store_id, service_id: rastros.append((store_id, service_id)),
+    )
+    t = _lejos(await _tienda(client, "b-rastro"))
+
+    res = await _reservar(client, t, metodo="auto")
+
+    assert res.status_code == 422, res.text
+    assert len(rastros) == 1
+
+
+def test_el_rastro_lejano_sale_una_vez_por_tienda_y_hora(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import modules.payments.deposit_channels as canales
+    from core.observability import OncePer
+
+    eventos: list[dict[str, Any]] = []
+    monkeypatch.setattr(canales, "_alertas_lejanas", OncePer(3600.0))
+    monkeypatch.setattr(
+        canales, "report_exception", lambda exc, **ctx: eventos.append(ctx)
+    )
+
+    for reloj in (0.0, 10.0, 3599.0):
+        canales.report_far_booking_unavailable(
+            store_id="tienda-a", service_id="s1", clock=reloj
+        )
+    canales.report_far_booking_unavailable(
+        store_id="tienda-b", service_id="s1", clock=20.0
+    )
+    canales.report_far_booking_unavailable(
+        store_id="tienda-a", service_id="s2", clock=3601.0
+    )
+
+    assert [e["store_id"] for e in eventos] == ["tienda-a", "tienda-b", "tienda-a"]
+
+
+@pytest.mark.asyncio
+async def test_la_vitrina_dice_hasta_cuando_se_reserva_con_sena(
+    client: AsyncClient,
+) -> None:
+    await _tienda(client, "v-limite-sin-mp")
+    await _tienda(client, "v-limite-mp", mercadopago=True)
+    flag_sin_cuenta = await _tienda(client, "v-limite-flag")
+    await _enable_payments(client, flag_sin_cuenta.token)
+
+    async def limite(slug: str) -> Any:
+        res = await client.get(f"/public/stores/{slug}")
+        assert res.status_code == 200, res.text
+        return res.json()["deposit_far_limit_days"]
+
+    assert await limite("v-limite-sin-mp") == FAR_BOOKING_DAYS
+    assert await limite("v-limite-flag") == FAR_BOOKING_DAYS
+    assert await limite("v-limite-mp") is None
+
+
+@pytest.mark.asyncio
+async def test_varios_servicios_lejos_con_la_sena_en_un_extra(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dataclasses import replace
+
+    from tests.integration import test_reserva_varios_servicios as varios
+
+    monkeypatch.setattr(tasks, "_send_email", Buzon())
+    # Barba (principal) no pide sena; Corte (extra) la pide obligatoria. La
+    # tienda solo tiene WhatsApp.
+    t = await varios._tienda(client, "b-varios-lejos")
+    lejos = replace(t, dia=t.dia + SEMANAS_LEJOS)
+    eventos_antes = await _cuantos(test_session, OutboxMessage)
+
+    res = await varios._reservar(client, lejos, [t.corte], principal=t.barba)
+
+    assert res.status_code == 422, res.text
+    assert res.json()["error_code"] == "FAR_BOOKING_UNAVAILABLE"
+    await _nada_escrito(test_session, eventos_antes)
+    dia_lejano = varios._slot(lejos, 13).date().isoformat()
+    grilla = await client.get(
+        "/public/availability",
+        params={
+            "store_public_id": t.store,
+            "service_id": t.barba,
+            "extra_service_id": t.corte,
+            "date": dia_lejano,
+        },
+    )
+    assert grilla.status_code == 200, grilla.text
+    assert grilla.json() == []
+    # Barba sola, sin sena, se ofrece lejos.
+    sola = await client.get(
+        "/public/availability",
+        params={"store_public_id": t.store, "service_id": t.barba, "date": dia_lejano},
+    )
+    assert sola.status_code == 200 and sola.json(), sola.text
+    # Cerca, la misma seleccion se cobra por WhatsApp como siempre.
+    cerca = await varios._reservar(client, t, [t.corte], principal=t.barba)
+    assert cerca.status_code == 201, cerca.text
+    assert cerca.json()["deposit_channel"] == "whatsapp"
+
+
+@pytest.mark.asyncio
+async def test_una_promo_que_deja_la_sena_en_cero_lejos_nace_confirmada(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    usar_cola_de_reservas(monkeypatch, test_session)
+    t = _lejos(await _tienda(client, "b-promo-cero"))
+    promo = await client.post(
+        "/promotions/",
+        headers={"Authorization": f"Bearer {t.token}"},
+        json={
+            "code": "GRATIS100",
+            "title": "Gratis",
+            "promotion_type": "fixed",
+            "value": "10000.00",
+            "is_active": True,
+        },
+    )
+    assert promo.status_code == 201, promo.text
+
+    res = await client.post(
+        "/public/appointments",
+        json={
+            "store_public_id": t.store,
+            "service_id": t.servicio,
+            "staff_id": t.staff,
+            "starts_at": t.dia.replace(
+                hour=11, minute=0, second=0, microsecond=0
+            ).isoformat(),
+            "client_name": "Cliente Promo",
+            "client_phone": "+5491155544499",
+            "client_email": "cliente-promo@example.com",
+            "payment_method": "manual",
+            "promotion_code": "GRATIS100",
+            "accepts_terms": True,
+            "idempotency_key": "b-promo-cero-0001",
+        },
+    )
+
+    # Sena obligatoria de importe cero: no hay cobro, la regla lejana no
+    # alcanza y nace confirmada (decision A).
+    assert res.status_code == 201, res.text
+    assert res.json()["status"] == AppointmentStatus.CONFIRMED.value
+    assert res.json()["payment_required"] is False
+    assert await _cobro(test_session, res.json()["public_id"]) is None
+
+
+@pytest.mark.asyncio
+async def test_mis_turnos_muestra_la_reserva_sin_cobro_confirmada_y_autogestionable(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    usar_cola_de_reservas(monkeypatch, test_session)
+    t = await _tienda_sin_sena(client, "a-mis-turnos")
+    reserva = await _reservar(client, t, metodo="manual")
+    assert reserva.status_code == 201, reserva.text
+    await _verificar_cliente(client, monkeypatch, t)
+
+    res = await client.get(f"/public/client/{t.store}/{TELEFONO}/appointments")
+
+    assert res.status_code == 200, res.text
+    turno = reserva.json()["public_id"]
+    [item] = [i for i in res.json()["appointments"] if i["public_id"] == turno]
+    assert item["status"] == AppointmentStatus.CONFIRMED.value
+    assert (item["can_cancel"], item["can_reschedule"]) == (True, True)

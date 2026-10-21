@@ -49,6 +49,8 @@ from modules.otp.service import OtpService
 from modules.payments.deposit_channels import (
     booking_blocked_code,
     deposit_channels_for,
+    deposit_channels_from,
+    far_limit_days,
     is_far_booking,
     online_payment_mandatory,
 )
@@ -208,9 +210,10 @@ async def get_store_by_slug(
 ) -> PublicStoreResponse:
     async with tenant_bypass(db):
         repo = PublicRepository(db)
-        store = await repo.get_store_by_slug(slug.lower())
-        if not store:
+        encontrada = await repo.get_store_by_slug(slug.lower())
+        if encontrada is None:
             raise StoreNotFoundException(identifier=slug)
+        store, gateway = encontrada
         # Tienda con la suscripcion suspendida: la vitrina publica desaparece
         # (mismo 404 que una tienda inexistente, sin revelar el motivo).
         if await store_is_suspended(db, store.id):
@@ -241,6 +244,12 @@ async def get_store_by_slug(
                 flag: bool(store.normalized_feature_flags.get(flag, False))
                 for flag in PUBLIC_FEATURE_FLAGS
             },
+            # Reserva lejana (decision de Mateo, 2026-10-20): sin MP usable, un
+            # servicio con sena obligatoria se reserva hasta hoy + 30 dias
+            # locales. Sale de la config ya leida con la tienda.
+            deposit_far_limit_days=far_limit_days(
+                deposit_channels_from(store, gateway)
+            ),
         )
 
 
@@ -399,15 +408,18 @@ async def get_public_availability(
 
     async with tenant_bypass(db):
         # F3-02 (R1-01): la tienda en columnas, una sentencia. Con el cache
-        # caliente es lo unico que toca la base; con el frio, sus reglas
-        # (antelacion y buffer) viajan a la grilla y no se vuelven a leer.
+        # caliente es lo unico que toca la base para un dia de los proximos
+        # 30; uno lejano suma UNA (la regla de la sena, abajo). Con el frio,
+        # sus reglas (antelacion y buffer) viajan a la grilla y no se vuelven
+        # a leer.
         store = await PublicRepository(db).get_store_ref(store_public_id)
         if not store:
             raise StoreNotFoundException(identifier=store_public_id)
         # De lectura: sin el flag (``require_selection_size``).
         require_selection_size(extra_service_id)
         # Un dia a mas de 30 que el alta rechazaria por la sena (decision de
-        # Mateo, 2026-10-20) no se ofrece; antes del cache, que no lo guarda.
+        # Mateo, 2026-10-20) no se ofrece: una sentencia, solo para un dia
+        # lejano, antes del cache (que no lo guarda).
         if await far_day_closed_by_deposit(
             db,
             store_id=store.id,

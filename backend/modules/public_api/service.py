@@ -31,8 +31,9 @@ import structlog
 from fastapi import status
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
-from sqlalchemy import delete, select
+from sqlalchemy import and_, delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import noload
 
 from core.availability_cache import invalidate_availability
 from core.circuit_breaker import CircuitBreakerOpenError
@@ -79,12 +80,15 @@ from modules.payments.deposit_channels import (
     FAR_WHATSAPP_RESCHEDULE_DENIED,
     DepositChannelUnavailableError,
     FarBookingRequiresMercadoPagoError,
+    FarBookingUnavailableError,
     deposit_channels_for,
-    deposit_channels_of,
+    deposit_channels_from,
+    far_booking_blocked,
     is_far_booking,
     is_far_day,
     provider_for,
     report_deposit_channel_unavailable,
+    report_far_booking_unavailable,
     resolve_deposit_channel,
     whatsapp_hold_deadline,
 )
@@ -100,9 +104,11 @@ from modules.payments.deposit_rules import (
 )
 from modules.payments.model import (
     PAYMENT_PROVIDER_MANUAL,
+    PAYMENT_PROVIDER_MERCADOPAGO,
     JsonValue,
     OutboxMessage,
     Payment,
+    PaymentGatewayConfig,
 )
 from modules.payments.repository import PaymentRepository
 from modules.payments.service import (
@@ -297,42 +303,43 @@ async def far_day_closed_by_deposit(
     """El dia lejano no se ofrece en la grilla publica: la seleccion pide
     sena obligatoria y la tienda no tiene Mercado Pago usable, asi que el alta
     lo rechazaria con 422 ``FAR_BOOKING_UNAVAILABLE`` (decision de Mateo,
-    2026-10-20).
+    2026-10-20; ``deposit_channels.far_booking_blocked``).
 
-    Solo consulta la base para un dia lejano (``is_far_day``): la grilla de
-    los proximos 30 dias no paga nada. La sena se estima con el precio de
-    lista y sin historial (un recargo solo la sube; un codigo de promo que la
-    deje en cero no se conoce aca); la garantia sigue siendo el alta.
+    Para un dia de los proximos 30 no toca la base. Para uno lejano, UNA
+    sentencia: los servicios elegidos con su tienda (sin la cascada de sus
+    horarios comerciales) y la config de MP de la tienda en un LEFT JOIN
+    (revision de la PR #236: eran hasta cuatro).
     """
     if not is_far_day(day):
         return False
-    services = list(
-        (
-            await db.execute(
-                select(Service).where(
-                    Service.store_id == store_id,
-                    Service.public_id.in_(sorted(set(service_public_ids))),
-                    Service.is_active.is_(True),
-                )
+    filas = (
+        await db.execute(
+            select(Service, Store, PaymentGatewayConfig)
+            .join(Store, Store.id == Service.store_id)
+            .outerjoin(
+                PaymentGatewayConfig,
+                and_(
+                    PaymentGatewayConfig.store_id == Store.id,
+                    PaymentGatewayConfig.provider == PAYMENT_PROVIDER_MERCADOPAGO,
+                ),
             )
-        ).scalars()
-    )
-    if selection_deposit_mode(services) != "required":
+            .where(
+                Service.store_id == store_id,
+                Service.public_id.in_(sorted(set(service_public_ids))),
+                Service.is_active.is_(True),
+            )
+            .options(noload(Store.schedules))
+        )
+    ).all()
+    if not filas:
         return False
-    store = await PublicRepository(db).get_store_by_id(store_id)
-    if store is None or (await deposit_channels_of(db, store)).mercadopago:
-        return False
-    precio = sum(
-        (Decimal(str(service.price or 0)) for service in services), Decimal("0")
-    )
-    deposit = decide_selection(
-        services,
+    store, gateway = filas[0][1], filas[0][2]
+    return far_booking_blocked(
+        [fila[0] for fila in filas],
         store,
-        price=precio,
+        deposit_channels_from(store, gateway),
         starts_at=local_day_start(day),
-        history=UNKNOWN_HISTORY,
     )
-    return deposit.decision.amount > 0
 
 
 # ---------------------------------------------------------------------------
@@ -1099,6 +1106,10 @@ class PublicBookingService:
                 store_id=store.id, service_id=services[0].id
             )
             raise
+        except FarBookingUnavailableError:
+            # Igual el 422 de la reserva lejana sin MP (revision de la PR #236).
+            report_far_booking_unavailable(store_id=store.id, service_id=services[0].id)
+            raise
         return deposit, deposit_channel
 
     async def _persist(
@@ -1766,9 +1777,11 @@ def _rescheduled_copy(
     elif confirmado:
         estado, vence = AppointmentStatus.CONFIRMED.value, None
     else:
-        # Mismo criterio que el alta publica para un turno sin cobro online:
-        # retiene el horario hasta que empieza y despues lo levanta el job de
-        # expiracion si nadie lo confirmo (B1-22).
+        # Un ``pending`` sin cobro: desde el 2026-10-20 el alta publica sin
+        # cobro nace confirmada (decision de Mateo), asi que aca solo llegan
+        # los de antes, que se siguen moviendo con su criterio: retiene el
+        # horario hasta que empieza y despues lo levanta el job de expiracion
+        # si nadie lo confirmo (B1-22).
         estado, vence = AppointmentStatus.PENDING.value, data.new_starts_at
     return Appointment(
         store_id=original.store_id,

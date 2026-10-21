@@ -96,6 +96,13 @@ PRESUPUESTOS: dict[str, Presupuesto] = {
     # juntarla con la del principal cambiaria la sentencia del alta de uno.
     "GET /public/availability [miss, varios]": Presupuesto(consultas=5, set_config=3),
     "POST /public/appointments [varios]": Presupuesto(consultas=18, set_config=5),
+    # Reserva lejana (decision de Mateo, 2026-10-20): un dia a mas de 30 suma
+    # UNA sentencia (servicios + tienda + config de MP en un JOIN,
+    # ``far_day_closed_by_deposit``) al miss y al hit. Techos ESTIMADOS, no
+    # medidos (sin Postgres local): el de un dia cercano + 1, la misma cuenta
+    # que fija en SQLite ``test_disponibilidad_sentencias``. CI los verifica.
+    "GET /public/availability [lejano, miss]": Presupuesto(consultas=6, set_config=3),
+    "GET /public/availability [lejano, hit]": Presupuesto(consultas=2, set_config=3),
 }
 
 # Prefijos de las rutas calientes: el portal publico y las lecturas del panel
@@ -455,6 +462,24 @@ async def test_los_endpoints_calientes_no_pasan_su_presupuesto(
             "GET",
             "/public/availability",
             disponibilidad,
+            None,
+            {},
+            200,
+        ),
+        (
+            "GET /public/availability [lejano, miss]",
+            "GET",
+            "/public/availability",
+            {**disponibilidad, "date": (tienda.dia + timedelta(days=35)).isoformat()},
+            None,
+            {},
+            200,
+        ),
+        (
+            "GET /public/availability [lejano, hit]",
+            "GET",
+            "/public/availability",
+            {**disponibilidad, "date": (tienda.dia + timedelta(days=35)).isoformat()},
             None,
             {},
             200,

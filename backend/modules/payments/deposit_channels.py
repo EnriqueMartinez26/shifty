@@ -36,6 +36,7 @@ escribir nada; un servicio sin sena obligatoria no cambia.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
@@ -52,12 +53,23 @@ from core.observability import OncePer, report_exception
 from core.utils import ARGENTINA_TZ, ensure_utc_aware, now_utc, today_local
 from core.whatsapp_phone import normalize_phone_for_whatsapp
 from modules.notifications.model import NotificationType
+from modules.payments.deposit_rules import (
+    UNKNOWN_HISTORY,
+    DepositRules,
+    decide_selection_deposit,
+    selection_deposit_mode,
+)
 from modules.payments.model import (
     PAYMENT_PROVIDER_MANUAL,
     PAYMENT_PROVIDER_MERCADOPAGO,
     OutboxMessage,
+    PaymentGatewayConfig,
 )
-from modules.payments.service import _get_store, mercadopago_connected
+from modules.payments.service import (
+    _get_store,
+    gateway_has_usable_token,
+    mercadopago_connected,
+)
 from modules.services.model import Service
 from modules.stores.model import Store
 
@@ -256,6 +268,27 @@ async def deposit_channels_of(db: AsyncSession, store: Store) -> DepositChannels
     )
 
 
+def deposit_channels_from(
+    store: Store, gateway: PaymentGatewayConfig | None
+) -> DepositChannels:
+    """``deposit_channels_of`` con la config de MP ya leida (``None``: no hay):
+    para quien la trae en la misma sentencia que la tienda y no quiere otra
+    consulta. Mismo predicado (``gateway_has_usable_token``)."""
+    payments_enabled = is_store_feature_enabled(store.feature_flags, "payments")
+    return DepositChannels(
+        mercadopago=payments_enabled and gateway_has_usable_token(gateway),
+        whatsapp=normalize_phone_for_whatsapp(store.whatsapp_number) is not None,
+        payments_enabled=payments_enabled,
+    )
+
+
+def far_limit_days(channels: DepositChannels) -> int | None:
+    """Hasta cuantos dias adelante se reserva un servicio con sena obligatoria
+    en esta tienda: ``FAR_BOOKING_DAYS`` sin MP usable, ``None`` (sin tope de
+    esta regla) con MP. Para que el portal corte el calendario."""
+    return None if channels.mercadopago else FAR_BOOKING_DAYS
+
+
 async def deposit_channels_for(
     db: AsyncSession, store: Store, *, deposit_mode: str
 ) -> DepositChannels:
@@ -419,6 +452,49 @@ def resolve_deposit_channel(
     )
 
 
+def far_booking_blocked(
+    services: Sequence[Service],
+    store: Store,
+    channels: DepositChannels,
+    *,
+    starts_at: datetime,
+    now: datetime | None = None,
+) -> bool:
+    """Un turno de estos servicios que empiece en ``starts_at`` lo rechazaria
+    el alta con 422 ``FAR_BOOKING_UNAVAILABLE`` (decision de Mateo,
+    2026-10-20).
+
+    Para quien todavia no tiene la reserva entera (la grilla publica, la lista
+    de espera): la sena se estima con el precio de lista y sin historial (un
+    recargo solo la sube; una promo que la deje en cero no se conoce) y la
+    decision es la de ``resolve_deposit_channel`` (``booking_blocked_code``),
+    la misma funcion del alta. Pura: los canales ya vienen resueltos.
+    """
+    if not services or selection_deposit_mode(services) != "required":
+        return False
+    if not is_far_booking(starts_at):
+        return False
+    ahora = now or now_utc()
+    precio = sum((Decimal(str(s.price or 0)) for s in services), Decimal("0"))
+    sena = decide_selection_deposit(
+        services,
+        price=precio,
+        notice=ensure_utc_aware(starts_at) - ahora,
+        rules=DepositRules.from_store(store),
+        history=UNKNOWN_HISTORY,
+    )
+    return (
+        booking_blocked_code(
+            channels=channels,
+            deposit_amount=sena.decision.amount,
+            deposit_mode=selection_deposit_mode(services),
+            allow_manual_coordination=store.allow_manual_coordination,
+            far_booking=True,
+        )
+        == "FAR_BOOKING_UNAVAILABLE"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Observabilidad: la tienda se quedo sin canal (revision 4R de la PR #108, W2)
 # ---------------------------------------------------------------------------
@@ -449,6 +525,33 @@ def report_deposit_channel_unavailable(
     )
     report_exception(
         DepositChannelUnavailableAlert("sena obligatoria sin canal de cobro"),
+        store_id=store_id,
+        service_id=service_id,
+    )
+
+
+# El rebote por la reserva lejana (``FAR_BOOKING_UNAVAILABLE``) deja el mismo
+# rastro, con su propia ventana: la tienda no tiene MP y un cliente quiso un
+# servicio con sena a mas de 30 dias (revision de la PR #236).
+_alertas_lejanas = OncePer(_ALERT_EVERY_SECONDS)
+
+
+class FarBookingUnavailableAlert(RuntimeError):
+    """Para Sentry: un cliente quiso reservar lejos un servicio con sena
+    obligatoria en una tienda sin MP usable (``report_far_booking_unavailable``)."""
+
+
+def report_far_booking_unavailable(
+    *, store_id: str, service_id: str, clock: float | None = None
+) -> None:
+    """Rastro de una reserva o un alta en la lista de espera rechazada con 422
+    ``FAR_BOOKING_UNAVAILABLE``: warning con ids y Sentry, a lo sumo uno por
+    tienda y hora."""
+    if not _alertas_lejanas.allow(store_id, now=clock):
+        return
+    logger.warning("far_booking_unavailable", store_id=store_id, service_id=service_id)
+    report_exception(
+        FarBookingUnavailableAlert("reserva lejana con sena sin Mercado Pago"),
         store_id=store_id,
         service_id=service_id,
     )

@@ -56,6 +56,11 @@ class PublicStoreResponse(BaseModel):
     deposit_policy: Optional[str] = None
     custom_client_fields: list[StoreCustomField] = Field(default_factory=list)
     feature_flags: dict[str, bool] = Field(default_factory=dict)
+    # Aditivo (decision de Mateo, 2026-10-20): si no es null, un servicio con
+    # ``deposit_mode = required`` se reserva hasta hoy + N dias (hora
+    # argentina); mas lejos es 422 ``FAR_BOOKING_UNAVAILABLE``. Null: la
+    # tienda cobra por Mercado Pago y esta regla no corta nada.
+    deposit_far_limit_days: int | None = None
 
     class Config:
         from_attributes = True
