@@ -183,7 +183,11 @@ const LegalContactBlock: React.FC<{ contact: ContactInfo }> = ({ contact }) => {
         {email && (
           <li style={contactLineStyle}>
             Email:{' '}
-            <a href={`mailto:${email}`} className="font-bold underline" style={contactLinkStyle}>
+            <a
+              href={`mailto:${email}`}
+              className="font-bold underline break-words"
+              style={contactLinkStyle}
+            >
               {email}
             </a>
           </li>
@@ -195,7 +199,7 @@ const LegalContactBlock: React.FC<{ contact: ContactInfo }> = ({ contact }) => {
               href={`https://wa.me/${whatsAppNumber}`}
               target="_blank"
               rel="noreferrer"
-              className="font-bold underline"
+              className="font-bold underline break-words"
               style={contactLinkStyle}
             >
               +{whatsAppNumber}
