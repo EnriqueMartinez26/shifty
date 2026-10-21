@@ -129,6 +129,8 @@ interface BookingStepConfirmationProps {
    * Sin el, "Revisar adicionales" vuelve con `onBack`.
    */
   onEditAddons?: () => void
+  /** La reserva quedo hecha y se muestra la pantalla de exito. */
+  onBooked?: () => void
   onConfirm: (
     paymentMethod: 'manual' | 'mercadopago',
     acceptsTerms: boolean,
@@ -183,6 +185,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
   onPromotionCodeChange,
   onAddonsChange,
   onEditAddons,
+  onBooked,
   onConfirm
 }) => {
   const fieldId = useId()
@@ -585,6 +588,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
         return
       }
       dispatchSubmission({ type: 'succeed', confirmation: result })
+      onBooked?.()
     } catch (error: unknown) {
       const code = getErrorCode(error)
       const status = getHttpStatus(error)

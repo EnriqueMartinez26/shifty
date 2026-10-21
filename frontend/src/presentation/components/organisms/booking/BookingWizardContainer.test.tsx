@@ -698,6 +698,34 @@ describe('BookingWizardContainer', () => {
         expect(window.sessionStorage.getItem('shifty:booking-idem:tienda')).toBeNull()
       )
     })
+
+    // QA 2026-10-21: la pantalla de exito seguia mostrando "Paso 3 de 3" sin
+    // tildar. Con la reserva hecha ya no hay pasos: el indicador se oculta.
+    it('con la reserva hecha oculta el indicador de pasos y al volver a reservar reaparece', async () => {
+      mockCreateBooking.mockResolvedValue({
+        public_id: 'appt-1',
+        service_id: 'a',
+        service_name: 'Servicio a',
+        staff_id: 'st-1',
+        staff_name: 'Pro',
+        starts_at: slot.starts_at,
+        ends_at: slot.ends_at,
+        status: 'confirmed',
+        client_name: 'Lucia',
+        client_phone: '+5491155550101',
+        payment_required: false
+      })
+      render(<WizardEnRuta store={tienda(false)} />)
+      expect(screen.getByRole('list', { name: 'Pasos de la reserva' })).toBeInTheDocument()
+
+      await confirmarReserva()
+
+      expect(await screen.findByText('Reserva Confirmada')).toBeInTheDocument()
+      expect(screen.queryByRole('list', { name: 'Pasos de la reserva' })).not.toBeInTheDocument()
+
+      atrasDelNavegador()
+      expect(screen.getByRole('list', { name: 'Pasos de la reserva' })).toBeInTheDocument()
+    })
   })
 
   describe('pedir el codigo desde el celular (F4-11, J7)', () => {

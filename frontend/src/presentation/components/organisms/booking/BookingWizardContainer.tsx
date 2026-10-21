@@ -130,6 +130,15 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
     if (currentStep !== step) onStepChange({ to: currentStep, from: step, mode: 'replace' })
   }, [currentStep, step, onStepChange])
 
+  // Con la reserva hecha la pantalla de exito no es un paso: el indicador se
+  // oculta. Cambiar de paso (p. ej. "atras" del navegador) lo vuelve a mostrar.
+  const [booked, setBooked] = useState(false)
+  const [bookedOnStep, setBookedOnStep] = useState(currentStep)
+  if (bookedOnStep !== currentStep) {
+    setBookedOnStep(currentStep)
+    setBooked(false)
+  }
+
   const stepRegionRef = useRef<HTMLDivElement>(null)
   const previousStepRef = useRef(currentStep)
 
@@ -430,7 +439,7 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
         }}
       />
 
-      {renderStepIndicator()}
+      {!booked && renderStepIndicator()}
 
       <div
         ref={stepRegionRef}
@@ -565,6 +574,7 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
             // Los adicionales se eligen en el paso del servicio (S4): editarlos
             // vuelve ahi, con lo elegido.
             onEditAddons={() => onStepChange({ to: 0, from: currentStep, mode: 'push' })}
+            onBooked={() => setBooked(true)}
             onConfirm={async (paymentMethod, acceptsTerms, addons) => {
               const pedido = {
                 store_public_id: store.public_id,
