@@ -1,6 +1,6 @@
 import React from 'react'
 
-import { CalendarCheck, Check, Clock3, MapPin, Phone, Store, X } from 'lucide-react'
+import { Check, Clock3, X } from 'lucide-react'
 import { useNavigate, useParams, useSearchParams } from 'react-router'
 
 import { BookingWizardContainer } from '@presentation/components/organisms/booking/BookingWizardContainer'
@@ -9,9 +9,10 @@ import {
   resolveBookingPreselect
 } from '@presentation/components/organisms/booking/deepLink'
 import { STEP_CONFIRMATION } from '@presentation/components/organisms/booking/stepFlow'
+import { StoreCover } from '@presentation/components/organisms/storefront/StoreCover'
+import { StoreHeader } from '@presentation/components/organisms/storefront/StoreHeader'
 import { useBookingStepParam } from '@presentation/hooks/useBookingStepParam'
-
-import { buildWaMeUrl } from '@shared/utils/whatsAppPhone'
+import { resolveBrandTheme } from '@presentation/lib/brandTheme'
 
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
 import LegalFooterLinks from '../components/navigation/LegalFooterLinks'
@@ -26,29 +27,6 @@ import {
 } from '../hooks/usePublic'
 
 const LEGAL_FOOTER_TARGET_CLASSES = '[&_a]:inline-flex [&_a]:min-h-11 [&_a]:items-center [&_a]:px-1'
-
-/**
- * WhatsApp de la tienda: texto libre que carga el dueno. Si no se puede leer
- * como un numero confiable se muestra tal cual, sin link: un wa.me roto
- * mandaba la consulta a otro pais.
- */
-const StoreWhatsAppContact: React.FC<{ phone: string; storeName: string }> = ({
-  phone,
-  storeName
-}) => {
-  const href = buildWaMeUrl(phone, `Hola ${storeName}! Quiero consultar por un turno.`)
-  if (!href) return <span>{phone}</span>
-  return (
-    <a
-      href={href}
-      target="_blank"
-      rel="noreferrer"
-      className="inline-flex min-h-11 min-w-11 max-w-full items-center justify-center break-all rounded-sm px-1 py-2 underline underline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-orange-500"
-    >
-      {phone}
-    </a>
-  )
-}
 
 const PublicBooking: React.FC = () => {
   const { slug = '' } = useParams()
@@ -198,76 +176,22 @@ const PublicBooking: React.FC = () => {
     )
   }
 
+  const brand = resolveBrandTheme(store.primary_color)
+
   return (
     <main
       className="min-h-screen py-8 px-4 sm:py-12 sm:px-6 lg:px-8"
       style={{ background: colors2000s.bg.primary }}
     >
-      {/* Header Info */}
-      <div className="max-w-2xl mx-auto mb-8 text-center duration-700">
-        <div
-          className="inline-flex items-center justify-center w-16 h-16 rounded-md text-white mb-4 transform -rotate-6 border"
-          style={{
-            background: `linear-gradient(135deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`,
-            borderColor: colors2000s.orange.accent,
-            boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerOrange}`
-          }}
-        >
-          <Store className="w-8 h-8 group-hover:scale-110 transition-transform duration-300" />
-        </div>
-
-        <h1
-          className="break-words text-3xl sm:text-4xl lg:text-5xl font-black tracking-tighter uppercase mb-4"
-          style={{ color: colors2000s.orange.heading }}
-        >
-          Reservar turno
-        </h1>
-
-        <div className="flex flex-col items-stretch justify-center gap-3 text-xs font-black uppercase tracking-widest sm:flex-row sm:flex-wrap sm:items-center sm:gap-4">
-          <div
-            className="flex min-h-11 w-full max-w-full items-center gap-2 break-words px-3 py-2.5 rounded-md border sm:w-auto sm:px-4"
-            style={{
-              background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
-              borderColor: colors2000s.border.default,
-              boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`,
-              color: colors2000s.text.primary
-            }}
-          >
-            <MapPin size={14} className="text-orange-500 stroke-[2.5px]" />
-            <span className="min-w-0 break-words">{store.name}</span>
-          </div>
-
-          <div
-            className="flex min-h-11 w-full max-w-full items-center gap-2 break-words px-3 py-2.5 rounded-md border sm:w-auto sm:px-4"
-            style={{
-              background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
-              borderColor: colors2000s.border.default,
-              boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`,
-              color: colors2000s.text.primary
-            }}
-          >
-            <Phone size={14} className="text-orange-500 stroke-[2.5px]" />
-            {store.whatsapp_number ? (
-              <StoreWhatsAppContact phone={store.whatsapp_number} storeName={store.name} />
-            ) : (
-              <span>Reserva por web disponible</span>
-            )}
-          </div>
-
-          <a
-            href={`/b/${store.slug}/mis-turnos`}
-            className="flex min-h-11 w-full items-center justify-center gap-2 px-3 py-2.5 rounded-xl border sm:w-auto sm:px-4"
-            style={{
-              background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
-              borderColor: colors2000s.border.default,
-              boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`,
-              color: colors2000s.text.primary
-            }}
-          >
-            <CalendarCheck size={14} className="text-orange-500 stroke-[2.5px]" />
-            <span>Mis turnos</span>
-          </a>
-        </div>
+      <StoreHeader
+        name={store.name}
+        logoUrl={store.logo_url}
+        whatsappNumber={store.whatsapp_number}
+        misTurnosHref={`/b/${store.slug}/mis-turnos`}
+        brand={brand}
+      />
+      <div className="mt-4 mb-8">
+        <StoreCover coverUrl={store.cover_url} brand={brand} />
       </div>
 
       {store.description && (
