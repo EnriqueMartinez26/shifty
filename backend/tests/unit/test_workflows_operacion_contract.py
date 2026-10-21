@@ -13,14 +13,12 @@
   dependencia.
 - F5-04 (plan §9): `perf-acceptance.yml` corre la prueba de aceptacion con
   Locust contra STAGING y la juzga `scripts/perf_acceptance_check.py`. Staging
-  comparte el host con produccion, asi que el nocturno esta apagado hasta que
-  el dueno lo prenda (`vars.PERF_NIGHTLY`).
+  requiere una Environment protegida y un grupo de runner dedicado; el
+  nocturno sigue apagado hasta `vars.PERF_NIGHTLY`.
 - #155 (P4, 2026-10-12): antes del manifiesto, de Locust y de cualquier
   request a la API, un paso propio corre `scripts/verify_perf_target.py` y
-  falla cerrado. El job exige un runner dedicado (`vars.PERF_RUNNER`, nunca
-  uno alojado por GitHub, cuyo egress no se puede restringir), el checkout no
-  deja el token de GitHub en disco y cada paso recibe solo los secretos que
-  usa.
+  falla cerrado. El job no tiene fallback de runner, el checkout no deja el
+  token de GitHub en disco y cada paso recibe solo los secretos que usa.
 """
 
 from __future__ import annotations
@@ -503,13 +501,42 @@ def test_perf_corre_de_noche_y_a_mano_nunca_en_pr() -> None:
     assert "pull_request" not in disparadores and "push" not in disparadores
 
 
-def test_el_nocturno_esta_apagado_hasta_que_el_dueno_lo_prenda() -> None:
-    """Staging vive en el host de produccion: 200 usuarios de noche le pegan."""
+def test_perf_exige_runner_dedicado_environment_y_dispatch_desde_main() -> None:
+    """No hay fallback de runner ni ejecucion manual desde una rama."""
     condicion = _job_perf()["if"]
     assert "workflow_dispatch" in condicion
+    assert "github.ref == 'refs/heads/main'" in condicion
     assert "vars.PERF_NIGHTLY == 'true'" in condicion
-    assert "vars.PERF_RUNNER" in _job_perf()["runs-on"]
+    assert _job_perf()["runs-on"] == {
+        "group": "shifty-perf-staging",
+        "labels": ["self-hosted", "linux", "x64"],
+    }
+    assert _job_perf()["environment"] == {"name": "staging", "deployment": False}
     assert _yaml(PERF)["concurrency"]["cancel-in-progress"] is False
+
+
+def test_perf_exige_atestaciones_antes_del_checkout() -> None:
+    pasos = _pasos_perf()
+    indice_guardia = next(
+        i
+        for i, paso in enumerate(pasos)
+        if paso.get("name") == "Verificar aislamiento y egress del staging"
+    )
+    indice_checkout = next(
+        i
+        for i, paso in enumerate(pasos)
+        if str(paso.get("uses", "")).startswith("actions/checkout@")
+    )
+    guardia = pasos[indice_guardia]
+
+    assert indice_guardia < indice_checkout
+    assert guardia["env"] == {
+        "PERF_ALLOWED_ORIGIN": "${{ vars.PERF_ALLOWED_ORIGIN }}",
+        "PERF_STAGING_ISOLATED": "${{ vars.PERF_STAGING_ISOLATED }}",
+        "PERF_RUNNER_EGRESS_RESTRICTED": "${{ vars.PERF_RUNNER_EGRESS_RESTRICTED }}",
+    }
+    assert "::error" in guardia["run"]
+    assert 'exit "$fallo"' in guardia["run"]
 
 
 def test_perf_solo_lee_el_repo() -> None:
@@ -519,17 +546,27 @@ def test_perf_solo_lee_el_repo() -> None:
 
 
 def test_perf_verifica_los_secretos_antes_que_nada() -> None:
-    primero = _pasos_perf()[0]
+    paso = next(
+        p
+        for p in _pasos_perf()
+        if p.get("name") == "Verificar configuracion de la prueba"
+    )
     for secreto in SECRETOS_PERF:
-        assert primero["env"][secreto] == f"${{{{ secrets.{secreto} }}}}"
-    assert "::error" in primero["run"]
+        assert paso["env"][secreto] == f"${{{{ secrets.{secreto} }}}}"
+    assert "::error" in paso["run"]
+    assert "Faltan los secretos del Environment staging" in paso["run"]
 
 
 @pytest.mark.skipif(BASH is None, reason="hace falta bash")
 def test_sin_secretos_perf_falla_diciendo_cuales_faltan() -> None:
     assert BASH is not None
+    paso = next(
+        p
+        for p in _pasos_perf()
+        if p.get("name") == "Verificar configuracion de la prueba"
+    )
     resultado = subprocess.run(
-        [BASH, "-c", _pasos_perf()[0]["run"]],
+        [BASH, "-c", paso["run"]],
         env={**os.environ, **{s: "" for s in SECRETOS_PERF}, "STAGING_URL": "x"},
         capture_output=True,
         text=True,
@@ -538,7 +575,7 @@ def test_sin_secretos_perf_falla_diciendo_cuales_faltan() -> None:
     )
     assert resultado.returncode == 1
     assert (
-        "Faltan los secretos del repo: SEED_OWNER_PASSWORD "
+        "Faltan los secretos del Environment staging: SEED_OWNER_PASSWORD "
         "SHIFTY_SUPERADMIN_EMAIL SHIFTY_SUPERADMIN_PASSWORD." in resultado.stdout
     )
 
@@ -564,8 +601,9 @@ def test_perf_corre_locust_y_lo_juzga_el_script() -> None:
 PREFLIGHT = "scripts/verify_perf_target.py"
 CONFIGURADO = {
     **{s: "x" for s in SECRETOS_PERF},
-    "PERF_RUNNER": "perf-ar",
     "PERF_ALLOWED_ORIGIN": "https://staging.example.com",
+    "PERF_STAGING_ISOLATED": "true",
+    "PERF_RUNNER_EGRESS_RESTRICTED": "true",
 }
 
 
@@ -596,8 +634,14 @@ def test_perf_verifica_el_destino_antes_de_tocar_staging() -> None:
     assert (
         _job_perf()["env"]["PERF_ALLOWED_ORIGIN"] == "${{ vars.PERF_ALLOWED_ORIGIN }}"
     )
-    # Entre la verificacion de la configuracion y el preflight solo se instala.
-    for anterior in pasos[1:preflight]:
+    checkout = next(
+        i
+        for i, paso in enumerate(pasos)
+        if str(paso.get("uses", "")).startswith("actions/checkout@")
+    )
+    assert checkout < preflight
+    # Despues del checkout y antes del preflight solo se instala.
+    for anterior in pasos[checkout + 1 : preflight]:
         assert "STAGING_URL" not in str(anterior), anterior.get("name")
     assert "PERF_ALLOW_LOCAL_TARGET" not in PERF.read_text(encoding="utf-8")
 
@@ -643,9 +687,12 @@ def test_perf_cada_paso_recibe_solo_los_secretos_que_usa() -> None:
     assert "secrets." not in str(_job_perf().get("env", {}))
     texto = PERF.read_text(encoding="utf-8")
     assert "GITHUB_TOKEN" not in texto and "github.token" not in texto
-    for i, paso in enumerate(_pasos_perf()):
+    for paso in _pasos_perf():
         run = str(paso.get("run", ""))
-        if i == 0 or "locust_aceptacion.py" in run:
+        nombre = paso.get("name")
+        if nombre == "Verificar configuracion de la prueba" or (
+            "locust_aceptacion.py" in run
+        ):
             esperados = set(SECRETOS_PERF)
         elif PREFLIGHT in run or "loadtests/aceptacion.py" in run:
             esperados = {"STAGING_URL"}
@@ -669,27 +716,31 @@ def test_perf_no_deja_el_token_de_github_en_el_checkout() -> None:
 @pytest.mark.parametrize(
     ("variables", "falla"),
     [
-        ({"PERF_RUNNER": ""}, "Faltan las variables del repo: PERF_RUNNER."),
+        ({"PERF_STAGING_ISOLATED": ""}, "PERF_STAGING_ISOLATED=true"),
+        ({"PERF_STAGING_ISOLATED": "false"}, "PERF_STAGING_ISOLATED=true"),
         (
-            {"PERF_ALLOWED_ORIGIN": ""},
-            "Faltan las variables del repo: PERF_ALLOWED_ORIGIN.",
+            {"PERF_RUNNER_EGRESS_RESTRICTED": ""},
+            "PERF_RUNNER_EGRESS_RESTRICTED=true",
         ),
-        ({"PERF_RUNNER": "ubuntu-latest"}, "runner dedicado"),
-        ({"PERF_RUNNER": "ubuntu-24.04"}, "runner dedicado"),
-        ({"PERF_RUNNER": "windows-2025"}, "runner dedicado"),
-        ({"PERF_RUNNER": "macos-15"}, "runner dedicado"),
-        ({"PERF_RUNNER": "self-hosted"}, "runner dedicado"),
+        (
+            {"PERF_RUNNER_EGRESS_RESTRICTED": "false"},
+            "PERF_RUNNER_EGRESS_RESTRICTED=true",
+        ),
+        ({"PERF_ALLOWED_ORIGIN": ""}, "PERF_ALLOWED_ORIGIN"),
     ],
 )
-def test_perf_exige_un_runner_dedicado_y_el_origen_aprobado(
+def test_perf_falla_cerrado_sin_aislamiento_egress_u_origen(
     variables: dict[str, str], falla: str
 ) -> None:
-    """Un runner de GitHub no restringe el egress: no corre la prueba."""
+    """Las atestaciones no declaradas o negativas detienen el job."""
     assert BASH is not None
-    primero = _pasos_perf()[0]
-    assert primero["env"]["PERF_RUNNER"] == "${{ vars.PERF_RUNNER }}"
+    guardia = next(
+        p
+        for p in _pasos_perf()
+        if p.get("name") == "Verificar aislamiento y egress del staging"
+    )
     resultado = subprocess.run(
-        [BASH, "-c", primero["run"]],
+        [BASH, "-c", guardia["run"]],
         env={**os.environ, **CONFIGURADO, **variables},
         capture_output=True,
         text=True,
@@ -702,10 +753,15 @@ def test_perf_exige_un_runner_dedicado_y_el_origen_aprobado(
 
 
 @pytest.mark.skipif(BASH is None, reason="hace falta bash")
-def test_perf_con_runner_dedicado_y_todo_configurado_sigue() -> None:
+def test_perf_con_atestaciones_y_origen_configurados_sigue() -> None:
     assert BASH is not None
+    guardia = next(
+        p
+        for p in _pasos_perf()
+        if p.get("name") == "Verificar aislamiento y egress del staging"
+    )
     resultado = subprocess.run(
-        [BASH, "-c", _pasos_perf()[0]["run"]],
+        [BASH, "-c", guardia["run"]],
         env={**os.environ, **CONFIGURADO},
         capture_output=True,
         text=True,
@@ -714,6 +770,30 @@ def test_perf_con_runner_dedicado_y_todo_configurado_sigue() -> None:
     )
     assert resultado.returncode == 0, resultado.stdout
     assert "::error" not in resultado.stdout
+
+
+@pytest.mark.skipif(BASH is None, reason="hace falta bash")
+def test_perf_rechaza_un_origen_no_https_en_la_configuracion() -> None:
+    assert BASH is not None
+    paso = next(
+        p
+        for p in _pasos_perf()
+        if p.get("name") == "Verificar configuracion de la prueba"
+    )
+    resultado = subprocess.run(
+        [BASH, "-c", paso["run"]],
+        env={
+            **os.environ,
+            **CONFIGURADO,
+            "PERF_ALLOWED_ORIGIN": "http://staging.example.com",
+        },
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert resultado.returncode == 1
+    assert "debe ser el origen HTTPS exacto" in resultado.stdout
 
 
 def test_perf_sube_el_csv_aunque_falle() -> None:
