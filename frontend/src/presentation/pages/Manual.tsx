@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useRef, useState } from 'react'
 
 import {
   BellRing,
@@ -187,6 +187,32 @@ const SECTIONS: ManualSection[] = [
 const Manual: React.FC = () => {
   useDocumentTitle('Manual de uso · Shifty')
   const [openSection, setOpenSection] = useState<string>(SECTIONS[0]?.id ?? '')
+  const sectionTabRefs = useRef<Array<HTMLButtonElement | null>>([])
+
+  const focusSectionTab = (index: number) => {
+    const section = SECTIONS[index]
+    if (!section) return
+
+    setOpenSection(section.id)
+    sectionTabRefs.current[index]?.focus()
+  }
+
+  const handleSectionTabKeyDown = (
+    event: React.KeyboardEvent<HTMLButtonElement>,
+    index: number
+  ) => {
+    let nextIndex: number | null = null
+
+    if (event.key === 'ArrowRight') nextIndex = (index + 1) % SECTIONS.length
+    if (event.key === 'ArrowLeft') nextIndex = (index - 1 + SECTIONS.length) % SECTIONS.length
+    if (event.key === 'Home') nextIndex = 0
+    if (event.key === 'End') nextIndex = SECTIONS.length - 1
+
+    if (nextIndex === null) return
+
+    event.preventDefault()
+    focusSectionTab(nextIndex)
+  }
 
   return (
     <div className="space-y-6">
@@ -219,15 +245,24 @@ const Manual: React.FC = () => {
         </div>
       </header>
 
-      <nav className="flex flex-wrap gap-2">
-        {SECTIONS.map((section) => {
+      <div role="tablist" aria-label="Secciones del manual" className="flex flex-wrap gap-2">
+        {SECTIONS.map((section, index) => {
           const active = openSection === section.id
           return (
             <button
               key={section.id}
+              ref={(element) => {
+                sectionTabRefs.current[index] = element
+              }}
               type="button"
+              id={`manual-tab-${section.id}`}
+              role="tab"
+              aria-selected={active}
+              aria-controls={`manual-panel-${section.id}`}
+              tabIndex={active ? 0 : -1}
               onClick={() => setOpenSection(section.id)}
-              className="px-4 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest inline-flex items-center gap-2 transition-all active:scale-95 cursor-pointer"
+              onKeyDown={(event) => handleSectionTabKeyDown(event, index)}
+              className="min-h-11 px-4 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest inline-flex items-center gap-2 transition-all active:scale-95 cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#9a4507]"
               style={active ? buttonStyles2000s.selected : buttonStyles2000s.default}
             >
               {section.icon}
@@ -235,11 +270,21 @@ const Manual: React.FC = () => {
             </button>
           )
         })}
-      </nav>
+      </div>
 
-      {SECTIONS.filter((section) => section.id === openSection).map((section) => (
-        <section key={section.id} className="rounded-[2rem] p-8" style={create2000sPanelStyle()}>
+      {SECTIONS.map((section) => (
+        <section
+          key={section.id}
+          id={`manual-panel-${section.id}`}
+          role="tabpanel"
+          aria-labelledby={`manual-tab-${section.id}`}
+          tabIndex={0}
+          hidden={section.id !== openSection}
+          className="rounded-[2rem] p-8 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#9a4507]"
+          style={create2000sPanelStyle()}
+        >
           <h2
+            id={`manual-heading-${section.id}`}
             className="text-lg font-black uppercase tracking-tight inline-flex items-center gap-2"
             style={{ color: colors2000s.orange.accent }}
           >
@@ -300,7 +345,7 @@ const Manual: React.FC = () => {
           <Link
             to="/legal/terminos"
             target="_blank"
-            className="px-4 py-2.5 text-[10px] font-black uppercase tracking-widest inline-flex items-center gap-2"
+            className="min-h-11 px-4 py-2.5 text-[10px] font-black uppercase tracking-widest inline-flex items-center gap-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#9a4507]"
             style={buttonStyles2000s.default}
           >
             <FileText className="w-3.5 h-3.5" />
@@ -309,7 +354,7 @@ const Manual: React.FC = () => {
           <Link
             to="/legal/privacidad"
             target="_blank"
-            className="px-4 py-2.5 text-[10px] font-black uppercase tracking-widest inline-flex items-center gap-2"
+            className="min-h-11 px-4 py-2.5 text-[10px] font-black uppercase tracking-widest inline-flex items-center gap-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#9a4507]"
             style={buttonStyles2000s.default}
           >
             <FileText className="w-3.5 h-3.5" />
