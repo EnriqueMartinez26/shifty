@@ -18,14 +18,15 @@ export const colors2000s = {
     white: '#ffffff' // Tarjetas y superficies blancas
   },
 
-  // CTA y selección conservan la rampa naranja de marca. El texto oscuro sobre
-  // naranja mantiene AA; el texto blanco queda reservado a estados oscuros.
+  // La marca conserva sus naranjas vivos; CTA y selección usan una rampa
+  // saturada más oscura para que el texto blanco alcance WCAG AA.
   orange: {
     light: '#ff8c42', // Marca - top
     dark: '#e67e22', // Marca - bottom (theme-color)
     heading: '#c75a00', // Alias legacy para títulos existentes
     accent: '#9a4507', // Titulos, labels y links sobre claro; borde del CTA
-    cta: '#ff8c42' // Fondo del CTA y de lo seleccionado - top
+    cta: '#c04f00', // Fondo de CTA y selección - top
+    ctaEnd: '#b84d00' // Fondo de CTA y selección - bottom
   },
 
   // Textos
@@ -34,7 +35,7 @@ export const colors2000s = {
     secondary: '#5c5c5c', // Labels, headers, ayudas y pies (AA sobre bg.secondary)
     disabled: '#b0b0b0', // SOLO controles deshabilitados (1.72:1): nunca contenido
     onOrange: '#ffffff', // Texto sobre estados oscuros (p. ej. success/info)
-    onOrangeSelection: '#1f1f1f' // Texto oscuro AA sobre la rampa naranja de marca
+    onOrangeSelection: '#ffffff' // Texto blanco AA sobre CTA y selección
   },
 
   // Bordes
@@ -98,8 +99,9 @@ export const colors2000s = {
   }
 } as const
 
-// Rampa naranja de marca para CTA y selección; onOrangeSelection mantiene AA.
-export const orangeCtaGradient = `linear-gradient(180deg, ${colors2000s.orange.cta} 0%, ${colors2000s.orange.dark} 100%)`
+// El naranja vivo sigue como color de marca; la rampa de CTA/selección
+// conserva identidad naranja y contraste AA para texto blanco (4.82:1-5.12:1).
+export const orangeCtaGradient = `linear-gradient(180deg, ${colors2000s.orange.cta} 0%, ${colors2000s.orange.ctaEnd} 100%)`
 
 // Estilos CSS reutilizables
 export const buttonStyles2000s = {
