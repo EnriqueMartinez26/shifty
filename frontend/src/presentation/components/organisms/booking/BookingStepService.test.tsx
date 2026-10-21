@@ -3,6 +3,7 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import { formatCurrency } from '@shared/utils/currency'
 
 import { BookingStepService } from './BookingStepService'
+import { colors2000s, orangeCtaGradient } from '../../../../theme/colors'
 
 // 2026-10-02 (F4-15): las fotos del primer paso de la reserva no tenian tamano
 // ni carga diferida: el celular bajaba todas y la lista saltaba al llegar cada
@@ -57,6 +58,20 @@ describe('BookingStepService', () => {
     expect(img).toHaveAttribute('decoding', 'async')
     expect(img).toHaveAttribute('width', '56')
     expect(img).toHaveAttribute('height', '56')
+  })
+
+  it('muestra la selección naranja con texto blanco de contraste AA', () => {
+    mockUsePublicServices.mockReturnValue({
+      isLoading: false,
+      data: [servicio('corte', 'Corte', 30, 10000)]
+    })
+
+    render(<BookingStepService storePublicId="store-1" selectedId="corte" onSelect={jest.fn()} />)
+
+    const title = screen.getByText('Corte')
+    expect(title.style.color).toBe('rgb(255, 255, 255)')
+    expect(colors2000s.text.onOrangeSelection).toBe('#ffffff')
+    expect(title.closest('button')?.style.background).toBe(orangeCtaGradient)
   })
 
   // QA movil 2026-10-08 (QA!): en 390 px el nombre salia cortado ("BARBA Y
