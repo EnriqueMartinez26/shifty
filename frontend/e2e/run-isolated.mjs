@@ -27,7 +27,7 @@ const composePrefix = [
   e2eComposeFile
 ]
 
-if (!/^shifty-qa-[a-z0-9-]{8,80}$/.test(project) || !/^[a-z0-9-]{8,80}$/.test(runId)) {
+if (!/^[a-z0-9-]{8,80}$/.test(runId) || project !== `shifty-qa-${runId}`) {
   throw new Error('Identificador del proyecto E2E inválido')
 }
 
