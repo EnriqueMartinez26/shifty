@@ -119,17 +119,8 @@ export const StoreModals: React.FC<StoreModalsProps> = ({
             />
           </div>
         </div>
-        <div>
-          <FieldLabel htmlFor="store-logo-url">Logo URL</FieldLabel>
-          <TextInput
-            id="store-logo-url"
-            value={storeForm.logo_url}
-            onChange={(event) =>
-              setStoreForm((current) => ({ ...current, logo_url: event.target.value }))
-            }
-            placeholder="https://..."
-          />
-        </div>
+        {/* Sin logo: lo sube la tienda desde su panel; la CSP de produccion no
+            carga una URL de otro sitio. */}
       </div>
 
       <div className={formGridClass}>

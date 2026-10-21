@@ -65,7 +65,8 @@ jest.mock('../hooks/useStores', () => ({
   useStoreFeatureFlags: () => ({ data: undefined }),
   useUpdateStoreSettings: () => ({ mutateAsync: updateStore, isPending: false }),
   useUpdateStoreFeatureFlags: () => ({ mutateAsync: updateFeatureFlags, isPending: false }),
-  useUploadStoreLogo: () => ({ mutateAsync: uploadLogo, isPending: false })
+  useUploadStoreLogo: () => ({ mutateAsync: uploadLogo, isPending: false }),
+  useUploadStoreCover: () => ({ mutateAsync: jest.fn(), isPending: false })
 }))
 
 jest.mock('../hooks/usePayments', () => ({

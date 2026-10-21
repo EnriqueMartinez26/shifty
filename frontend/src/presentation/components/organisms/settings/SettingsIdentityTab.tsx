@@ -1,6 +1,6 @@
 import React from 'react'
 
-import { Loader2, Store } from 'lucide-react'
+import { ImageIcon, Loader2, Store, Upload } from 'lucide-react'
 
 import type { BusinessType } from '@shared/types/business'
 
@@ -34,16 +34,65 @@ interface SettingsIdentityTabProps {
   slugError: string | undefined
   logoError: string | null
   uploadingLogo: boolean
+  coverError: string | null
+  uploadingCover: boolean
   onChange: (patch: Partial<IdentitySettings>) => void
   /** La validacion de la imagen (tipo y tamano, regla 19) vive en la pagina. */
   onLogoUpload: (event: React.ChangeEvent<HTMLInputElement>) => void
+  onCoverUpload: (event: React.ChangeEvent<HTMLInputElement>) => void
   /** Tienda suspendida: POST /stores/me/media responde 402 (FF-15). */
   readOnlyReason?: string | null
 }
 
+type UploadEvent = React.ChangeEvent<HTMLInputElement>
+
+/**
+ * Logo y portada solo se suben: la CSP de produccion (`img-src 'self' data:
+ * blob:`) no carga imagenes de otro sitio, asi que una URL pegada no se veia.
+ */
+const ImageUploadButton: React.FC<{
+  label: string
+  uploading: boolean
+  readOnlyReason: string | null
+  onUpload: (event: UploadEvent) => void
+}> = ({ label, uploading, readOnlyReason, onUpload }) => (
+  <label
+    className={`inline-flex min-h-11 items-center gap-2 px-4 py-2.5 font-black uppercase tracking-widest text-[11px] transition-all active:scale-95 focus-within:outline focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-orange-500 ${
+      readOnlyReason ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'
+    }`}
+    style={buttonStyles2000s.default}
+    title={readOnlyReason ?? undefined}
+  >
+    {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+    {uploading ? 'Subiendo...' : label}
+    <input
+      type="file"
+      accept="image/png,image/jpeg,image/webp"
+      className="sr-only"
+      disabled={uploading || readOnlyReason !== null}
+      onChange={onUpload}
+    />
+  </label>
+)
+
+const UploadError: React.FC<{ message: string | null }> = ({ message }) =>
+  message ? (
+    <div
+      role="alert"
+      className="rounded-2xl px-4 py-2.5 text-xs font-bold"
+      style={{
+        background: colors2000s.status.danger.bg,
+        color: colors2000s.status.danger.text
+      }}
+    >
+      {message}
+    </div>
+  ) : null
+
 /**
  * Pestana "Identidad" de Configuracion (F11b-08). Solo pinta: subir el logo y
- * guardar los resuelve la pagina, que es quien tiene los hooks (D-58).
+ * la portada y guardar los resuelve la pagina, que es quien tiene los hooks
+ * (D-58).
  */
 export const SettingsIdentityTab: React.FC<SettingsIdentityTabProps> = ({
   value,
@@ -51,8 +100,11 @@ export const SettingsIdentityTab: React.FC<SettingsIdentityTabProps> = ({
   slugError,
   logoError,
   uploadingLogo,
+  coverError,
+  uploadingCover,
   onChange,
   onLogoUpload,
+  onCoverUpload,
   readOnlyReason = null
 }) => (
   <div className="space-y-8">
@@ -161,51 +213,18 @@ export const SettingsIdentityTab: React.FC<SettingsIdentityTabProps> = ({
             )}
           </div>
           <div className="flex-1 space-y-2">
-            <label
-              className={`inline-flex items-center gap-2 px-4 py-2.5 font-black uppercase tracking-widest text-[11px] transition-all active:scale-95 ${
-                readOnlyReason ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'
-              }`}
-              style={buttonStyles2000s.default}
-              title={readOnlyReason ?? undefined}
-            >
-              {uploadingLogo ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
-              ) : (
-                <Store className="w-4 h-4" />
-              )}
-              {uploadingLogo ? 'Subiendo...' : 'Subir imagen'}
-              <input
-                type="file"
-                accept="image/png,image/jpeg,image/webp"
-                className="hidden"
-                disabled={uploadingLogo || readOnlyReason !== null}
-                onChange={onLogoUpload}
-              />
-            </label>
+            <ImageUploadButton
+              label="Subir logo"
+              uploading={uploadingLogo}
+              readOnlyReason={readOnlyReason}
+              onUpload={onLogoUpload}
+            />
             <p className="text-[10px] font-bold" style={{ color: colors2000s.text.secondary }}>
               PNG, JPEG o WebP · máx 1 MB
             </p>
           </div>
         </div>
-        {logoError && (
-          <div
-            role="alert"
-            className="rounded-2xl px-4 py-2.5 text-xs font-bold"
-            style={{
-              background: colors2000s.status.danger.bg,
-              color: colors2000s.status.danger.text
-            }}
-          >
-            {logoError}
-          </div>
-        )}
-        <input
-          value={value.logo_url}
-          onChange={(e) => onChange({ logo_url: e.target.value })}
-          className="w-full rounded-2xl px-5 py-3.5 font-bold outline-none text-xs"
-          style={createSettingsInputStyle()}
-          placeholder="…o pegá una URL https://"
-        />
+        <UploadError message={logoError} />
       </div>
       <div className="min-w-0 space-y-3">
         <label
@@ -232,22 +251,43 @@ export const SettingsIdentityTab: React.FC<SettingsIdentityTabProps> = ({
       </div>
     </div>
 
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-      <div className="min-w-0 space-y-3">
-        <label
-          className="block text-[10px] font-black uppercase tracking-widest"
-          style={{ color: colors2000s.text.secondary }}
-        >
-          URL de portada
-        </label>
-        <input
-          value={value.cover_url}
-          onChange={(e) => onChange({ cover_url: e.target.value })}
-          className="w-full rounded-2xl px-5 py-3.5 font-bold outline-none"
-          style={createSettingsInputStyle()}
-          placeholder="https://..."
-        />
+    <div className="min-w-0 space-y-3">
+      <p
+        className="text-[10px] font-black uppercase tracking-widest"
+        style={{ color: colors2000s.text.secondary }}
+      >
+        Portada
+      </p>
+      {/* Mismo 3:1 que el portal publico. */}
+      <div
+        className="flex aspect-[3/1] w-full max-w-xl items-center justify-center overflow-hidden rounded-md"
+        style={{ background: 'white', border: `1px solid ${colors2000s.border.default}` }}
+      >
+        {value.cover_url ? (
+          <img
+            src={value.cover_url}
+            alt="Portada"
+            loading="lazy"
+            decoding="async"
+            className="h-full w-full object-cover"
+          />
+        ) : (
+          <ImageIcon className="h-8 w-8" style={{ color: colors2000s.text.secondary }} />
+        )}
       </div>
+      <ImageUploadButton
+        label="Subir portada"
+        uploading={uploadingCover}
+        readOnlyReason={readOnlyReason}
+        onUpload={onCoverUpload}
+      />
+      <p className="text-[10px] font-bold" style={{ color: colors2000s.text.secondary }}>
+        PNG, JPEG o WebP · máx 2 MB · recomendado 1500 × 500
+      </p>
+      <UploadError message={coverError} />
+    </div>
+
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
       <div className="min-w-0 space-y-3">
         <label
           className="block text-[10px] font-black uppercase tracking-widest"

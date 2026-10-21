@@ -49,6 +49,7 @@ import {
   useStoreSettings,
   useUpdateStoreFeatureFlags,
   useUpdateStoreSettings,
+  useUploadStoreCover,
   useUploadStoreLogo
 } from '../hooks/useStores'
 import { useStoreWriteAccess } from '../hooks/useStoreWriteAccess'
@@ -68,9 +69,19 @@ const TABS = [
   { id: 'security', label: 'Seguridad', icon: <Lock className="w-4 h-4" /> }
 ]
 
-// IMAGE_CAPS["logo"] en backend/modules/stores/media.py. Las dimensiones las
-// valida solo el backend.
-const MAX_LOGO_BYTES = 1024 * 1024
+type StoreImageKind = 'logo' | 'cover'
+
+const ALLOWED_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp']
+
+// IMAGE_CAPS en backend/modules/stores/media.py. Las dimensiones las valida
+// solo el backend.
+const IMAGE_UPLOADS = {
+  logo: { maxBytes: 1024 * 1024, maxLabel: '1 MB', field: 'logo_url' },
+  cover: { maxBytes: 2 * 1024 * 1024, maxLabel: '2 MB', field: 'cover_url' }
+} as const satisfies Record<
+  StoreImageKind,
+  { maxBytes: number; maxLabel: string; field: keyof SettingsFormData }
+>
 
 /**
  * Una de las dos llamadas del guardado. `run` en `null` es "esta mitad no
@@ -93,8 +104,11 @@ const SettingsPage: React.FC = () => {
   const { data: store, isLoading, error: storeError } = useStoreSettings()
   const featureFlagsQuery = useStoreFeatureFlags()
   const updateStore = useUpdateStoreSettings()
-  const uploadLogo = useUploadStoreLogo()
-  const [logoError, setLogoError] = useState<string | null>(null)
+  const uploads = { logo: useUploadStoreLogo(), cover: useUploadStoreCover() }
+  const [imageErrors, setImageErrors] = useState<Record<StoreImageKind, string | null>>({
+    logo: null,
+    cover: null
+  })
   const updateFeatureFlags = useUpdateStoreFeatureFlags()
   const changePassword = useChangePassword()
   const gatewayQuery = useGatewayConfig()
@@ -150,26 +164,32 @@ const SettingsPage: React.FC = () => {
       </p>
     ) : null
 
-  const handleLogoUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleImageUpload = async (
+    kind: StoreImageKind,
+    event: React.ChangeEvent<HTMLInputElement>
+  ) => {
     const file = event.target.files?.[0]
     event.target.value = '' // permite volver a elegir el mismo archivo
     if (!file) return
-    setLogoError(null)
+    const { maxBytes, maxLabel, field } = IMAGE_UPLOADS[kind]
+    const setError = (message: string | null) =>
+      setImageErrors((prev) => ({ ...prev, [kind]: message }))
+    setError(null)
     // Validacion cliente para feedback rapido; el backend igual valida por
     // magic bytes y tamano (no se confia en esto).
-    if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) {
-      setLogoError('Formato no permitido. Usá PNG, JPEG o WebP.')
+    if (!ALLOWED_IMAGE_TYPES.includes(file.type)) {
+      setError('Formato no permitido. Usá PNG, JPEG o WebP.')
       return
     }
-    if (file.size > MAX_LOGO_BYTES) {
-      setLogoError('La imagen supera el máximo de 1 MB.')
+    if (file.size > maxBytes) {
+      setError(`La imagen supera el máximo de ${maxLabel}.`)
       return
     }
     try {
-      const result = await uploadLogo.mutateAsync(file)
-      setFormData((prev) => (prev ? { ...prev, logo_url: result.url } : prev))
+      const result = await uploads[kind].mutateAsync(file)
+      setFormData((prev) => (prev ? { ...prev, [field]: result.url } : prev))
     } catch (err) {
-      setLogoError(getErrorMessage(err, 'No se pudo subir la imagen'))
+      setError(getErrorMessage(err, 'No se pudo subir la imagen'))
     }
   }
 
@@ -450,10 +470,13 @@ const SettingsPage: React.FC = () => {
             value={formData}
             labels={labels}
             slugError={slugError}
-            logoError={logoError}
-            uploadingLogo={uploadLogo.isPending}
+            logoError={imageErrors.logo}
+            uploadingLogo={uploads.logo.isPending}
+            coverError={imageErrors.cover}
+            uploadingCover={uploads.cover.isPending}
             onChange={patch}
-            onLogoUpload={(e) => void handleLogoUpload(e)}
+            onLogoUpload={(e) => void handleImageUpload('logo', e)}
+            onCoverUpload={(e) => void handleImageUpload('cover', e)}
             readOnlyReason={readOnlyTitle ?? null}
           />
         )}
