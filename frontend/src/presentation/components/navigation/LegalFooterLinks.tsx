@@ -17,20 +17,24 @@ interface LegalFooterLinksProps {
  * reservar o pagar: es lo que respalda a Shifty ante un reclamo.
  */
 const LegalFooterLinks: React.FC<LegalFooterLinksProps> = ({ depositPolicy, className = '' }) => (
-  <div className={`flex flex-wrap items-center justify-center gap-x-3 gap-y-1 ${className}`}>
+  <div className={`flex flex-wrap items-center justify-center gap-x-1 gap-y-1 ${className}`}>
     <Link
       to="/legal/terminos"
-      className="inline-flex min-h-11 items-center px-1 text-[10px] font-bold uppercase tracking-widest hover:underline"
+      className="inline-flex min-h-11 items-center rounded-md px-2 text-[10px] font-bold uppercase tracking-widest hover:underline"
       style={{ color: colors2000s.text.secondary }}
     >
       Términos y condiciones
     </Link>
-    <span aria-hidden="true" className="text-[10px]" style={{ color: colors2000s.text.disabled }}>
+    <span
+      aria-hidden="true"
+      className="hidden text-[10px] sm:inline"
+      style={{ color: colors2000s.text.disabled }}
+    >
       ·
     </span>
     <Link
       to="/legal/privacidad"
-      className="inline-flex min-h-11 items-center px-1 text-[10px] font-bold uppercase tracking-widest hover:underline"
+      className="inline-flex min-h-11 items-center rounded-md px-2 text-[10px] font-bold uppercase tracking-widest hover:underline"
       style={{ color: colors2000s.text.secondary }}
     >
       Privacidad
@@ -39,7 +43,7 @@ const LegalFooterLinks: React.FC<LegalFooterLinksProps> = ({ depositPolicy, clas
       <>
         <span
           aria-hidden="true"
-          className="text-[10px]"
+          className="hidden text-[10px] sm:inline"
           style={{ color: colors2000s.text.disabled }}
         >
           ·
