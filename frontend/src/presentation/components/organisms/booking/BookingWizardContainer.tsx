@@ -13,6 +13,7 @@ import { getErrorCode, getErrorMessage, getRetryAfterSeconds } from '@shared/err
 import { bookingIdempotencyKey, forgetBookingIdempotency } from '@shared/utils/bookingIdempotency'
 import { isOtpStillValid, phoneDigits, rememberOtpVerification } from '@shared/utils/otpSession'
 
+import { groupAddonsByService, withAddonQuantity } from './addonGroups'
 import { BookingStepConfirmation } from './BookingStepConfirmation'
 import { BookingStepDateTime } from './BookingStepDateTime'
 import { BookingStepService } from './BookingStepService'
@@ -202,6 +203,31 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
       date: null,
       startTime: null,
       startsAt: null
+    })
+  }
+
+  // Los adicionales se eligen en el paso del servicio, debajo de cada servicio
+  // elegido (S4, 2026-10-21). `bookingState.addons` sigue siendo la unica
+  // fuente: los grupos se concilian contra el catalogo en cada render.
+  const chosenServiceIds = bookingState.serviceId
+    ? [bookingState.serviceId, ...bookingState.extraServiceIds]
+    : []
+  const addonGroups = groupAddonsByService(chosenServiceIds, services, bookingState.addons)
+  const serviceHasAddons = (id: string) =>
+    Boolean(services?.find((service) => service.public_id === id)?.addons?.length)
+
+  const continueFromService = () => {
+    trackBookingEvent('service_selected')
+    nextStep()
+  }
+
+  // La promo se mide contra el total (servicio y adicionales): con otros
+  // adicionales el codigo aplicado se vuelve a cargar en el ultimo paso.
+  const handleAddonChange = (serviceId: string, addonId: string, quantity: number) => {
+    updateState({
+      addons: withAddonQuantity(addonGroups, serviceId, addonId, quantity),
+      promotionCode: '',
+      promotionPreview: null
     })
   }
 
@@ -414,7 +440,11 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
             storePublicId={store.public_id}
             selectedId={bookingState.serviceId}
             onSelect={(id) => {
-              trackBookingEvent('service_selected')
+              // Con adicionales, tocarlo lo elige y abre su contador: se sigue
+              // con la barra. Tocar de nuevo el elegido no borra lo elegido.
+              const withAddons = serviceHasAddons(id)
+              if (withAddons && id === bookingState.serviceId) return
+              if (!withAddons) trackBookingEvent('service_selected')
               updateState({
                 serviceId: id,
                 extraServiceIds: [],
@@ -430,7 +460,12 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
                 startTime: null,
                 startsAt: null
               })
-              nextStep()
+              if (!withAddons) nextStep()
+            }}
+            addons={{
+              groups: addonGroups,
+              onChange: handleAddonChange,
+              onContinue: continueFromService
             }}
             multiService={
               multiService
@@ -440,10 +475,7 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
                       : [],
                     onToggle: handleToggleService,
                     performers: storeStaff ? publicPerformers(storeStaff) : undefined,
-                    onContinue: () => {
-                      trackBookingEvent('service_selected')
-                      nextStep()
-                    }
+                    onContinue: continueFromService
                   }
                 : undefined
             }

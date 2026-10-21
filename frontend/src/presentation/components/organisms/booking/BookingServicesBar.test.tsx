@@ -24,6 +24,24 @@ describe('BookingServicesBar', () => {
     expect(screen.getByRole('status')).toHaveTextContent(/^1 servicio · 30 min/)
   })
 
+  // S4 (2026-10-21): los adicionales se eligen en el paso del servicio y el
+  // total de la barra los suma al momento.
+  it('el total suma los adicionales elegidos', () => {
+    render(
+      <BookingServicesBar
+        count={1}
+        durationMinutes={30}
+        listPrice={10000}
+        addonsTotal={1500}
+        onContinue={jest.fn()}
+      />
+    )
+
+    expect(screen.getByRole('status')).toHaveTextContent(
+      `1 servicio · 30 min · ${formatCurrency(11500)}`
+    )
+  })
+
   it('Continuar avisa al paso', () => {
     const onContinue = jest.fn()
     render(

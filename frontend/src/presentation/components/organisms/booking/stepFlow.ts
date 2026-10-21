@@ -1,6 +1,6 @@
 interface StepOptions {
   /** Servicios publicados por la tienda (undefined mientras carga). */
-  services: ReadonlyArray<{ public_id: string }> | undefined
+  services: ReadonlyArray<{ public_id: string; addons?: readonly unknown[] }> | undefined
 }
 
 interface StepJump {
@@ -13,6 +13,15 @@ const STEP_SERVICE = 0
 const STEP_DATETIME = 1
 
 /**
+ * El servicio unico que hace salteable el paso del servicio. Con adicionales
+ * no se saltea: se eligen ahi, debajo del servicio (S4, 2026-10-21).
+ */
+const skippableService = (options: StepOptions): { public_id: string } | undefined => {
+  const unico = options.services?.length === 1 ? options.services[0] : undefined
+  return unico && !unico.addons?.length ? unico : undefined
+}
+
+/**
  * Un paso con una sola opcion no es una eleccion: se elige solo y se saltea.
  * En el wizard de 3 pasos el unico salteable es el del servicio (el
  * profesional ya no es un paso: es un filtro dentro del horario; con uno
@@ -23,18 +32,18 @@ const STEP_DATETIME = 1
  */
 export const resolveStepJump = (from: number, options: StepOptions): StepJump => {
   if (from !== STEP_SERVICE) return { step: from }
-  const unico = options.services?.length === 1 ? options.services[0] : undefined
+  const unico = skippableService(options)
   if (!unico) return { step: from }
   return { step: STEP_DATETIME, serviceId: unico.public_id }
 }
 
 /**
  * Volver atras hacia un paso que se salteo no tiene sentido: con un solo
- * servicio, "atras" desde el horario se queda donde esta.
+ * servicio sin adicionales, "atras" desde el horario se queda donde esta.
  */
 export const resolveBackJump = (from: number, options: StepOptions): number => {
   const step = Math.max(from - 1, STEP_SERVICE)
-  if (step === STEP_SERVICE && options.services?.length === 1) return from
+  if (step === STEP_SERVICE && skippableService(options)) return from
   return step
 }
 
