@@ -4087,6 +4087,8 @@ Type: `enum("efectivo", "transferencia", "mercadopago", "otro")`
 | `deposit_amount` | number \| null | no |  |
 | `color` | string \| null | no |  |
 | `image_url` | string \| null | no |  |
+| `requires_prior_design` | boolean | no | default=false |
+| `prior_design_message` | string \| null | no |  |
 | `addons` | array<ServiceAddonResponse> | no |  |
 
 ### PublicStaffResponse
@@ -4382,6 +4384,8 @@ Type: `enum("efectivo", "transferencia", "mercadopago", "otro")`
 | `color` | string \| null | no | pattern="^#([A-Fa-f0-9]{6}\|[A-Fa-f0-9]{3})$" |
 | `image_url` | string \| null | no | maxLength=500 |
 | `youtube_trailer_url` | string \| null | no | maxLength=500 |
+| `requires_prior_design` | boolean | no | default=false |
+| `prior_design_message` | string \| null | no | maxLength=500 |
 | `public_id` | string | yes |  |
 | `is_active` | boolean | yes |  |
 | `created_at` | string | yes | format="date-time" |
@@ -4402,6 +4406,8 @@ Type: `enum("efectivo", "transferencia", "mercadopago", "otro")`
 | `color` | string \| null | no | pattern="^#([A-Fa-f0-9]{6}\|[A-Fa-f0-9]{3})$" |
 | `image_url` | string \| null | no | maxLength=500 |
 | `youtube_trailer_url` | string \| null | no | maxLength=500 |
+| `requires_prior_design` | boolean | no | default=false |
+| `prior_design_message` | string \| null | no | maxLength=500 |
 | `addons` | array<ServiceAddonInput> \| null | no | maxItems=20 |
 
 ### ServiceResponse
@@ -4418,6 +4424,8 @@ Type: `enum("efectivo", "transferencia", "mercadopago", "otro")`
 | `color` | string \| null | no | pattern="^#([A-Fa-f0-9]{6}\|[A-Fa-f0-9]{3})$" |
 | `image_url` | string \| null | no | maxLength=500 |
 | `youtube_trailer_url` | string \| null | no | maxLength=500 |
+| `requires_prior_design` | boolean | no | default=false |
+| `prior_design_message` | string \| null | no | maxLength=500 |
 | `public_id` | string | yes |  |
 | `is_active` | boolean | yes |  |
 | `created_at` | string | yes | format="date-time" |
@@ -4438,6 +4446,8 @@ Type: `enum("efectivo", "transferencia", "mercadopago", "otro")`
 | `image_url` | string \| null | no | maxLength=500 |
 | `youtube_trailer_url` | string \| null | no | maxLength=500 |
 | `is_active` | boolean \| null | no |  |
+| `requires_prior_design` | boolean \| null | no |  |
+| `prior_design_message` | string \| null | no | maxLength=500 |
 | `addons` | array<ServiceAddonInput> \| null | no | maxItems=20 |
 
 ### SessionItem
@@ -4978,4 +4988,4 @@ Type: `enum("admin", "staff", "receptionist", "client")`
 | `terms_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 | `privacy_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 
-Generado desde app.openapi() el 2026-10-16, commit c739efef
+Generado desde app.openapi() el 2026-10-21, commit c9f8c906

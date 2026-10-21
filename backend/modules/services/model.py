@@ -1,6 +1,7 @@
 from decimal import Decimal
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     ForeignKey,
     Index,
@@ -8,11 +9,15 @@ from sqlalchemy import (
     Numeric,
     SmallInteger,
     String,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
 from core.models import BaseEntity
 import ulid
+
+# Tope del mensaje de diseno previo: el mismo en el schema y en la columna.
+PRIOR_DESIGN_MESSAGE_MAX = 500
 
 
 class Service(BaseEntity):
@@ -35,6 +40,17 @@ class Service(BaseEntity):
     color: Mapped[str | None] = mapped_column(String(20))
     image_url: Mapped[str | None] = mapped_column(String(500))
     youtube_trailer_url: Mapped[str | None] = mapped_column(String(500))
+    # Diseno previo (2026-10-21, pedido de Mateo): el servicio avisa que el
+    # cliente tiene que mandar su diseno, con un mensaje que sale al portal.
+    # Es solo un dato: el cobro, la sena y los estados del turno no cambian.
+    # El default vive tambien en la base para que las filas viejas y el
+    # codigo anterior sigan funcionando (migracion a7c9e1b3d5f7).
+    requires_prior_design: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    prior_design_message: Mapped[str | None] = mapped_column(
+        String(PRIOR_DESIGN_MESSAGE_MAX), nullable=True
+    )
 
     __table_args__ = (
         CheckConstraint(

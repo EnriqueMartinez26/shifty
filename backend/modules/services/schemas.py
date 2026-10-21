@@ -14,6 +14,7 @@ from modules.services.model import (
     ADDON_MAX_QUANTITY,
     ADDON_MAX_UNIT_PRICE,
     ADDONS_PER_SERVICE,
+    PRIOR_DESIGN_MESSAGE_MAX,
 )
 from modules.stores.media import reject_media_url, validate_image_url
 
@@ -32,6 +33,11 @@ class ServiceBase(BaseModel):
     # esta base y una imagen subida no es http(s).
     image_url: str | None = Field(None, max_length=500)
     youtube_trailer_url: str | None = Field(None, max_length=500)
+    # Diseno previo (2026-10-21): solo un aviso al cliente con su mensaje; el
+    # cobro y la sena no cambian. El mensaje se valida en los schemas de
+    # entrada (``clean_prior_design_message``), igual que el nombre.
+    requires_prior_design: bool = False
+    prior_design_message: str | None = Field(None, max_length=PRIOR_DESIGN_MESSAGE_MAX)
 
 
 _CENT = Decimal("0.01")
@@ -78,6 +84,12 @@ class ServiceAddonInput(BaseModel):
     def reject_sub_cent_price(cls, value: float) -> float:
         reject_sub_cent(value)
         return value
+
+
+def clean_prior_design_message(value: str | None) -> str | None:
+    """Regla 19 (sale al portal publico), recortado; vacio queda en null."""
+    cleaned = (reject_control_chars(value) or "").strip()
+    return cleaned or None
 
 
 AddonList = Annotated[list[ServiceAddonInput], Field(max_length=ADDONS_PER_SERVICE)]
@@ -183,6 +195,11 @@ class ServiceCreate(ServiceBase):
         # ya guardado con un invisible tiene que seguir leyendose.
         return reject_control_chars(value)
 
+    @field_validator("prior_design_message")
+    @classmethod
+    def validate_prior_design_message(cls, value: str | None) -> str | None:
+        return clean_prior_design_message(value)
+
 
 # Columnas NOT NULL de services que el PATCH puede tocar.
 _NOT_NULL_FIELDS = (
@@ -192,6 +209,7 @@ _NOT_NULL_FIELDS = (
     "deposit_mode",
     "deposit_type",
     "is_active",
+    "requires_prior_design",
 )
 
 
@@ -207,6 +225,9 @@ class ServiceUpdate(BaseModel):
     image_url: str | None = Field(None, max_length=500)
     youtube_trailer_url: str | None = Field(None, max_length=500)
     is_active: bool | None = None
+    requires_prior_design: bool | None = None
+    # Un null explicito (o un texto vacio) borra el mensaje.
+    prior_design_message: str | None = Field(None, max_length=PRIOR_DESIGN_MESSAGE_MAX)
     # Si viene, REEMPLAZA el conjunto de adicionales (una lista vacia los
     # quita todos). Un null explicito no cambia nada.
     addons: AddonList | None = None
@@ -222,6 +243,11 @@ class ServiceUpdate(BaseModel):
     @classmethod
     def reject_control_chars_in_text(cls, value: str | None) -> str | None:
         return reject_control_chars(value)
+
+    @field_validator("prior_design_message")
+    @classmethod
+    def validate_prior_design_message(cls, value: str | None) -> str | None:
+        return clean_prior_design_message(value)
 
     @field_validator("price", "deposit_amount")
     @classmethod

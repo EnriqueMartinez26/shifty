@@ -72,6 +72,10 @@ class PublicServiceResponse(BaseModel):
     deposit_amount: float | None = None
     color: Optional[str] = None
     image_url: Optional[str] = None
+    # Diseno previo (2026-10-21): el portal muestra el mensaje para que el
+    # cliente mande su diseno; el cobro y la sena no cambian. Aditivo.
+    requires_prior_design: bool = False
+    prior_design_message: Optional[str] = None
     # Adicionales del servicio, en orden de ``position``: suman precio, nunca
     # tiempo (decision de Mateo, 2026-10-14). Aditivo.
     addons: list[ServiceAddonResponse] = Field(default_factory=list)
