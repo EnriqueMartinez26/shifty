@@ -25,6 +25,8 @@ import {
   usePublicStore
 } from '../hooks/usePublic'
 
+const LEGAL_FOOTER_TARGET_CLASSES = '[&_a]:inline-flex [&_a]:min-h-11 [&_a]:items-center [&_a]:px-1'
+
 /**
  * WhatsApp de la tienda: texto libre que carga el dueno. Si no se puede leer
  * como un numero confiable se muestra tal cual, sin link: un wa.me roto
@@ -37,7 +39,12 @@ const StoreWhatsAppContact: React.FC<{ phone: string; storeName: string }> = ({
   const href = buildWaMeUrl(phone, `Hola ${storeName}! Quiero consultar por un turno.`)
   if (!href) return <span>{phone}</span>
   return (
-    <a href={href} target="_blank" rel="noreferrer">
+    <a
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      className="inline-flex min-h-11 min-w-11 max-w-full items-center justify-center break-all rounded-sm px-1 py-2 underline underline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-orange-500"
+    >
       {phone}
     </a>
   )
@@ -76,12 +83,12 @@ const PublicBooking: React.FC = () => {
 
   if (isLoading || resolvingDeepLink) {
     return (
-      <div
+      <main
         className="min-h-screen grid place-items-center text-sm font-black uppercase tracking-widest"
         style={{ background: colors2000s.bg.primary, color: colors2000s.text.secondary }}
       >
         Cargando...
-      </div>
+      </main>
     )
   }
 
@@ -90,16 +97,23 @@ const PublicBooking: React.FC = () => {
   // cargada, un refetch fallido no tapa la pagina.
   if (!store && isError && !isStoreMissing(storeQuery.error)) {
     return (
-      <StoreLoadError onRetry={() => void storeQuery.refetch()} retrying={storeQuery.isFetching} />
+      <main>
+        <StoreLoadError
+          onRetry={() => void storeQuery.refetch()}
+          retrying={storeQuery.isFetching}
+        />
+      </main>
     )
   }
 
   if (!store) {
     return (
-      <NotFoundScreen
-        title="Negocio no encontrado"
-        subtitle="No encontramos una tienda en esta dirección. Revisá el link que te compartieron."
-      />
+      <main>
+        <NotFoundScreen
+          title="Negocio no encontrado"
+          subtitle="No encontramos una tienda en esta dirección. Revisá el link que te compartieron."
+        />
+      </main>
     )
   }
 
@@ -109,12 +123,12 @@ const PublicBooking: React.FC = () => {
       payment?.payment_status === 'approved' && payment.appointment_status === 'confirmed'
     const failed = ['rejected', 'expired', 'refunded'].includes(payment?.payment_status || '')
     return (
-      <div
+      <main
         className="min-h-screen grid place-items-center px-4"
         style={{ background: colors2000s.bg.primary }}
       >
         <section
-          className="w-full max-w-xl rounded-lg bg-white p-8 text-center space-y-5"
+          className="w-full max-w-xl rounded-lg bg-white p-4 sm:p-8 text-center space-y-5"
           style={{ boxShadow: colors2000s.shadows.outer }}
         >
           {approved ? (
@@ -150,7 +164,7 @@ const PublicBooking: React.FC = () => {
               type="button"
               onClick={() => void paymentStatus.refetch()}
               disabled={paymentStatus.isFetching}
-              className="w-full py-4 rounded-xl font-black uppercase tracking-widest text-xs border disabled:opacity-60"
+              className="w-full min-h-11 py-4 rounded-xl font-black uppercase tracking-widest text-xs border disabled:opacity-60"
               style={{
                 borderColor: colors2000s.border.default,
                 color: colors2000s.text.primary
@@ -173,20 +187,20 @@ const PublicBooking: React.FC = () => {
             // Sin payment_id en la URL se monta un wizard nuevo (estado y clave de
             // idempotencia nuevos) sin recargar la SPA (F11b-20).
             onClick={() => void navigate(`/booking/${slug}`)}
-            className="w-full py-4 rounded-xl text-white font-black uppercase tracking-widest text-xs"
+            className="w-full min-h-11 py-4 rounded-xl text-white font-black uppercase tracking-widest text-xs"
             style={buttonStyles2000s.selected}
           >
             Volver a la tienda
           </button>
-          <LegalFooterLinks className="pt-2" />
+          <LegalFooterLinks className={`pt-2 ${LEGAL_FOOTER_TARGET_CLASSES}`} />
         </section>
-      </div>
+      </main>
     )
   }
 
   return (
-    <div
-      className="min-h-screen py-12 px-4 sm:px-6 lg:px-8"
+    <main
+      className="min-h-screen py-8 px-4 sm:py-12 sm:px-6 lg:px-8"
       style={{ background: colors2000s.bg.primary }}
     >
       {/* Header Info */}
@@ -203,15 +217,15 @@ const PublicBooking: React.FC = () => {
         </div>
 
         <h1
-          className="text-4xl sm:text-5xl font-black tracking-tighter uppercase mb-4"
+          className="break-words text-3xl sm:text-4xl lg:text-5xl font-black tracking-tighter uppercase mb-4"
           style={{ color: colors2000s.orange.heading }}
         >
           Reservar turno
         </h1>
 
-        <div className="flex flex-wrap items-center justify-center gap-4 text-xs font-black uppercase tracking-widest">
+        <div className="flex flex-col items-stretch justify-center gap-3 text-xs font-black uppercase tracking-widest sm:flex-row sm:flex-wrap sm:items-center sm:gap-4">
           <div
-            className="flex items-center gap-2 px-4 py-2.5 rounded-md border"
+            className="flex min-h-11 w-full max-w-full items-center gap-2 break-words px-3 py-2.5 rounded-md border sm:w-auto sm:px-4"
             style={{
               background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
               borderColor: colors2000s.border.default,
@@ -220,11 +234,11 @@ const PublicBooking: React.FC = () => {
             }}
           >
             <MapPin size={14} className="text-orange-500 stroke-[2.5px]" />
-            <span>{store.name}</span>
+            <span className="min-w-0 break-words">{store.name}</span>
           </div>
 
           <div
-            className="flex items-center gap-2 px-4 py-2.5 rounded-md border"
+            className="flex min-h-11 w-full max-w-full items-center gap-2 break-words px-3 py-2.5 rounded-md border sm:w-auto sm:px-4"
             style={{
               background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
               borderColor: colors2000s.border.default,
@@ -242,7 +256,7 @@ const PublicBooking: React.FC = () => {
 
           <a
             href={`/b/${store.slug}/mis-turnos`}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-xl border"
+            className="flex min-h-11 w-full items-center justify-center gap-2 px-3 py-2.5 rounded-xl border sm:w-auto sm:px-4"
             style={{
               background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
               borderColor: colors2000s.border.default,
@@ -289,12 +303,16 @@ const PublicBooking: React.FC = () => {
       <div className="max-w-2xl mx-auto mt-12 text-center space-y-3">
         <LegalFooterLinks
           depositPolicy={bookingStep.step === STEP_CONFIRMATION ? null : store.deposit_policy}
+          className={LEGAL_FOOTER_TARGET_CLASSES}
         />
-        <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">
+        <p
+          className="text-[10px] font-black uppercase tracking-widest"
+          style={{ color: colors2000s.text.secondary }}
+        >
           POWERED BY <span className="text-orange-500 font-extrabold">SHIFTY</span>
         </p>
       </div>
-    </div>
+    </main>
   )
 }
 
