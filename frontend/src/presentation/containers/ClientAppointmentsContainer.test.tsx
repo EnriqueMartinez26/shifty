@@ -1,5 +1,4 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { format } from 'date-fns'
 
 import { forgetClientToken, rememberClientToken } from '@application/services/clientToken'
 import type { PublicStore } from '@application/services/PublicBookingService'
@@ -10,6 +9,7 @@ import { InternalServerError } from '@shared/errors/InternalServerError'
 import { NotFoundError } from '@shared/errors/NotFoundError'
 import { RateLimitError } from '@shared/errors/RateLimitError'
 import { ServiceUnavailableError } from '@shared/errors/ServiceUnavailableError'
+import { formatArgentinaDate } from '@shared/utils/argentinaTime'
 import {
   forgetOtpVerification,
   isOtpStillValid,
@@ -167,7 +167,9 @@ describe('ClientAppointmentsContainer', () => {
     expect(mockAvailability).toHaveBeenCalledWith(
       'store-1',
       'svc-1',
-      format(new Date(), 'yyyy-MM-dd'),
+      // El "hoy" de la grilla es el dia argentino, no el del runner (UTC en CI):
+      // con la fecha local del runner fallaba de 21 a 24 h ART.
+      formatArgentinaDate(new Date().toISOString()),
       false,
       ['svc-2']
     )
@@ -340,7 +342,7 @@ describe('ClientAppointmentsContainer', () => {
       expect(mockAvailability).toHaveBeenCalledWith(
         'store-1',
         'svc-1',
-        format(new Date(), 'yyyy-MM-dd'),
+        formatArgentinaDate(new Date().toISOString()),
         false,
         []
       )
