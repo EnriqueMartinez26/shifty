@@ -104,8 +104,8 @@ test.describe('reserva pública aislada desde el celular', () => {
     await expect(tituloHorario).toBeVisible()
     await sinScrollHorizontal(page, 'horario')
     const days = page.locator('[data-testid^="date-"]')
-    const slots = page.locator('button:not([disabled])', { hasText: /^d{2}:d{2}/ })
-    const empty = page.getByText(/^(No hay turnos disponibles.|Este día no hay atención.)$/)
+    const slots = page.locator('button:not([disabled])', { hasText: /^\d{2}:\d{2}/ })
+    const empty = page.getByText(/^(No hay turnos disponibles\.|Este día no hay atención\.)$/)
     for (let index = 0; index < (await days.count()); index += 1) {
       await days.nth(index).click()
       // Esperar a que ese dia termine de cargar: aparece un slot o uno de los
