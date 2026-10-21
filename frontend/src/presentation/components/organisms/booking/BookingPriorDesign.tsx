@@ -30,7 +30,7 @@ export const WhatsAppLinkButton: React.FC<{ href: string; children: React.ReactN
     href={href}
     target="_blank"
     rel="noreferrer"
-    className="w-full min-h-[44px] mt-6 font-black py-4 rounded-xl transition-all uppercase tracking-widest text-xs border cursor-pointer select-none inline-flex items-center justify-center gap-2"
+    className="w-full min-h-[44px] mt-6 font-black py-4 rounded-xl transition-all uppercase tracking-widest text-xs text-center border cursor-pointer select-none inline-flex items-center justify-center gap-2"
     style={whatsAppButtonStyle}
   >
     {children}

@@ -70,6 +70,8 @@ describe('BookingPriorDesign', () => {
     expect(link).toHaveAttribute('target', '_blank')
     expect(link).toHaveAttribute('rel', 'noreferrer')
     expect(link).toHaveClass('min-h-[44px]')
+    // QA 2026-10-21: en 360 px la etiqueta corta en dos lineas y quedaba a la izquierda.
+    expect(link).toHaveClass('text-center')
     expect(textoDelLink().href).toMatch(/^https:\/\/wa\.me\/5491155550303\?text=/)
   })
 

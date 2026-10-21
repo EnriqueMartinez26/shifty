@@ -96,6 +96,16 @@ describe('StoreHeader', () => {
     expect(link).toHaveClass('min-h-11', 'shrink-0')
   })
 
+  // QA 2026-10-21: en 360 px la pastilla con texto dejaba sin lugar a un
+  // nombre corto como "Jaziz Nails Studio". Debajo de sm queda el icono solo.
+  it('"Mis turnos" en el celular es solo el icono, con el mismo nombre y 44 px', () => {
+    renderHeader({ name: 'Jaziz Nails Studio' })
+
+    const link = screen.getByRole('link', { name: 'Mis turnos' })
+    expect(link).toHaveClass('min-h-11', 'min-w-11', 'justify-center', 'px-2', 'sm:px-3')
+    expect(screen.getByText('Mis turnos')).toHaveClass('sr-only', 'sm:not-sr-only')
+  })
+
   it('todo va en una fila que no se estira con un nombre largo', () => {
     renderHeader()
 

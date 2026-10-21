@@ -118,7 +118,8 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
           boxShadow: isSelected
             ? 'inset 0 1px 2px rgba(255,255,255,0.5)'
             : colors2000s.shadows.insetDark,
-          color: isSelected ? brandColor.onFill : serviceColor
+          // La tinta de marca, no el relleno: un color claro no se lee sobre blanco.
+          color: isSelected ? brandColor.onFill : brandColor.ink
         }}
       >
         {svc.image_url ? (

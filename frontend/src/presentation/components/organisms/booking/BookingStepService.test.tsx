@@ -93,6 +93,23 @@ describe('BookingStepService', () => {
     expect(check?.classList.contains('flex-shrink-0')).toBe(true)
   })
 
+  // QA 2026-10-21: con un color de tienda claro (amarillo) el icono pintado
+  // con el relleno quedaba en 1.07:1 sobre el blanco de la tarjeta.
+  it.each([
+    ['sin color propio', null],
+    ['con color propio', '#ffff00']
+  ])('el icono del servicio %s usa la tinta de marca, legible sobre claro', (_caso, color) => {
+    mockUsePublicServices.mockReturnValue({
+      isLoading: false,
+      data: [{ ...servicio('corte', 'Corte', 30, 10000), color }]
+    })
+
+    render(<BookingStepService storePublicId="store-1" selectedId={null} onSelect={jest.fn()} />)
+
+    const avatar = screen.getByRole('button').querySelector('svg.lucide-briefcase')?.parentElement
+    expect(avatar?.getAttribute('style')).toContain('color: var(--brand-ink,')
+  })
+
   it('sin varios servicios tocar uno lo elige y no muestra la barra', () => {
     mockUsePublicServices.mockReturnValue({
       isLoading: false,
