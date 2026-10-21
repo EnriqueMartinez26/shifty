@@ -395,10 +395,10 @@ describe('BookingWizardContainer', () => {
     await waitFor(() => expect(screen.getByText(HORARIO)).toBeInTheDocument())
     fireEvent.click(screen.getByText('09:00'))
 
-    const dato = (etiqueta: string) =>
-      screen.getByText(etiqueta, { selector: 'dt' }).nextElementSibling?.textContent
-    expect(dato('Servicio')).toBe('Servicio a')
-    expect(dato('Profesional')).toBe('Pro')
+    // La confirmacion compacta resume el turno en una linea (S5).
+    const resumen = screen.getByTestId('booking-summary-line')
+    expect(resumen).toHaveTextContent('Servicio a')
+    expect(resumen).toHaveTextContent('con Pro')
   })
 
   it('el codigo OTP se pide por email, al email que escribe el cliente', async () => {
@@ -496,6 +496,8 @@ describe('BookingWizardContainer', () => {
         expect(screen.getByText('Teléfono validado correctamente')).toBeInTheDocument()
       )
 
+      // Las notas van plegadas detras de un link (S5).
+      fireEvent.click(screen.getByText('Agregar una nota para la tienda'))
       fireEvent.change(screen.getByPlaceholderText('Algo que debamos saber?'), {
         target: { value: 'Llego 5 minutos tarde' }
       })
@@ -1212,8 +1214,9 @@ describe('BookingWizardContainer con adicionales en el paso del servicio', () =>
   })
 
   // La promo se mide contra el total: con otros adicionales el codigo aplicado
-  // ya no es seguro y se vuelve a cargar en el pedido.
-  it('cambiar los adicionales en el servicio quita el codigo aplicado', async () => {
+  // se conserva y se vuelve a validar contra la seleccion nueva al llegar a la
+  // confirmacion (antes se borraba en silencio).
+  it('cambiar los adicionales en el servicio conserva el codigo y lo revalida con los nuevos', async () => {
     mockServices.mockReturnValue({ data: [corteConStrass], isLoading: false })
     mockPreviewPromotion.mockResolvedValue({
       code: 'BIENVENIDA10',
@@ -1240,9 +1243,14 @@ describe('BookingWizardContainer con adicionales en el paso del servicio', () =>
     atrasDelNavegador()
     agregar('Strass')
     continuar()
+    mockPreviewPromotion.mockClear()
     const pedido = await reservar()
 
-    expect(pedido.promotion_code).toBeUndefined()
+    expect(mockPreviewPromotion).toHaveBeenCalledTimes(1)
+    expect(mockPreviewPromotion.mock.calls[0][0]).toEqual(
+      expect.objectContaining({ code: 'BIENVENIDA10', addons: ['strass:1'] })
+    )
+    expect(pedido.promotion_code).toBe('BIENVENIDA10')
     expect(pedido.addons).toEqual([{ addon_id: 'strass', quantity: 1 }])
   })
 })
