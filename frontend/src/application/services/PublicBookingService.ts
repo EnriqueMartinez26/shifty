@@ -57,6 +57,13 @@ export interface PublicService {
   deposit_amount: number | null
   color: string | null
   image_url: string | null
+  /**
+   * Diseño previo (S7): tras reservar, la clienta le manda su diseño a la
+   * tienda por WhatsApp. Opcionales: un backend anterior no los manda y eso
+   * es "no". El mensaje se muestra solo con la opcion prendida.
+   */
+  requires_prior_design?: boolean
+  prior_design_message?: string | null
   /** Adicionales del servicio, ordenados por `position`. */
   addons?: PublicServiceAddon[]
 }
