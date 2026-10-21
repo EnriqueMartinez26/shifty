@@ -361,7 +361,10 @@ export const BookingSuccess: React.FC<BookingSuccessProps> = ({
         </a>
       )}
 
-      {whatsappHref && !confirmation.payment_link && (
+      {/* Solo con una seña que pagar fuera de MP: payment_required es el turno
+          pending_payment con cobro vivo (por WhatsApp, o sin canal en una
+          respuesta vieja). Sin seña no hay pago que coordinar. */}
+      {whatsappHref && confirmation.payment_required && !confirmation.payment_link && (
         <WhatsAppLinkButton href={whatsappHref}>Coordinar el pago por WhatsApp</WhatsAppLinkButton>
       )}
 
