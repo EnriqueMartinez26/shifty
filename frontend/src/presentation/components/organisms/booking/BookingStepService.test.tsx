@@ -3,7 +3,7 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import { formatCurrency } from '@shared/utils/currency'
 
 import { BookingStepService } from './BookingStepService'
-import { colors2000s, orangeCtaGradient } from '../../../../theme/colors'
+import { colors2000s } from '../../../../theme/colors'
 
 // 2026-10-02 (F4-15): las fotos del primer paso de la reserva no tenian tamano
 // ni carga diferida: el celular bajaba todas y la lista saltaba al llegar cada
@@ -68,10 +68,14 @@ describe('BookingStepService', () => {
 
     render(<BookingStepService storePublicId="store-1" selectedId="corte" onSelect={jest.fn()} />)
 
+    // Con el color de la tienda (S3) la seleccion lee var(--brand-*); sin
+    // color de tienda el respaldo de cada var() es la rampa de #240.
     const title = screen.getByText('Corte')
-    expect(title.style.color).toBe('rgb(255, 255, 255)')
+    expect(title.style.color).toBe(`var(--brand-on-fill, ${colors2000s.text.onOrangeSelection})`)
     expect(colors2000s.text.onOrangeSelection).toBe('#ffffff')
-    expect(title.closest('button')?.style.background).toBe(orangeCtaGradient)
+    const fondo = title.closest('button')?.style.background ?? ''
+    expect(fondo).toContain(`var(--brand-fill, ${colors2000s.orange.cta})`)
+    expect(fondo).toContain(`var(--brand-fill-bottom, ${colors2000s.orange.ctaEnd})`)
   })
 
   // QA movil 2026-10-08 (QA!): en 390 px el nombre salia cortado ("BARBA Y
