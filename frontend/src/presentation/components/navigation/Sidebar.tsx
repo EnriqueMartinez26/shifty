@@ -249,7 +249,9 @@ const Sidebar: React.FC<SidebarProps> = ({
           <Icon2000s path={item.iconPath} size={20} variant={isActive ? 'active' : 'idle'} />
           <span
             className="font-bold text-sm"
-            style={{ color: isActive ? colors2000s.text.onOrange : colors2000s.text.primary }}
+            style={{
+              color: isActive ? colors2000s.text.onOrangeSelection : colors2000s.text.primary
+            }}
           >
             {item.label}
           </span>

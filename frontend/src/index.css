@@ -2,7 +2,7 @@
 
 @theme {
   --color-primary: #ff8c42;
-  --color-primary-foreground: #ffffff;
+  --color-primary-foreground: #1f1f1f;
   --color-background: #e5e5e5;
   --color-background-end: #d9d9d9;
   --color-foreground: #404040;
@@ -24,7 +24,7 @@
   --color-info-background: #eff6ff;
 
   /* Las utilidades orange-* heredadas siguen siendo acentos AA para texto.
-     La marca y las selecciones usan primary / brand-light / brand. */
+     Para marca, usar brand-light/brand; CTA usa primary con texto oscuro AA. */
   --color-orange-400: #9a4507;
   --color-orange-500: #9a4507;
   --color-orange-600: #9a4507;
@@ -66,7 +66,6 @@
 
 body {
   margin: 0;
-  min-width: 320px;
   min-height: 100vh;
   background: linear-gradient(180deg, var(--color-background) 0%, var(--color-background-end) 100%);
 }
