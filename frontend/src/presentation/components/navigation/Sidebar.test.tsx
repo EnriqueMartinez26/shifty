@@ -2,6 +2,7 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter, useNavigate } from 'react-router'
 
 import Sidebar from './Sidebar'
+import { colors2000s } from '../../../theme/colors'
 
 const mockLogout = jest.fn()
 let mockUser: {
@@ -40,6 +41,13 @@ describe('Sidebar', () => {
     expect(screen.getByRole('link', { name: 'Agenda' })).toHaveAttribute(
       'href',
       '/dashboard/calendar'
+    )
+    const selectedText = colors2000s.text.onOrangeSelection
+    const expectedSelectedColor = `rgb(${[1, 3, 5]
+      .map((offset) => Number.parseInt(selectedText.slice(offset, offset + 2), 16))
+      .join(', ')})`
+    expect(screen.getByRole('link', { name: 'Agenda' }).querySelector('span')?.style.color).toBe(
+      expectedSelectedColor
     )
     // El personal no tiene ningun hijo visible en "Mi Negocio": el grupo entero
     // no deberia renderizarse, ni siquiera colapsado.
