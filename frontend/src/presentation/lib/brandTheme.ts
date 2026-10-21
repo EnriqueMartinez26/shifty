@@ -35,7 +35,7 @@ const DEFAULT_GLOW_COLOR = 'rgba(200, 90, 15, 0.25)'
 
 export const DEFAULT_BRAND_THEME: BrandTheme = {
   fill: colors2000s.orange.cta,
-  fillBottom: colors2000s.orange.dark,
+  fillBottom: colors2000s.orange.ctaEnd,
   onFill: colors2000s.text.onOrangeSelection,
   ink: colors2000s.orange.accent,
   isDefault: true
