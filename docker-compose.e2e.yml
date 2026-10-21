@@ -16,4 +16,3 @@ services:
   nginx:
     ports: !override
       - 127.0.0.1:13000:80
-
