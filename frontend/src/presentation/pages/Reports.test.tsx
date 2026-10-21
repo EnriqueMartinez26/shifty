@@ -3,6 +3,7 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import type { ReportSummary } from '@application/services/ReportsService'
 
 import ReportsPage from './Reports'
+import { colors2000s } from '../../theme/colors'
 
 const mockSummary: ReportSummary = {
   from_date: '2026-09-01',
@@ -100,6 +101,24 @@ describe('ReportsPage', () => {
     expect(screen.getByText('Pendiente de pago')).toBeInTheDocument()
     expect(screen.queryByText('pending_payment')).not.toBeInTheDocument()
     expect(screen.getByText('on_hold')).toBeInTheDocument()
+  })
+
+  it('da a ambos filtros de fecha un objetivo táctil amplio y foco visible', () => {
+    render(<ReportsPage />)
+    const expectedOutlineColor = document.createElement('span')
+    expectedOutlineColor.style.color = colors2000s.orange.accent
+
+    for (const label of ['Desde', 'Hasta']) {
+      const input = screen.getByLabelText(label)
+      expect(input).toHaveClass(
+        'min-h-11',
+        'focus-visible:outline',
+        'focus-visible:outline-2',
+        'focus-visible:outline-offset-2'
+      )
+      expect(input).not.toHaveClass('outline-none')
+      expect(input.style.outlineColor).toBe(expectedOutlineColor.style.color)
+    }
   })
 
   // Un <button> sin type es submit: movido dentro de un <form> lo envia.

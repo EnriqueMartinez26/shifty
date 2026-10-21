@@ -80,8 +80,8 @@ const ReportRangeHeader: React.FC<ReportRangeHeaderProps> = ({
           type="date"
           value={fromDate}
           onChange={(e) => onFromChange(e.target.value)}
-          className="rounded-xl px-3 py-2 text-xs font-black outline-none"
-          style={create2000sInputStyle()}
+          className="min-h-11 rounded-xl px-3 py-2 text-xs font-black focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
+          style={{ ...create2000sInputStyle(), outlineColor: colors2000s.orange.accent }}
         />
       </div>
       <div>
@@ -97,8 +97,8 @@ const ReportRangeHeader: React.FC<ReportRangeHeaderProps> = ({
           type="date"
           value={toDate}
           onChange={(e) => onToChange(e.target.value)}
-          className="rounded-xl px-3 py-2 text-xs font-black outline-none"
-          style={create2000sInputStyle()}
+          className="min-h-11 rounded-xl px-3 py-2 text-xs font-black focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
+          style={{ ...create2000sInputStyle(), outlineColor: colors2000s.orange.accent }}
         />
       </div>
     </div>
