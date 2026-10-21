@@ -137,38 +137,41 @@ Rehearsal on 2026-09-24 (3 stores, 20 users, 90 s plateau, local uvicorn): 1336 
 
 ### From CI
 
-`.github/workflows/perf-acceptance.yml` runs on `workflow_dispatch` and, only when the repo variable `PERF_NIGHTLY` is `true`, every night at 03:30 ART. It never runs on `push` or `pull_request`, so a fork cannot trigger it. Staging shares the VPS with production, so the nightly stays off until the owner decides otherwise. The token only reads the repo (`permissions: contents: read`).
+`.github/workflows/perf-acceptance.yml` accepts `workflow_dispatch` only from `main`, and runs nightly at 03:30 ART only when the repository variable `PERF_NIGHTLY` is `true`. It never runs on `push` or `pull_request`. The job uses the `staging` GitHub Environment with `deployment: false`; configure an independent required reviewer and restrict it to `main` before adding staging secrets. The job is pinned to the `shifty-perf-staging` self-hosted runner group with labels `self-hosted`, `linux`, and `x64`. Restrict that group to this repository and this workflow. There is no GitHub-hosted fallback: without that group and a matching runner, the job cannot reach staging. The token only reads the repo (`permissions: contents: read`).
 
 The steps, in order, each one fail-closed:
 
-1. **Configuration check**, before checkout: the four secrets, `PERF_RUNNER` and `PERF_ALLOWED_ORIGIN` are set, and `PERF_RUNNER` is not a GitHub-hosted label (`ubuntu-*`, `windows-*`, `macos-*`) or the generic `self-hosted`.
-2. Checkout without persisting the GitHub token (`persist-credentials: false`), Python, uv and `uv sync --frozen`.
-3. **Target preflight** (`uv run python scripts/verify_perf_target.py`, #155): `STAGING_URL` must be HTTPS on exactly `PERF_ALLOWED_ORIGIN`, the production apex and `www` host are rejected, loopback is rejected in Actions, and `/api/ops/health/ready` must answer 200 with `"environment": "staging"` without following a redirect. This step gets only `STAGING_URL`; no password reaches it. Nothing below runs if it fails.
-4. Manifest from staging's public API by slug, Locust, and the verdict script. The manifest builder and Locust run the same target check again on their own before their first request, and no acceptance client follows redirects.
-5. Upload `perf-acceptance` (CSV, codes, SLO samples, manifest) as an artifact even when the run fails.
+1. **Isolation and egress attestations**, before checkout: Environment variables `PERF_STAGING_ISOLATED=true` and `PERF_RUNNER_EGRESS_RESTRICTED=true`, plus `PERF_ALLOWED_ORIGIN`, are required. These are operator attestations; the workflow cannot inspect the host, database, Redis, broker, or firewall configuration. Set them only after recording evidence that staging services and data are isolated from production and that the dedicated runner passes allow/deny egress checks.
+2. **Configuration check**, also before checkout: the four secrets and the HTTPS `PERF_ALLOWED_ORIGIN` are set. Secrets are read from the protected Environment, not repository scope.
+3. Checkout without persisting the GitHub token (`persist-credentials: false`), Python, uv and `uv sync --frozen`.
+4. **Target preflight** (`uv run python scripts/verify_perf_target.py`, #155): `STAGING_URL` must be HTTPS on exactly `PERF_ALLOWED_ORIGIN`, the production apex and `www` host are rejected, loopback is rejected in Actions, and `/api/ops/health/ready` must answer 200 with `"environment": "staging"` without following a redirect. This step gets only `STAGING_URL`; no password reaches it. Nothing below runs if it fails.
+5. Manifest from staging's public API by slug, Locust, and the verdict script. The manifest builder and Locust run the same target check again on their own before their first request, and no acceptance client follows redirects.
+6. Upload `perf-acceptance` (CSV, codes, SLO samples, manifest) as an artifact even when the run fails.
 
 Each step gets only the secrets it uses: the configuration check and Locust get all four, the preflight and the manifest only `STAGING_URL`, the rest none.
 
-| Setting | Kind | What |
+| Setting | Scope | What |
 | --- | --- | --- |
-| `STAGING_URL` | secret | staging API URL with `/api` |
-| `PERF_ALLOWED_ORIGIN` | variable | exact HTTPS staging origin; the production apex and `www` host are rejected |
-| `SEED_OWNER_PASSWORD` | secret | the password the seed ran with |
-| `SHIFTY_SUPERADMIN_EMAIL`, `SHIFTY_SUPERADMIN_PASSWORD` | secrets | a staging superadmin (samples `/ops/slo`) |
-| `PERF_RUNNER` | variable | label of the dedicated runner; required, GitHub-hosted labels are rejected |
-| `PERF_NETWORK_OFFSET_MS` | variable | ms added to the p95 thresholds |
-| `PERF_NIGHTLY` | variable | `true` to enable the nightly run |
+| `STAGING_URL` | Environment secret | staging API URL with `/api` |
+| `SEED_OWNER_PASSWORD` | Environment secret | the password the seed ran with |
+| `SHIFTY_SUPERADMIN_EMAIL`, `SHIFTY_SUPERADMIN_PASSWORD` | Environment secrets | a staging superadmin (samples `/ops/slo`) |
+| `PERF_ALLOWED_ORIGIN` | Environment variable | exact HTTPS staging origin; production apex and `www` are rejected |
+| `PERF_STAGING_ISOLATED` | Environment variable | `true` only with recorded evidence that staging services and data are isolated from production |
+| `PERF_RUNNER_EGRESS_RESTRICTED` | Environment variable | `true` only after the dedicated runner passes allow/deny network checks |
+| `PERF_NETWORK_OFFSET_MS` | Environment variable | measured ms added to p95 thresholds |
+| `PERF_NIGHTLY` | Repository variable | `true` to enable the nightly run after the release gates pass |
 
-**Runner and egress.** The acceptance runs only on a dedicated self-hosted runner, because a GitHub-hosted runner cannot restrict its egress. Requirements for that runner, set up by hand on its host (the workflow cannot check them):
+**Runner group and egress.** Configure the runner group in GitHub settings; the workflow cannot create or restrict it. The group and its runner must meet these requirements:
 
-- It is used only for this workflow, and its label is unique to it; no other workflow names that label.
-- Its outbound traffic is limited to GitHub (Actions, checkout, artifacts), the package indexes `uv sync` needs, and the staging origin. The production host is blocked at the firewall, so a wrong DNS answer or a misconfigured origin cannot reach production.
+- It is scoped to this repository and only `.github/workflows/perf-acceptance.yml`; it is used only for this workflow.
+- Its outbound traffic is default-deny and limited to GitHub Actions, artifact storage, the package indexes `uv sync` needs, and the exact staging API origin. The production host and other application destinations are blocked at the firewall, so a wrong DNS answer or a misconfigured origin cannot reach production.
 - It does not live on the production VPS and holds no production credentials.
-- The repository is public: under Settings → Actions → General, fork pull request workflows require approval for all outside collaborators, and the runner is ephemeral (`--ephemeral`) or reset between jobs. A fork PR that edits another workflow to use the runner's label must not get to run on it.
+- It is ephemeral (`--ephemeral`) or reset between jobs. No pull request workflow may use this group.
+- The `staging` Environment is restricted to `main` and requires an independent reviewer before releasing its secrets. Environment approval does not replace runner-group restrictions.
 
-Runner location still matters: a runner far from Argentina adds round-trip time to every request. Register it close to the VPS (Argentina or Brazil), or set `PERF_NETWORK_OFFSET_MS` (or pass `network_offset_ms` when dispatching) so the thresholds are raised by the network cost. Write down which one was used.
+Runner location still matters: a distant runner adds round-trip time to every request. Register it near staging (Argentina or Brazil), or measure residual network latency and set `PERF_NETWORK_OFFSET_MS` (or pass `network_offset_ms` when dispatching). Record the measurement with the acceptance results; do not use the offset to hide server latency.
 
-**Status (2026-10-12).** The workflow wiring is in place, but the real 200-user acceptance has not run. It still needs a private, isolated staging environment, the dedicated runner above, and the staging secrets and variables configured privately. Until then a workflow run stops at the configuration check.
+**Status.** The real 200-user acceptance has not run. It still needs the protected Environment, private isolated staging, the dedicated runner group, and evidence for both isolation and egress. Until those are configured and reviewed, do not dispatch the workflow or enable the nightly run.
 
 ## 5. Reading the results
 
