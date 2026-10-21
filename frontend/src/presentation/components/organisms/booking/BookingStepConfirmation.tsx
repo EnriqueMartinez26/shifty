@@ -1,18 +1,8 @@
-import React, { useEffect, useId, useReducer, useRef, useState } from 'react'
+import React, { useEffect, useEffectEvent, useId, useReducer, useRef, useState } from 'react'
 
-import {
-  CalendarCheck,
-  FileText,
-  Loader2,
-  Mail,
-  Phone,
-  Tag,
-  TriangleAlert,
-  User,
-  WalletCards
-} from 'lucide-react'
+import { FileText, Loader2, Mail, Phone, Tag, TriangleAlert, User } from 'lucide-react'
 
-import { AddonSelection, type SelectedAddon } from '@domain/value-objects/AddonSelection'
+import type { SelectedAddon } from '@domain/value-objects/AddonSelection'
 import { Email } from '@domain/value-objects/Email'
 import { MAX_SERVICES_PER_BOOKING } from '@domain/value-objects/ServiceSelection'
 
@@ -32,7 +22,7 @@ import {
 } from '@presentation/hooks/usePublic'
 
 import { getErrorCode, getErrorMessage, getHttpStatus } from '@shared/errors/getErrorMessage'
-import { formatArgentinaDateDisplay } from '@shared/utils/argentinaTime'
+import { formatArgentinaDayHeading } from '@shared/utils/argentinaTime'
 import { CLIENT_PHONE_HINT, isValidClientPhone } from '@shared/utils/clientPhone'
 import { formatCurrency } from '@shared/utils/currency'
 import { phoneDigits } from '@shared/utils/otpSession'
@@ -44,15 +34,19 @@ import {
   toSelectedAddons,
   type ServiceAddonsGroup
 } from './addonGroups'
-import { BookingAddonsPicker } from './BookingAddonsPicker'
 import { BookingBackButton } from './BookingBackButton'
+import {
+  BookingConfirmationCard,
+  type BookingPaymentMethod,
+  type BookingSubmitAction
+} from './BookingConfirmationCard'
 import { BookingOtpSection } from './BookingOtpSection'
 import { BookingPriceSummary } from './BookingPriceSummary'
 import { BookingSuccess } from './BookingSuccess'
 import { depositBreakdownText } from './depositReasons'
 import type { BookingClientData, BookingOtpState, BookingWizardState } from './types'
-import { buttonStyles2000s, colors2000s } from '../../../../theme/colors'
-import { brandColor, brandCtaStyle } from '../../../lib/brandTheme'
+import { colors2000s } from '../../../../theme/colors'
+import { brandColor } from '../../../lib/brandTheme'
 import { revealOnMount } from '../../../lib/revealOnMount'
 import {
   createBookingClientInputStyle,
@@ -93,14 +87,12 @@ const BOOKING_CODE_MESSAGES: Partial<Record<string, string>> = {
   [ADDON_UNAVAILABLE]: ADDON_UNAVAILABLE_MESSAGE,
   ...SERVICE_COMBO_MESSAGES
 }
+// Los adicionales se eligen en el primer paso (S4): aca solo se avisa.
 const ADDONS_CHANGED_MESSAGE =
-  'Los adicionales del servicio cambiaron. Revisá tu selección antes de confirmar.'
+  'Los adicionales del servicio cambiaron. Revisá tu selección en el primer paso.'
 // Espera antes de pedir la seña con otros adicionales: cada toque del
 // contador era una request.
 const ADDONS_PREVIEW_DEBOUNCE_MS = 300
-
-// Una politica de seña mas larga que esto va plegada (unas 6 lineas en 390 px).
-const LONG_DEPOSIT_POLICY_CHARS = 280
 
 interface BookingStepConfirmationProps {
   storePublicId: string
@@ -130,6 +122,11 @@ interface BookingStepConfirmationProps {
   onPromotionCodeChange: (promotionCode: string, preview: PromotionPreview | null) => void
   /** Adicionales elegidos, con el nombre y el precio que vio el cliente. */
   onAddonsChange: (addons: SelectedAddon[]) => void
+  /**
+   * Lleva a elegir los adicionales (el primer paso) cuando el catalogo cambio.
+   * Sin el, "Revisar adicionales" vuelve con `onBack`.
+   */
+  onEditAddons?: () => void
   onConfirm: (
     paymentMethod: 'manual' | 'mercadopago',
     acceptsTerms: boolean,
@@ -183,10 +180,16 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
   onClientChange,
   onPromotionCodeChange,
   onAddonsChange,
+  onEditAddons,
   onConfirm
 }) => {
   const fieldId = useId()
   const [acceptsTerms, setAcceptsTerms] = useState(false)
+  // Con los dos medios disponibles se elige antes del unico boton; arranca en
+  // pagar online.
+  const [chosenMethod, setChosenMethod] = useState<BookingPaymentMethod>('mercadopago')
+  // Las notas van plegadas como el codigo; escritas (volver al paso), abiertas.
+  const [notesOpen, setNotesOpen] = useState(Boolean(bookingState.client.notes))
   // El codigo promocional va plegado detras de un link: la mayoria no tiene
   // uno y el campo era ruido en el celular. Con un codigo ya aplicado (volver
   // al paso) arranca abierto; una vez abierto no se vuelve a plegar solo, asi
@@ -218,7 +221,11 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
   // Lo elegido contra el catalogo vigente. Si cambio (un adicional borrado,
   // otro precio, un maximo menor) se avisa y hay que revisarlo antes de
   // confirmar: nunca se descarta en silencio.
-  const addonGroups = groupAddonsByService(serviceIds, servicesQuery.data, bookingState.addons)
+  const addonGroups: ServiceAddonsGroup[] = groupAddonsByService(
+    serviceIds,
+    servicesQuery.data,
+    bookingState.addons
+  )
   const selectedServices = addonGroups.flatMap((group) => (group.service ? [group.service] : []))
   const hasAddonOptions = addonGroups.some((group) => group.options.length > 0)
   const addonsChanged = addonGroups.some((group) => group.changed)
@@ -297,8 +304,8 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
       ? Math.max(0, Math.round((subtotal - totalPrice) * 100) / 100)
       : null
 
-  // La promo se mide contra el total (servicio + adicionales): cambiar la
-  // seleccion vuelve a validar el codigo aplicado, con la misma espera que la
+  // La promo se mide contra el total (servicio + adicionales): al volver al
+  // paso con un codigo aplicado se vuelve a validar, con la misma espera que la
   // seña. Si ya no aplica (p. ej. el total quedo bajo el minimo) se quita y se
   // dice, en vez de dejar que la reserva rebote con 422.
   const [promotionNotice, setPromotionNotice] = useState('')
@@ -355,24 +362,18 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
         })
     }, ADDONS_PREVIEW_DEBOUNCE_MS)
   }
-  const commitAddons = (groups: readonly Pick<ServiceAddonsGroup, 'serviceId' | 'selection'>[]) => {
-    onAddonsChange(toSelectedAddons(groups))
-    revalidatePromotion(groups.flatMap((group) => group.selection.toQueryParams()))
-  }
-  const handleAddonChange = (groupServiceId: string, addonId: string, quantity: number) => {
-    commitAddons(
-      addonGroups.map((group) =>
-        group.serviceId === groupServiceId
-          ? {
-              serviceId: group.serviceId,
-              selection: AddonSelection.create(group.options, {
-                ...group.selection.toQuantities(),
-                [addonId]: quantity
-              })
-            }
-          : group
-      )
-    )
+  // Los adicionales se cambian en el primer paso (S4): al volver con un codigo
+  // aplicado se revalida una vez contra la seleccion actual. Sincroniza con el
+  // backend (sistema externo), no deriva estado.
+  const revalidateOnReturn = useEffectEvent(() => revalidatePromotion(addonQueryParams))
+  useEffect(() => {
+    revalidateOnReturn()
+  }, [])
+  // El catalogo cambio: se guarda lo que sigue vigente (como hacia "Revisé mi
+  // selección") y se lleva a revisarlo donde se elige.
+  const reviewAddons = () => {
+    onAddonsChange(toSelectedAddons(addonGroups))
+    ;(onEditAddons ?? onBack)()
   }
   // Mientras el preview no llega solo se infiere SI hay seña (para ofrecer
   // los botones), nunca el importe: con varios servicios la seña sale sobre
@@ -459,32 +460,66 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
     promotionFocusPending.current = false
     input.focus()
   }
-  // Que, con quien y cuando: con "Cualquiera" el profesional es el que asigno
-  // el horario elegido; si no se conoce, no se muestra.
+  // Que, con quien y cuando, en una linea: "Semipermanente + 3 Decoración ·
+  // viernes 25/09 · 09:00 hs · con Ana". Con "Cualquiera" el profesional es el
+  // que asigno el horario elegido; si no se conoce, no se muestra. Los
+  // servicios y la duracion del turno entero, solo con todo el catalogo.
   const { assignedStaff } = bookingState
-  // "Corte + Barba" y la duracion del turno entero, solo con todo el catalogo.
   const allServicesLoaded = selectedServices.length === serviceIds.length
-  const servicesLabel = selectedServices.map((service) => service.name).join(' + ')
+  const servicesLabel = addonGroups
+    .flatMap((group) =>
+      group.service
+        ? [
+            group.service.name,
+            ...group.selection
+              .lines()
+              .map((line) => (line.quantity > 1 ? `${line.quantity} ${line.name}` : line.name))
+          ]
+        : []
+    )
+    .join(' + ')
   const totalDuration = selectedServices.reduce(
     (sum, service) => sum + Number(service.duration_minutes),
     0
   )
-  const turnSummary = [
-    { label: 'Fecha', value: formatArgentinaDateDisplay(bookingState.date ?? '') },
-    { label: 'Hora', value: `${bookingState.startTime ?? ''} hs` },
-    ...(allServicesLoaded && servicesLabel ? [{ label: 'Servicio', value: servicesLabel }] : []),
-    ...(allServicesLoaded && hasExtraServices
-      ? [{ label: 'Duración', value: `${totalDuration} min` }]
-      : []),
+  const turnDay = formatArgentinaDayHeading(bookingState.date ?? '')
+  const summaryServices = allServicesLoaded && servicesLabel ? servicesLabel : null
+  const summaryDetails = [
+    ...(allServicesLoaded && hasExtraServices ? [`${totalDuration} min`] : []),
+    ...(turnDay ? [turnDay] : []),
+    `${bookingState.startTime ?? ''} hs`,
     ...(assignedStaff
-      ? [
-          {
-            label: assignedStaff.isResource ? 'Cancha / sala' : 'Profesional',
-            value: assignedStaff.name
-          }
-        ]
+      ? [assignedStaff.isResource ? assignedStaff.name : `con ${assignedStaff.name}`]
       : [])
   ]
+  // Un solo boton (S5): con los dos medios, el que se eligio; si no, el unico.
+  // Con seña solo online y sin Mercado Pago no hay con que reservar (como antes).
+  const submitMethod: BookingPaymentMethod | null = onlinePaymentMandatory
+    ? canPayDeposit
+      ? 'mercadopago'
+      : null
+    : canPayDeposit
+      ? chosenMethod
+      : 'manual'
+  // El importe en el boton solo si el backend ya lo confirmo para estos datos.
+  const confirmedDepositLabel =
+    depositPreview && depositPreviewConfirmed ? formatCurrency(depositPreview.amount) : null
+  const submitAction: BookingSubmitAction | null = submitMethod && {
+    method: submitMethod,
+    label:
+      submitMethod === 'mercadopago'
+        ? confirmedDepositLabel
+          ? `Pagar seña ${confirmedDepositLabel}`
+          : 'Pagar seña con Mercado Pago'
+        : owesDepositByWhatsApp
+          ? 'Reservar y pagar la seña por WhatsApp'
+          : 'Confirmar reserva',
+    owesDepositByWhatsApp,
+    disabled: !canSubmit
+  }
+  // Sin el catalogo ni el total del backend no se muestra un importe inventado.
+  const shownTotal = allServicesLoaded || serverTotal !== null ? totalPrice : null
+  const totalLabel = shownTotal === null ? null : `Total ${formatCurrency(shownTotal)}`
 
   const handleApplyPromotion = async () => {
     const normalizedCode = promotionCode.trim().toUpperCase()
@@ -568,6 +603,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
 
   const renderCustomField = (field: StoreCustomField) => {
     const commonProps = {
+      id: `${fieldId}-custom-${field.key}`,
       required: field.required,
       value: client.customFields[field.key] || '',
       onChange: (
@@ -612,7 +648,8 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
   }
 
   // Un solo titulo para el paso (el h2): el bloque de datos no repite otro
-  // encabezado, pero sigue nombrado para los lectores de pantalla.
+  // encabezado, pero sigue nombrado para los lectores de pantalla. Arriba solo
+  // los tres datos (S5); la verificacion del telefono va con ellos.
   const renderClientFields = () => (
     <section
       aria-label="Tus datos"
@@ -642,73 +679,105 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
         </div>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+      <div className="relative">
+        <label
+          htmlFor={`${fieldId}-phone`}
+          className="text-[10px] font-black uppercase tracking-widest text-gray-400 ml-1 block mb-1"
+        >
+          Teléfono
+        </label>
         <div className="relative">
-          <label
-            htmlFor={`${fieldId}-email`}
-            className="text-[10px] font-black uppercase tracking-widest text-gray-400 ml-1 block mb-1"
-          >
-            {emailRequired ? 'Email' : 'Email (opcional)'}
-          </label>
-          <div className="relative">
-            <Mail size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
-            <input
-              id={`${fieldId}-email`}
-              type="email"
-              required={emailRequired}
-              autoComplete="email"
-              value={client.email}
-              onChange={(e) => updateClient({ email: e.target.value })}
-              className="w-full min-h-11 pl-12 pr-4 py-3.5 font-bold"
-              style={clientInputStyle}
-              placeholder="juan@email.com"
-              aria-invalid={emailTyped && !emailFormatValid}
-              aria-describedby="booking-email-hint"
-            />
-          </div>
-          {emailTyped && !emailFormatValid ? (
-            <p id="booking-email-hint" className="mt-1 ml-1 text-[11px] font-bold text-red-600">
-              {BOOKING_FIELD_MESSAGES.client_email}
-            </p>
-          ) : (
-            <p id="booking-email-hint" className="mt-1 ml-1 text-[11px] font-bold text-gray-500">
-              {emailRequired
-                ? 'Te enviamos la confirmación y el acceso a tus turnos.'
-                : 'Opcional. Si no lo dejás, no vas a poder gestionar tu turno desde acá ni recibir avisos; para cambiarlo o cancelarlo escribile a la tienda por WhatsApp.'}
-            </p>
-          )}
+          <Phone size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
+          <input
+            id={`${fieldId}-phone`}
+            type="tel"
+            required
+            autoComplete="tel"
+            value={client.phone}
+            onChange={(e) => updateClient({ phone: e.target.value })}
+            className="w-full min-h-11 pl-12 pr-4 py-3.5 font-bold"
+            style={clientInputStyle}
+            // Un ejemplo con forma de numero: "PREFIJO + NUM" no decia nada en
+            // el celular. La validacion no cambia (isValidClientPhone).
+            placeholder="Ej: 351 1234567"
+            aria-invalid={Boolean(client.phone.trim()) && !phoneValid}
+          />
         </div>
-
-        <div className="relative">
-          <label
-            htmlFor={`${fieldId}-phone`}
-            className="text-[10px] font-black uppercase tracking-widest text-gray-400 ml-1 block mb-1"
+        {client.phone.trim() && !phoneValid && (
+          <p className="mt-1 ml-1 text-[11px] font-bold text-red-600">{CLIENT_PHONE_HINT}</p>
+        )}
+        {requiresOtp && !showOtpSection && (
+          <p
+            className="mt-1 ml-1 text-[11px] font-bold"
+            style={{ color: colors2000s.text.secondary }}
           >
-            Teléfono
-          </label>
-          <div className="relative">
-            <Phone size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
-            <input
-              id={`${fieldId}-phone`}
-              type="tel"
-              required
-              autoComplete="tel"
-              value={client.phone}
-              onChange={(e) => updateClient({ phone: e.target.value })}
-              className="w-full min-h-11 pl-12 pr-4 py-3.5 font-bold"
-              style={clientInputStyle}
-              // Un ejemplo con forma de numero: "PREFIJO + NUM" no decia nada en
-              // el celular. La validacion no cambia (isValidClientPhone).
-              placeholder="Ej: 351 1234567"
-              aria-invalid={Boolean(client.phone.trim()) && !phoneValid}
-            />
-          </div>
-          {client.phone.trim() && !phoneValid && (
-            <p className="mt-1 ml-1 text-[11px] font-bold text-red-600">{CLIENT_PHONE_HINT}</p>
-          )}
-        </div>
+            Completá tu teléfono para verificarlo antes de confirmar.
+          </p>
+        )}
       </div>
 
+      <div className="relative">
+        <label
+          htmlFor={`${fieldId}-email`}
+          className="text-[10px] font-black uppercase tracking-widest text-gray-400 ml-1 block mb-1"
+        >
+          {emailRequired ? 'Email' : 'Email (opcional)'}
+        </label>
+        <div className="relative">
+          <Mail size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
+          <input
+            id={`${fieldId}-email`}
+            type="email"
+            required={emailRequired}
+            autoComplete="email"
+            value={client.email}
+            onChange={(e) => updateClient({ email: e.target.value })}
+            className="w-full min-h-11 pl-12 pr-4 py-3.5 font-bold"
+            style={clientInputStyle}
+            placeholder="juan@email.com"
+            aria-invalid={emailTyped && !emailFormatValid}
+            aria-describedby="booking-email-hint"
+          />
+        </div>
+        {emailTyped && !emailFormatValid ? (
+          <p id="booking-email-hint" className="mt-1 ml-1 text-[11px] font-bold text-red-600">
+            {BOOKING_FIELD_MESSAGES.client_email}
+          </p>
+        ) : (
+          <p id="booking-email-hint" className="mt-1 ml-1 text-[11px] font-bold text-gray-500">
+            {emailRequired
+              ? 'Te enviamos la confirmación y el acceso a tus turnos.'
+              : 'Opcional. Si no lo dejás, no vas a poder gestionar tu turno desde acá ni recibir avisos; para cambiarlo o cancelarlo escribile a la tienda por WhatsApp.'}
+          </p>
+        )}
+      </div>
+
+      {showOtpSection && (
+        <BookingOtpSection
+          phone={client.phone}
+          otpState={otpState}
+          isRequestingOtp={isRequestingOtp}
+          otpResendSeconds={otpResendSeconds}
+          isVerifyingOtp={isVerifyingOtp}
+          onRequestOtp={onRequestOtp}
+          onVerifyOtp={onVerifyOtp}
+          onOtpEmailChange={onOtpEmailChange}
+          onOtpCodeChange={onOtpCodeChange}
+        />
+      )}
+    </section>
+  )
+
+  // Lo que la tienda pide aparte de los tres datos, y las notas: debajo, sin
+  // perderse (S5). Las notas van plegadas detras de un link, como el codigo.
+  const notesFocusPending = useRef(false)
+  const focusNotesInput = (input: HTMLTextAreaElement | null) => {
+    if (!input || !notesFocusPending.current) return
+    notesFocusPending.current = false
+    input.focus()
+  }
+  const renderExtraFields = () => (
+    <div className="space-y-4">
       {customFields.length > 0 && (
         <div
           className="space-y-4 rounded-md p-4"
@@ -728,7 +797,10 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
           </div>
           {customFields.map((field) => (
             <div key={field.key} className="space-y-1.5">
-              <label className="text-[10px] font-black uppercase tracking-widest text-gray-400 ml-1 block">
+              <label
+                htmlFor={`${fieldId}-custom-${field.key}`}
+                className="text-[10px] font-black uppercase tracking-widest text-gray-400 ml-1 block"
+              >
                 {field.label}
                 {field.required ? ' *' : ''}
               </label>
@@ -741,26 +813,253 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
         </div>
       )}
 
-      <div className="relative">
-        <label
-          htmlFor={`${fieldId}-notes`}
-          className="text-[10px] font-black uppercase tracking-widest text-gray-400 ml-1 block mb-1"
-        >
-          Notas para la tienda (opcional)
-        </label>
+      {notesOpen ? (
         <div className="relative">
-          <FileText size={18} className="absolute left-4 top-4 text-gray-400" />
-          <textarea
-            id={`${fieldId}-notes`}
-            value={client.notes}
-            onChange={(e) => updateClient({ notes: e.target.value })}
-            className="w-full min-h-[100px] pl-12 pr-4 py-3.5 font-bold resize-none"
-            style={clientInputStyle}
-            placeholder="Algo que debamos saber?"
-          />
+          <label
+            htmlFor={`${fieldId}-notes`}
+            className="text-[10px] font-black uppercase tracking-widest text-gray-400 ml-1 block mb-1"
+          >
+            Notas para la tienda (opcional)
+          </label>
+          <div className="relative">
+            <FileText size={18} className="absolute left-4 top-4 text-gray-400" />
+            <textarea
+              id={`${fieldId}-notes`}
+              ref={focusNotesInput}
+              value={client.notes}
+              onChange={(e) => updateClient({ notes: e.target.value })}
+              className="w-full min-h-[100px] pl-12 pr-4 py-3.5 font-bold resize-none"
+              style={clientInputStyle}
+              placeholder="Algo que debamos saber?"
+            />
+          </div>
         </div>
+      ) : (
+        <button
+          type="button"
+          aria-expanded={false}
+          onClick={() => {
+            notesFocusPending.current = true
+            setNotesOpen(true)
+          }}
+          className="min-h-11 inline-flex items-center gap-2 text-xs font-black underline"
+          style={{ color: brandColor.ink }}
+        >
+          <FileText className="w-4 h-4" />
+          Agregar una nota para la tienda
+        </button>
+      )}
+    </div>
+  )
+
+  const warningBoxStyle = createBookingAccentBoxStyle(
+    colors2000s.status.warning.bg,
+    colors2000s.status.warning.border,
+    colors2000s.status.warning.text
+  )
+  const dangerBoxStyle = createBookingAccentBoxStyle(
+    colors2000s.status.danger.bg,
+    colors2000s.status.danger.border,
+    colors2000s.status.danger.text
+  )
+
+  const renderPromotion = () =>
+    !showPromotion ? (
+      <button
+        type="button"
+        aria-expanded={false}
+        onClick={() => {
+          promotionFocusPending.current = true
+          setPromotionOpen(true)
+        }}
+        className="min-h-11 inline-flex items-center gap-2 text-xs font-black underline"
+        style={{ color: brandColor.ink }}
+      >
+        <Tag className="w-4 h-4" />
+        ¿Tenés un código de descuento?
+      </button>
+    ) : (
+      <div
+        className="p-4 border space-y-3"
+        style={{ ...createBookingAccentBoxStyle('#ffffff', '#e5e7eb') }}
+      >
+        <div className="flex items-center gap-2">
+          <Tag className="w-4 h-4" style={{ color: brandColor.ink }} />
+          <label
+            htmlFor={`${fieldId}-promo-code`}
+            className="text-[10px] font-black uppercase tracking-widest text-gray-400"
+          >
+            Código promocional
+          </label>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-3">
+          <input
+            id={`${fieldId}-promo-code`}
+            ref={focusPromotionInput}
+            value={promotionCode}
+            onChange={(event) => {
+              setPromotionCode(event.target.value)
+              cancelPromotionCheck()
+              setPromotionNotice('')
+              applyPromotion('', null)
+              setErrorMessage('')
+            }}
+            className="w-full min-h-11 px-4 py-3 font-bold outline-none"
+            style={createBookingInputStyle()}
+            placeholder="Ej: BIENVENIDA10"
+          />
+          <button
+            type="button"
+            onClick={() => {
+              void handleApplyPromotion()
+            }}
+            disabled={previewPromotion.isPending}
+            className="min-h-11 px-4 py-3 rounded-2xl text-xs font-black uppercase tracking-widest disabled:opacity-50"
+            style={{
+              background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
+              border: `1px solid ${colors2000s.border.default}`,
+              boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`,
+              color: colors2000s.text.primary
+            }}
+          >
+            {previewPromotion.isPending ? 'Validando...' : 'Aplicar'}
+          </button>
+        </div>
+        {promotionNotice && (
+          <div
+            role="status"
+            className="p-3 text-xs font-bold flex flex-wrap items-center gap-2"
+            style={warningBoxStyle}
+          >
+            <span className="flex-1">{promotionNotice}</span>
+            {promotionCheckFailed && (
+              <button
+                type="button"
+                onClick={() => revalidatePromotion(addonQueryParams)}
+                className="underline font-black"
+              >
+                Reintentar
+              </button>
+            )}
+          </div>
+        )}
+        {promotionChecking && (
+          <p className="text-[11px] font-bold text-gray-500">
+            Revisando el código con los adicionales elegidos…
+          </p>
+        )}
+        {promotionPreview && (
+          <div
+            className="p-4"
+            style={{
+              ...createBookingAccentBoxStyle(
+                colors2000s.status.success.bg,
+                colors2000s.status.success.border,
+                colors2000s.status.success.text
+              ),
+              border: 'none'
+            }}
+          >
+            <p className="text-[10px] font-black uppercase tracking-widest text-green-700">
+              {promotionPreview.title}
+            </p>
+            {hasAddonOptions || hasExtraServices ? (
+              // Con adicionales o varios servicios el descuento sale sobre el
+              // total: los importes de este preview no son los que se cobran.
+              <p className="mt-2 text-sm font-black text-green-900">
+                {hasExtraServices
+                  ? 'El descuento se aplica al total del turno.'
+                  : 'El descuento se aplica al total, adicionales incluidos.'}
+              </p>
+            ) : (
+              <div className="mt-2 space-y-1 text-sm font-black text-green-900">
+                <p>Servicio: {formatCurrency(Number(promotionPreview.base_amount))}</p>
+                <p>Descuento: -{formatCurrency(Number(promotionPreview.discount_amount))}</p>
+                <p>Total final: {formatCurrency(Number(promotionPreview.final_amount))}</p>
+              </div>
+            )}
+          </div>
+        )}
       </div>
-    </section>
+    )
+
+  const renderAlerts = () => (
+    <>
+      {/* Si el servicio ya no esta en el catalogo, lo elegido igual se avisa. */}
+      {addonsChanged && (
+        <div
+          role="alert"
+          className="p-3 text-xs font-bold flex flex-wrap items-center gap-2"
+          style={warningBoxStyle}
+        >
+          <TriangleAlert className="w-4 h-4 flex-shrink-0" />
+          <span className="flex-1">{ADDONS_CHANGED_MESSAGE}</span>
+          <button type="button" onClick={reviewAddons} className="min-h-11 underline font-black">
+            Revisar adicionales
+          </button>
+        </div>
+      )}
+
+      {addonsOutdated && (
+        <div
+          role="alert"
+          className="p-3 text-xs font-bold flex flex-wrap items-center gap-2"
+          style={warningBoxStyle}
+        >
+          <TriangleAlert className="w-4 h-4 flex-shrink-0" />
+          <span className="flex-1">{ADDON_UNAVAILABLE_MESSAGE}</span>
+          <button
+            type="button"
+            onClick={() => {
+              // Con el catalogo nuevo se vuelve a pedir el importe: si la
+              // seleccion no cambio, la clave del preview tampoco, y el error
+              // quedaba hasta recargar.
+              void refreshServices().then(() => depositQuery.refetch())
+            }}
+            className="underline font-black"
+          >
+            Actualizar adicionales
+          </button>
+        </div>
+      )}
+
+      {errorMessage && (
+        <div
+          key={errorMessage}
+          ref={revealOnMount}
+          role="alert"
+          aria-live="polite"
+          className="p-3 text-xs font-bold flex items-center gap-2"
+          style={dangerBoxStyle}
+        >
+          <TriangleAlert className="w-4 h-4 flex-shrink-0" />
+          {errorMessage}
+        </div>
+      )}
+
+      {amountFailed && (
+        <div
+          role="alert"
+          className="p-3 text-xs font-bold flex flex-wrap items-center gap-2"
+          style={dangerBoxStyle}
+        >
+          <TriangleAlert className="w-4 h-4 flex-shrink-0" />
+          <span className="flex-1">
+            {serviceComboMessage ??
+              'No pudimos confirmar el importe de tu reserva. Reintentá para continuar.'}
+          </span>
+          <button
+            type="button"
+            onClick={() => {
+              void depositQuery.refetch()
+            }}
+            className="underline font-black"
+          >
+            Reintentar
+          </button>
+        </div>
+      )}
+    </>
   )
 
   if (submission.phase === 'submitting') {
@@ -791,7 +1090,8 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
   }
 
   return (
-    <div className="space-y-6 duration-500">
+    // pb-36: en el celular el boton queda fijo abajo y no tapa el ultimo campo.
+    <div className="space-y-6 duration-500 pb-36 sm:pb-0">
       <div className="space-y-3 mb-2">
         <BookingBackButton onBack={onBack} />
         <div>
@@ -808,305 +1108,50 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
       </div>
 
       {renderClientFields()}
+      {renderExtraFields()}
 
-      {showOtpSection && (
-        <BookingOtpSection
-          phone={client.phone}
-          otpState={otpState}
-          isRequestingOtp={isRequestingOtp}
-          otpResendSeconds={otpResendSeconds}
-          isVerifyingOtp={isVerifyingOtp}
-          onRequestOtp={onRequestOtp}
-          onVerifyOtp={onVerifyOtp}
-          onOtpEmailChange={onOtpEmailChange}
-          onOtpCodeChange={onOtpCodeChange}
-        />
-      )}
-      {requiresOtp && !showOtpSection && (
-        <p className="text-xs font-bold text-center" style={{ color: colors2000s.text.secondary }}>
-          Completá tu teléfono para verificarlo antes de confirmar.
-        </p>
-      )}
-
-      <div className="p-4 sm:p-6 bg-white space-y-5" style={createBookingSurfaceStyle()}>
-        <dl
-          className="grid grid-cols-1 min-[380px]:grid-cols-2 gap-3 sm:gap-4"
-          aria-label="Tu turno"
-        >
-          {turnSummary.map((item) => (
-            <div
-              key={item.label}
-              className="p-3 sm:p-4 border min-w-0"
-              style={{ ...createBookingAccentBoxStyle('#ffffff', '#e5e7eb') }}
-            >
-              <dt className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-1">
-                {item.label}
-              </dt>
-              <dd
-                className={`text-lg font-black text-gray-800 ${item.label === 'Fecha' ? 'whitespace-nowrap' : 'break-words'}`}
-              >
-                {item.value}
-              </dd>
-            </div>
-          ))}
-        </dl>
-
-        {!showPromotion ? (
-          <button
-            type="button"
-            aria-expanded={false}
-            onClick={() => {
-              promotionFocusPending.current = true
-              setPromotionOpen(true)
-            }}
-            className="inline-flex items-center gap-2 text-xs font-black underline"
-            style={{ color: brandColor.ink }}
-          >
-            <Tag className="w-4 h-4" />
-            ¿Tenés un código de descuento?
-          </button>
-        ) : (
-          <div
-            className="p-4 border space-y-3"
-            style={{ ...createBookingAccentBoxStyle('#ffffff', '#e5e7eb') }}
-          >
-            <div className="flex items-center gap-2">
-              <Tag className="w-4 h-4" style={{ color: brandColor.ink }} />
-              <label
-                htmlFor={`${fieldId}-promo-code`}
-                className="text-[10px] font-black uppercase tracking-widest text-gray-400"
-              >
-                Código promocional
-              </label>
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-3">
-              <input
-                id={`${fieldId}-promo-code`}
-                ref={focusPromotionInput}
-                value={promotionCode}
-                onChange={(event) => {
-                  setPromotionCode(event.target.value)
-                  cancelPromotionCheck()
-                  setPromotionNotice('')
-                  applyPromotion('', null)
-                  setErrorMessage('')
-                }}
-                className="w-full min-h-11 px-4 py-3 font-bold outline-none"
-                style={createBookingInputStyle()}
-                placeholder="Ej: BIENVENIDA10"
-              />
-              <button
-                type="button"
-                onClick={() => {
-                  void handleApplyPromotion()
-                }}
-                disabled={previewPromotion.isPending}
-                className="min-h-11 px-4 py-3 rounded-2xl text-xs font-black uppercase tracking-widest disabled:opacity-50"
-                style={{
-                  background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
-                  border: `1px solid ${colors2000s.border.default}`,
-                  boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`,
-                  color: colors2000s.text.primary
-                }}
-              >
-                {previewPromotion.isPending ? 'Validando...' : 'Aplicar'}
-              </button>
-            </div>
-            {promotionNotice && (
-              <div
-                role="status"
-                className="p-3 text-xs font-bold flex flex-wrap items-center gap-2"
-                style={createBookingAccentBoxStyle(
-                  colors2000s.status.warning.bg,
-                  colors2000s.status.warning.border,
-                  colors2000s.status.warning.text
-                )}
-              >
-                <span className="flex-1">{promotionNotice}</span>
-                {promotionCheckFailed && (
-                  <button
-                    type="button"
-                    onClick={() => revalidatePromotion(addonQueryParams)}
-                    className="underline font-black"
-                  >
-                    Reintentar
-                  </button>
-                )}
-              </div>
-            )}
-            {promotionChecking && (
-              <p className="text-[11px] font-bold text-gray-500">
-                Revisando el código con los adicionales elegidos…
-              </p>
-            )}
-            {promotionPreview && (
-              <div
-                className="p-4"
-                style={{
-                  ...createBookingAccentBoxStyle(
-                    colors2000s.status.success.bg,
-                    colors2000s.status.success.border,
-                    colors2000s.status.success.text
-                  ),
-                  border: 'none'
-                }}
-              >
-                <p className="text-[10px] font-black uppercase tracking-widest text-green-700">
-                  {promotionPreview.title}
-                </p>
-                {hasAddonOptions || hasExtraServices ? (
-                  // Con adicionales o varios servicios el descuento sale sobre el
-                  // total: los importes de este preview no son los que se cobran.
-                  <p className="mt-2 text-sm font-black text-green-900">
-                    {hasExtraServices
-                      ? 'El descuento se aplica al total del turno.'
-                      : 'El descuento se aplica al total, adicionales incluidos.'}
-                  </p>
-                ) : (
-                  <div className="mt-2 space-y-1 text-sm font-black text-green-900">
-                    <p>Servicio: {formatCurrency(Number(promotionPreview.base_amount))}</p>
-                    <p>Descuento: -{formatCurrency(Number(promotionPreview.discount_amount))}</p>
-                    <p>Total final: {formatCurrency(Number(promotionPreview.final_amount))}</p>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Fuera del bloque de adicionales: si el servicio ya no esta en el
-            catalogo, lo elegido igual se avisa. */}
-        {addonsChanged && (
-          <div
-            role="alert"
-            className="p-3 text-xs font-bold flex flex-wrap items-center gap-2"
-            style={createBookingAccentBoxStyle(
-              colors2000s.status.warning.bg,
-              colors2000s.status.warning.border,
-              colors2000s.status.warning.text
-            )}
-          >
-            <TriangleAlert className="w-4 h-4 flex-shrink-0" />
-            <span className="flex-1">{ADDONS_CHANGED_MESSAGE}</span>
-            <button
-              type="button"
-              onClick={() => commitAddons(addonGroups)}
-              className="underline font-black"
-            >
-              Revisé mi selección
-            </button>
-          </div>
-        )}
-
-        {(hasAddonOptions || hasExtraServices) && (
-          <>
-            {/* Con varios servicios, un bloque por servicio con sus adicionales. */}
-            {addonGroups.map((group) => (
-              <BookingAddonsPicker
-                key={group.serviceId}
-                title={
-                  hasExtraServices && group.service
-                    ? `Adicionales de ${group.service.name}`
-                    : undefined
-                }
-                addons={group.options}
-                quantities={group.selection.toQuantities()}
-                onChange={(addonId, quantity) =>
-                  handleAddonChange(group.serviceId, addonId, quantity)
-                }
-              />
-            ))}
-            {addonsOutdated && (
-              <div
-                role="alert"
-                className="p-3 text-xs font-bold flex flex-wrap items-center gap-2"
-                style={createBookingAccentBoxStyle(
-                  colors2000s.status.warning.bg,
-                  colors2000s.status.warning.border,
-                  colors2000s.status.warning.text
-                )}
-              >
-                <TriangleAlert className="w-4 h-4 flex-shrink-0" />
-                <span className="flex-1">{ADDON_UNAVAILABLE_MESSAGE}</span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    // Con el catalogo nuevo se vuelve a pedir el importe: si la
-                    // seleccion no cambio, la clave del preview tampoco, y el
-                    // error quedaba hasta recargar.
-                    void refreshServices().then(() => depositQuery.refetch())
-                  }}
-                  className="underline font-black"
-                >
-                  Actualizar adicionales
-                </button>
-              </div>
-            )}
-            <BookingPriceSummary
-              basePrice={listPrice}
-              addons={addonLines}
-              serviceLines={
-                hasExtraServices
-                  ? addonGroups.map((group) => ({
-                      serviceId: group.serviceId,
-                      name: group.service?.name ?? 'Servicio',
-                      price: Number(group.service?.price ?? 0),
-                      addons: group.selection.lines()
-                    }))
-                  : undefined
+      <BookingConfirmationCard
+        summaryServices={summaryServices}
+        summaryDetails={summaryDetails}
+        storeName={storeName}
+        depositPolicy={depositPolicy}
+        acceptsTerms={acceptsTerms}
+        onAcceptsTermsChange={setAcceptsTerms}
+        paymentChoice={
+          canPayDeposit && !onlinePaymentMandatory
+            ? {
+                value: chosenMethod,
+                manualLabel: owesDepositByWhatsApp
+                  ? 'Por WhatsApp a la tienda'
+                  : 'No la pago ahora, solo reservo',
+                onChange: setChosenMethod
               }
-              discount={discount}
-              promotionCode={promotionApplied ? bookingState.promotionCode : undefined}
-              total={totalPrice}
-              pendingLabel={amountFailed ? 'Sin confirmar' : undefined}
-            />
-          </>
-        )}
-
-        {errorMessage && (
-          <div
-            key={errorMessage}
-            ref={revealOnMount}
-            role="alert"
-            aria-live="polite"
-            className="p-3 text-xs font-bold flex items-center gap-2"
-            style={createBookingAccentBoxStyle(
-              colors2000s.status.danger.bg,
-              colors2000s.status.danger.border,
-              colors2000s.status.danger.text
-            )}
-          >
-            <TriangleAlert className="w-4 h-4 flex-shrink-0" />
-            {errorMessage}
-          </div>
-        )}
-
-        {amountFailed && (
-          <div
-            role="alert"
-            className="p-3 text-xs font-bold flex flex-wrap items-center gap-2"
-            style={createBookingAccentBoxStyle(
-              colors2000s.status.danger.bg,
-              colors2000s.status.danger.border,
-              colors2000s.status.danger.text
-            )}
-          >
-            <TriangleAlert className="w-4 h-4 flex-shrink-0" />
-            <span className="flex-1">
-              {serviceComboMessage ??
-                'No pudimos confirmar el importe de tu reserva. Reintentá para continuar.'}
-            </span>
-            <button
-              type="button"
-              onClick={() => {
-                void depositQuery.refetch()
-              }}
-              className="underline font-black"
-            >
-              Reintentar
-            </button>
-          </div>
-        )}
+            : null
+        }
+        barAmount={submitMethod === 'mercadopago' && confirmedDepositLabel ? null : totalLabel}
+        submit={submitAction}
+        onSubmit={(method) => {
+          void handleConfirm(method)
+        }}
+      >
+        <BookingPriceSummary
+          basePrice={listPrice}
+          addons={addonLines}
+          serviceLines={
+            hasExtraServices
+              ? addonGroups.map((group) => ({
+                  serviceId: group.serviceId,
+                  name: group.service?.name ?? 'Servicio',
+                  price: Number(group.service?.price ?? 0),
+                  addons: group.selection.lines()
+                }))
+              : undefined
+          }
+          discount={discount}
+          promotionCode={promotionApplied ? bookingState.promotionCode : undefined}
+          total={shownTotal}
+          pendingLabel={amountFailed ? 'Sin confirmar' : undefined}
+        />
 
         {depositPreview && depositPreview.amount > 0 && (
           <div
@@ -1130,127 +1175,16 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
           </div>
         )}
 
-        {/* La politica se muestra aca, junto a la seña y antes de aceptar
-            (Legal.tsx: "se muestra al cliente antes de confirmar la reserva");
-            el pie de la pagina no la repite en este paso. Una larga va plegada
-            detras de "Ver política de seña" para no tapar el boton en el
-            celular; corta, se ve entera. */}
-        {depositPolicy &&
-          (depositPolicy.length > LONG_DEPOSIT_POLICY_CHARS ? (
-            <details
-              className="p-4 text-xs leading-relaxed"
-              style={createBookingAccentBoxStyle(
-                colors2000s.bg.button,
-                colors2000s.border.default,
-                colors2000s.text.secondary
-              )}
-            >
-              <summary className="cursor-pointer font-black uppercase tracking-widest text-[10px]">
-                Ver política de seña de {storeName}
-              </summary>
-              <p className="mt-2 font-medium whitespace-pre-line">{depositPolicy}</p>
-            </details>
-          ) : (
-            <div
-              className="p-4 text-xs leading-relaxed"
-              style={createBookingAccentBoxStyle(
-                colors2000s.bg.button,
-                colors2000s.border.default,
-                colors2000s.text.secondary
-              )}
-            >
-              <p className="font-black uppercase tracking-widest text-[10px] mb-1">
-                Política de seña de {storeName}
-              </p>
-              <p className="font-medium whitespace-pre-line">{depositPolicy}</p>
-            </div>
-          ))}
-
-        <label
-          className="flex items-start gap-3 text-xs font-bold cursor-pointer select-none"
-          style={{ color: colors2000s.text.secondary }}
-        >
-          <input
-            type="checkbox"
-            checked={acceptsTerms}
-            onChange={(event) => setAcceptsTerms(event.target.checked)}
-            className="mt-0.5 w-4 h-4 cursor-pointer"
-            style={{ accentColor: brandColor.fill }}
-          />
-          <span>
-            Acepto los{' '}
-            <a
-              href="/legal/terminos"
-              target="_blank"
-              rel="noreferrer"
-              className="underline"
-              style={{ color: brandColor.ink }}
-            >
-              términos y condiciones
-            </a>
-            , la{' '}
-            <a
-              href="/legal/privacidad"
-              target="_blank"
-              rel="noreferrer"
-              className="underline"
-              style={{ color: brandColor.ink }}
-            >
-              política de privacidad
-            </a>
-            {depositPolicy ? ' y la política de seña de la tienda.' : '.'}
-          </span>
-        </label>
-
-        {!onlinePaymentMandatory && (
-          <button
-            type="button"
-            disabled={!canSubmit}
-            onClick={() => {
-              void handleConfirm('manual')
-            }}
-            className="w-full min-h-11 font-black py-4 rounded-xl transition-all uppercase tracking-widest text-xs active:scale-95 border cursor-pointer select-none disabled:cursor-not-allowed"
-            style={canSubmit ? brandCtaStyle : buttonStyles2000s.disabled}
-          >
-            {owesDepositByWhatsApp ? (
-              <>
-                <Phone className="w-4 h-4 inline mr-2" />
-                Reservar y pagar la seña por WhatsApp
-              </>
-            ) : (
-              <>
-                <CalendarCheck className="w-4 h-4 inline mr-2" />
-                Confirmar reserva
-              </>
-            )}
-          </button>
-        )}
-        {canPayDeposit && (
-          <button
-            type="button"
-            disabled={!canSubmit}
-            onClick={() => {
-              void handleConfirm('mercadopago')
-            }}
-            className="w-full min-h-11 font-black py-4 rounded-xl transition-all uppercase tracking-widest text-xs active:scale-95 border cursor-pointer select-none inline-flex items-center justify-center gap-2 disabled:cursor-not-allowed"
-            style={canSubmit ? brandCtaStyle : buttonStyles2000s.disabled}
-          >
-            <WalletCards className="w-4 h-4" />
-            Pagar seña con Mercado Pago
-          </button>
-        )}
-      </div>
+        {renderPromotion()}
+        {renderAlerts()}
+      </BookingConfirmationCard>
 
       {submission.phase === 'error' && submission.slotMayBeTaken && (
         <div
           role="alert"
           aria-live="polite"
           className="p-4 text-xs font-bold flex items-center gap-2"
-          style={createBookingAccentBoxStyle(
-            colors2000s.status.warning.bg,
-            colors2000s.status.warning.border,
-            colors2000s.status.warning.text
-          )}
+          style={warningBoxStyle}
         >
           <TriangleAlert className="w-4 h-4 flex-shrink-0" />
           El horario podria haberse ocupado mientras completabas el formulario. Volve un paso atras
