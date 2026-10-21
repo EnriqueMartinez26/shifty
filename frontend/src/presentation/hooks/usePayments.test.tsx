@@ -51,6 +51,13 @@ const CLAVES_DEL_COBRO = [
   ['calendar-agenda']
 ]
 
+const CLAVES_DEL_REEMBOLSO = [
+  ...CLAVES_DEL_COBRO,
+  ['reports-summary'],
+  ['reports-professionals'],
+  ['dashboard-summary']
+]
+
 describe('usePayments: mutaciones que cambian el estado del cobro', () => {
   beforeEach(() => {
     mockManualConfirm.mockReset()
@@ -98,7 +105,7 @@ describe('usePayments: mutaciones que cambian el estado del cobro', () => {
     expect(clavesInvalidadas(invalidateSpy)).toEqual(CLAVES_DEL_COBRO)
   })
 
-  it('registrar una devolucion refresca las mismas consultas', async () => {
+  it('registrar una devolucion total refresca Cobros, agenda, reportes y panel', async () => {
     mockRefund.mockResolvedValue({ public_id: 'pay_1' })
     const { envoltorio, invalidateSpy } = crearEnvoltorio()
 
@@ -106,7 +113,7 @@ describe('usePayments: mutaciones que cambian el estado del cobro', () => {
     result.current.mutate({ paymentId: 'pay_1', manual: true })
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
-    expect(clavesInvalidadas(invalidateSpy)).toEqual(CLAVES_DEL_COBRO)
+    expect(clavesInvalidadas(invalidateSpy)).toEqual(CLAVES_DEL_REEMBOLSO)
   })
 
   it('una devolucion rechazada no invalida nada', async () => {
