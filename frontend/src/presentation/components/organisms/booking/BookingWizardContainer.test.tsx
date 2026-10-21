@@ -1289,7 +1289,7 @@ describe('BookingWizardContainer con el color de la tienda', () => {
 
       expect(variables(raiz())).toEqual({
         '--brand-fill': colors2000s.orange.cta,
-        '--brand-fill-bottom': colors2000s.orange.dark,
+        '--brand-fill-bottom': colors2000s.orange.ctaEnd,
         '--brand-on-fill': colors2000s.text.onOrangeSelection,
         '--brand-ink': colors2000s.orange.accent
       })
