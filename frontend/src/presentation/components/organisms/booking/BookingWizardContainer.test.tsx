@@ -1261,12 +1261,12 @@ describe('BookingWizardContainer con adicionales en el paso del servicio', () =>
 describe('BookingWizardContainer con el color de la tienda', () => {
   const raiz = () =>
     screen.getByRole('region', { name: 'Paso 1 de 3: Servicio' }).parentElement as HTMLElement
+  // Todas las variables de marca que la raiz fija (sin color de tienda no hay --brand-glow).
   const variables = (element: HTMLElement) =>
     Object.fromEntries(
-      ['--brand-fill', '--brand-fill-bottom', '--brand-on-fill', '--brand-ink'].map((name) => [
-        name,
-        element.style.getPropertyValue(name)
-      ])
+      Array.from(element.style)
+        .filter((name) => name.startsWith('--brand-'))
+        .map((name) => [name, element.style.getPropertyValue(name)])
     )
 
   beforeEach(() => {

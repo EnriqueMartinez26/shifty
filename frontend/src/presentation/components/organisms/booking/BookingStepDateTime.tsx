@@ -23,7 +23,7 @@ import { BookingBackButton } from './BookingBackButton'
 import type { BookingSlotStaff } from './types'
 import { WaitlistJoinForm } from './WaitlistJoinForm'
 import { colors2000s } from '../../../../theme/colors'
-import { brandColor } from '../../../lib/brandTheme'
+import { brandColor, brandGlowShadow } from '../../../lib/brandTheme'
 import { createBookingSurfaceStyle } from '../../../lib/surfaceStyles'
 
 interface BookingStepDateTimeProps {
@@ -425,7 +425,7 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
                     : `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
                   borderColor: isSelected ? brandColor.fillBottom : colors2000s.border.default,
                   boxShadow: isSelected
-                    ? `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerOrange}`
+                    ? `${colors2000s.shadows.insetLight}, ${brandGlowShadow}`
                     : `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`,
                   color: isSelected ? brandColor.onFill : colors2000s.text.primary
                 }}
@@ -601,7 +601,7 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
                           : `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
                         borderColor: isSelected ? brandColor.ink : colors2000s.border.default,
                         boxShadow: isSelected
-                          ? `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerOrange}`
+                          ? `${colors2000s.shadows.insetLight}, ${brandGlowShadow}`
                           : `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`,
                         color: isSelected ? brandColor.onFill : colors2000s.text.primary
                       }}

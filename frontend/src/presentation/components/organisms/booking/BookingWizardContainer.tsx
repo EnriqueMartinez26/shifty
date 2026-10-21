@@ -30,7 +30,12 @@ import {
   useVerifyPublicOtp
 } from '../../../hooks/usePublic'
 import { useResendCooldown } from '../../../hooks/useResendCooldown'
-import { brandColor, brandCssVariables, resolveBrandTheme } from '../../../lib/brandTheme'
+import {
+  brandColor,
+  brandCssVariables,
+  brandGlowShadow,
+  resolveBrandTheme
+} from '../../../lib/brandTheme'
 import { createBookingSurfaceStyle } from '../../../lib/surfaceStyles'
 
 interface BookingWizardContainerProps {
@@ -357,7 +362,7 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
                   boxShadow: isCompleted
                     ? `${colors2000s.shadows.insetLight}, 0 2px 4px rgba(16,185,129,0.3)`
                     : isActive
-                      ? `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerOrange}`
+                      ? `${colors2000s.shadows.insetLight}, ${brandGlowShadow}`
                       : `${colors2000s.shadows.insetLight}, 0 1px 2px rgba(0,0,0,0.05)`,
                   color: isCompleted
                     ? colors2000s.text.onOrange

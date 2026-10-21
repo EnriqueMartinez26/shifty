@@ -2,6 +2,7 @@ import {
   brandColor,
   brandCssVariables,
   brandCtaStyle,
+  brandGlowShadow,
   brandSelectedStyle,
   contrastRatio,
   DEFAULT_BRAND_THEME,
@@ -28,6 +29,24 @@ describe('resolveBrandTheme', () => {
     }
   )
 
+  // QA 2026-10-21: el texto de marca sobre los botones grises (#f5f5f5 a
+  // #ebebeb) quedaba en 4.21:1 con rosa y 3.87:1 con amarillo.
+  it.each(['#ff70fa', '#ffff00', '#fff', '#3b82f6', '#777777', '#111111', '#e67e22', '#00ff88'])(
+    'keeps AA for brand text on the gray button surface (%s)',
+    (value) => {
+      const theme = resolveBrandTheme(value)
+      expect(contrastRatio(theme.ink, colors2000s.bg.button)).toBeGreaterThanOrEqual(4.5)
+      expect(contrastRatio(theme.ink, colors2000s.bg.buttonBottom)).toBeGreaterThanOrEqual(4.5)
+    }
+  )
+
+  it('the default ink already passes on white and on the gray surface', () => {
+    expect(contrastRatio(DEFAULT_BRAND_THEME.ink, '#ffffff')).toBeGreaterThanOrEqual(4.5)
+    expect(
+      contrastRatio(DEFAULT_BRAND_THEME.ink, colors2000s.bg.buttonBottom)
+    ).toBeGreaterThanOrEqual(4.5)
+  })
+
   it('keeps the store color as the fill and darkens only the ink', () => {
     const theme = resolveBrandTheme('#FF70FA')
     expect(theme.fill).toBe('#ff70fa')
@@ -44,8 +63,13 @@ describe('resolveBrandTheme', () => {
       '--brand-fill': '#3b82f6',
       '--brand-fill-bottom': expect.stringMatching(/^#[\da-f]{6}$/),
       '--brand-on-fill': expect.stringMatching(/^#(000000|ffffff)$/),
-      '--brand-ink': expect.stringMatching(/^#[\da-f]{6}$/)
+      '--brand-ink': expect.stringMatching(/^#[\da-f]{6}$/),
+      '--brand-glow': 'color-mix(in srgb, var(--brand-fill) 25%, transparent)'
     })
+  })
+
+  it('without a store color sets no glow, so the orange shadow stays', () => {
+    expect(brandCssVariables(DEFAULT_BRAND_THEME)).not.toHaveProperty('--brand-glow')
   })
 })
 
@@ -67,8 +91,16 @@ describe('brand variable references', () => {
       background: brandColor.fillGradient,
       borderColor: brandColor.fillBottom,
       color: brandColor.onFill,
-      boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerOrange}`
+      boxShadow: `${colors2000s.shadows.insetLight}, ${brandGlowShadow}`
     })
+  })
+
+  // QA 2026-10-21: el resplandor naranja quedaba debajo de un boton rosa.
+  it('the glow follows the brand and falls back to the orange shadow', () => {
+    expect(brandGlowShadow).toBe('0 2px 4px var(--brand-glow, rgba(200, 90, 15, 0.25))')
+    expect(brandGlowShadow.replace(/var\(--brand-glow, (.+)\)$/, '$1')).toBe(
+      colors2000s.shadows.outerOrange
+    )
   })
 
   it('paints the 2000s selected state with the brand and keeps its shape', () => {
@@ -76,7 +108,8 @@ describe('brand variable references', () => {
       ...buttonStyles2000s.selected,
       background: brandColor.fillGradient,
       border: `1px solid ${brandColor.ink}`,
-      color: brandColor.onFill
+      color: brandColor.onFill,
+      boxShadow: `${colors2000s.shadows.insetLight}, ${brandGlowShadow}`
     })
   })
 })
