@@ -1,5 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react'
-import { format } from 'date-fns'
+import { addDays, format, parseISO } from 'date-fns'
+
+import { formatArgentinaDate } from '@shared/utils/argentinaTime'
 
 import { BookingStepDateTime } from './BookingStepDateTime'
 import { colors2000s } from '../../../../theme/colors'
@@ -413,13 +415,14 @@ describe('BookingStepDateTime', () => {
     // recibe foco y el navegador lo activa con Enter/Espacio (jsdom no simula
     // esa activacion, asi que se verifica el elemento y su efecto).
     mockAvailability.mockReturnValue({ isLoading: false, data: [] })
+    const hoyArgentina = formatArgentinaDate(new Date().toISOString())
 
     render(
       <BookingStepDateTime
         storePublicId="store-1"
         serviceId="svc-1"
         staffId={null}
-        selectedDate="2026-09-25"
+        selectedDate={hoyArgentina}
         selectedTime={null}
         onSelect={() => undefined}
         onBack={() => undefined}
@@ -437,7 +440,69 @@ describe('BookingStepDateTime', () => {
     fireEvent.click(interruptor)
 
     expect(interruptor).toHaveAttribute('aria-checked', 'true')
-    expect(mockAvailability).toHaveBeenLastCalledWith('store-1', 'svc-1', '2026-09-25', true, [])
+    expect(mockAvailability).toHaveBeenLastCalledWith('store-1', 'svc-1', hoyArgentina, true, [])
+  })
+
+  it('pagina el horizonte argentino en bloques de 14 y conserva una ultima pagina de 9 fechas', () => {
+    mockAvailability.mockReturnValue({ isLoading: false, data: [] })
+    const today = parseISO(formatArgentinaDate(new Date().toISOString()))
+    const onEmptyAvailability = jest.fn()
+
+    render(
+      <BookingStepDateTime
+        storePublicId="store-1"
+        serviceId="svc-1"
+        staffId={null}
+        selectedDate={null}
+        selectedTime={null}
+        onSelect={() => undefined}
+        onBack={() => undefined}
+        onEmptyAvailability={onEmptyAvailability}
+      />
+    )
+
+    const counter = screen.getByText('Días 1–14 de 121')
+    expect(counter).toHaveClass('whitespace-nowrap')
+    expect(counter.parentElement).toHaveClass('flex-col', 'sm:flex-row')
+    expect(screen.getAllByTestId(/^date-/)).toHaveLength(14)
+    expect(
+      screen.getByRole('button', { name: 'Anterior: mostrar los 14 días anteriores' })
+    ).toBeDisabled()
+    expect(onEmptyAvailability).toHaveBeenCalledTimes(1)
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Siguiente: mostrar los 14 días siguientes' })
+    )
+
+    expect(screen.getByText('Días 15–28 de 121')).toBeInTheDocument()
+    expect(mockAvailability).toHaveBeenLastCalledWith('store-1', 'svc-1', undefined, false, [])
+    expect(screen.getByText('Elegí una fecha para ver los horarios.')).toBeInTheDocument()
+    expect(onEmptyAvailability).toHaveBeenCalledTimes(1)
+
+    const selectedDate = format(addDays(today, 15), 'yyyy-MM-dd')
+    fireEvent.click(screen.getByTestId(`date-${selectedDate}`))
+    expect(mockAvailability).toHaveBeenLastCalledWith('store-1', 'svc-1', selectedDate, false, [])
+    expect(onEmptyAvailability).toHaveBeenCalledTimes(2)
+
+    for (let page = 2; page < 8; page += 1) {
+      fireEvent.click(
+        screen.getByRole('button', { name: 'Siguiente: mostrar los 14 días siguientes' })
+      )
+    }
+
+    expect(
+      screen.getByRole('button', { name: 'Siguiente: mostrar los 9 días siguientes' })
+    ).not.toBeDisabled()
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Siguiente: mostrar los 9 días siguientes' })
+    )
+
+    expect(screen.getByText('Días 113–121 de 121')).toBeInTheDocument()
+    expect(screen.getAllByTestId(/^date-/)).toHaveLength(9)
+    expect(
+      screen.getByRole('button', { name: 'Siguiente: no hay más fechas disponibles' })
+    ).toBeDisabled()
+    expect(onEmptyAvailability).toHaveBeenCalledTimes(2)
   })
 
   it('indica el desplazamiento de fechas y adapta los horarios a dos columnas angostas', () => {
@@ -616,11 +681,10 @@ describe('BookingStepDateTime', () => {
   })
 
   it('una fecha lejana que vino por deep-link aparece en la tira y carga sus horarios', () => {
-    // La tira muestra 14 dias: el ?date= de un link de reoferta a 45 dias
-    // cargaba sus horarios pero el dia no se veia seleccionado en ningun lado.
+    // El ?date= de un link de reoferta abre la pagina que contiene ese dia.
     mockAvailability.mockReturnValue({ isLoading: false, data: [] })
-    const lejana = new Date()
-    lejana.setDate(lejana.getDate() + 45)
+    const today = parseISO(formatArgentinaDate(new Date().toISOString()))
+    const lejana = addDays(today, 45)
     const lejanaStr = format(lejana, 'yyyy-MM-dd')
 
     render(
@@ -636,6 +700,7 @@ describe('BookingStepDateTime', () => {
     )
 
     expect(screen.getByTestId(`date-${lejanaStr}`)).toBeInTheDocument()
+    expect(screen.getByText('Días 43–56 de 121')).toBeInTheDocument()
     expect(mockAvailability).toHaveBeenCalledWith('store-1', 'svc-1', lejanaStr, false, [])
   })
 
