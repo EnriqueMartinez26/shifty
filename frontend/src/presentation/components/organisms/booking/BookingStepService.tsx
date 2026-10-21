@@ -70,7 +70,7 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
       onClick={onClick}
       disabled={blockHint !== null}
       aria-pressed={multi ? isSelected : undefined}
-      className="w-full text-left p-4 pl-5 sm:p-5 flex items-center gap-3 sm:gap-4 transition-all active:scale-98 group border relative overflow-hidden disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100"
+      className="w-full text-left p-3 pl-4 sm:p-5 flex items-center gap-2 sm:gap-4 transition-all active:scale-98 group border relative overflow-hidden disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100"
       style={createBookingChoiceCardStyle(isSelected)}
     >
       {/* Left dynamic accented border */}
@@ -78,7 +78,7 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
 
       {/* Glossy avatar */}
       <div
-        className="w-12 h-12 sm:w-14 sm:h-14 rounded-md flex items-center justify-center flex-shrink-0 ml-1 overflow-hidden"
+        className="w-9 h-9 sm:w-14 sm:h-14 rounded-md flex items-center justify-center flex-shrink-0 overflow-hidden"
         style={{
           background: isSelected
             ? 'linear-gradient(135deg, rgba(255,255,255,0.4) 0%, rgba(255,255,255,0.15) 100%)'
@@ -149,7 +149,7 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
       </div>
 
       <div
-        className="w-7 h-7 flex-shrink-0 rounded-full flex items-center justify-center transition-all"
+        className="w-6 h-6 sm:w-7 sm:h-7 flex-shrink-0 rounded-full flex items-center justify-center transition-all"
         style={{
           background: isSelected
             ? `linear-gradient(180deg, ${colors2000s.status.success.light} 0%, ${colors2000s.status.success.dark} 100%)`
