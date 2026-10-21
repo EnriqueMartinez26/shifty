@@ -2089,8 +2089,9 @@ describe('BookingStepConfirmation: confirmación compacta (S5)', () => {
     expect(barra.getAttribute('style')).toContain('env(safe-area-inset-bottom)')
     expect(within(barra).getByRole('button', { name: /Pagar seña/ })).toBeInTheDocument()
     expect(barra).toHaveTextContent(formatCurrency(6900))
-    // Espacio al pie del paso para que la barra no tape el ultimo campo.
-    expect(container.firstElementChild).toHaveClass('pb-36', 'sm:pb-0')
+    // QA 2026-10-21: el espacio para la barra lo reserva la pagina debajo del
+    // pie (PublicBooking); dentro de la tarjeta dejaba un hueco vacio.
+    expect(container.firstElementChild).not.toHaveClass('pb-36')
   })
 
   it('el paso ya no tiene el selector de adicionales', () => {

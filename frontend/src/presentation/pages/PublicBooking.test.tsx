@@ -361,6 +361,24 @@ describe('PublicBooking: objetivos táctiles', () => {
     expect(screen.getByRole('link', { name: 'Términos y condiciones' })).toHaveClass('min-h-11')
     expect(screen.getByRole('link', { name: 'Privacidad' })).toHaveClass('min-h-11')
   })
+
+  // QA 2026-10-21 (S5): en el celular la barra fija de pago tapaba los links
+  // del pie al final de la pagina.
+  it('en la confirmacion la pagina reserva abajo el alto de la barra fija, solo en el celular', () => {
+    renderEn('/booking/sol?step=2')
+
+    expect(screen.getByRole('main')).toHaveClass(
+      'pb-[calc(8rem+env(safe-area-inset-bottom))]',
+      'sm:pb-12'
+    )
+  })
+
+  it('en los otros pasos la pagina no reserva ese espacio', () => {
+    renderEn('/booking/sol?step=1')
+
+    expect(screen.getByRole('main')).not.toHaveClass('pb-[calc(8rem+env(safe-area-inset-bottom))]')
+    expect(screen.getByRole('main')).toHaveClass('py-8')
+  })
 })
 
 // 2026-10-16 (pedido de Mateo): en el paso de confirmacion la politica de seña

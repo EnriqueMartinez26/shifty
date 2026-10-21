@@ -206,9 +206,17 @@ const PublicBooking: React.FC = () => {
     )
   }
 
+  // En la confirmacion el boton de pago queda fijo al pie en el celular
+  // (BookingConfirmationCard): la pagina reserva su alto, gesto de inicio
+  // incluido, para que no tape los links del pie al final.
+  const verticalPadding =
+    bookingStep.step === STEP_CONFIRMATION
+      ? 'pt-8 pb-[calc(8rem+env(safe-area-inset-bottom))] sm:pt-12 sm:pb-12'
+      : 'py-8 sm:py-12'
+
   return (
     <main
-      className="min-h-screen py-8 px-4 sm:py-12 sm:px-6 lg:px-8"
+      className={`min-h-screen px-4 sm:px-6 lg:px-8 ${verticalPadding}`}
       style={{ background: colors2000s.bg.primary }}
     >
       {header}

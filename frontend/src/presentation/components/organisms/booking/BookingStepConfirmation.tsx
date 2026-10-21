@@ -1103,8 +1103,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
   }
 
   return (
-    // pb-36: en el celular el boton queda fijo abajo y no tapa el ultimo campo.
-    <div className="space-y-6 duration-500 pb-36 sm:pb-0">
+    <div className="space-y-6 duration-500">
       <div className="space-y-3 mb-2">
         <BookingBackButton onBack={onBack} />
         <div>
