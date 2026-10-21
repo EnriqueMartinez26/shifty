@@ -51,6 +51,13 @@ describe('StoreHeader', () => {
     expect(screen.getByRole('banner').firstElementChild?.contains(portada)).toBe(true)
   })
 
+  it('la portada usa el encuadre que eligio la tienda', () => {
+    const { container } = renderHeader({ coverUrl: '/media/cover.webp', coverPosition: 'top' })
+
+    const portada = container.querySelector('img[src="/media/cover.webp"]') as HTMLElement
+    expect(portada.style.objectPosition).toBe('center 20%')
+  })
+
   it('sin portada el degradado del color de marca ocupa su lugar', () => {
     renderHeader()
 

@@ -21,6 +21,7 @@ const value: TabProps['value'] = {
   logo_url: '',
   primary_color: '#ff6600',
   cover_url: '',
+  cover_position: null,
   whatsapp_number: '',
   description: '',
   custom_client_fields: [],
@@ -130,6 +131,51 @@ describe('SettingsIdentityTab', () => {
     expect(img).toHaveAttribute('src', '/media/cover.webp')
     expect(img).toHaveClass('object-cover')
     expect(img.parentElement).toHaveClass('aspect-[3/1]')
+  })
+
+  // 2026-10-22 (S10.1): con la foto real el portal mostraba el medio y cortaba
+  // lo que importaba. La tienda elige que parte se ve.
+  describe('encuadre de la portada', () => {
+    const conPortada = { ...value, cover_url: '/media/cover.webp' }
+
+    it('sin portada no ofrece elegir el encuadre', () => {
+      renderTab()
+
+      expect(
+        screen.queryByRole('radiogroup', { name: 'Qué parte de la foto se ve' })
+      ).not.toBeInTheDocument()
+    })
+
+    it('con portada ofrece Arriba, Centro y Abajo, de 44 px, sin ninguno elegido', () => {
+      renderTab({ value: conPortada })
+
+      const grupo = screen.getByRole('radiogroup', { name: 'Qué parte de la foto se ve' })
+      const opciones = ['Arriba', 'Centro', 'Abajo'].map((nombre) =>
+        screen.getByRole('radio', { name: nombre })
+      )
+      opciones.forEach((opcion) => {
+        expect(grupo.contains(opcion)).toBe(true)
+        expect((opcion as HTMLInputElement).checked).toBe(false)
+        expect(opcion.closest('label')).toHaveClass('min-h-11', 'min-w-11')
+      })
+      // Sin elegir, la vista previa encuadra como el portal.
+      expect(screen.getByRole('img', { name: 'Portada' }).style.objectPosition).toBe('center 65%')
+    })
+
+    it('marca el encuadre guardado y la vista previa lo sigue', () => {
+      renderTab({ value: { ...conPortada, cover_position: 'top' } })
+
+      expect((screen.getByRole('radio', { name: 'Arriba' }) as HTMLInputElement).checked).toBe(true)
+      expect(screen.getByRole('img', { name: 'Portada' }).style.objectPosition).toBe('center 20%')
+    })
+
+    it('elegir otro devuelve solo cover_position', () => {
+      const { props } = renderTab({ value: conPortada })
+
+      fireEvent.click(screen.getByRole('radio', { name: 'Abajo' }))
+
+      expect(props.onChange).toHaveBeenCalledWith({ cover_position: 'bottom' })
+    })
   })
 
   it('subiendo la portada se apaga solo su boton', () => {

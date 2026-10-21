@@ -7,6 +7,8 @@ import { resolveBrandTheme } from '../../../lib/brandTheme'
 // portada, una franja del color de la tienda.
 // 2026-10-22 (S9): la portada va arriba de todo, de borde a borde en el
 // celular; sin portada, un degradado suave del color de la tienda.
+// 2026-10-22 (S10.1): con la foto real se veia el medio y se cortaba lo que
+// importaba; la tienda elige que parte se ve (arriba, centro o abajo).
 
 const brand = resolveBrandTheme('#123456')
 
@@ -20,6 +22,29 @@ describe('StoreCover', () => {
     expect(img).toHaveClass('h-full', 'w-full', 'object-cover')
     expect(img?.parentElement).toHaveClass('h-[140px]', 'sm:h-[232px]', 'w-full')
     expect(screen.queryByTestId('store-cover-band')).not.toBeInTheDocument()
+  })
+
+  it.each([
+    ['top', 'center 20%'],
+    ['center', 'center 50%'],
+    ['bottom', 'center 80%']
+  ] as const)('con el encuadre %s muestra la foto en %s', (position, objectPosition) => {
+    const { container } = render(
+      <StoreCover coverUrl="/media/cover.webp" coverPosition={position} brand={brand} />
+    )
+
+    expect(container.querySelector('img')?.style.objectPosition).toBe(objectPosition)
+  })
+
+  it('sin encuadre elegido muestra un poco por debajo del medio', () => {
+    const { container, rerender } = render(
+      <StoreCover coverUrl="/media/cover.webp" coverPosition={null} brand={brand} />
+    )
+    expect(container.querySelector('img')?.style.objectPosition).toBe('center 65%')
+
+    // Un backend que todavia no manda el campo se ve igual.
+    rerender(<StoreCover coverUrl="/media/cover.webp" brand={brand} />)
+    expect(container.querySelector('img')?.style.objectPosition).toBe('center 65%')
   })
 
   it('sin portada pinta un degradado suave del color de marca, mas bajo', () => {

@@ -103,6 +103,7 @@ const PublicBooking: React.FC = () => {
       name={store.name}
       logoUrl={store.logo_url}
       coverUrl={store.cover_url}
+      coverPosition={store.cover_position}
       whatsappNumber={store.whatsapp_number}
       misTurnosHref={`/b/${store.slug}/mis-turnos`}
       brand={brand}

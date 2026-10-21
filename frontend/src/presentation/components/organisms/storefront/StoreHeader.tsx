@@ -2,6 +2,8 @@ import React, { useState } from 'react'
 
 import { CalendarCheck, MessageCircle } from 'lucide-react'
 
+import type { CoverPosition } from '@application/services/StoreSettingsService'
+
 import { buildWaMeUrl } from '@shared/utils/whatsAppPhone'
 
 import { StoreCover } from './StoreCover'
@@ -15,6 +17,7 @@ interface StoreHeaderProps {
   name: string
   logoUrl: string | null | undefined
   coverUrl: string | null | undefined
+  coverPosition?: CoverPosition | null
   whatsappNumber: string | null | undefined
   misTurnosHref: string
   brand: BrandTheme
@@ -105,12 +108,13 @@ export const StoreHeader: React.FC<StoreHeaderProps> = ({
   name,
   logoUrl,
   coverUrl,
+  coverPosition,
   whatsappNumber,
   misTurnosHref,
   brand
 }) => (
   <header className="mx-auto w-full max-w-2xl">
-    <StoreCover coverUrl={coverUrl} brand={brand} />
+    <StoreCover coverUrl={coverUrl} coverPosition={coverPosition} brand={brand} />
     {/* En la compu, el mismo margen interno que la tarjeta del wizard: el logo
         no queda sobre la esquina redondeada de la portada. */}
     <div className="flex items-start gap-3 px-4 sm:gap-4 sm:px-8">

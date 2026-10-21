@@ -52,6 +52,24 @@ describe('base que arma el formulario desde el servidor', () => {
     expect(base.deposit_policy).toBe('')
   })
 
+  // S10.1 (2026-10-22): el encuadre de la portada. Un backend que todavia no
+  // manda el campo es "sin elegir".
+  it('toma el encuadre de la portada, o ninguno si el servidor no lo manda', () => {
+    expect(base.cover_position).toBeNull()
+    expect(buildSettingsBase({ ...store, cover_position: 'top' }, undefined).cover_position).toBe(
+      'top'
+    )
+  })
+
+  it('elegir el encuadre lo manda solo a el; volver al del servidor no manda nada', () => {
+    const conEncuadre = buildSettingsBase({ ...store, cover_position: 'top' }, undefined)
+
+    expect(planSave(conEncuadre, { cover_position: 'bottom' }).store).toEqual({
+      cover_position: 'bottom'
+    })
+    expect(planSave(conEncuadre, { cover_position: 'top' })).toEqual({ order: 'store-first' })
+  })
+
   it('prefiere los flags del endpoint dedicado sobre los que trae la tienda', () => {
     const conFlags = buildSettingsBase(store, {
       payments: false,

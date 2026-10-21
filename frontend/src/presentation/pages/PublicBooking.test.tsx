@@ -25,6 +25,7 @@ const TIENDA_SOL = {
     description: null as string | null,
     logo_url: null as string | null,
     cover_url: null as string | null,
+    cover_position: null as 'top' | 'center' | 'bottom' | null,
     primary_color: '#000000',
     whatsapp_number: null as string | null,
     deposit_policy: null as string | null
@@ -317,6 +318,15 @@ describe('PublicBooking: encabezado y portada de la tienda', () => {
       '/media/logo.png'
     )
     expect(container.querySelector('img[src="/media/cover.webp"]')).toHaveAttribute('alt', '')
+  })
+
+  // S10.1 (2026-10-22): la tienda elige que parte de la foto se ve.
+  it('la portada se encuadra donde lo eligio la tienda', () => {
+    conTienda({ cover_url: '/media/cover.webp', cover_position: 'bottom' })
+    const { container } = renderEn('/booking/sol')
+
+    const portada = container.querySelector('img[src="/media/cover.webp"]') as HTMLElement
+    expect(portada.style.objectPosition).toBe('center 80%')
   })
 
   it('sin logo ni portada usa la inicial y el degradado con el color de la tienda', () => {

@@ -1,11 +1,16 @@
 import React, { useState } from 'react'
 
+import type { CoverPosition } from '@application/services/StoreSettingsService'
+
+import { coverObjectPosition } from './coverPosition'
 import { brandCoverWash, type resolveBrandTheme } from '../../../lib/brandTheme'
 
 type BrandTheme = ReturnType<typeof resolveBrandTheme>
 
 interface StoreCoverProps {
   coverUrl: string | null | undefined
+  /** Que parte de la foto se ve (S10.1); sin elegir, un poco abajo del medio. */
+  coverPosition?: CoverPosition | null
   brand: BrandTheme
 }
 
@@ -13,7 +18,7 @@ interface StoreCoverProps {
 // ancho del contenido y redondea solo abajo, porque toca el borde superior.
 const COVER_SHAPE = 'w-full overflow-hidden sm:rounded-b-lg'
 
-const CoverImage: React.FC<StoreCoverProps> = ({ coverUrl, brand }) => {
+const CoverImage: React.FC<StoreCoverProps> = ({ coverUrl, coverPosition, brand }) => {
   const [failed, setFailed] = useState(false)
   if (coverUrl && !failed) {
     // Mas baja en el celular: el wizard sigue a la vista.
@@ -25,6 +30,7 @@ const CoverImage: React.FC<StoreCoverProps> = ({ coverUrl, brand }) => {
           decoding="async"
           onError={() => setFailed(true)}
           className="h-full w-full object-cover"
+          style={{ objectPosition: coverObjectPosition(coverPosition) }}
         />
       </div>
     )
@@ -44,7 +50,12 @@ const CoverImage: React.FC<StoreCoverProps> = ({ coverUrl, brand }) => {
  * carga (la CSP de produccion bloquea las URLs externas), un degradado suave
  * del color de la tienda.
  */
-export const StoreCover: React.FC<StoreCoverProps> = ({ coverUrl, brand }) => (
+export const StoreCover: React.FC<StoreCoverProps> = ({ coverUrl, coverPosition, brand }) => (
   // key: otra portada vuelve a intentar cargar aunque la anterior fallara.
-  <CoverImage key={coverUrl ?? ''} coverUrl={coverUrl} brand={brand} />
+  <CoverImage
+    key={coverUrl ?? ''}
+    coverUrl={coverUrl}
+    coverPosition={coverPosition}
+    brand={brand}
+  />
 )
