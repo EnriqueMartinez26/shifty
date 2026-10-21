@@ -2,7 +2,7 @@ import { randomBytes, randomUUID } from 'node:crypto'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { readFile, rm, writeFile } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
@@ -15,8 +15,6 @@ const project = process.env.E2E_COMPOSE_PROJECT ?? `shifty-qa-${runId}`
 const ci = process.env.CI === 'true'
 const tempDir = process.env.RUNNER_TEMP ?? tmpdir()
 const envPath = join(tempDir, `${project}.env`)
-const fixtureDir = join(tempDir, project)
-const fixturePath = join(fixtureDir, 'fixture.json')
 const composePrefix = [
   'compose',
   '--project-name',
@@ -149,6 +147,19 @@ async function api(path, { token, method = 'GET', body } = {}) {
   return value && typeof value === 'object' && 'data' in value ? value.data : value
 }
 
+// El fixture viaja a Playwright por el entorno del proceso hijo, nunca por un
+// archivo. De la respuesta de la API solo se toman ids con forma de ULID;
+// nombres, duraciones y precios son los que este script mandó, y se comparan
+// con lo que devolvió la API antes de usarlos.
+const ULID = /^[0-9A-HJKMNP-TV-Z]{26}$/
+
+function assertUlid(value, what) {
+  if (typeof value !== 'string' || !ULID.test(value)) {
+    throw new Error(`La API aislada devolvió un id inválido para ${what}`)
+  }
+  return value
+}
+
 async function prepareFixture() {
   const globalLogin = await api('/auth/login', {
     method: 'POST',
@@ -198,24 +209,31 @@ async function prepareFixture() {
   })
 
   const services = []
-  for (const [name, durationMinutes, price] of [
+  for (const [baseName, durationMinutes, price] of [
     ['QA Corte', 30, 1111],
     ['QA Barba', 20, 2222]
   ]) {
-    services.push(
-      await api('/services/', {
-        method: 'POST',
-        token,
-        body: {
-          name: `${name} ${runId.slice(-6)}`,
-          duration_minutes: durationMinutes,
-          price,
-          deposit_mode: 'none',
-          deposit_type: 'percent',
-          deposit_amount: null
-        }
-      })
-    )
+    const name = `${baseName} ${runId.slice(-6)}`
+    const created = await api('/services/', {
+      method: 'POST',
+      token,
+      body: {
+        name,
+        duration_minutes: durationMinutes,
+        price,
+        deposit_mode: 'none',
+        deposit_type: 'percent',
+        deposit_amount: null
+      }
+    })
+    if (
+      created.name !== name ||
+      created.duration_minutes !== durationMinutes ||
+      created.price !== price
+    ) {
+      throw new Error(`La API aislada no devolvió el servicio pedido (${baseName})`)
+    }
+    services.push({ id: assertUlid(created.public_id, baseName), name, durationMinutes, price })
   }
   const staff = await api('/staff/', {
     method: 'POST',
@@ -223,31 +241,25 @@ async function prepareFixture() {
     body: {
       kind: 'resource',
       display_name: 'Recurso QA',
-      service_ids: services.map((service) => service.public_id)
+      service_ids: services.map((service) => service.id)
     }
   })
+  const staffId = assertUlid(staff.public_id, 'el profesional')
   for (let day = 0; day <= 6; day += 1) {
-    await api(`/staff/${staff.public_id}/schedules`, {
+    await api(`/staff/${staffId}/schedules`, {
       method: 'POST',
       token,
       body: { day_of_week: day, start_time: '09:00:00', end_time: '18:00:00' }
     })
   }
 
-  const fixture = {
+  return JSON.stringify({
     kind: 'shifty-isolated-e2e-v1',
     runId,
     storeSlug: slug,
-    staffId: staff.public_id,
-    services: services.map((service) => ({
-      id: service.public_id,
-      name: service.name,
-      durationMinutes: service.duration_minutes,
-      price: service.price
-    }))
-  }
-  await mkdir(fixtureDir, { recursive: true })
-  await writeFile(fixturePath, `${JSON.stringify(fixture, null, 2)}\n`, { mode: 0o600 })
+    staffId,
+    services
+  })
 }
 
 let composeStarted = false
@@ -343,13 +355,13 @@ try {
   await run('docker', [...composePrefix, 'up', '-d', 'backend', 'frontend', 'nginx'])
   await waitForHttp(`${apiBaseUrl}/ops/health/ready`, 'API')
   await waitForHttp('http://127.0.0.1:13000/', 'frontend')
-  await prepareFixture()
+  const fixtureJson = await prepareFixture()
 
   const playwrightEnv = {
     ...process.env,
     E2E_ISOLATED: '1',
     E2E_ISOLATED_RUN_ID: runId,
-    E2E_FIXTURE_PATH: fixturePath,
+    E2E_FIXTURE_JSON: fixtureJson,
     E2E_BASE_URL: 'http://127.0.0.1:13000',
     E2E_API_URL: apiBaseUrl
   }
@@ -367,7 +379,6 @@ try {
       cleanupError = error
     }
   }
-  await rm(fixtureDir, { recursive: true, force: true })
   if (!ci || !composeStarted) await rm(envPath, { force: true })
 }
 

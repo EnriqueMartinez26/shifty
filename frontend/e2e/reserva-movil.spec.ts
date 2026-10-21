@@ -1,5 +1,4 @@
 import { expect, test, type Page } from '@playwright/test'
-import { readFileSync } from 'node:fs'
 
 interface IsolatedFixture {
   kind: 'shifty-isolated-e2e-v1'
@@ -9,12 +8,12 @@ interface IsolatedFixture {
   services: Array<{ id: string; name: string; durationMinutes: number; price: number }>
 }
 
-const fixturePath = process.env.E2E_FIXTURE_PATH
-if (process.env.E2E_ISOLATED !== '1' || !fixturePath) {
+const fixtureJson = process.env.E2E_FIXTURE_JSON
+if (process.env.E2E_ISOLATED !== '1' || !fixtureJson) {
   throw new Error('E2E requiere el fixture generado por npm run e2e:isolated')
 }
 
-const fixture = JSON.parse(readFileSync(fixturePath, 'utf8')) as IsolatedFixture
+const fixture = JSON.parse(fixtureJson) as IsolatedFixture
 const runId = process.env.E2E_ISOLATED_RUN_ID
 if (
   fixture.kind !== 'shifty-isolated-e2e-v1' ||
