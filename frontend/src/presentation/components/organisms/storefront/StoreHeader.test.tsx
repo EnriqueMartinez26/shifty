@@ -82,7 +82,97 @@ describe('StoreHeader', () => {
 
     const logo = screen.getByRole('img', { name: 'Logo de Peluqueria Sol' })
     expect(logo).toHaveAttribute('src', '/media/logo.png')
-    expect(logo).toHaveClass('rounded-full', 'border-4', 'border-white')
+    expect(logo).toHaveClass('object-contain')
+    // S10.2: el aro y el recorte van en el circulo, asi el logo puede crecer
+    // adentro sin agrandar el aro.
+    expect(logo.parentElement).toHaveClass(
+      'rounded-full',
+      'border-4',
+      'border-white',
+      'overflow-hidden'
+    )
+  })
+
+  // 2026-10-22 (S10.2): el logo real es una firma fina en mucho blanco; en el
+  // circulo quedaba un punto. Al cargar se mide y se agranda.
+  describe('logo que llena el circulo', () => {
+    // 10 x 10 blanco con un cuadrado de tinta de 4 x 4 en el medio: 1,41x.
+    const logoConMargen = () => {
+      const data = new Uint8ClampedArray(10 * 10 * 4).fill(255)
+      for (let y = 3; y <= 6; y += 1) {
+        for (let x = 3; x <= 6; x += 1) data.set([20, 20, 20, 255], (y * 10 + x) * 4)
+      }
+      return { width: 10, height: 10, data }
+    }
+
+    const conLienzo = (getImageData: () => unknown) => {
+      const drawImage = jest.fn()
+      const getContext = jest
+        .spyOn(HTMLCanvasElement.prototype, 'getContext')
+        .mockReturnValue({ drawImage, getImageData } as unknown as CanvasRenderingContext2D)
+      return { drawImage, getContext }
+    }
+
+    const cargar = (logo: HTMLElement) => {
+      Object.defineProperty(logo, 'naturalWidth', { value: 1440 })
+      Object.defineProperty(logo, 'naturalHeight', { value: 1440 })
+      fireEvent.load(logo)
+    }
+
+    const logo = () => screen.getByRole('img', { name: 'Logo de Peluqueria Sol' })
+
+    afterEach(() => jest.restoreAllMocks())
+
+    it('hasta que carga no se ve, asi no salta de tamano; el aro si', () => {
+      renderHeader({ logoUrl: '/media/logo.png' })
+
+      expect(logo().style.opacity).toBe('0')
+      expect(logo().style.transform).toBe('')
+    })
+
+    it('con margen blanco, al cargar lo agranda adentro del circulo y lo muestra', () => {
+      const { drawImage } = conLienzo(() => logoConMargen())
+      renderHeader({ logoUrl: '/media/logo.png' })
+
+      cargar(logo())
+
+      expect(drawImage).toHaveBeenCalledTimes(1)
+      expect(logo().style.transform).toBe('scale(1.41)')
+      expect(logo().style.opacity).toBe('1')
+    })
+
+    it('si el lienzo no se deja leer queda como esta, visible', () => {
+      conLienzo(() => {
+        throw new DOMException('tainted', 'SecurityError')
+      })
+      renderHeader({ logoUrl: '/media/logo.png' })
+
+      cargar(logo())
+
+      expect(logo().style.transform).toBe('')
+      expect(logo().style.opacity).toBe('1')
+    })
+
+    it('sin canvas queda como esta, visible', () => {
+      jest.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null)
+      renderHeader({ logoUrl: '/media/logo.png' })
+
+      cargar(logo())
+
+      expect(logo().style.transform).toBe('')
+      expect(logo().style.opacity).toBe('1')
+    })
+
+    it('un logo de otro sitio ni se intenta medir', () => {
+      const { getContext } = conLienzo(() => logoConMargen())
+      renderHeader({ logoUrl: 'https://otro-sitio.test/logo.png' })
+
+      cargar(logo())
+
+      expect(getContext).not.toHaveBeenCalled()
+      expect(logo().style.transform).toBe('')
+      expect(logo().style.opacity).toBe('1')
+    })
   })
 
   it('sin logo muestra la inicial en un circulo con el color de marca y el mismo aro', () => {

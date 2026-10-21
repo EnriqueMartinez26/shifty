@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React from 'react'
 
 import { CalendarCheck, MessageCircle } from 'lucide-react'
 
@@ -7,6 +7,7 @@ import type { CoverPosition } from '@application/services/StoreSettingsService'
 import { buildWaMeUrl } from '@shared/utils/whatsAppPhone'
 
 import { StoreCover } from './StoreCover'
+import { StoreLogo } from './StoreLogo'
 import { colors2000s } from '../../../../theme/colors'
 import type { resolveBrandTheme } from '../../../lib/brandTheme'
 import { createBookingBackButtonStyle } from '../../../lib/surfaceStyles'
@@ -23,49 +24,8 @@ interface StoreHeaderProps {
   brand: BrandTheme
 }
 
-// Logo redondo con aro blanco que pisa el borde inferior de la portada por la
-// mitad de su alto (76 px en el celular, 112 px en la compu).
-const LOGO_BOX =
-  'h-[76px] w-[76px] -mt-[38px] shrink-0 rounded-full border-4 border-white sm:h-28 sm:w-28 sm:-mt-14'
-const LOGO_SHADOW = { boxShadow: colors2000s.shadows.outer }
 const FOCUS_RING =
   'focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-orange-500'
-
-/**
- * Logo de la tienda; sin logo, o si la imagen no carga (la CSP de produccion
- * bloquea las URLs externas), la inicial del nombre en el color de marca.
- */
-const StoreLogo: React.FC<{
-  name: string
-  logoUrl: string | null | undefined
-  brand: BrandTheme
-}> = ({ name, logoUrl, brand }) => {
-  const [failed, setFailed] = useState(false)
-  if (logoUrl && !failed) {
-    return (
-      <img
-        src={logoUrl}
-        alt={`Logo de ${name}`}
-        width={112}
-        height={112}
-        decoding="async"
-        onError={() => setFailed(true)}
-        className={`${LOGO_BOX} bg-white object-contain`}
-        style={LOGO_SHADOW}
-      />
-    )
-  }
-  const initial = Array.from(name.trim())[0]?.toLocaleUpperCase('es-AR') ?? ''
-  return (
-    <span
-      aria-hidden="true"
-      className={`${LOGO_BOX} flex items-center justify-center text-3xl font-black sm:text-5xl`}
-      style={{ ...LOGO_SHADOW, background: brand.fill, color: brand.onFill }}
-    >
-      {initial}
-    </span>
-  )
-}
 
 /**
  * WhatsApp de la tienda: texto libre que carga el dueno. Si no se puede leer
