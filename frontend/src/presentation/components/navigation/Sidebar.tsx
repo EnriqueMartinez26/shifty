@@ -8,6 +8,7 @@ import {
   mdiCashMultiple,
   mdiCalendar,
   mdiChartBar,
+  mdiClose,
   mdiChevronDown,
   mdiChevronRight,
   mdiCog,
@@ -163,13 +164,23 @@ interface SidebarProps {
   // montan <Sidebar /> sin props y esperan los links presentes en el DOM.
   // A partir de `lg:` el sidebar queda siempre visible sin importar esto.
   isOpen?: boolean
+  isModal?: boolean
   onNavigate?: () => void
   // Ver AdminLayout: saca el sidebar del arbol de accesibilidad solo cuando
   // esta realmente fuera de pantalla (off-canvas cerrado en mobile).
   inert?: boolean
+  containerRef?: React.Ref<HTMLElement>
+  navigationRef?: React.Ref<HTMLElement>
 }
 
-const Sidebar: React.FC<SidebarProps> = ({ isOpen = true, onNavigate, inert = false }) => {
+const Sidebar: React.FC<SidebarProps> = ({
+  isOpen = true,
+  isModal = false,
+  onNavigate,
+  inert = false,
+  containerRef,
+  navigationRef
+}) => {
   const location = useLocation()
   const { logout, user } = useAuth()
 
@@ -215,6 +226,7 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen = true, onNavigate, inert = fa
         key={item.path}
         to={item.path}
         onClick={onNavigate}
+        aria-current={isActive ? 'page' : undefined}
         className={`flex items-center justify-between px-4 py-3 rounded-xl transition-all group ${indent ? 'ml-4' : ''}`}
         style={linkStyle}
         onMouseEnter={(e) => {
@@ -306,6 +318,11 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen = true, onNavigate, inert = fa
 
   return (
     <aside
+      id="admin-sidebar"
+      ref={containerRef}
+      role={isModal ? 'dialog' : undefined}
+      aria-modal={isModal || undefined}
+      aria-label={isModal ? 'Menú de navegación' : undefined}
       inert={inert || undefined}
       className={`w-64 h-screen flex flex-col fixed left-0 top-0 z-50 transition-transform duration-200 lg:translate-x-0 ${
         isOpen ? 'translate-x-0' : '-translate-x-full'
@@ -316,35 +333,54 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen = true, onNavigate, inert = fa
         boxShadow: colors2000s.shadows.outerMedium
       }}
     >
-      <div className="p-6 flex items-center gap-3">
-        <div
-          className="w-10 h-10 rounded-md flex items-center justify-center relative overflow-hidden"
-          style={{
-            background: `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`,
-            boxShadow: colors2000s.shadows.outerOrange,
-            border: `1px solid ${colors2000s.orange.accent}`
-          }}
-        >
-          <div className="absolute top-0 left-0 right-0 h-1/2 bg-white/20 pointer-events-none" />
-          <Icon2000s path={mdiStore} size={20} variant="active" />
-        </div>
-        <div>
-          <h2
-            className="font-black leading-none mb-1 uppercase tracking-tight"
-            style={{ color: colors2000s.text.primary }}
+      <div className="p-6 flex items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <div
+            className="w-10 h-10 rounded-md flex items-center justify-center relative overflow-hidden"
+            style={{
+              background: `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`,
+              boxShadow: colors2000s.shadows.outerOrange,
+              border: `1px solid ${colors2000s.orange.accent}`
+            }}
           >
-            Shifty
-          </h2>
-          <span
-            className="text-[10px] uppercase tracking-wider font-bold"
-            style={{ color: colors2000s.text.secondary }}
-          >
-            Admin Panel
-          </span>
+            <div className="absolute top-0 left-0 right-0 h-1/2 bg-white/20 pointer-events-none" />
+            <Icon2000s path={mdiStore} size={20} variant="active" />
+          </div>
+          <div>
+            <h2
+              className="font-black leading-none mb-1 uppercase tracking-tight"
+              style={{ color: colors2000s.text.primary }}
+            >
+              Shifty
+            </h2>
+            <span
+              className="text-[10px] uppercase tracking-wider font-bold"
+              style={{ color: colors2000s.text.secondary }}
+            >
+              Admin Panel
+            </span>
+          </div>
         </div>
+
+        {isModal && (
+          <button
+            type="button"
+            onClick={onNavigate}
+            aria-label="Cerrar menú de navegación"
+            className="h-11 w-11 flex-shrink-0 inline-flex items-center justify-center rounded-xl focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-orange-600"
+            style={{
+              background: 'white',
+              border: `1px solid ${colors2000s.border.default}`,
+              boxShadow: colors2000s.shadows.insetDark,
+              color: colors2000s.text.primary
+            }}
+          >
+            <Icon2000s path={mdiClose} size={20} variant="idle" />
+          </button>
+        )}
       </div>
 
-      <nav className="flex-1 px-4 py-6 space-y-1 overflow-y-auto">
+      <nav ref={navigationRef} tabIndex={-1} className="flex-1 px-4 py-6 space-y-1 overflow-y-auto">
         {menuEntries.map((entry) =>
           entry.type === 'link' ? (isVisible(entry) ? renderLink(entry) : null) : renderGroup(entry)
         )}

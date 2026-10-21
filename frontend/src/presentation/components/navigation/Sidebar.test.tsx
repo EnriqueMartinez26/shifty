@@ -42,6 +42,8 @@ describe('Sidebar', () => {
       'href',
       '/dashboard/calendar'
     )
+    expect(screen.getByRole('link', { name: 'Agenda' })).toHaveAttribute('aria-current', 'page')
+    expect(screen.getByRole('link', { name: 'Dashboard' })).not.toHaveAttribute('aria-current')
     const selectedText = colors2000s.text.onOrangeSelection
     const expectedSelectedColor = `rgb(${[1, 3, 5]
       .map((offset) => Number.parseInt(selectedText.slice(offset, offset + 2), 16))
@@ -94,6 +96,10 @@ describe('Sidebar', () => {
     expect(screen.getByRole('link', { name: 'Cuentas pendientes' })).toHaveAttribute(
       'href',
       '/dashboard/ledger'
+    )
+    expect(screen.getByRole('link', { name: 'Cuentas pendientes' })).toHaveAttribute(
+      'aria-current',
+      'page'
     )
   })
 })
