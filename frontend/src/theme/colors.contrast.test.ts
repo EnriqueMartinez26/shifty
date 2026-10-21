@@ -7,13 +7,11 @@ const { readFileSync } = jest.requireActual<{
 }>('node:fs')
 const { resolve } = jest.requireActual<{ resolve: (...paths: string[]) => string }>('node:path')
 
-// 2026-10-03: blanco sobre el naranja de marca (#ff8c42/#e67e22) medía
-// 2.31/2.85:1, text.secondary 3.0-3.4:1 sobre el fondo y el pie del portal
-// usaba text.disabled (1.72:1). Por eso marca decorativa y CTA legible son
-// roles distintos. Este test fija WCAG 2.1 AA para cada par de tokens de
-// texto: 4.5:1, aunque el texto grande se conforme con 3:1; los mismos
-// tokens van en etiquetas de 10 px. text.disabled queda fuera a propósito:
-// solo se usa en controles deshabilitados, que WCAG exime (1.4.3).
+// El naranja vivo de marca (#ff8c42/#e67e22) se reserva para decoración.
+// CTA y selección usan una rampa naranja propia, con blanco por encima de
+// 4.5:1. Este test fija WCAG 2.1 AA para cada par de tokens de texto:
+// los mismos tokens aparecen en etiquetas pequeñas. text.disabled queda
+// fuera a propósito: solo se usa en controles deshabilitados (1.4.3).
 
 const AA_NORMAL = 4.5
 const AA_LARGE = 3
@@ -62,8 +60,8 @@ const lightPairs = Object.entries(TEXT_ON_LIGHT).flatMap(([text, fg]) =>
   Object.entries(LIGHT_SURFACES).map(([surface, bg]) => [text, fg, surface, bg] as const)
 )
 
-// El CTA y todo lo "seleccionado": texto oscuro sobre la rampa naranja
-// orange.cta -> orange.dark (buttonStyles2000s.selected, orangeCtaGradient).
+// El CTA y todo lo "seleccionado": texto blanco sobre la rampa naranja
+// orange.cta -> orange.ctaEnd (buttonStyles2000s.selected, orangeCtaGradient).
 const ctaPairs = [
   [
     'text.onOrangeSelection',
@@ -74,8 +72,8 @@ const ctaPairs = [
   [
     'text.onOrangeSelection',
     colors2000s.text.onOrangeSelection,
-    'orange.dark',
-    colors2000s.orange.dark
+    'orange.ctaEnd',
+    colors2000s.orange.ctaEnd
   ]
 ] as const
 
