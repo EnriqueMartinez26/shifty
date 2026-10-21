@@ -130,6 +130,8 @@ interface BookingStepConfirmationProps {
   onPromotionCodeChange: (promotionCode: string, preview: PromotionPreview | null) => void
   /** Adicionales elegidos, con el nombre y el precio que vio el cliente. */
   onAddonsChange: (addons: SelectedAddon[]) => void
+  /** Lleva al paso del servicio para revisar los adicionales (S4/S5). */
+  onEditAddons?: () => void
   onConfirm: (
     paymentMethod: 'manual' | 'mercadopago',
     acceptsTerms: boolean,
