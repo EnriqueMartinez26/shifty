@@ -16,6 +16,7 @@ from core.validation import (
 from modules.services.model import ADDON_MAX_QUANTITY, ADDONS_PER_SERVICE
 from modules.services.selection import EXTRA_SERVICES_INPUT_MAX
 from modules.services.schemas import ServiceAddonResponse
+from modules.stores.model import CoverPosition
 from modules.stores.schemas import StoreCustomField
 
 
@@ -48,6 +49,8 @@ class PublicStoreResponse(BaseModel):
     cancellation_hours: int
     description: Optional[str] = None
     cover_url: Optional[str] = None
+    # Aditivo (S10.1, 2026-10-22): punto focal de la portada; null sin elegir.
+    cover_position: Optional[CoverPosition] = None
     whatsapp_number: Optional[str] = None
     website_url: Optional[str] = None
     # La politica de seña y la posibilidad de coordinar por fuera se muestran al

@@ -228,6 +228,7 @@ async def get_store_by_slug(
             cancellation_hours=store.cancellation_hours,
             description=store.description,
             cover_url=store.cover_url,
+            cover_position=store.cover_position,
             whatsapp_number=store.whatsapp_number,
             website_url=store.website_url,
             allow_manual_coordination=store.allow_manual_coordination,
