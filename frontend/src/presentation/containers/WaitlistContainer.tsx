@@ -293,9 +293,9 @@ export const WaitlistContainer: React.FC = () => {
                 </div>
 
                 {isBookingThis && booking && (
-                  // Dos columnas y el boton abajo en el telefono: en una fila
-                  // medía 396 px en 390 (QA movil 2026-10-08).
-                  <div className="grid grid-cols-2 sm:grid-cols-[1fr_auto_auto] gap-2 items-end">
+                  // En telefono cada control ocupa su fila; desde sm se
+                  // recuperan fecha, hora y confirmacion en una linea.
+                  <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto_auto] gap-2 items-end">
                     <label className="min-w-0 text-[9px] font-black uppercase tracking-widest text-gray-500">
                       Fecha
                       <input
@@ -323,7 +323,7 @@ export const WaitlistContainer: React.FC = () => {
                       onClick={() => {
                         void confirmBooking(entry)
                       }}
-                      className="col-span-2 sm:col-span-1 min-h-10 px-4 py-2 rounded-lg text-white text-[9px] font-black uppercase tracking-widest disabled:opacity-60"
+                      className="min-h-11 px-4 py-2 rounded-lg text-white text-[9px] font-black uppercase tracking-widest disabled:opacity-60"
                       style={buttonStyles2000s.selected}
                     >
                       {bookEntry.isPending ? '...' : 'Confirmar'}
