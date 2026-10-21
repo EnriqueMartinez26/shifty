@@ -166,6 +166,15 @@ async def test_la_conciliacion_guarda_el_pago_sin_datos_del_pagador_ni_tarjeta(
     assert datos.get("transaction_amount") == float(cobro.amount)
     assert datos.get("external_reference") == cobro.current_external_reference
     assert datos.get("metadata") == {"appointment_id": turno}
+    # Por estructura: ningun campo del pagador ni de la tarjeta llega a data.
+    for campo in (
+        "payer",
+        "card",
+        "additional_info",
+        "point_of_interaction",
+        "identification",
+    ):
+        assert campo not in datos, f"{campo!r} quedo en raw_payload: {datos}"
     # La referencia y el id del turno se verifican arriba por igualdad; se
     # sacan del texto porque son aleatorios y pueden contener por azar los
     # digitos que se buscan (2026-10-22, falso positivo en CI).
