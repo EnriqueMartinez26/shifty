@@ -262,7 +262,7 @@ const CollectionsPage: React.FC = () => {
           </h3>
         </div>
 
-        <div className="space-y-3">
+        <div className="collections-mobile-actions space-y-3 max-sm:[&_button]:min-h-[44px] max-sm:[&_button]:min-w-[44px]">
           {appointments.map((appointment) => (
             <CollectionAppointmentCard
               key={appointment.public_id}
