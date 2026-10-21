@@ -4,7 +4,7 @@ import { Link, useParams } from 'react-router'
 
 import { ClientAppointmentsContainer } from '@presentation/containers/ClientAppointmentsContainer'
 
-import { colors2000s } from '../../theme/colors'
+import { buttonStyles2000s, colors2000s } from '../../theme/colors'
 import LegalFooterLinks from '../components/navigation/LegalFooterLinks'
 import { isStoreMissing, StoreLoadError } from '../components/organisms/StoreLoadError'
 import { useDocumentTitle } from '../hooks/useDocumentTitle'
@@ -26,22 +26,32 @@ const ClientAppointmentsPage: React.FC = () => {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen grid place-items-center bg-[#EEF2F6] text-sm font-black uppercase tracking-widest text-gray-500">
+      <main
+        className="min-h-screen grid place-items-center text-sm font-black uppercase tracking-widest"
+        style={{ background: colors2000s.bg.primary, color: colors2000s.text.secondary }}
+      >
         Cargando...
-      </div>
+      </main>
     )
   }
 
   // 2026-10-02: sin red o con un 5xx tambien decia "Negocio no encontrado".
   if (!ref && isError && !isStoreMissing(refQuery.error)) {
-    return <StoreLoadError onRetry={() => void refQuery.refetch()} retrying={refQuery.isFetching} />
+    return (
+      <main>
+        <StoreLoadError onRetry={() => void refQuery.refetch()} retrying={refQuery.isFetching} />
+      </main>
+    )
   }
 
   if (!ref) {
     return (
-      <div className="min-h-screen grid place-items-center bg-[#EEF2F6] text-sm font-black uppercase tracking-widest text-red-500">
+      <main
+        className="min-h-screen grid place-items-center text-sm font-black uppercase tracking-widest"
+        style={{ background: colors2000s.bg.primary, color: colors2000s.status.danger.text }}
+      >
         Negocio no encontrado
-      </div>
+      </main>
     )
   }
 
@@ -50,10 +60,13 @@ const ClientAppointmentsPage: React.FC = () => {
   const store = { public_id: ref.store_public_id, name: ref.name, slug: slug.toLowerCase() }
 
   return (
-    <div className="min-h-screen bg-[#EEF2F6] py-10 px-4">
-      <header className="max-w-2xl mx-auto mb-8 text-center">
+    <main
+      className="min-h-screen py-8 px-4 sm:py-10"
+      style={{ background: colors2000s.bg.primary }}
+    >
+      <header className="max-w-2xl mx-auto mb-6 text-center sm:mb-8">
         <h1
-          className="text-3xl font-black tracking-tighter uppercase"
+          className="break-words text-3xl font-black tracking-tighter uppercase"
           style={{ color: colors2000s.orange.accent }}
         >
           {store.name}
@@ -61,8 +74,8 @@ const ClientAppointmentsPage: React.FC = () => {
         {acceptsNewBookings ? (
           <Link
             to={`/b/${store.slug}`}
-            className="text-[10px] font-black uppercase tracking-widest"
-            style={{ color: colors2000s.text.secondary }}
+            className="mx-auto mt-2 inline-flex min-h-11 items-center justify-center rounded-xl border px-4 py-2 text-xs font-black uppercase tracking-widest"
+            style={buttonStyles2000s.default}
           >
             Reservar un turno nuevo
           </Link>
@@ -79,7 +92,7 @@ const ClientAppointmentsPage: React.FC = () => {
       <div className="max-w-2xl mx-auto mt-10 text-center">
         <LegalFooterLinks depositPolicy={vitrina?.deposit_policy} />
       </div>
-    </div>
+    </main>
   )
 }
 

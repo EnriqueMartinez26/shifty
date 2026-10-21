@@ -1,7 +1,13 @@
 import { fireEvent, render, screen } from '@testing-library/react'
-import { format } from 'date-fns'
+import { addDays, format, parseISO } from 'date-fns'
+
+import { formatArgentinaDate } from '@shared/utils/argentinaTime'
 
 import { BookingStepDateTime } from './BookingStepDateTime'
+import { colors2000s } from '../../../../theme/colors'
+
+const asRgb = (hex: string): string =>
+  `rgb(${[1, 3, 5].map((offset) => parseInt(hex.slice(offset, offset + 2), 16)).join(', ')})`
 
 const mockAvailability = jest.fn()
 const mockStaff = jest.fn()
@@ -17,6 +23,25 @@ describe('BookingStepDateTime', () => {
     mockAvailability.mockReset()
     mockStaff.mockReset()
     mockStaff.mockReturnValue({ data: [], isLoading: false })
+  })
+
+  it('incluye el texto visible "Hoy" al principio del nombre accesible de la fecha actual', () => {
+    mockAvailability.mockReturnValue({ isLoading: false, data: [] })
+
+    render(
+      <BookingStepDateTime
+        storePublicId="store-1"
+        serviceId="svc-1"
+        staffId={null}
+        selectedDate={null}
+        selectedTime={null}
+        onSelect={() => undefined}
+        onBack={() => undefined}
+      />
+    )
+
+    const fechaDeHoy = screen.getByRole('button', { name: /^Hoy,/ })
+    expect(fechaDeHoy).toHaveTextContent('Hoy')
   })
 
   it('muestra los slots en hora argentina y entrega el instante UTC al elegir', () => {
@@ -390,13 +415,14 @@ describe('BookingStepDateTime', () => {
     // recibe foco y el navegador lo activa con Enter/Espacio (jsdom no simula
     // esa activacion, asi que se verifica el elemento y su efecto).
     mockAvailability.mockReturnValue({ isLoading: false, data: [] })
+    const hoyArgentina = formatArgentinaDate(new Date().toISOString())
 
     render(
       <BookingStepDateTime
         storePublicId="store-1"
         serviceId="svc-1"
         staffId={null}
-        selectedDate="2026-09-25"
+        selectedDate={hoyArgentina}
         selectedTime={null}
         onSelect={() => undefined}
         onBack={() => undefined}
@@ -414,15 +440,251 @@ describe('BookingStepDateTime', () => {
     fireEvent.click(interruptor)
 
     expect(interruptor).toHaveAttribute('aria-checked', 'true')
-    expect(mockAvailability).toHaveBeenLastCalledWith('store-1', 'svc-1', '2026-09-25', true, [])
+    expect(mockAvailability).toHaveBeenLastCalledWith('store-1', 'svc-1', hoyArgentina, true, [])
+  })
+
+  it('pagina el horizonte argentino en bloques de 14 y conserva una ultima pagina de 9 fechas', () => {
+    mockAvailability.mockReturnValue({ isLoading: false, data: [] })
+    const today = parseISO(formatArgentinaDate(new Date().toISOString()))
+    const onEmptyAvailability = jest.fn()
+
+    render(
+      <BookingStepDateTime
+        storePublicId="store-1"
+        serviceId="svc-1"
+        staffId={null}
+        selectedDate={null}
+        selectedTime={null}
+        onSelect={() => undefined}
+        onBack={() => undefined}
+        onEmptyAvailability={onEmptyAvailability}
+      />
+    )
+
+    const counter = screen.getByText('Días 1–14 de 121')
+    expect(counter).toHaveClass('whitespace-nowrap')
+    expect(counter.parentElement).toHaveClass('flex-col', 'sm:flex-row')
+    expect(screen.getAllByTestId(/^date-/)).toHaveLength(14)
+    expect(
+      screen.getByRole('button', { name: 'Anterior: mostrar los 14 días anteriores' })
+    ).toBeDisabled()
+    expect(onEmptyAvailability).toHaveBeenCalledTimes(1)
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Siguiente: mostrar los 14 días siguientes' })
+    )
+
+    expect(screen.getByText('Días 15–28 de 121')).toBeInTheDocument()
+    expect(mockAvailability).toHaveBeenLastCalledWith('store-1', 'svc-1', undefined, false, [])
+    expect(screen.getByText('Elegí una fecha para ver los horarios.')).toBeInTheDocument()
+    expect(onEmptyAvailability).toHaveBeenCalledTimes(1)
+
+    const selectedDate = format(addDays(today, 15), 'yyyy-MM-dd')
+    fireEvent.click(screen.getByTestId(`date-${selectedDate}`))
+    expect(mockAvailability).toHaveBeenLastCalledWith('store-1', 'svc-1', selectedDate, false, [])
+    expect(onEmptyAvailability).toHaveBeenCalledTimes(2)
+
+    for (let page = 2; page < 8; page += 1) {
+      fireEvent.click(
+        screen.getByRole('button', { name: 'Siguiente: mostrar los 14 días siguientes' })
+      )
+    }
+
+    expect(
+      screen.getByRole('button', { name: 'Siguiente: mostrar los 9 días siguientes' })
+    ).not.toBeDisabled()
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Siguiente: mostrar los 9 días siguientes' })
+    )
+
+    expect(screen.getByText('Días 113–121 de 121')).toBeInTheDocument()
+    expect(screen.getAllByTestId(/^date-/)).toHaveLength(9)
+    expect(
+      screen.getByRole('button', { name: 'Siguiente: no hay más fechas disponibles' })
+    ).toBeDisabled()
+    expect(onEmptyAvailability).toHaveBeenCalledTimes(2)
+  })
+
+  it('indica el desplazamiento de fechas y adapta los horarios a dos columnas angostas', () => {
+    mockAvailability.mockReturnValue({
+      isLoading: false,
+      data: [
+        {
+          staff_id: 'st-1',
+          staff_name: 'Ana',
+          starts_at: '2026-09-15T12:00:00+00:00',
+          ends_at: '2026-09-15T12:30:00+00:00',
+          status: 'available',
+          reason: null
+        }
+      ]
+    })
+
+    render(
+      <BookingStepDateTime
+        storePublicId="store-1"
+        serviceId="svc-1"
+        staffId="st-1"
+        selectedDate={null}
+        selectedTime={null}
+        onSelect={() => undefined}
+        onBack={() => undefined}
+      />
+    )
+
+    expect(
+      screen.getByRole('group', { name: /fechas disponibles.*deslizá horizontalmente/i })
+    ).toBeInTheDocument()
+    expect(screen.getByText('Deslizá para ver más')).not.toHaveClass('sm:hidden')
+
+    const timeButton = screen.getByRole('button', { name: /09:00/ })
+    expect(timeButton).toHaveClass('min-h-11')
+    expect(timeButton.parentElement).toHaveClass(
+      'grid-cols-2',
+      'min-[380px]:grid-cols-3',
+      'sm:grid-cols-4'
+    )
+  })
+
+  it('usa texto secundario AA y objetivos tactiles para el selector de profesional', () => {
+    mockAvailability.mockReturnValue({ isLoading: false, data: [] })
+    mockStaff.mockReturnValue({
+      isLoading: false,
+      data: [
+        {
+          public_id: 'st-1',
+          kind: 'person',
+          first_name: 'Ana',
+          last_name: '',
+          display_name: 'Ana',
+          service_ids: ['svc-1']
+        },
+        {
+          public_id: 'st-2',
+          kind: 'person',
+          first_name: 'Sol',
+          last_name: '',
+          display_name: 'Sol',
+          service_ids: ['svc-1']
+        }
+      ]
+    })
+
+    render(
+      <BookingStepDateTime
+        storePublicId="store-1"
+        serviceId="svc-1"
+        staffId={null}
+        selectedDate={null}
+        selectedTime={null}
+        onSelect={() => undefined}
+        onBack={() => undefined}
+      />
+    )
+
+    expect(screen.getByText('Profesional').parentElement?.style.color).toBe(
+      asRgb(colors2000s.text.secondary)
+    )
+    expect(screen.getByText('Deslizá para ver más opciones.')).not.toHaveClass('sm:hidden')
+    expect(screen.getByText('Deslizá para ver más opciones.').style.color).toBe(
+      asRgb(colors2000s.text.secondary)
+    )
+    for (const name of [/Cualquiera/, /Ana/, /Sol/]) {
+      expect(screen.getByRole('button', { name })).toHaveClass('min-h-11', 'min-w-11')
+    }
+  })
+
+  it('usa texto secundario AA en el estado vacío sobre superficie blanca', () => {
+    mockAvailability.mockReturnValue({ isLoading: false, data: [] })
+    mockStaff.mockReturnValue({
+      isLoading: false,
+      data: [
+        {
+          public_id: 'st-1',
+          kind: 'person',
+          first_name: 'Ana',
+          last_name: '',
+          display_name: 'Ana',
+          service_ids: ['svc-1']
+        },
+        {
+          public_id: 'st-2',
+          kind: 'person',
+          first_name: 'Sol',
+          last_name: '',
+          display_name: 'Sol',
+          service_ids: ['svc-1']
+        }
+      ]
+    })
+
+    render(
+      <BookingStepDateTime
+        storePublicId="store-1"
+        serviceId="svc-1"
+        staffId={null}
+        selectedDate={null}
+        selectedTime={null}
+        showWaitlist={false}
+        onSelect={() => undefined}
+        onBack={() => undefined}
+      />
+    )
+
+    expect(screen.getByText('Este día no hay atención.').style.color).toBe(
+      asRgb(colors2000s.text.secondary)
+    )
+    expect(screen.getByText('Probá con otro día.').style.color).toBe(
+      asRgb(colors2000s.text.secondary)
+    )
+  })
+
+  it('mantiene los horarios en caché ante un error de actualización y permite reintentar', () => {
+    const refetch = jest.fn()
+    mockAvailability.mockReturnValue({
+      isLoading: false,
+      isError: true,
+      isFetching: false,
+      refetch,
+      data: [
+        {
+          staff_id: 'st-1',
+          staff_name: 'Ana',
+          starts_at: '2026-09-15T12:00:00+00:00',
+          ends_at: '2026-09-15T12:30:00+00:00',
+          status: 'available',
+          reason: null
+        }
+      ]
+    })
+
+    render(
+      <BookingStepDateTime
+        storePublicId="store-1"
+        serviceId="svc-1"
+        staffId="st-1"
+        selectedDate={null}
+        selectedTime={null}
+        onSelect={() => undefined}
+        onBack={() => undefined}
+      />
+    )
+
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'La información visible puede estar desactualizada.'
+    )
+    expect(screen.getByRole('button', { name: /09:00/ })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reintentar' }))
+
+    expect(refetch).toHaveBeenCalledTimes(1)
   })
 
   it('una fecha lejana que vino por deep-link aparece en la tira y carga sus horarios', () => {
-    // La tira muestra 14 dias: el ?date= de un link de reoferta a 45 dias
-    // cargaba sus horarios pero el dia no se veia seleccionado en ningun lado.
+    // El ?date= de un link de reoferta abre la pagina que contiene ese dia.
     mockAvailability.mockReturnValue({ isLoading: false, data: [] })
-    const lejana = new Date()
-    lejana.setDate(lejana.getDate() + 45)
+    const today = parseISO(formatArgentinaDate(new Date().toISOString()))
+    const lejana = addDays(today, 45)
     const lejanaStr = format(lejana, 'yyyy-MM-dd')
 
     render(
@@ -438,6 +700,7 @@ describe('BookingStepDateTime', () => {
     )
 
     expect(screen.getByTestId(`date-${lejanaStr}`)).toBeInTheDocument()
+    expect(screen.getByText('Días 43–56 de 121')).toBeInTheDocument()
     expect(mockAvailability).toHaveBeenCalledWith('store-1', 'svc-1', lejanaStr, false, [])
   })
 
@@ -540,6 +803,35 @@ describe('BookingStepDateTime', () => {
 
       expect(screen.getByText('Este día no hay atención.')).toBeInTheDocument()
       expect(screen.getByText('Probá con otro día.')).toBeInTheDocument()
+      expect(screen.queryByText('No hay turnos disponibles.')).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: AVISAME })).not.toBeInTheDocument()
+    })
+
+    it('sin franjas de atencion no ofrece lista de espera aunque haya profesionales asignados', () => {
+      mockAvailability.mockReturnValue({ isLoading: false, data: [] })
+      mockStaff.mockReturnValue({
+        isLoading: false,
+        data: [
+          { public_id: 'st-1', kind: 'person', display_name: 'Ana', service_ids: ['svc-1'] },
+          { public_id: 'st-2', kind: 'person', display_name: 'Bruno', service_ids: ['svc-1'] }
+        ]
+      })
+
+      montarCon(null)
+
+      expect(screen.getByText('Este día no hay atención.')).toBeInTheDocument()
+      expect(screen.queryByText('No hay turnos disponibles.')).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: AVISAME })).not.toBeInTheDocument()
+    })
+
+    it('mantiene la carga mientras se resuelve la lista de profesionales', () => {
+      mockAvailability.mockReturnValue({ isLoading: false, data: [] })
+      mockStaff.mockReturnValue({ isLoading: true, data: undefined })
+
+      montarCon(null)
+
+      expect(screen.getByRole('status', { name: 'Cargando horarios' })).toBeInTheDocument()
+      expect(screen.queryByText('Este día no hay atención.')).not.toBeInTheDocument()
       expect(screen.queryByText('No hay turnos disponibles.')).not.toBeInTheDocument()
       expect(screen.queryByRole('button', { name: AVISAME })).not.toBeInTheDocument()
     })

@@ -1,15 +1,23 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 
-import { addDays, format, parseISO } from 'date-fns'
+import { addDays, differenceInCalendarDays, format, parseISO } from 'date-fns'
 import { es } from 'date-fns/locale'
-import { Calendar as CalendarIcon, Clock, Loader2, Sparkles, Users } from 'lucide-react'
+import {
+  Calendar as CalendarIcon,
+  ChevronLeft,
+  ChevronRight,
+  Clock,
+  Loader2,
+  Sparkles,
+  Users
+} from 'lucide-react'
 
 import { staffForAllServices } from '@application/mappers/PublicServiceOptionMapper'
 
 import { usePublicAvailability, usePublicStaff } from '@presentation/hooks/usePublic'
 
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
-import { formatArgentinaTime } from '@shared/utils/argentinaTime'
+import { formatArgentinaDate, formatArgentinaTime } from '@shared/utils/argentinaTime'
 
 import { BookingBackButton } from './BookingBackButton'
 import type { BookingSlotStaff } from './types'
@@ -47,9 +55,24 @@ interface BookingStepDateTimeProps {
   showWaitlist?: boolean
   heading?: string
   onEmptyAvailability?: () => void
+  /** Invalida el horario elegido cuando se navega a otra página de fechas. */
+  onDatePageChange?: () => void
 }
 
 const NO_EXTRA_SERVICES: readonly string[] = []
+const PUBLIC_AVAILABILITY_DAYS_AHEAD = 120
+const PUBLIC_AVAILABILITY_DATE_COUNT = PUBLIC_AVAILABILITY_DAYS_AHEAD + 1
+const DATE_PAGE_SIZE = 14
+const DATE_PAGE_COUNT = Math.ceil(PUBLIC_AVAILABILITY_DATE_COUNT / DATE_PAGE_SIZE)
+
+const getPublicDate = (value: string | null, today: Date): Date => {
+  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return today
+  const parsed = parseISO(value)
+  if (isNaN(parsed.getTime()) || format(parsed, 'yyyy-MM-dd') !== value) return today
+
+  const daysFromToday = differenceInCalendarDays(parsed, today)
+  return daysFromToday >= 0 && daysFromToday < PUBLIC_AVAILABILITY_DATE_COUNT ? parsed : today
+}
 
 // Un 422 de la grilla con varios servicios (revision de #194): se dice por
 // que en vez de mostrar una grilla vacia como si no hubiera lugar.
@@ -73,30 +96,42 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
   lockedStaffId,
   showWaitlist = true,
   heading = 'Elegí fecha y hora',
-  onEmptyAvailability
+  onEmptyAvailability,
+  onDatePageChange
 }) => {
-  const [activeDate, setActiveDate] = useState<Date>(() => {
-    if (!selectedDate || selectedDate === 'invalid') return new Date()
-    const parsed = parseISO(selectedDate)
-    return isNaN(parsed.getTime()) ? new Date() : parsed
-  })
+  // `yyyy-MM-dd` representa el día del calendario argentino, no una fecha UTC.
+  const [today] = useState(() => parseISO(formatArgentinaDate(new Date().toISOString())))
+  const initialDate = getPublicDate(selectedDate, today)
+  const [activeDate, setActiveDate] = useState<Date | null>(initialDate)
+  const [datePage, setDatePage] = useState(() =>
+    Math.floor(differenceInCalendarDays(initialDate, today) / DATE_PAGE_SIZE)
+  )
   const [forceAll, setForceAll] = useState(false)
   // Semilla desde la prop `staffId` (el ultimo pedido guardado en el estado
   // del wizard) para que volver desde el paso de confirmacion conserve la
   // seleccion en vez de resetear a "Cualquiera". Un profesional fijo manda.
   const [selectedStaffId, setSelectedStaffId] = useState<string | null>(lockedStaffId ?? staffId)
 
-  // 14 dias a partir de hoy, mas la fecha que vino por deep-link si cae mas
-  // lejos: si no, el dia elegido cargaba sus horarios pero no se veia en la tira.
+  // La disponibilidad publica permite desde hoy hasta 120 dias adelante.
   const dates = useMemo(() => {
-    const base = Array.from({ length: 14 }).map((_, i) => addDays(new Date(), i))
-    if (!selectedDate || !/^\d{4}-\d{2}-\d{2}$/.test(selectedDate)) return base
-    const wanted = parseISO(selectedDate)
-    const ultimo = base[base.length - 1] ?? new Date()
-    if (isNaN(wanted.getTime()) || wanted <= ultimo) return base
-    return [...base, wanted]
-  }, [selectedDate])
-  const dateStr = format(activeDate, 'yyyy-MM-dd')
+    const firstDayIndex = datePage * DATE_PAGE_SIZE
+    const pageLength = Math.min(DATE_PAGE_SIZE, PUBLIC_AVAILABILITY_DATE_COUNT - firstDayIndex)
+    return Array.from({ length: pageLength }, (_, index) => addDays(today, firstDayIndex + index))
+  }, [datePage, today])
+  const firstDayNumber = datePage * DATE_PAGE_SIZE + 1
+  const lastDayNumber = Math.min((datePage + 1) * DATE_PAGE_SIZE, PUBLIC_AVAILABILITY_DATE_COUNT)
+  const nextPageDateCount = Math.min(
+    DATE_PAGE_SIZE,
+    Math.max(0, PUBLIC_AVAILABILITY_DATE_COUNT - (datePage + 1) * DATE_PAGE_SIZE)
+  )
+  const changeDatePage = (offset: number) => {
+    const nextPage = Math.max(0, Math.min(datePage + offset, DATE_PAGE_COUNT - 1))
+    if (nextPage === datePage) return
+    setDatePage(nextPage)
+    setActiveDate(null)
+    onDatePageChange?.()
+  }
+  const dateStr = activeDate ? format(activeDate, 'yyyy-MM-dd') : ''
 
   const { data: serviceStaff, isLoading: isStaffLoading } = usePublicStaff(storePublicId, serviceId)
   // Con varios servicios, solo quien los hace todos (la grilla ya viene asi).
@@ -160,13 +195,15 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
     )
   }, [availability, staffFilterId])
 
-  // El backend solo genera horarios dentro de las franjas del profesional: un
-  // dia sin ninguno (para el profesional elegido, si hay uno) es un dia sin
-  // atencion. Un dia con horarios pero ninguno libre esta lleno, bloqueado o
-  // dentro del aviso minimo: ahi si tiene sentido la lista de espera.
+  // El backend solo genera horarios dentro de las franjas de atención: si no
+  // devuelve ninguno para el dia, no hay atención aunque haya profesionales
+  // asignados al servicio. Un día con horarios pero ninguno libre está lleno,
+  // bloqueado o dentro del aviso mínimo: ahí sí tiene sentido la lista de espera.
   const diaSinAtencion =
     availability !== undefined &&
-    !availability.some((slot) => !staffFilterId || slot.staff_id === staffFilterId)
+    (staffFilterId
+      ? !availability.some((slot) => slot.staff_id === staffFilterId)
+      : availability.length === 0)
 
   const emptyReported = useRef<string | null>(null)
   useEffect(() => {
@@ -174,6 +211,7 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
     // antes contaria dos veces el mismo dia vacio (con y sin filtro).
     if (
       !onEmptyAvailability ||
+      !dateStr ||
       isStaffLoading ||
       isLoading ||
       isFetching ||
@@ -247,12 +285,20 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
 
       {!lockedStaffId && !soloStaff && (
         <div>
-          <div className="flex items-center gap-2 mb-3 text-xs font-black text-gray-500 uppercase tracking-widest ml-1">
+          <div
+            className="flex items-center gap-2 mb-3 text-xs font-black uppercase tracking-widest ml-1"
+            style={{ color: colors2000s.text.secondary }}
+          >
             <Users size={14} className="text-orange-500" />
             <span>{staffLabel}</span>
           </div>
 
-          <div className="flex gap-2 overflow-x-auto pb-1 hide-scrollbar">
+          <div
+            role="region"
+            aria-label={`${hayRecursos ? 'Canchas o salas' : 'Profesionales'} disponibles, desplazable horizontalmente`}
+            tabIndex={0}
+            className="flex gap-2 overflow-x-auto overscroll-x-contain pb-2 hide-scrollbar"
+          >
             {isStaffLoading ? (
               <Loader2 className="w-5 h-5 animate-spin text-orange-500" />
             ) : (
@@ -262,8 +308,9 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
                   <button
                     key={option.id ?? 'any-professional'}
                     type="button"
+                    aria-pressed={isSelected}
                     onClick={() => setSelectedStaffId(option.id)}
-                    className="flex items-center gap-1.5 px-3 py-2 text-xs font-black uppercase tracking-widest whitespace-nowrap border transition-all active:scale-95"
+                    className="min-h-11 min-w-11 flex items-center gap-1.5 px-3 py-2 text-xs font-black uppercase tracking-widest whitespace-nowrap border transition-all active:scale-95"
                     style={{
                       borderRadius: 6,
                       background: isSelected ? orangeCtaGradient : '#ffffff',
@@ -285,30 +332,96 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
               })
             )}
           </div>
+          {staffOptions.length > 2 && (
+            <p
+              className="mt-1 text-[10px] font-semibold"
+              style={{ color: colors2000s.text.secondary }}
+            >
+              Deslizá para ver más opciones.
+            </p>
+          )}
         </div>
       )}
 
       <div>
-        <div className="flex items-center gap-2 mb-3 text-xs font-black text-gray-500 uppercase tracking-widest ml-1">
-          <CalendarIcon size={14} className="text-orange-500" />
-          <span>Fechas Disponibles</span>
+        <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 mb-3 ml-1">
+          <div className="flex min-w-0 items-center gap-2 text-xs font-black text-gray-500 uppercase tracking-widest">
+            <CalendarIcon size={14} className="text-orange-500" />
+            <span>Fechas disponibles</span>
+          </div>
+          <span className="ml-auto text-right text-[10px] font-semibold text-gray-500">
+            Deslizá para ver más
+          </span>
+        </div>
+
+        <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <p
+            aria-live="polite"
+            className="whitespace-nowrap text-xs font-black uppercase tracking-widest text-gray-500"
+          >
+            Días {firstDayNumber}–{lastDayNumber} de {PUBLIC_AVAILABILITY_DATE_COUNT}
+          </p>
+          <div className="flex w-full items-center justify-between gap-2 sm:w-auto sm:justify-end">
+            <button
+              type="button"
+              aria-label="Anterior: mostrar los 14 días anteriores"
+              onClick={() => changeDatePage(-1)}
+              disabled={datePage === 0}
+              className="inline-flex min-h-11 items-center justify-center gap-1 rounded-md border px-3 py-2 text-[10px] font-black uppercase tracking-wider transition-opacity hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-500 focus-visible:ring-offset-2"
+              style={{
+                background: colors2000s.bg.button,
+                borderColor: colors2000s.border.default,
+                boxShadow: colors2000s.shadows.insetLight,
+                color: colors2000s.text.primary
+              }}
+            >
+              <ChevronLeft size={14} aria-hidden="true" />
+              <span>Anterior</span>
+            </button>
+            <button
+              type="button"
+              aria-label={
+                datePage === DATE_PAGE_COUNT - 1
+                  ? 'Siguiente: no hay más fechas disponibles'
+                  : `Siguiente: mostrar los ${nextPageDateCount} días siguientes`
+              }
+              onClick={() => changeDatePage(1)}
+              disabled={datePage === DATE_PAGE_COUNT - 1}
+              className="inline-flex min-h-11 items-center justify-center gap-1 rounded-md border px-3 py-2 text-[10px] font-black uppercase tracking-wider transition-opacity hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-500 focus-visible:ring-offset-2"
+              style={{
+                background: colors2000s.bg.button,
+                borderColor: colors2000s.border.default,
+                boxShadow: colors2000s.shadows.insetLight,
+                color: colors2000s.text.primary
+              }}
+            >
+              <span>Siguiente</span>
+              <ChevronRight size={14} aria-hidden="true" />
+            </button>
+          </div>
         </div>
 
         <div
+          role="group"
+          aria-label="Fechas disponibles. Deslizá horizontalmente para ver más días"
           className="flex gap-3 overflow-x-auto p-4 snap-x hide-scrollbar border"
           style={createBookingSurfaceStyle()}
         >
           {dates.map((date) => {
             const formattedDate = format(date, 'yyyy-MM-dd')
-            const isSelected = format(activeDate, 'yyyy-MM-dd') === formattedDate
-            const isToday = format(date, 'yyyy-MM-dd') === format(new Date(), 'yyyy-MM-dd')
+            const isSelected =
+              activeDate !== null && format(activeDate, 'yyyy-MM-dd') === formattedDate
+            const isToday = format(date, 'yyyy-MM-dd') === format(today, 'yyyy-MM-dd')
 
             return (
               <button
                 key={formattedDate}
+                type="button"
                 data-testid={`date-${formattedDate}`}
+                aria-label={`${isToday ? 'Hoy, ' : ''}${format(date, "EEEE d 'de' MMMM 'de' yyyy", { locale: es })}`}
+                aria-pressed={isSelected}
                 onClick={() => setActiveDate(date)}
-                className="flex flex-col items-center justify-center min-w-[72px] py-3 rounded-md border transition-all snap-center active:scale-95"
+                className="min-h-11 min-w-[72px] flex flex-col items-center justify-center py-3 rounded-md border transition-all snap-center active:scale-95"
                 style={{
                   background: isSelected
                     ? orangeCtaGradient
@@ -347,7 +460,7 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
             role="switch"
             aria-checked={forceAll}
             onClick={() => setForceAll(!forceAll)}
-            className="flex items-center gap-2 cursor-pointer opacity-80 hover:opacity-100 transition-opacity rounded-full bg-transparent border-0 p-1 focus:outline-none focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-orange-500 focus-visible:ring-offset-2"
+            className="min-h-11 min-w-11 px-2 flex items-center gap-2 cursor-pointer opacity-80 hover:opacity-100 transition-opacity rounded-full bg-transparent border-0 p-1 focus:outline-none focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-orange-500 focus-visible:ring-offset-2"
           >
             <span className="text-[9px] font-black uppercase text-gray-500 tracking-wider">
               Ver todos
@@ -363,101 +476,161 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
           </button>
         </div>
 
-        {isLoading ? (
-          <div className="flex flex-col items-center justify-center py-10">
-            <Loader2 className="w-8 h-8 animate-spin text-orange-500 mb-4" />
-          </div>
-        ) : isError ? (
-          <div
-            role="alert"
-            className="text-center py-8 px-4 border space-y-3"
-            style={createBookingSurfaceStyle()}
-          >
-            <p className="text-xs font-bold" style={{ color: colors2000s.text.primary }}>
-              {getErrorMessage(
-                availabilityError,
-                'No pudimos cargar los horarios. Probá de nuevo en unos minutos.',
-                AVAILABILITY_ERROR_MESSAGES
-              )}
-            </p>
-            <button
-              type="button"
-              onClick={() => {
-                void refetchAvailability()
-              }}
-              className="text-xs font-black underline"
-              style={{ color: colors2000s.orange.accent }}
-            >
-              Reintentar
-            </button>
-          </div>
-        ) : visibleSlots.length === 0 ? (
+        {!activeDate ? (
           <div className="text-center py-10 border" style={createBookingSurfaceStyle()}>
-            <p className="font-black text-gray-400 uppercase tracking-widest text-xs">
-              {diaSinAtencion ? 'Este día no hay atención.' : 'No hay turnos disponibles.'}
+            <p
+              className="font-black uppercase tracking-widest text-xs"
+              style={{ color: colors2000s.text.secondary }}
+            >
+              Elegí una fecha para ver los horarios.
             </p>
-            <p className="text-xs text-gray-400 mt-2 font-medium">
-              {diaSinAtencion ? 'Probá con otro día.' : 'Probá seleccionando otro día.'}
-            </p>
-            {waitlistAvailable && !diaSinAtencion && (
-              <div className="px-4 text-left">
-                <WaitlistJoinForm
-                  key={dateStr}
-                  storePublicId={storePublicId}
-                  serviceId={serviceId}
-                  staffId={staffId}
-                  date={dateStr}
-                />
-              </div>
-            )}
           </div>
         ) : (
-          <div className="grid grid-cols-3 sm:grid-cols-4 gap-3">
-            {visibleSlots.map((slot) => {
-              const timeString = formatArgentinaTime(slot.starts_at)
-              const isSelected = selectedDate === dateStr && selectedTime === timeString
-              return (
+          <>
+            {isError && availability && (
+              <div
+                role="status"
+                className="flex flex-col items-start gap-3 rounded-md border p-4 sm:flex-row sm:items-center sm:justify-between"
+                style={{
+                  background: colors2000s.status.warning.bg,
+                  borderColor: colors2000s.status.warning.border,
+                  color: colors2000s.status.warning.text
+                }}
+              >
+                <p className="min-w-0 break-words text-sm font-bold">
+                  La información visible puede estar desactualizada.
+                </p>
                 <button
-                  key={`${slot.staff_id}-${slot.start_time || slot.starts_at}`}
-                  onClick={() =>
-                    onSelect(dateStr, timeString, slot.staff_id, staffFilterId, slot.starts_at, {
-                      name: slot.staff_name,
-                      isResource: resourceIds.has(slot.staff_id)
-                    })
-                  }
-                  className="py-3 rounded-md font-black text-lg transition-all active:scale-95 border"
+                  type="button"
+                  onClick={() => void refetchAvailability()}
+                  className="min-h-11 shrink-0 rounded-md border px-4 py-2 text-xs font-black uppercase tracking-wide"
                   style={{
-                    background: isSelected
-                      ? orangeCtaGradient
-                      : `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
-                    borderColor: isSelected
-                      ? colors2000s.orange.accent
-                      : colors2000s.border.default,
-                    boxShadow: isSelected
-                      ? `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerOrange}`
-                      : `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`,
-                    color: isSelected
-                      ? colors2000s.text.onOrangeSelection
-                      : colors2000s.text.primary
+                    background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
+                    borderColor: colors2000s.border.default,
+                    color: colors2000s.text.primary
                   }}
                 >
-                  <div>{timeString}</div>
-                  {!staffFilterId && (
-                    <div
-                      className="text-[8px] uppercase tracking-widest mt-1"
+                  Reintentar
+                </button>
+              </div>
+            )}
+
+            {isLoading || (isStaffLoading && visibleSlots.length === 0) ? (
+              <div
+                role="status"
+                aria-label="Cargando horarios"
+                className="flex flex-col items-center justify-center py-10"
+              >
+                <Loader2 className="w-8 h-8 animate-spin text-orange-500 mb-4" />
+              </div>
+            ) : isError && !availability ? (
+              <div
+                role="alert"
+                className="text-center py-8 px-4 border space-y-3"
+                style={createBookingSurfaceStyle()}
+              >
+                <p className="text-xs font-bold" style={{ color: colors2000s.text.primary }}>
+                  {getErrorMessage(
+                    availabilityError,
+                    'No pudimos cargar los horarios. Probá de nuevo en unos minutos.',
+                    AVAILABILITY_ERROR_MESSAGES
+                  )}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    void refetchAvailability()
+                  }}
+                  className="text-xs font-black underline"
+                  style={{ color: colors2000s.orange.accent }}
+                >
+                  Reintentar
+                </button>
+              </div>
+            ) : visibleSlots.length === 0 ? (
+              <div className="text-center py-10 border" style={createBookingSurfaceStyle()}>
+                <p
+                  className="font-black uppercase tracking-widest text-xs"
+                  style={{ color: colors2000s.text.secondary }}
+                >
+                  {diaSinAtencion ? 'Este día no hay atención.' : 'No hay turnos disponibles.'}
+                </p>
+                <p
+                  className="text-xs mt-2 font-medium"
+                  style={{ color: colors2000s.text.secondary }}
+                >
+                  {diaSinAtencion ? 'Probá con otro día.' : 'Probá seleccionando otro día.'}
+                </p>
+                {waitlistAvailable && !diaSinAtencion && (
+                  <div className="px-4 text-left">
+                    <WaitlistJoinForm
+                      key={dateStr}
+                      storePublicId={storePublicId}
+                      serviceId={serviceId}
+                      staffId={staffId}
+                      date={dateStr}
+                    />
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 min-[380px]:grid-cols-3 sm:grid-cols-4 gap-3">
+                {visibleSlots.map((slot) => {
+                  const timeString = formatArgentinaTime(slot.starts_at)
+                  const isSelected = selectedDate === dateStr && selectedTime === timeString
+                  return (
+                    <button
+                      key={`${slot.staff_id}-${slot.start_time || slot.starts_at}`}
+                      type="button"
+                      aria-pressed={isSelected}
+                      onClick={() =>
+                        onSelect(
+                          dateStr,
+                          timeString,
+                          slot.staff_id,
+                          staffFilterId,
+                          slot.starts_at,
+                          {
+                            name: slot.staff_name,
+                            isResource: resourceIds.has(slot.staff_id)
+                          }
+                        )
+                      }
+                      className="min-h-11 min-w-0 py-2 sm:py-3 rounded-md font-black text-base sm:text-lg transition-all active:scale-95 border"
                       style={{
+                        background: isSelected
+                          ? orangeCtaGradient
+                          : `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
+                        borderColor: isSelected
+                          ? colors2000s.orange.accent
+                          : colors2000s.border.default,
+                        boxShadow: isSelected
+                          ? `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerOrange}`
+                          : `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`,
                         color: isSelected
                           ? colors2000s.text.onOrangeSelection
-                          : colors2000s.text.secondary
+                          : colors2000s.text.primary
                       }}
                     >
-                      {slot.staff_name}
-                    </div>
-                  )}
-                </button>
-              )
-            })}
-          </div>
+                      <div>{timeString}</div>
+                      {!staffFilterId && (
+                        <div
+                          className="text-[8px] uppercase tracking-widest mt-1"
+                          style={{
+                            color: isSelected
+                              ? colors2000s.text.onOrangeSelection
+                              : colors2000s.text.secondary
+                          }}
+                        >
+                          {slot.staff_name}
+                        </div>
+                      )}
+                    </button>
+                  )
+                })}
+              </div>
+            )}
+          </>
         )}
       </div>
     </div>

@@ -38,8 +38,12 @@ test.describe('reserva publica desde el celular', () => {
     // Paso 1: servicio. Con un solo servicio el wizard lo elige solo y ya
     // muestra el horario; con varios, se toca el primero.
     const tituloServicio = page.getByText('¿Qué servicio necesitás?')
-    const tituloHorario = page.getByRole('heading', { name: 'Elegí fecha y hora' })
+    const tituloHorario = page.getByRole('heading', { name: /eleg[ií] fecha y hora/i })
     await expect(tituloServicio.or(tituloHorario)).toBeVisible()
+    await expect(page.getByRole('link', { name: 'Mis turnos' })).toHaveCSS('min-height', '44px')
+    for (const nombre of ['Términos y condiciones', 'Privacidad']) {
+      await expect(page.getByRole('link', { name: nombre })).toHaveCSS('min-height', '44px')
+    }
     if (await tituloServicio.isVisible()) {
       await sinScrollHorizontal(page, 'servicio')
       await page
@@ -58,8 +62,8 @@ test.describe('reserva publica desde el celular', () => {
     const sinTurnos = page.getByText(/^(No hay turnos disponibles\.|Este día no hay atención\.)$/)
     for (let i = 0; i < cantidad; i += 1) {
       await dias.nth(i).click()
-      // Esperar a que ese dia termine de cargar: o hay un slot o dice que no
-      // hay (isVisible() no espera; revisar antes de la carga miraba vacio).
+      // Esperar a que ese dia termine de cargar: aparece un slot o uno de los
+      // estados vacios (dia sin atencion o agenda completa).
       await expect(slot.or(sinTurnos).first()).toBeVisible({ timeout: 10_000 })
       if ((await slot.count()) > 0) break
     }

@@ -157,9 +157,10 @@ export const StaffManagementContainer: React.FC = () => {
           size={20}
         />
         <input
-          type="text"
+          type="search"
+          aria-label="Buscar profesional o recurso"
           placeholder="BUSCAR PROFESIONAL..."
-          className="w-full pl-12 pr-4 py-3.5 rounded-2xl font-black uppercase tracking-widest text-xs outline-none"
+          className="w-full pl-12 pr-4 py-3.5 rounded-2xl font-black uppercase tracking-widest text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#9a4507]"
           style={{
             background: 'white',
             border: `1px solid ${colors2000s.border.default}`,
@@ -195,6 +196,9 @@ export const StaffManagementContainer: React.FC = () => {
         </div>
       ) : filteredStaff?.length === 0 ? (
         <div
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
           className="flex flex-col items-center justify-center py-20 rounded-lg text-center"
           style={{
             background: 'white',
@@ -209,13 +213,17 @@ export const StaffManagementContainer: React.FC = () => {
             <User size={40} className="opacity-25" style={{ color: colors2000s.text.primary }} />
           </div>
           <h3 className="text-xl font-black uppercase" style={{ color: colors2000s.text.primary }}>
-            No se encontraron resultados
+            {staffList?.length === 0
+              ? 'Todavía no hay profesionales ni recursos'
+              : 'No se encontraron resultados'}
           </h3>
           <p
             className="text-xs font-bold max-w-xs mx-auto mt-2"
             style={{ color: colors2000s.text.secondary }}
           >
-            Probá con otro término de búsqueda o agregá un nuevo profesional.
+            {staffList?.length === 0
+              ? 'Agregá un profesional o recurso para empezar a gestionar el equipo.'
+              : 'Probá con otro término de búsqueda.'}
           </p>
         </div>
       ) : (

@@ -95,6 +95,7 @@ describe('LedgerPage', () => {
   it('la busqueda viaja al hook de /ledger/clients al enviarla, no por tecla', () => {
     render(<LedgerPage />)
 
+    expect(screen.getByRole('button', { name: 'Buscar' })).toHaveClass('min-h-11')
     fireEvent.change(screen.getByLabelText('Buscar cliente'), { target: { value: 'Beto' } })
     expect(mockLedgerClients).toHaveBeenLastCalledWith('')
     fireEvent.click(screen.getByRole('button', { name: 'Buscar' }))
@@ -326,6 +327,7 @@ describe('LedgerPage: revertir un movimiento', () => {
 
     const botones = screen.getAllByRole('button', { name: 'Revertir' })
     expect(botones).toHaveLength(1)
+    expect(botones[0]).toHaveClass('min-h-11', 'min-w-11')
     expect(filaDe('Pago').contains(botones[0] ?? null)).toBe(true)
     // El original queda marcado y la reversion dice que anula.
     expect(filaDe('Cargo')).toHaveTextContent('Revertido')

@@ -252,8 +252,8 @@ Una instrucción en lenguaje natural no es una garantía.
    (`payments/service.py::carry_manual_deposit`; el dueño recibe el aviso
    con el plazo nuevo). A un día a más de 30 no se muda: 422
    `FAR_BOOKING_REQUIRES_MERCADOPAGO` antes de escribir (ahí solo se cobra
-   por MP y la autogestión no cambia el canal; decisión de Mateo,
-   2026-10-20; pendiente de OK del dueño en `docs/DECISIONES.md`). Un turno
+   por MP y la autogestión no cambia el canal; propuesta por Mateo,
+   adoptada por el dueño el 2026-10-21, D-20261020-02). Un turno
    terminal no se reprograma desde ningún lado (409
    `APPOINTMENT_NOT_ACTIVE`). El link del panel y la confirmación manual
    lockean el turno y rechazan uno soltado (`RELEASED_APPOINTMENT_STATUSES`:
@@ -569,8 +569,8 @@ Una instrucción en lenguaje natural no es una garantía.
   `test_mails_del_panel_sin_transaccion.py`) Los helpers de `notifications/tasks.py` que
   mandan SMTP en línea se llaman `send_*`; una función `enqueue_*` tiene que
   encolar de verdad (`test_enqueue_encola_de_verdad.py`).
-- **Una reserva pública sin cobro nace confirmada** (decisión de Mateo,
-  2026-10-20; pendiente de OK del dueño en `docs/DECISIONES.md`). Sin cobro es
+- **Una reserva pública sin cobro nace confirmada** (propuesta por Mateo,
+  adoptada por el dueño el 2026-10-21, D-20261020-01). Sin cobro es
   `payment_required` falso: sin seña, seña opcional sin MP elegido o seña
   obligatoria de importe cero. Nace `confirmed` y sin `expires_at` (como el
   alta del panel), en vez de `pending` retenido hasta su inicio, que el job
@@ -803,8 +803,8 @@ Una instrucción en lenguaje natural no es una garantía.
   `refunded` o contracargo no se aplica: sin esto, devolver el duplicado en
   MP dejaba devuelta la seña que la tienda se quedó. Cancelar y reprogramar:
   regla 3. **Una reserva lejana con seña obligatoria se cobra solo por MP**
-  (decisión de Mateo, 2026-10-20; pendiente de OK del dueño en
-  `docs/DECISIONES.md`; `deposit_channels.py::FAR_BOOKING_DAYS`, 30): un turno cuyo día argentino
+  (propuesta por Mateo, adoptada por el dueño el 2026-10-21, D-20261020-02;
+  `deposit_channels.py::FAR_BOOKING_DAYS`, 30): un turno cuyo día argentino
   pasa de hoy + 30 (`is_far_booking`, por calendario local, no por horas) y
   pide una seña obligatoria mayor a cero no se cobra por WhatsApp. Elegirlo
   es 422 `FAR_BOOKING_REQUIRES_MERCADOPAGO`; sin MP usable

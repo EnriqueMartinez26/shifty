@@ -74,7 +74,7 @@ export const AuthShell: React.FC<AuthShellProps> = ({
           >
             <Link
               to="/login"
-              className="inline-flex items-center gap-2 text-sm font-bold transition-colors"
+              className="inline-flex min-h-11 items-center justify-center gap-2 rounded-md px-3 text-sm font-bold transition-colors"
               style={{ color: colors2000s.orange.accent }}
             >
               <ArrowLeft className="w-4 h-4" />

@@ -254,7 +254,7 @@ describe('WaitlistContainer - reservar desde la lista', () => {
     expect(aviso.textContent).not.toMatch(/mail|WhatsApp/)
   })
 
-  it('el formulario entra en un telefono: dos columnas y el boton abajo', () => {
+  it('apila fecha, hora y confirmacion en el telefono y conserva la fila en escritorio', () => {
     mockWaitlist.mockReturnValue({ data: [entrada], isLoading: false })
     render(<WaitlistContainer />)
     fireEvent.click(screen.getByRole('button', { name: /Reservar/ }))
@@ -262,9 +262,10 @@ describe('WaitlistContainer - reservar desde la lista', () => {
     const form = screen.getByRole('button', { name: 'Confirmar' }).parentElement
     if (!form) throw new Error('sin formulario')
     expect(form.classList.contains('grid-cols-[1fr_auto_auto]')).toBe(false)
-    expect(form.classList.contains('grid-cols-2')).toBe(true)
-    expect(screen.getByRole('button', { name: 'Confirmar' }).classList.contains('col-span-2')).toBe(
-      true
-    )
+    expect(form.classList.contains('grid-cols-1')).toBe(true)
+    expect(form.classList.contains('sm:grid-cols-[1fr_auto_auto]')).toBe(true)
+    const confirmar = screen.getByRole('button', { name: 'Confirmar' })
+    expect(confirmar.classList.contains('col-span-2')).toBe(false)
+    expect(confirmar).toHaveClass('min-h-11')
   })
 })

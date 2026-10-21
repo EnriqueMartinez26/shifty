@@ -109,6 +109,9 @@ const Navegador = () => {
       <button type="button" onClick={() => void navigate(-1)}>
         Atras del navegador
       </button>
+      <button type="button" onClick={() => void navigate(1)}>
+        Adelante del navegador
+      </button>
     </>
   )
 }
@@ -128,6 +131,7 @@ const WizardEnRuta = ({
 
 const url = () => screen.getByTestId('url').textContent
 const atrasDelNavegador = () => fireEvent.click(screen.getByText('Atras del navegador'))
+const adelanteDelNavegador = () => fireEvent.click(screen.getByText('Adelante del navegador'))
 // El "Volver" de la app, con texto visible (2026-10-16).
 const volver = () => screen.getByRole('button', { name: 'Volver' })
 
@@ -204,6 +208,8 @@ describe('BookingWizardContainer', () => {
         screen.getByRole('region', { name: 'Paso 3 de 3: Datos y Confirmación' })
       ).toHaveFocus()
     )
+    expect(screen.getByPlaceholderText('Ej: Juan Perez')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('Ej: Juan Perez')).not.toHaveFocus()
 
     fireEvent.click(volver())
     await waitFor(() =>
@@ -248,6 +254,22 @@ describe('BookingWizardContainer', () => {
       expect(url()).toBe('/booking/tienda?ref=ig&step=2')
     })
 
+    it('al elegir un horario enfoca la región sin abrir el teclado del formulario', async () => {
+      mockServices.mockReturnValue({ data: [servicio('a'), servicio('b')], isLoading: false })
+      render(<WizardEnRuta store={tienda(false)} />)
+      fireEvent.click(screen.getByText('Servicio a'))
+      await waitFor(() => expect(screen.getByText(HORARIO)).toBeInTheDocument())
+
+      fireEvent.click(screen.getByText('09:00'))
+
+      const nameInput = await screen.findByPlaceholderText('Ej: Juan Perez')
+      const stepRegion = screen.getByRole('region', {
+        name: 'Paso 3 de 3: Datos y Confirmación'
+      })
+      await waitFor(() => expect(document.activeElement).toBe(stepRegion))
+      expect(nameInput).not.toHaveFocus()
+    })
+
     it('"atras" del navegador vuelve al paso anterior con lo elegido', () => {
       render(<WizardEnRuta store={tienda(false)} />)
       elegirServicioYHorario()
@@ -265,6 +287,23 @@ describe('BookingWizardContainer', () => {
       atrasDelNavegador()
       expect(screen.getByText(SERVICIO)).toBeInTheDocument()
       expect(url()).toBe('/booking/tienda')
+    })
+
+    it('no restaura una confirmacion vieja si cambia la pagina de fechas antes de avanzar', async () => {
+      render(<WizardEnRuta store={tienda(false)} />)
+      elegirServicioYHorario()
+
+      expect(screen.getByPlaceholderText(DATOS)).toBeInTheDocument()
+      fireEvent.click(volver())
+      expect(screen.getByText(HORARIO)).toBeInTheDocument()
+
+      fireEvent.click(screen.getByRole('button', { name: /Siguiente: mostrar/ }))
+      expect(screen.getByText('Elegí una fecha para ver los horarios.')).toBeInTheDocument()
+
+      adelanteDelNavegador()
+      await waitFor(() => expect(url()).toBe('/booking/tienda?step=1'))
+      expect(screen.getByText(HORARIO)).toBeInTheDocument()
+      expect(screen.queryByPlaceholderText(DATOS)).not.toBeInTheDocument()
     })
 
     it('"atras" de la app retrocede en el historial sin dejar un paso repetido', () => {

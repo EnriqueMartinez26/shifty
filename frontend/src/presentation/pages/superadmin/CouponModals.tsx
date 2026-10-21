@@ -74,8 +74,9 @@ export const CouponModals: React.FC<CouponModalsProps> = ({
     >
       <div className={formGridClass}>
         <div>
-          <FieldLabel>Código</FieldLabel>
+          <FieldLabel htmlFor="coupon-code">Código</FieldLabel>
           <TextInput
+            id="coupon-code"
             value={couponForm.code}
             onChange={(event) =>
               setCouponForm((current) => ({ ...current, code: event.target.value.toUpperCase() }))
@@ -84,8 +85,9 @@ export const CouponModals: React.FC<CouponModalsProps> = ({
           />
         </div>
         <div>
-          <FieldLabel>Tipo</FieldLabel>
+          <FieldLabel htmlFor="coupon-type">Tipo</FieldLabel>
           <SelectInput
+            id="coupon-type"
             value={couponForm.coupon_type}
             onChange={(event) =>
               setCouponForm((current) => ({
@@ -102,8 +104,9 @@ export const CouponModals: React.FC<CouponModalsProps> = ({
 
       <div className={formGridClass}>
         <div>
-          <FieldLabel>Valor</FieldLabel>
+          <FieldLabel htmlFor="coupon-value">Valor</FieldLabel>
           <TextInput
+            id="coupon-value"
             type="number"
             min="0"
             step="0.01"
@@ -115,8 +118,9 @@ export const CouponModals: React.FC<CouponModalsProps> = ({
           />
         </div>
         <div>
-          <FieldLabel>Moneda</FieldLabel>
+          <FieldLabel htmlFor="coupon-currency">Moneda</FieldLabel>
           <TextInput
+            id="coupon-currency"
             value={couponForm.currency}
             onChange={(event) =>
               setCouponForm((current) => ({
@@ -131,8 +135,9 @@ export const CouponModals: React.FC<CouponModalsProps> = ({
 
       <div className={formGridClass}>
         <div>
-          <FieldLabel>Max usos</FieldLabel>
+          <FieldLabel htmlFor="coupon-max-uses">Max usos</FieldLabel>
           <TextInput
+            id="coupon-max-uses"
             type="number"
             min="1"
             value={couponForm.max_uses}
@@ -143,8 +148,9 @@ export const CouponModals: React.FC<CouponModalsProps> = ({
           />
         </div>
         <div>
-          <FieldLabel>Canje único por tienda</FieldLabel>
+          <FieldLabel htmlFor="coupon-one-time-per-store">Canje único por tienda</FieldLabel>
           <SelectInput
+            id="coupon-one-time-per-store"
             value={couponForm.one_time_per_store ? 'yes' : 'no'}
             onChange={(event) =>
               setCouponForm((current) => ({
@@ -161,8 +167,9 @@ export const CouponModals: React.FC<CouponModalsProps> = ({
 
       <div className={formGridClass}>
         <div>
-          <FieldLabel>Vigente desde</FieldLabel>
+          <FieldLabel htmlFor="coupon-valid-from">Vigente desde</FieldLabel>
           <TextInput
+            id="coupon-valid-from"
             type="datetime-local"
             value={couponForm.valid_from}
             onChange={(event) =>
@@ -171,8 +178,9 @@ export const CouponModals: React.FC<CouponModalsProps> = ({
           />
         </div>
         <div>
-          <FieldLabel>Vigente hasta</FieldLabel>
+          <FieldLabel htmlFor="coupon-valid-until">Vigente hasta</FieldLabel>
           <TextInput
+            id="coupon-valid-until"
             type="datetime-local"
             value={couponForm.valid_until}
             onChange={(event) =>
@@ -183,8 +191,9 @@ export const CouponModals: React.FC<CouponModalsProps> = ({
       </div>
 
       <div>
-        <FieldLabel>Descripción</FieldLabel>
+        <FieldLabel htmlFor="coupon-description">Descripción</FieldLabel>
         <TextArea
+          id="coupon-description"
           value={couponForm.description}
           onChange={(event) =>
             setCouponForm((current) => ({ ...current, description: event.target.value }))
@@ -222,8 +231,9 @@ export const CouponModals: React.FC<CouponModalsProps> = ({
       ) : null}
 
       <div>
-        <FieldLabel>Cupón</FieldLabel>
+        <FieldLabel htmlFor="coupon-redemption-code">Cupón</FieldLabel>
         <SelectInput
+          id="coupon-redemption-code"
           value={redeemForm.coupon_code}
           onChange={(event) => setRedeemForm({ coupon_code: event.target.value })}
           required
