@@ -42,6 +42,14 @@ describe('BookingServicesBar', () => {
     )
   })
 
+  it('Continuar mide al menos 44 px de alto en todos los anchos', () => {
+    render(
+      <BookingServicesBar count={1} durationMinutes={30} listPrice={10000} onContinue={jest.fn()} />
+    )
+
+    expect(screen.getByRole('button', { name: /Continuar/ })).toHaveClass('min-h-11')
+  })
+
   it('Continuar avisa al paso', () => {
     const onContinue = jest.fn()
     render(

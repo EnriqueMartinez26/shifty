@@ -409,7 +409,10 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
     <div
       // Menos relleno en el telefono: con p-8 + p-6 la tarjeta del servicio
       // quedaba de 227 px en 390 y cortaba los nombres (QA movil 2026-10-08).
-      className="max-w-2xl mx-auto rounded-lg p-4 sm:p-8 relative overflow-hidden duration-700"
+      // overflow-clip y no overflow-hidden: recorta igual las esquinas pero no
+      // crea un contenedor de scroll, asi la barra del servicio queda sticky
+      // contra la pantalla (QA 2026-10-21).
+      className="max-w-2xl mx-auto rounded-lg p-4 sm:p-8 relative overflow-clip duration-700"
       style={{
         // El color de la tienda (S3), una sola vez: los pasos leen var(--brand-*).
         ...brandCssVariables(resolveBrandTheme(store.primary_color)),

@@ -924,6 +924,23 @@ describe('BookingWizardContainer', () => {
       expect(pedido).toMatchObject({ service_id: 'a', extra_service_ids: ['b'] })
     })
 
+    // QA 2026-10-21 (S4): la barra no quedaba fija abajo porque la raiz del
+    // wizard tenia overflow-hidden, que anula el sticky de los descendientes.
+    it('la barra queda fija abajo: ningun ancestro la encierra en un contenedor con scroll', () => {
+      render(<WizardEnRuta store={tiendaMulti(true)} />)
+      fireEvent.click(screen.getByText('Servicio a'))
+
+      const barra = screen.getByTestId('booking-services-bar')
+      expect(barra).toHaveClass('sticky', 'bottom-0')
+      const encierran: string[] = []
+      for (let node = barra.parentElement; node; node = node.parentElement) {
+        if (/\boverflow(-[xy])?-(hidden|auto|scroll)\b/.test(node.className)) {
+          encierran.push(node.className)
+        }
+      }
+      expect(encierran).toEqual([])
+    })
+
     it('con el flag y un solo servicio elegido el pedido es el de siempre', async () => {
       render(<WizardEnRuta store={tiendaMulti(true)} />)
 
