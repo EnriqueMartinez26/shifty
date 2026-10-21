@@ -28,6 +28,15 @@ describe('resolveBrandTheme', () => {
     }
   )
 
+  // 2026-10-22 (#240): el naranja de CTA y seleccion paso a una rampa oscura
+  // con texto blanco; el tema por defecto tiene que seguir esa rampa entera.
+  it('keeps AA for the default Shifty orange on both ends of the fill', () => {
+    const theme = DEFAULT_BRAND_THEME
+    expect(contrastRatio(theme.onFill, theme.fill)).toBeGreaterThanOrEqual(4.5)
+    expect(contrastRatio(theme.onFill, theme.fillBottom)).toBeGreaterThanOrEqual(4.5)
+    expect(contrastRatio(theme.ink, '#ffffff')).toBeGreaterThanOrEqual(4.5)
+  })
+
   it('keeps the store color as the fill and darkens only the ink', () => {
     const theme = resolveBrandTheme('#FF70FA')
     expect(theme.fill).toBe('#ff70fa')
