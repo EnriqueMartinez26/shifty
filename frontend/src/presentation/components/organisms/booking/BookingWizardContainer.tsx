@@ -553,6 +553,9 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
               updateState({ promotionCode, promotionPreview })
             }
             onAddonsChange={(addons) => updateState({ addons })}
+            // Los adicionales se eligen en el paso del servicio (S4): editarlos
+            // vuelve ahi, con lo elegido.
+            onEditAddons={() => onStepChange({ to: 0, from: currentStep, mode: 'push' })}
             onConfirm={async (paymentMethod, acceptsTerms, addons) => {
               const pedido = {
                 store_public_id: store.public_id,
