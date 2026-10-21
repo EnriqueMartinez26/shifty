@@ -36,3 +36,20 @@ Esta excepción no cierra los smoke funcionales, la revisión legal del texto de
 - Rollback: `bash scripts/deploy.sh rollback` (o `make rollback`). Es automático si falla la compuerta de 60 s y vuelve a la versión guardada en `.deploy/previous`. No migra: las migraciones son solo expand, así que la versión anterior corre sobre el esquema nuevo.
 - Vencimiento: lo que llegue primero entre incorporar una sexta tienda o el 2026-11-12. Antes de cualquiera de los dos, la aceptación corre en el staging aislado o hace falta una decisión nueva. **Enrique: ajustar el número de tiendas y la fecha si no coinciden con el plan de incorporación.**
 - Lo que no se exceptúa: las guardas de P4 siguen obligatorias para cualquier corrida de carga (verificador del destino `scripts/verify_perf_target.py`, clientes sin redirecciones, dominio de producción y `www` rechazados). Nunca se corre la prueba contra producción.
+
+## Release del 2026-10-21: excepción de capacidad hasta 20 tiendas
+
+- Release: `109f38fe232cd73fa4df4c2a5528bf7ef53ec22d` (antes corría `27ab7f01ef26659541b017ea80a6a0974eae7b85`).
+- Ventana: deploy del 2026-10-21, de 06:16:35 a 06:18:55 UTC (`bash scripts/deploy.sh deploy`).
+- Contenido: cambios de interfaz del panel y del portal público (adaptación a celular, accesibilidad, contador de fechas de la reserva) y actualizaciones de dependencias. Sin migraciones ni cambios en `nginx/nginx.prod.conf` ni en `docker-compose.prod.yml`.
+- Decisión: `D-20261021-01`, propuesta por Mateo y adoptada por Enrique (owner) en su aprobación del PR [#237](https://github.com/EnriqueMartinez26/shifty/pull/237) el 2026-10-21.
+- Ítem exceptuado: solo la aceptación de capacidad de `docs/RELEASE_CHECKLIST.md` (staging aislado y `perf-acceptance.yml` en el runner dedicado). Los demás ítems del checklist y la QA manual en celular siguen vigentes.
+- Evidencia del deploy:
+  - preflight: Quality verde en `main` para el SHA, compose 5.6.0, disco al 7 %;
+  - sin migraciones pendientes (`alembic upgrade head` no aplicó revisiones);
+  - backend gradual (2 réplicas nuevas sanas) y frontend sin corte;
+  - compuerta: `ok (0 fallos sueltos, 5xx 0/94)`;
+  - `.deploy/current` = `109f38fe232cd73fa4df4c2a5528bf7ef53ec22d`, y `docker compose images` muestra ese tag en backend ×2, frontend, `celery`, `celery_beat` y `celery_interactive`;
+  - después del deploy: `/api/ops/health/ready` respondió 200 y el smoke de solo lectura del portal de la primera tienda (4 servicios, horarios y vista previa de total y seña con adicionales) no encontró problemas.
+- Pendiente: QA manual en un celular real de las pantallas del cliente que cambiaron.
+- Rollback: `bash scripts/deploy.sh rollback`, que vuelve a `.deploy/previous` sin migrar.
