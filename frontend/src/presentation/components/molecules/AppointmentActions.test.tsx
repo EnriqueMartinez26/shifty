@@ -178,11 +178,7 @@ describe('AppointmentActions', () => {
       for (const button of screen.getAllByRole('button')) {
         expect(button).toHaveClass('min-h-11', 'min-w-11')
         if (compact) {
-          expect(button).toHaveClass('md:min-h-0')
-          expect(button).toHaveClass('md:min-w-0')
-        } else {
-          expect(button).not.toHaveClass('md:min-h-0')
-          expect(button).not.toHaveClass('md:min-w-0')
+          expect(button).toHaveClass('md:min-h-11', 'md:min-w-11')
         }
       }
     }

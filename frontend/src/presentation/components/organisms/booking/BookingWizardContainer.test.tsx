@@ -177,6 +177,53 @@ describe('BookingWizardContainer', () => {
     expect(screen.getByText(SERVICIO)).toBeInTheDocument()
   })
 
+  it('no mueve el foco al montar el paso inicial', () => {
+    mockServices.mockReturnValue({ data: [servicio('a'), servicio('b')], isLoading: false })
+    const focoInicial = document.activeElement
+
+    render(<WizardEnRuta store={tienda(false)} />)
+
+    expect(document.activeElement).toBe(focoInicial)
+    expect(screen.getByRole('region', { name: 'Paso 1 de 3: Servicio' })).not.toHaveFocus()
+  })
+
+  it('mueve el foco al paso nuevo al avanzar y retroceder', async () => {
+    mockServices.mockReturnValue({ data: [servicio('a'), servicio('b')], isLoading: false })
+    render(<WizardEnRuta store={tienda(false)} />)
+
+    fireEvent.click(screen.getByText('Servicio a'))
+    await waitFor(() =>
+      expect(
+        screen.getByRole('region', { name: 'Paso 2 de 3: Horario y Profesional' })
+      ).toHaveFocus()
+    )
+
+    fireEvent.click(screen.getByText('09:00'))
+    await waitFor(() =>
+      expect(
+        screen.getByRole('region', { name: 'Paso 3 de 3: Datos y Confirmación' })
+      ).toHaveFocus()
+    )
+
+    fireEvent.click(volver())
+    await waitFor(() =>
+      expect(
+        screen.getByRole('region', { name: 'Paso 2 de 3: Horario y Profesional' })
+      ).toHaveFocus()
+    )
+  })
+
+  it('mueve el foco al horario cuando salta el paso de servicio unico', async () => {
+    mockServices.mockReturnValue({ data: [servicio('unico')], isLoading: false })
+    render(<WizardEnRuta store={tienda(false)} />)
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole('region', { name: 'Paso 2 de 3: Horario y Profesional' })
+      ).toHaveFocus()
+    )
+  })
+
   // 2026-10-02 (F4-15): el paso vivia solo en memoria. "Atras" del navegador
   // sacaba de la reserva y un link no podia volver al paso en que estaba.
   describe('paso en la URL', () => {
