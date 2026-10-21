@@ -113,6 +113,13 @@ const PAYMENT_STATE_QUERIES = [
   ['calendar-agenda']
 ] as const
 
+const REFUND_STATE_QUERIES = [
+  ...PAYMENT_STATE_QUERIES,
+  ['reports-summary'],
+  ['reports-professionals'],
+  ['dashboard-summary']
+] as const
+
 export const useManualConfirmPayment = () => {
   const queryClient = useQueryClient()
   return useMutation<
@@ -177,7 +184,7 @@ export const useRefundPayment = () => {
     mutationFn: ({ paymentId, amount, reason, manual }) =>
       paymentsService.refund(paymentId, amount, reason, manual),
     onSuccess: () => {
-      PAYMENT_STATE_QUERIES.forEach((queryKey) => {
+      REFUND_STATE_QUERIES.forEach((queryKey) => {
         void queryClient.invalidateQueries({ queryKey: [...queryKey] })
       })
     }

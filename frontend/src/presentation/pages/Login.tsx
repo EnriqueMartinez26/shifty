@@ -104,10 +104,10 @@ const LoginPage: React.FC = () => {
             placeholder="********"
             required
           />
-          <div className="mt-2 text-right">
+          <div className="mt-2 flex justify-end">
             <Link
               to="/forgot-password"
-              className="text-xs transition-colors font-medium"
+              className="inline-flex min-h-11 items-center rounded-md px-2 text-xs transition-colors font-medium"
               style={{ color: colors2000s.orange.accent }}
             >
               ¿Olvidaste tu contraseña?

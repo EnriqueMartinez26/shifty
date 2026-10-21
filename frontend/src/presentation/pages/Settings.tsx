@@ -400,6 +400,7 @@ const SettingsPage: React.FC = () => {
             type="button"
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}
+            aria-pressed={activeTab === tab.id}
             className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all whitespace-nowrap"
             style={activeTab === tab.id ? buttonStyles2000s.selected : buttonStyles2000s.default}
           >

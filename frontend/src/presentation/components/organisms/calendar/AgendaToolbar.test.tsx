@@ -39,4 +39,15 @@ describe('AgendaToolbar', () => {
     expect(handlers.onViewChange).toHaveBeenCalledWith('month')
     expect(handlers.onNewAppointment).toHaveBeenCalledTimes(1)
   })
+
+  it('mantiene los controles principales en un objetivo táctil de al menos 44 px', () => {
+    renderToolbar()
+
+    expect(screen.getByRole('button', { name: 'Anterior' })).toHaveClass('min-w-11', 'min-h-11')
+    expect(screen.getByRole('button', { name: 'Siguiente' })).toHaveClass('min-w-11', 'min-h-11')
+    for (const label of ['Día', 'Semana', 'Mes', 'Lista']) {
+      expect(screen.getByRole('button', { name: label })).toHaveClass('min-h-11')
+    }
+    expect(screen.getByRole('button', { name: /Nuevo turno/ })).toHaveClass('min-h-11')
+  })
 })

@@ -168,6 +168,19 @@ describe('LegalPage: responsables y contacto', () => {
     expect(region).not.toHaveTextContent(/pendiente|COMPLETAR/i)
   })
 
+  it('allows long contact values to wrap on narrow screens', () => {
+    const email = `${'responsable'.repeat(5)}@example.com`
+    const whatsapp = '+123456789012345'
+    jest.mocked(getContactEnv).mockReturnValue({
+      contactEmail: email,
+      supportWhatsApp: whatsapp
+    })
+    renderAt(['/legal/privacidad'])
+
+    expect(screen.getByRole('link', { name: email })).toHaveClass('break-words')
+    expect(screen.getByRole('link', { name: `+${whatsapp.slice(1)}` })).toHaveClass('break-words')
+  })
+
   it('sin nada configurado (o con placeholders) no hay bloque ni texto de relleno', () => {
     jest.mocked(getContactEnv).mockReturnValue({
       legalResponsables: '[[COMPLETAR]]',

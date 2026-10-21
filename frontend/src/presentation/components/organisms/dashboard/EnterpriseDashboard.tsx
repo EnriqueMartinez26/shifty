@@ -58,7 +58,7 @@ function EnterpriseDashboard({
 }: EnterpriseDashboardProps) {
   if (isLoading) {
     return (
-      <main style={pageStyle}>
+      <main style={{ ...pageStyle, width: '100%', minWidth: 0 }}>
         <div
           style={{
             ...createDashboardPanelStyle(),
@@ -74,7 +74,7 @@ function EnterpriseDashboard({
   }
 
   return (
-    <main style={pageStyle}>
+    <main style={{ ...pageStyle, width: '100%', minWidth: 0 }}>
       {errorMessage ? <ErrorPanel message={errorMessage} /> : null}
 
       <SummaryMetricsPanel title={copy.metricsTitle} metrics={todayMetrics} />
@@ -158,22 +158,39 @@ function EnterpriseDashboard({
 
       <style>
         {`
+          .dashboard-insights-grid,
+          .dashboard-board-grid,
+          .dashboard-lower-grid,
+          .dashboard-insights-grid > *,
+          .dashboard-board-grid > *,
+          .dashboard-lower-grid > * {
+            min-width: 0;
+          }
+
           @media (max-width: 1200px) {
             .dashboard-board-grid,
             .dashboard-lower-grid {
-              grid-template-columns: 1fr !important;
+              grid-template-columns: minmax(0, 1fr) !important;
             }
           }
 
           @media (max-width: 1100px) {
             .dashboard-insights-grid {
-              grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) !important;
+              grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+            }
+
+            .dashboard-insights-grid > :last-child {
+              grid-column: 1 / -1;
             }
           }
 
           @media (max-width: 720px) {
             .dashboard-insights-grid {
-              grid-template-columns: 1fr !important;
+              grid-template-columns: minmax(0, 1fr) !important;
+            }
+
+            .dashboard-insights-grid > :last-child {
+              grid-column: auto;
             }
           }
         `}

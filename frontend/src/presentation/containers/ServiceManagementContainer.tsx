@@ -143,13 +143,14 @@ export const ServiceManagementContainer: React.FC = () => {
         <input
           type="text"
           placeholder="BUSCAR SERVICIO..."
-          className="w-full pl-12 pr-4 py-3.5 rounded-xl border text-xs font-black uppercase tracking-widest transition-all placeholder-gray-400"
+          aria-label="Buscar servicio"
+          className="w-full pl-12 pr-4 py-3.5 rounded-xl border text-xs font-black uppercase tracking-widest transition-all placeholder-gray-400 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
           style={{
             background: 'white',
             borderColor: colors2000s.border.default,
             boxShadow: colors2000s.shadows.insetDark,
             color: colors2000s.text.primary,
-            outline: 'none'
+            outlineColor: colors2000s.orange.heading
           }}
           value={searchTerm}
           onChange={(e) => setSearchTerm(e.target.value)}
@@ -165,6 +166,32 @@ export const ServiceManagementContainer: React.FC = () => {
             Cargando servicios...
           </p>
         </div>
+      ) : services?.length === 0 ? (
+        <p
+          role="status"
+          aria-live="polite"
+          className="rounded-xl border border-dashed p-8 text-center text-xs font-black uppercase tracking-widest"
+          style={{
+            borderColor: colors2000s.border.default,
+            color: colors2000s.text.secondary,
+            background: colors2000s.bg.button
+          }}
+        >
+          Todavía no hay servicios en el catálogo. Agregá el primero con «Nuevo servicio».
+        </p>
+      ) : filteredServices?.length === 0 ? (
+        <p
+          role="status"
+          aria-live="polite"
+          className="rounded-xl border border-dashed p-8 text-center text-xs font-black uppercase tracking-widest"
+          style={{
+            borderColor: colors2000s.border.default,
+            color: colors2000s.text.secondary,
+            background: colors2000s.bg.button
+          }}
+        >
+          No hay servicios que coincidan con tu búsqueda. Probá con otro término.
+        </p>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {filteredServices?.map((service) => (
