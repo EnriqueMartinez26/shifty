@@ -58,8 +58,8 @@ test.describe('reserva publica desde el celular', () => {
     const sinTurnos = page.getByText(/^(No hay turnos disponibles\.|Este día no hay atención\.)$/)
     for (let i = 0; i < cantidad; i += 1) {
       await dias.nth(i).click()
-      // Esperar a que ese dia termine de cargar: o hay un slot o dice que no
-      // hay (isVisible() no espera; revisar antes de la carga miraba vacio).
+      // Esperar a que ese dia termine de cargar: aparece un slot o uno de los
+      // estados vacios (dia sin atencion o agenda completa).
       await expect(slot.or(sinTurnos).first()).toBeVisible({ timeout: 10_000 })
       if ((await slot.count()) > 0) break
     }
