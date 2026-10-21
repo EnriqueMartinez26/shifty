@@ -152,7 +152,7 @@ export const BookingConfirmationCard: React.FC<BookingConfirmationCardProps> = (
             target="_blank"
             rel="noreferrer"
             className="underline"
-            style={{ color: brandColor.ink }}
+            style={{ color: colors2000s.text.primary }}
           >
             términos y condiciones
           </a>
@@ -162,7 +162,7 @@ export const BookingConfirmationCard: React.FC<BookingConfirmationCardProps> = (
             target="_blank"
             rel="noreferrer"
             className="underline"
-            style={{ color: brandColor.ink }}
+            style={{ color: colors2000s.text.primary }}
           >
             política de privacidad
           </a>

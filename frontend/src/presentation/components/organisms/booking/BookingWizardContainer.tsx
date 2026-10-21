@@ -384,7 +384,7 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
               </div>
               <span
                 className={`text-[9px] uppercase tracking-wider hidden md:block mt-1 font-black text-center ${isActive ? '' : isCompleted ? 'text-green-600' : 'text-gray-400'}`}
-                style={isActive ? { color: brandColor.ink } : undefined}
+                style={isActive ? { color: colors2000s.text.primary } : undefined}
               >
                 {label}
               </span>

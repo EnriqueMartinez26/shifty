@@ -165,7 +165,7 @@ export const brandCtaStyle: React.CSSProperties = {
 export const brandSelectedStyle: React.CSSProperties = {
   ...buttonStyles2000s.selected,
   background: brandColor.fillGradient,
-  border: `1px solid ${brandColor.ink}`,
+  border: `1px solid ${brandColor.fillBottom}`,
   color: brandColor.onFill,
   boxShadow: `${colors2000s.shadows.insetLight}, ${brandGlowShadow}`
 }

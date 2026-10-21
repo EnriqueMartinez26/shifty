@@ -15,14 +15,15 @@ describe('BookingBackButton', () => {
   })
 
   // QA visual 2026-10-21: pintado con el relleno de marca competia con el
-  // unico boton principal del paso. Es secundario: superficie neutra, texto y
-  // borde con el color de la tienda.
-  it('es un boton secundario: sin relleno de marca, texto y borde en tinta de marca', () => {
+  // unico boton principal del paso. Es secundario: superficie neutra.
+  // S9 (2026-10-22): texto y borde neutros, nunca un tono de marca.
+  it('es un boton secundario neutro: sin relleno ni tinta de marca', () => {
     render(<BookingBackButton onBack={() => undefined} />)
 
-    const style = screen.getByRole('button', { name: 'Volver' }).getAttribute('style') ?? ''
+    const volver = screen.getByRole('button', { name: 'Volver' })
+    const style = volver.getAttribute('style') ?? ''
 
-    expect(style).not.toContain('--brand-fill')
-    expect(style).toContain('var(--brand-ink')
+    expect(style).not.toContain('--brand')
+    expect(volver.style.color).toBe('rgb(64, 64, 64)')
   })
 })

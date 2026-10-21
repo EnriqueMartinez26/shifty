@@ -1348,6 +1348,29 @@ describe('BookingWizardContainer con el color de la tienda', () => {
     const circulo = actual.querySelector('div') as HTMLElement
     expect(circulo.getAttribute('style')).toContain('var(--brand-fill,')
     expect(circulo.getAttribute('style')).toContain('var(--brand-on-fill,')
-    expect(actual.querySelector('span')?.getAttribute('style')).toContain('var(--brand-ink,')
+    // S9: el rotulo del paso es texto neutro; la marca queda en el circulo.
+    expect(actual.querySelector('span')?.getAttribute('style') ?? '').not.toContain('--brand')
+  })
+
+  // S9 (2026-10-22, Mateo: "hay colores que no parecen ser respetados"): con
+  // un amarillo los titulos salian oliva y con un rosa, violeta. El color de
+  // marca solo es relleno; el unico texto con variable de marca es el que va
+  // sobre ese relleno (--brand-on-fill).
+  it('ningun texto ni icono de los pasos usa un tono de marca', () => {
+    const textoDeMarca = () =>
+      Array.from(document.body.querySelectorAll<HTMLElement>('[style]'))
+        .map((el) => el.style.color)
+        .filter((color) => color.includes('--brand-') && !color.includes('--brand-on-fill'))
+
+    render(<WizardEnRuta store={{ ...tienda(false), primary_color: '#ffff00' }} />)
+    expect(textoDeMarca()).toEqual([])
+
+    fireEvent.click(screen.getByText('Servicio a'))
+    expect(screen.getByText('09:00')).toBeInTheDocument()
+    expect(textoDeMarca()).toEqual([])
+
+    fireEvent.click(screen.getByText('09:00'))
+    expect(screen.getByPlaceholderText(DATOS)).toBeInTheDocument()
+    expect(textoDeMarca()).toEqual([])
   })
 })

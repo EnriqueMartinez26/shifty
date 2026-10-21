@@ -1890,7 +1890,8 @@ describe('BookingStepConfirmation con el color de la tienda', () => {
     mockServices.mockReturnValue({ data: [], isLoading: false })
   })
 
-  it('el boton de confirmar habilitado y los links usan el color de marca', () => {
+  // S9 (2026-10-22): el color de marca solo es relleno; los links son neutros.
+  it('el boton de confirmar habilitado usa el color de marca y los links son neutros', () => {
     render(
       <BookingStepConfirmation
         {...props({
@@ -1903,9 +1904,10 @@ describe('BookingStepConfirmation con el color de la tienda', () => {
     expect(botonReservar()).not.toBeDisabled()
     expect(botonReservar().getAttribute('style')).toContain('var(--brand-fill,')
     expect(botonReservar().getAttribute('style')).toContain('var(--brand-on-fill,')
-    expect(
-      screen.getByRole('link', { name: 'términos y condiciones' }).getAttribute('style')
-    ).toContain('var(--brand-ink,')
+    const terminos = screen.getByRole('link', { name: 'términos y condiciones' })
+    expect(terminos.getAttribute('style')).not.toContain('--brand')
+    expect(terminos.style.color).toBe('rgb(64, 64, 64)')
+    expect(terminos).toHaveClass('underline')
   })
 
   it('deshabilitado sigue con el estilo neutro de siempre', () => {
