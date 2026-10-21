@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 
 import { Check } from 'lucide-react'
 
@@ -123,6 +123,18 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
   useEffect(() => {
     if (currentStep !== step) onStepChange({ to: currentStep, from: step, mode: 'replace' })
   }, [currentStep, step, onStepChange])
+
+  const stepRegionRef = useRef<HTMLDivElement>(null)
+  const previousStepRef = useRef(currentStep)
+
+  // Al avanzar, retroceder o saltar automaticamente el servicio unico, el
+  // control activo anterior se desmonta. Lleva el foco al nuevo paso para que
+  // teclado y lector de pantalla no queden en el body.
+  useEffect(() => {
+    if (previousStepRef.current === currentStep) return
+    previousStepRef.current = currentStep
+    stepRegionRef.current?.focus()
+  }, [currentStep])
 
   // Un solo servicio no es una eleccion: se elige solo y el wizard arranca
   // en el horario. Sincroniza con la lista publica (dato externo): cuando
@@ -284,19 +296,30 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
   }
 
   const renderStepIndicator = () => (
-    <div
-      className="flex items-center justify-between p-4 mb-8 relative overflow-hidden"
-      style={createBookingSurfaceStyle()}
-    >
-      {steps.map((label, i) => {
-        const isCompleted = i < currentStep
-        const isActive = i === currentStep
+    <div className="p-4 mb-8 relative overflow-hidden" style={createBookingSurfaceStyle()}>
+      <p
+        aria-hidden="true"
+        className="mb-3 text-center text-xs font-bold md:hidden"
+        style={{ color: colors2000s.text.primary }}
+      >
+        Paso {currentStep + 1} de {steps.length}: {steps[currentStep]}
+      </p>
+      <ol aria-label="Pasos de la reserva" className="flex items-start">
+        {steps.map((label, i) => {
+          const isCompleted = i < currentStep
+          const isActive = i === currentStep
+          const status = isCompleted ? 'completado' : isActive ? 'actual' : 'pendiente'
 
-        return (
-          <React.Fragment key={label}>
-            <div className="flex flex-col items-center gap-1 z-10 flex-1">
+          return (
+            <li
+              key={label}
+              aria-current={isActive ? 'step' : undefined}
+              aria-label={`Paso ${i + 1} de ${steps.length}: ${label}, ${status}`}
+              className="relative z-10 flex min-w-0 flex-1 flex-col items-center gap-1"
+            >
               <div
-                className="w-9 h-9 rounded-full flex items-center justify-center text-xs font-black transition-all cursor-default select-none"
+                aria-hidden="true"
+                className="z-10 w-9 h-9 rounded-full flex items-center justify-center text-xs font-black transition-all cursor-default select-none"
                 style={{
                   background: isCompleted
                     ? `linear-gradient(180deg, ${colors2000s.status.success.light} 0%, ${colors2000s.status.success.dark} 100%)`
@@ -323,21 +346,24 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
               >
                 {label}
               </span>
-            </div>
-            {i < steps.length - 1 && (
-              <div
-                className="h-1 flex-1 mx-2 rounded-full transition-all"
-                style={{
-                  background: isCompleted
-                    ? `linear-gradient(90deg, ${colors2000s.status.success.dark} 0%, ${colors2000s.status.success.light} 100%)`
-                    : colors2000s.bg.disabled,
-                  boxShadow: isCompleted ? 'none' : 'inset 0 1px 1px rgba(0,0,0,0.1)'
-                }}
-              />
-            )}
-          </React.Fragment>
-        )
-      })}
+              {i < steps.length - 1 && (
+                <span
+                  aria-hidden="true"
+                  className="absolute top-4 h-1 rounded-full transition-all"
+                  style={{
+                    left: 'calc(50% + 18px)',
+                    right: 'calc(-50% + 18px)',
+                    background: isCompleted
+                      ? `linear-gradient(90deg, ${colors2000s.status.success.dark} 0%, ${colors2000s.status.success.light} 100%)`
+                      : colors2000s.bg.disabled,
+                    boxShadow: isCompleted ? 'none' : 'inset 0 1px 1px rgba(0,0,0,0.1)'
+                  }}
+                />
+              )}
+            </li>
+          )
+        })}
+      </ol>
     </div>
   )
 
@@ -369,7 +395,11 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
       {renderStepIndicator()}
 
       <div
-        className="min-h-[400px] p-3 sm:p-6 rounded-lg relative"
+        ref={stepRegionRef}
+        role="region"
+        aria-label={`Paso ${currentStep + 1} de ${steps.length}: ${steps[currentStep]}`}
+        tabIndex={-1}
+        className="min-h-[400px] p-3 sm:p-6 rounded-lg relative focus:outline-none focus:ring-2 focus:ring-orange-500 focus:ring-offset-2"
         style={{
           background: 'rgba(255, 255, 255, 0.4)',
           border: '1px solid rgba(255, 255, 255, 0.5)',
