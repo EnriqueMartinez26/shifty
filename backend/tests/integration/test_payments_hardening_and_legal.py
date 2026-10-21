@@ -512,7 +512,11 @@ async def test_mercadopago_hold_expires_long_before_the_appointment(
 async def test_manual_booking_notifies_the_store_owner(
     client: AsyncClient, test_session: AsyncSession
 ) -> None:
-    """El dueño tiene que enterarse de los turnos que debe confirmar a mano."""
+    """El dueño tiene que enterarse de las reservas del portal.
+
+    Sin cobro la reserva nace confirmada (decision de Mateo, 2026-10-20): el
+    aviso es "Nueva reserva" (``appointment.booked_online``), ya no "turno
+    pendiente de confirmar"."""
     store_public_id, token = await register_and_login(
         client, slug="tienda-aviso", email="aviso@test.com"
     )
@@ -544,12 +548,13 @@ async def test_manual_booking_notifies_the_store_owner(
 
     result = await test_session.execute(
         select(Notification).where(
-            Notification.type == NotificationType.APPOINTMENT_PENDING_CONFIRMATION.value
+            Notification.type == NotificationType.APPOINTMENT_BOOKED_ONLINE.value
         )
     )
     notification = result.scalars().first()
     assert notification is not None
     assert "Cliente WhatsApp" in (notification.body or "")
+    assert "transferencia" not in (notification.body or "")
 
     listing = await client.get("/notifications", headers=auth_headers(token))
     assert listing.status_code == 200, listing.text
@@ -786,7 +791,9 @@ async def test_el_dueno_recibe_la_notificacion_tambien_por_mail(
 
     assert enviados, "el dueño no recibio mail de la notificacion"
     assert enviados[0]["email"] == "mail-dueno@test.com"
-    assert "confirmar" in (enviados[0]["title"] or "").lower()
+    # Sin cobro nace confirmada (decision de Mateo, 2026-10-20): el titulo
+    # informa, ya no pide confirmar.
+    assert enviados[0]["title"] == "Nueva reserva"
 
 
 @pytest.mark.asyncio

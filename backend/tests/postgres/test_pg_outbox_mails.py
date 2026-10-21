@@ -6,6 +6,10 @@ no hay segunda conexion que pueda mirar si la fila esta commiteada; aca si:
 en el momento en que sale cada mail, OTRA conexion (rol dueno) ya tiene que
 ver ``processed_at`` persistido para ESA fila. Ademas, dos workers solapados
 no mandan dos veces el mismo aviso (SKIP LOCKED) ni pierden ninguno.
+
+Desde el 2026-10-20 (decision de Mateo) la reserva sin cobro nace confirmada
+y su aviso al dueno es ``appointment.booked_online`` ("Nueva reserva"), antes
+``appointment.pending_confirmation``.
 """
 
 import asyncio
@@ -77,7 +81,7 @@ async def _commiteado_segun_otra_conexion(
             await conn.execute(
                 text(
                     "select processed_at from outbox_messages "
-                    "where event_type = 'appointment.pending_confirmation' "
+                    "where event_type = 'appointment.booked_online' "
                     "and payload->>'client_name' = :name"
                 ),
                 {"name": client_name},
@@ -92,7 +96,7 @@ async def _pendientes_segun_otra_conexion(owner_engine: AsyncEngine) -> int:
             await conn.execute(
                 text(
                     "select count(*) from outbox_messages "
-                    "where event_type = 'appointment.pending_confirmation' "
+                    "where event_type = 'appointment.booked_online' "
                     "and processed_at is null"
                 )
             )
@@ -143,11 +147,13 @@ async def test_el_aviso_al_dueno_sale_con_la_fila_ya_commiteada_y_una_sola_vez(
     assert sum(int(r["processed"]) for r in resultados) == CUANTOS
     assert all(int(r["failed"]) == 0 for r in resultados), resultados
     # Cada aviso salio una sola vez (SKIP LOCKED) y ninguno se perdio.
-    assert sorted(enviados) == sorted(
-        f"Cliente {i} reservó Consulta y va a coordinar el pago. "
-        "Confirmalo cuando recibas la transferencia."
-        for i in range(CUANTOS)
+    assert sorted(e.split(" para el ", 1)[0] for e in enviados) == sorted(
+        f"Cliente {i} reservó Consulta" for i in range(CUANTOS)
     )
+    assert all(
+        e.endswith("El turno quedó confirmado: no tenés que hacer nada.")
+        for e in enviados
+    ), enviados
     # Y en el momento de cada envio SU fila ya estaba commiteada: el commit
     # fue antes del mail (regla 5 / CLAUDE.md Fases 4-7).
     assert commiteado_al_enviar == [True] * CUANTOS, commiteado_al_enviar

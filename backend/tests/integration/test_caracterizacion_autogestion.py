@@ -256,7 +256,9 @@ async def test_reprogramar_cuerpo_filas_outbox_cache_y_replay(
         "service_name": "Consulta",
         "staff_id": t.staff,
         "staff_name": "Pro Demo",
-        "status": "pending",
+        # El alta sin cobro nace confirmada (decision de Mateo, 2026-10-20) y
+        # la copia conserva el estado (AUD2-B1-14); antes era "pending".
+        "status": "confirmed",
         "client_name": "Cliente Caracterizado",
         "client_phone": "5491155558001",
         "notes": "Primera vez",
@@ -286,10 +288,11 @@ async def test_reprogramar_cuerpo_filas_outbox_cache_y_replay(
     assert orden == ["commit", "cache"], orden
     assert (await _turno(test_session, turno)).status == "cancelled"
     nuevo = await _turno(test_session, cuerpo["public_id"])
-    assert nuevo.status == "pending"
+    # 2026-10-20: confirmado y sin retencion, como el original.
+    assert nuevo.status == "confirmed"
     assert nuevo.idempotency_key == "carac-repro-nuevo-0001"
     assert nuevo.price_amount == Decimal("10000.00")
-    assert ensure_utc_aware(nuevo.expires_at) == nuevo_inicio  # type: ignore[arg-type]
+    assert nuevo.expires_at is None
     assert (nuevo.client_name, nuevo.client_phone) == (
         "Cliente Caracterizado",
         "5491155558001",
