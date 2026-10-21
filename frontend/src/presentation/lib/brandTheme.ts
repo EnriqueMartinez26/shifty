@@ -1,7 +1,7 @@
 import type React from 'react'
 
 import { getContrastingForeground } from './getContrastingForeground'
-import { colors2000s } from '../../theme/colors'
+import { buttonStyles2000s, colors2000s } from '../../theme/colors'
 
 /**
  * Colors of a store's public portal, derived from its `primary_color`.
@@ -100,3 +100,39 @@ export const brandCssVariables = (theme: BrandTheme): React.CSSProperties =>
     '--brand-on-fill': theme.onFill,
     '--brand-ink': theme.ink
   }) as React.CSSProperties
+
+/**
+ * `var()` references to the variables `brandCssVariables` sets at the portal
+ * root. Components paint with these and never compute colors themselves: the
+ * contrast is already resolved by `resolveBrandTheme`.
+ *
+ * Each one falls back to the Shifty orange: some booking pieces also render
+ * outside the wizard root (the date and time grid in "Mis turnos"), where the
+ * variables are not set and a bare `var()` would paint nothing.
+ */
+const fill = `var(--brand-fill, ${DEFAULT_BRAND_THEME.fill})`
+const fillBottom = `var(--brand-fill-bottom, ${DEFAULT_BRAND_THEME.fillBottom})`
+
+export const brandColor = {
+  fill,
+  fillBottom,
+  onFill: `var(--brand-on-fill, ${DEFAULT_BRAND_THEME.onFill})`,
+  ink: `var(--brand-ink, ${DEFAULT_BRAND_THEME.ink})`,
+  fillGradient: `linear-gradient(180deg, ${fill} 0%, ${fillBottom} 100%)`
+} as const
+
+/** Primary action of the portal (continue, confirm, pay) on the brand fill. */
+export const brandCtaStyle: React.CSSProperties = {
+  background: brandColor.fillGradient,
+  borderColor: brandColor.fillBottom,
+  color: brandColor.onFill,
+  boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerOrange}`
+}
+
+/** `buttonStyles2000s.selected` painted with the brand instead of the orange. */
+export const brandSelectedStyle: React.CSSProperties = {
+  ...buttonStyles2000s.selected,
+  background: brandColor.fillGradient,
+  border: `1px solid ${brandColor.ink}`,
+  color: brandColor.onFill
+}

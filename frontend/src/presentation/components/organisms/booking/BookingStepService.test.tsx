@@ -202,3 +202,23 @@ describe('BookingStepService', () => {
     })
   })
 })
+
+// S3 (2026-10-21): el servicio elegido se pinta con el color de la tienda
+// (var(--brand-*), fijadas en la raiz del wizard), no con el naranja fijo.
+describe('BookingStepService con el color de la tienda', () => {
+  it('el servicio elegido usa el relleno, el borde y el texto de marca', () => {
+    mockUsePublicServices.mockReturnValue({
+      isLoading: false,
+      data: [servicio('svc-1', 'Corte', 30, 1000), servicio('svc-2', 'Barba', 20, 900)]
+    })
+
+    render(<BookingStepService storePublicId="store-1" selectedId="svc-1" onSelect={jest.fn()} />)
+
+    const elegido = screen.getByRole('button', { name: /Corte/ })
+    expect(elegido.getAttribute('style')).toContain('var(--brand-fill,')
+    expect(elegido.getAttribute('style')).toContain('var(--brand-ink,')
+    expect(screen.getByText('Corte').getAttribute('style')).toContain('var(--brand-on-fill,')
+    const otro = screen.getByRole('button', { name: /Barba/ })
+    expect(otro.getAttribute('style')).not.toContain('var(--brand-fill,')
+  })
+})

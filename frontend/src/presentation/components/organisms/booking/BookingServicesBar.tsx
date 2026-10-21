@@ -4,7 +4,8 @@ import { ArrowRight } from 'lucide-react'
 
 import { formatCurrency } from '@shared/utils/currency'
 
-import { colors2000s, orangeCtaGradient } from '../../../../theme/colors'
+import { colors2000s } from '../../../../theme/colors'
+import { brandCtaStyle } from '../../../lib/brandTheme'
 
 interface BookingServicesBarProps {
   /** Servicios elegidos (al menos uno: sin nada elegido la barra no se muestra). */
@@ -50,12 +51,7 @@ export const BookingServicesBar: React.FC<BookingServicesBarProps> = ({
       type="button"
       onClick={onContinue}
       className="inline-flex items-center gap-2 px-4 py-3 rounded-xl border text-xs font-black uppercase tracking-widest active:scale-95"
-      style={{
-        background: orangeCtaGradient,
-        borderColor: colors2000s.orange.dark,
-        color: colors2000s.text.onOrangeSelection,
-        boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerOrange}`
-      }}
+      style={brandCtaStyle}
     >
       Continuar
       <ArrowRight className="w-4 h-4" />

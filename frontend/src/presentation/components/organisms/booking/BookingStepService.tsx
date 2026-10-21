@@ -18,6 +18,7 @@ import { formatCurrency } from '@shared/utils/currency'
 
 import { BookingServicesBar } from './BookingServicesBar'
 import { colors2000s } from '../../../../theme/colors'
+import { brandColor } from '../../../lib/brandTheme'
 import { createBookingChoiceCardStyle } from '../../../lib/surfaceStyles'
 
 /** Elegir varios servicios para un mismo turno (`multi_service_booking`). */
@@ -63,7 +64,7 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
   multi,
   onClick
 }) => {
-  const serviceColor = svc.color || colors2000s.orange.light
+  const serviceColor = svc.color || brandColor.fill
   return (
     <button
       type="button"
@@ -71,7 +72,15 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
       disabled={blockHint !== null}
       aria-pressed={multi ? isSelected : undefined}
       className="w-full text-left p-3 pl-4 sm:p-5 flex items-center gap-2 sm:gap-4 transition-all active:scale-98 group border relative overflow-hidden disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100"
-      style={createBookingChoiceCardStyle(isSelected)}
+      style={
+        isSelected
+          ? {
+              ...createBookingChoiceCardStyle(true),
+              background: brandColor.fillGradient,
+              borderColor: brandColor.ink
+            }
+          : createBookingChoiceCardStyle(false)
+      }
     >
       {/* Left dynamic accented border */}
       <div className="absolute left-0 top-0 bottom-0 w-2.5" style={{ background: serviceColor }} />
@@ -86,7 +95,7 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
           boxShadow: isSelected
             ? 'inset 0 1px 2px rgba(255,255,255,0.5)'
             : colors2000s.shadows.insetDark,
-          color: isSelected ? colors2000s.text.onOrangeSelection : serviceColor
+          color: isSelected ? brandColor.onFill : serviceColor
         }}
       >
         {svc.image_url ? (
@@ -110,7 +119,7 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
         <p
           className="text-base sm:text-lg font-black uppercase tracking-tight leading-tight mb-2 break-words"
           style={{
-            color: isSelected ? colors2000s.text.onOrangeSelection : colors2000s.text.primary
+            color: isSelected ? brandColor.onFill : colors2000s.text.primary
           }}
         >
           {svc.name}
@@ -126,7 +135,8 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
               color: colors2000s.text.primary
             }}
           >
-            <Clock className="w-3.5 h-3.5 text-orange-500" /> {svc.duration_minutes} min
+            <Clock className="w-3.5 h-3.5" style={{ color: brandColor.ink }} />{' '}
+            {svc.duration_minutes} min
           </span>
 
           <span
@@ -134,7 +144,7 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
             style={{
               background: '#ffffff',
               boxShadow: colors2000s.shadows.insetDark,
-              color: colors2000s.orange.accent
+              color: brandColor.ink
             }}
           >
             {formatCurrency(svc.price)}
@@ -176,7 +186,7 @@ export const BookingStepService: React.FC<BookingStepServiceProps> = ({
   if (isLoading) {
     return (
       <div className="flex flex-col items-center justify-center h-48">
-        <Loader2 className="w-8 h-8 animate-spin text-orange-500 mb-4" />
+        <Loader2 className="w-8 h-8 animate-spin mb-4" style={{ color: brandColor.ink }} />
         <p className="text-sm font-black text-gray-500 uppercase tracking-widest">
           Cargando servicios...
         </p>
@@ -193,7 +203,7 @@ export const BookingStepService: React.FC<BookingStepServiceProps> = ({
       <div className="mb-6">
         <h2
           className="text-2xl font-black uppercase tracking-tight"
-          style={{ color: colors2000s.orange.heading }}
+          style={{ color: brandColor.ink }}
         >
           ¿Qué servicio necesitás?
         </h2>
