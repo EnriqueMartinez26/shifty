@@ -184,10 +184,6 @@ const SuperAdminPage: React.FC = () => {
     setStoreForm({
       name: store.name,
       slug: store.slug,
-      logo_url:
-        overview?.store.public_id === store.public_id
-          ? overview.store.logo_url || ''
-          : store.logo_url || '',
       primary_color: store.primary_color,
       cancellation_hours: String(
         overview?.store.public_id === store.public_id
