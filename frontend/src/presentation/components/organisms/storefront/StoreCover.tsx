@@ -40,7 +40,7 @@ const CoverImage: React.FC<StoreCoverProps> = ({ coverUrl, coverPosition, brand 
     <div
       aria-hidden="true"
       data-testid="store-cover-band"
-      className={`${COVER_SHAPE} h-12 sm:h-40`}
+      className={`${COVER_SHAPE} h-16 sm:h-24`}
       style={{ background: brandCoverWash(brand) }}
     />
   )

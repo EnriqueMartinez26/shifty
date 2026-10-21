@@ -42,11 +42,11 @@ describe('StoreCover', () => {
     const { container, rerender } = render(
       <StoreCover coverUrl="/media/cover.webp" coverPosition={null} brand={brand} />
     )
-    expect(container.querySelector('img')?.style.objectPosition).toBe('center 65%')
+    expect(container.querySelector('img')?.style.objectPosition).toBe('center 75%')
 
     // Un backend que todavia no manda el campo se ve igual.
     rerender(<StoreCover coverUrl="/media/cover.webp" brand={brand} />)
-    expect(container.querySelector('img')?.style.objectPosition).toBe('center 65%')
+    expect(container.querySelector('img')?.style.objectPosition).toBe('center 75%')
   })
 
   it('sin portada pinta un degradado suave del color de marca, la mitad de alto en el celular', () => {
@@ -54,7 +54,7 @@ describe('StoreCover', () => {
 
     expect(container.querySelector('img')).toBeNull()
     const franja = screen.getByTestId('store-cover-band')
-    expect(franja).toHaveClass('h-12', 'sm:h-40', 'w-full')
+    expect(franja).toHaveClass('h-16', 'sm:h-24', 'w-full')
     expect(franja).not.toHaveClass('h-24')
     expect(franja).toHaveAttribute('aria-hidden', 'true')
     expect(franja.getAttribute('style')).toContain('linear-gradient(')

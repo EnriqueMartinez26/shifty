@@ -159,7 +159,7 @@ describe('SettingsIdentityTab', () => {
         expect(opcion.closest('label')).toHaveClass('min-h-11', 'min-w-11')
       })
       // Sin elegir, la vista previa encuadra como el portal.
-      expect(screen.getByRole('img', { name: 'Portada' }).style.objectPosition).toBe('center 65%')
+      expect(screen.getByRole('img', { name: 'Portada' }).style.objectPosition).toBe('center 75%')
     })
 
     it('marca el encuadre guardado y la vista previa lo sigue', () => {
