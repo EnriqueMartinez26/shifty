@@ -3,6 +3,7 @@ import React from 'react'
 import { Check, Clock3, X } from 'lucide-react'
 import { useNavigate, useParams, useSearchParams } from 'react-router'
 
+import { BookingPriorDesignAfterPayment } from '@presentation/components/organisms/booking/BookingPriorDesign'
 import { BookingWizardContainer } from '@presentation/components/organisms/booking/BookingWizardContainer'
 import {
   initialStepFor,
@@ -13,6 +14,8 @@ import { StoreCover } from '@presentation/components/organisms/storefront/StoreC
 import { StoreHeader } from '@presentation/components/organisms/storefront/StoreHeader'
 import { useBookingStepParam } from '@presentation/hooks/useBookingStepParam'
 import { brandCssVariables, brandCtaStyle, resolveBrandTheme } from '@presentation/lib/brandTheme'
+
+import { readPriorDesignHandoff } from '@shared/utils/priorDesignHandoff'
 
 import { colors2000s } from '../../theme/colors'
 import LegalFooterLinks from '../components/navigation/LegalFooterLinks'
@@ -111,6 +114,12 @@ const PublicBooking: React.FC = () => {
     const approved =
       payment?.payment_status === 'approved' && payment.appointment_status === 'confirmed'
     const failed = ['rejected', 'expired', 'refunded'].includes(payment?.payment_status || '')
+    // Diseño previo (S7): el resumen que guardo el paso de confirmacion antes
+    // de ir a MP, solo para este turno y mientras el pago no fallo.
+    const priorDesign =
+      payment && !failed
+        ? readPriorDesignHandoff(store.public_id, payment.appointment_public_id)
+        : null
     return (
       // La vuelta de Mercado Pago lleva la tienda y su color (S3): el nombre
       // sigue siendo el h1 y el estado del pago va debajo.
@@ -149,6 +158,13 @@ const PublicBooking: React.FC = () => {
                   ? 'Todavía no recibimos la confirmación del pago. Si ya pagaste, tu turno se confirma cuando Mercado Pago avise; podés volver a consultar o hablar con la tienda.'
                   : 'No cierres esta pantalla. El turno se confirma cuando Mercado Pago nos avisa del pago.'}
           </p>
+          {priorDesign && (
+            <BookingPriorDesignAfterPayment
+              handoff={priorDesign}
+              storeName={store.name}
+              whatsappNumber={store.whatsapp_number}
+            />
+          )}
           {paymentStatus.pollingStopped && (
             // Pasados 30 min el sondeo corta (F4-05); consultar de nuevo es a
             // pedido. Solo relee el estado: confirmar es del webhook (regla 7).

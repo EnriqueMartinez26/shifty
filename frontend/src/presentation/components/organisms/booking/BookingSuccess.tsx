@@ -6,17 +6,13 @@ import { formatAddonLabel } from '@domain/value-objects/AddonSelection'
 
 import type { BookingConfirmation, PublicService } from '@application/services/PublicBookingService'
 
-import {
-  formatArgentinaDateDisplay,
-  formatArgentinaDayHeading,
-  formatArgentinaTime
-} from '@shared/utils/argentinaTime'
+import { formatArgentinaDateDisplay } from '@shared/utils/argentinaTime'
 import { formatCurrency } from '@shared/utils/currency'
 import { asSafeHttpsUrl } from '@shared/utils/safeUrl'
 import { buildWaMeUrl } from '@shared/utils/whatsAppPhone'
 
 import { BookingNoEmailActions, bookedSummary } from './BookingNoEmailActions'
-import { BookingPriorDesign, WhatsAppLinkButton } from './BookingPriorDesign'
+import { BookingPriorDesign, turnWhenLabel, WhatsAppLinkButton } from './BookingPriorDesign'
 import type { BookingWizardState } from './types'
 import { colors2000s } from '../../../../theme/colors'
 import { brandColor, brandCtaStyle } from '../../../lib/brandTheme'
@@ -33,14 +29,6 @@ const PAYMENT_STATUS_LABELS: Record<string, string> = {
 
 const paymentStatusLabel = (status: string | null | undefined): string =>
   status ? (PAYMENT_STATUS_LABELS[status] ?? status) : 'pendiente'
-
-/** "sábado 12/10 a las 15:00" en hora argentina, o null si no hay instante. */
-const whenLabel = (instant: string | null | undefined): string | null => {
-  if (!instant) return null
-  const day = formatArgentinaDayHeading(instant)
-  const time = formatArgentinaTime(instant)
-  return day && time ? `${day} a las ${time}` : null
-}
 
 interface ServicePriceLine {
   key: string
@@ -116,7 +104,7 @@ export const BookingSuccess: React.FC<BookingSuccessProps> = ({
   // el canal viene explicito en la respuesta (antes se inferia de la falta de
   // link). La tienda la confirma a mano cuando le pagan, hasta el plazo.
   const isWhatsappDeposit = confirmation.deposit_channel === 'whatsapp'
-  const whatsappDeadline = isWhatsappDeposit ? whenLabel(confirmation.deposit_deadline) : null
+  const whatsappDeadline = isWhatsappDeposit ? turnWhenLabel(confirmation.deposit_deadline) : null
   const depositLabel = confirmation.payment_amount
     ? formatCurrency(Number(confirmation.payment_amount))
     : null
@@ -388,7 +376,7 @@ export const BookingSuccess: React.FC<BookingSuccessProps> = ({
         services={bookedServices}
         confirmation={confirmation}
         clientName={confirmation.client_name?.trim() || bookingState.client.name}
-        when={whenLabel(confirmation.starts_at)}
+        when={turnWhenLabel(confirmation.starts_at)}
         storeName={storeName}
         whatsappNumber={whatsappNumber}
       />

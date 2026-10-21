@@ -26,6 +26,7 @@ import { formatArgentinaDayHeading } from '@shared/utils/argentinaTime'
 import { CLIENT_PHONE_HINT, isValidClientPhone } from '@shared/utils/clientPhone'
 import { formatCurrency } from '@shared/utils/currency'
 import { phoneDigits } from '@shared/utils/otpSession'
+import { savePriorDesignHandoff } from '@shared/utils/priorDesignHandoff'
 import { navigateExternal } from '@shared/utils/safeUrl'
 
 import {
@@ -42,6 +43,7 @@ import {
 } from './BookingConfirmationCard'
 import { BookingOtpSection } from './BookingOtpSection'
 import { BookingPriceSummary } from './BookingPriceSummary'
+import { priorDesignHandoffFor } from './BookingPriorDesign'
 import { BookingSuccess } from './BookingSuccess'
 import { depositBreakdownText } from './depositReasons'
 import type { BookingClientData, BookingOtpState, BookingWizardState } from './types'
@@ -568,6 +570,15 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
         addonGroups.flatMap((group) => group.selection.toPayload())
       )
       if (paymentMethod === 'mercadopago') {
+        // La pantalla de exito no se ve con MP: el diseño previo (S7) se
+        // ofrece a la vuelta con este resumen.
+        const handoff = priorDesignHandoffFor(
+          selectedServices,
+          result,
+          result.client_name?.trim() || client.name,
+          storeName
+        )
+        if (handoff) savePriorDesignHandoff(storePublicId, handoff)
         if (!navigateExternal(result.payment_link)) {
           throw new Error('Mercado Pago no devolvió un enlace de pago válido')
         }

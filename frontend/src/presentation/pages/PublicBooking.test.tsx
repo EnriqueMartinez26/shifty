@@ -2,13 +2,18 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
 
 import { NetworkError, NotFoundError, ServiceUnavailableError } from '@shared/errors'
+import { savePriorDesignHandoff } from '@shared/utils/priorDesignHandoff'
 
 import PublicBooking from './PublicBooking'
 
 const mockRefetch = jest.fn()
 const mockRefetchTienda = jest.fn()
 let mockPago = {
-  data: { payment_status: 'approved', appointment_status: 'confirmed' },
+  data: {
+    payment_status: 'approved',
+    appointment_status: 'confirmed',
+    appointment_public_id: 'apt-9'
+  },
   pollingStopped: false
 }
 
@@ -74,7 +79,10 @@ const renderEn = (entrada: string) =>
 
 describe('PublicBooking al volver del pago', () => {
   const pagoCon = (payment_status: string, appointment_status: string, pollingStopped = false) => {
-    mockPago = { data: { payment_status, appointment_status }, pollingStopped }
+    mockPago = {
+      data: { payment_status, appointment_status, appointment_public_id: 'apt-9' },
+      pollingStopped
+    }
   }
 
   beforeEach(() => {
@@ -160,6 +168,93 @@ describe('PublicBooking al volver del pago', () => {
     expect(screen.getByText('Wizard de reserva')).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Reserva confirmada' })).not.toBeInTheDocument()
     expect(screen.getByLabelText('ubicacion')).toHaveTextContent(/^\/booking\/sol$/)
+  })
+})
+
+// QA 2026-10-21 (S7, Mateo): "si tengo seña por mercado pago me paga y le sale
+// una redireccion al numero de natalia para enviar el diseño junto con el turno
+// respectivo". El paso de confirmacion guarda el resumen antes de ir a MP y la
+// vuelta muestra el mismo bloque del diseño previo.
+describe('PublicBooking: diseño previo al volver de Mercado Pago', () => {
+  const BOTON = 'Enviar mi diseño por WhatsApp'
+  const pagoCon = (payment_status: string, appointment_status: string) => {
+    mockPago = {
+      data: { payment_status, appointment_status, appointment_public_id: 'apt-9' },
+      pollingStopped: false
+    }
+  }
+  const guardarResumen = (appointmentPublicId = 'apt-9') =>
+    savePriorDesignHandoff('store-1', {
+      appointmentPublicId,
+      serviceName: 'Uñas esculpidas',
+      servicesLabel: null,
+      addons: [{ name: 'Strass', quantity: 6 }],
+      clientFirstName: 'Lucia',
+      startsAt: '2026-10-23T18:00:00+00:00',
+      message: 'Mandame una foto'
+    })
+
+  beforeEach(() => {
+    window.sessionStorage.clear()
+    pagoCon('approved', 'confirmed')
+    mockTienda = { ...TIENDA_SOL, data: { ...TIENDA_SOL.data, whatsapp_number: '11 5555 0303' } }
+  })
+
+  afterEach(() => {
+    jest.restoreAllMocks()
+    mockTienda = TIENDA_SOL
+  })
+
+  it.each([
+    ['aprobado', 'approved', 'confirmed', 'Reserva confirmada'],
+    ['pendiente', 'pending', 'pending_payment', 'Estamos validando tu pago']
+  ])(
+    'con el pago %s y el resumen del turno muestra el mensaje y el boton de WhatsApp',
+    (_caso, pago, turno, titulo) => {
+      pagoCon(pago, turno)
+      guardarResumen()
+      renderEn('/booking/sol?payment_id=p1')
+
+      expect(screen.getByRole('heading', { level: 2, name: titulo })).toBeInTheDocument()
+      expect(screen.getByText('Mandame una foto')).toBeInTheDocument()
+      const href = screen.getByRole('link', { name: BOTON }).getAttribute('href') ?? ''
+      expect(href).toMatch(/^https:\/\/wa\.me\/5491155550303\?text=/)
+      expect(decodeURIComponent(href.split('?text=')[1] ?? '')).toContain(
+        'soy Lucia.\nReservé Uñas esculpidas (Strass x6) para el'
+      )
+      expect(decodeURIComponent(href)).toContain('(turno apt-9)')
+    }
+  )
+
+  it.each([
+    ['rechazado', 'rejected', 'expired'],
+    ['vencido', 'expired', 'expired']
+  ])('con el pago %s no lo muestra', (_caso, pago, turno) => {
+    pagoCon(pago, turno)
+    guardarResumen()
+    renderEn('/booking/sol?payment_id=p1')
+
+    expect(screen.getByRole('heading', { name: 'La seña no fue aprobada' })).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: BOTON })).not.toBeInTheDocument()
+  })
+
+  it('con el resumen de otro turno no lo muestra', () => {
+    guardarResumen('apt-otro')
+    renderEn('/booking/sol?payment_id=p1')
+
+    expect(screen.getByRole('heading', { name: 'Reserva confirmada' })).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: BOTON })).not.toBeInTheDocument()
+  })
+
+  it('sin storage no muestra el bloque y el estado del pago sigue igual', () => {
+    jest.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new DOMException('bloqueado', 'SecurityError')
+    })
+    renderEn('/booking/sol?payment_id=p1')
+
+    expect(screen.getByRole('heading', { name: 'Reserva confirmada' })).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: BOTON })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Volver a la tienda' })).toBeInTheDocument()
   })
 })
 

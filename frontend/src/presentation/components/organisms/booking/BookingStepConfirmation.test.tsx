@@ -2291,4 +2291,90 @@ describe('BookingStepConfirmation: diseño previo (S7)', () => {
       screen.queryByRole('link', { name: 'Enviar mi diseño por WhatsApp' })
     ).not.toBeInTheDocument()
   })
+
+  // QA 2026-10-21 (S7, Mateo): "si tengo seña por mercado pago me paga y le
+  // sale una redireccion al numero de natalia para enviar el diseño". Con MP
+  // la pagina se va al link apenas reserva: el resumen queda guardado para la
+  // vuelta (PublicBooking).
+  describe('con seña por Mercado Pago', () => {
+    const CLAVE = 'shifty:prior-design:store-1'
+
+    beforeEach(() => {
+      window.sessionStorage.clear()
+      // Seña obligatoria que solo se paga online: el unico boton es el de MP.
+      mockDepositPreview.mockReturnValue({
+        isLoading: false,
+        data: {
+          amount: 1000,
+          base_amount: 1000,
+          extra_percent: 0,
+          reasons: [],
+          price: 5000,
+          addons_amount: 0,
+          payments_enabled: true,
+          online_payment_mandatory: true
+        }
+      })
+    })
+    afterEach(() => jest.restoreAllMocks())
+
+    const pagarConMp = async (catalogo: unknown[]) => {
+      mockServices.mockReturnValue({ data: catalogo, isLoading: false })
+      // Lo guardado en el momento de salir hacia MP.
+      let guardadoAlSalir: string | null = 'sin redirigir'
+      const ir = jest.spyOn(safeUrl, 'navigateExternal').mockImplementation(() => {
+        guardadoAlSalir = window.sessionStorage.getItem(CLAVE)
+        return true
+      })
+      render(
+        <BookingStepConfirmation
+          {...props({
+            paymentsEnabled: true,
+            storeName: 'Natalia Nails',
+            bookingState: estado({
+              client: cliente({ name: 'Lucia Perez', phone: '1155550101' })
+            }),
+            onConfirm: jest.fn().mockResolvedValue(
+              confirmacion({
+                public_id: 'apt-9',
+                service_name: 'Uñas esculpidas',
+                client_name: 'Lucia Perez',
+                status: 'pending_payment',
+                payment_required: true,
+                deposit_channel: 'mercadopago',
+                payment_link: 'https://mp.example/pagar',
+                addons: [
+                  { addon_id: 'strass', name: 'Strass', unit_price: 100, quantity: 6, amount: 600 }
+                ]
+              })
+            )
+          })}
+        />
+      )
+      aceptarTerminos()
+      fireEvent.click(screen.getByRole('button', { name: PAGAR_MP }))
+      await waitFor(() => expect(ir).toHaveBeenCalledWith('https://mp.example/pagar'))
+      return guardadoAlSalir
+    }
+
+    it('guarda el resumen del turno antes de ir a pagar si un servicio pide diseño', async () => {
+      const guardado = await pagarConMp([
+        servicio({ requires_prior_design: true, prior_design_message: 'Mandame una foto' })
+      ])
+
+      expect(JSON.parse(guardado ?? 'null')).toEqual({
+        appointmentPublicId: 'apt-9',
+        serviceName: 'Uñas esculpidas',
+        servicesLabel: null,
+        addons: [{ name: 'Strass', quantity: 6 }],
+        clientFirstName: 'Lucia',
+        startsAt: '2026-09-25T12:00:00+00:00',
+        message: 'Mandame una foto'
+      })
+    })
+
+    it('sin servicios con diseño previo no guarda nada', async () => {
+      expect(await pagarConMp([servicio()])).toBeNull()
+    })
+  })
 })
