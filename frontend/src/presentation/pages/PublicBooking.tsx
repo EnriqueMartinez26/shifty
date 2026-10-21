@@ -12,9 +12,9 @@ import { STEP_CONFIRMATION } from '@presentation/components/organisms/booking/st
 import { StoreCover } from '@presentation/components/organisms/storefront/StoreCover'
 import { StoreHeader } from '@presentation/components/organisms/storefront/StoreHeader'
 import { useBookingStepParam } from '@presentation/hooks/useBookingStepParam'
-import { resolveBrandTheme } from '@presentation/lib/brandTheme'
+import { brandCssVariables, brandCtaStyle, resolveBrandTheme } from '@presentation/lib/brandTheme'
 
-import { buttonStyles2000s, colors2000s } from '../../theme/colors'
+import { colors2000s } from '../../theme/colors'
 import LegalFooterLinks from '../components/navigation/LegalFooterLinks'
 import { NotFoundScreen } from '../components/organisms/NotFoundScreen'
 import { isStoreMissing, StoreLoadError } from '../components/organisms/StoreLoadError'
@@ -95,18 +95,32 @@ const PublicBooking: React.FC = () => {
     )
   }
 
+  const brand = resolveBrandTheme(store.primary_color)
+  const header = (
+    <StoreHeader
+      name={store.name}
+      logoUrl={store.logo_url}
+      whatsappNumber={store.whatsapp_number}
+      misTurnosHref={`/b/${store.slug}/mis-turnos`}
+      brand={brand}
+    />
+  )
+
   if (paymentId) {
     const payment = paymentStatus.data
     const approved =
       payment?.payment_status === 'approved' && payment.appointment_status === 'confirmed'
     const failed = ['rejected', 'expired', 'refunded'].includes(payment?.payment_status || '')
     return (
+      // La vuelta de Mercado Pago lleva la tienda y su color (S3): el nombre
+      // sigue siendo el h1 y el estado del pago va debajo.
       <main
-        className="min-h-screen grid place-items-center px-4"
-        style={{ background: colors2000s.bg.primary }}
+        className="min-h-screen py-8 px-4 sm:py-12 sm:px-6"
+        style={{ ...brandCssVariables(brand), background: colors2000s.bg.primary }}
       >
+        {header}
         <section
-          className="w-full max-w-xl rounded-lg bg-white p-4 sm:p-8 text-center space-y-5"
+          className="mx-auto mt-6 w-full max-w-xl rounded-lg bg-white p-4 sm:p-8 text-center space-y-5"
           style={{ boxShadow: colors2000s.shadows.outer }}
         >
           {approved ? (
@@ -119,13 +133,13 @@ const PublicBooking: React.FC = () => {
               color={colors2000s.status.warning.light}
             />
           )}
-          <h1 className="text-2xl font-black uppercase tracking-tight">
+          <h2 className="text-2xl font-black uppercase tracking-tight">
             {approved
               ? 'Reserva confirmada'
               : failed
                 ? 'La seña no fue aprobada'
                 : 'Estamos validando tu pago'}
-          </h1>
+          </h2>
           <p className="text-sm font-bold" style={{ color: colors2000s.text.secondary }}>
             {approved
               ? 'Mercado Pago acreditó la seña y tu turno quedó reservado.'
@@ -165,8 +179,8 @@ const PublicBooking: React.FC = () => {
             // Sin payment_id en la URL se monta un wizard nuevo (estado y clave de
             // idempotencia nuevos) sin recargar la SPA (F11b-20).
             onClick={() => void navigate(`/booking/${slug}`)}
-            className="w-full min-h-11 py-4 rounded-xl text-white font-black uppercase tracking-widest text-xs"
-            style={buttonStyles2000s.selected}
+            className="w-full min-h-11 py-4 rounded-xl border font-black uppercase tracking-widest text-xs"
+            style={brandCtaStyle}
           >
             Volver a la tienda
           </button>
@@ -176,20 +190,12 @@ const PublicBooking: React.FC = () => {
     )
   }
 
-  const brand = resolveBrandTheme(store.primary_color)
-
   return (
     <main
       className="min-h-screen py-8 px-4 sm:py-12 sm:px-6 lg:px-8"
       style={{ background: colors2000s.bg.primary }}
     >
-      <StoreHeader
-        name={store.name}
-        logoUrl={store.logo_url}
-        whatsappNumber={store.whatsapp_number}
-        misTurnosHref={`/b/${store.slug}/mis-turnos`}
-        brand={brand}
-      />
+      {header}
       <div className="mt-4 mb-8">
         <StoreCover coverUrl={store.cover_url} brand={brand} />
       </div>

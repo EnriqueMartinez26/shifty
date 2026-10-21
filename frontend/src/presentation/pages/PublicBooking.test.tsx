@@ -79,6 +79,7 @@ describe('PublicBooking al volver del pago', () => {
 
   beforeEach(() => {
     mockRefetch.mockReset()
+    mockTienda = TIENDA_SOL
     pagoCon('approved', 'confirmed')
   })
 
@@ -125,6 +126,25 @@ describe('PublicBooking al volver del pago', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Volver a consultar' }))
 
     expect(mockRefetch).toHaveBeenCalledTimes(1)
+  })
+
+  // QA 2026-10-21 (S3): la vuelta de Mercado Pago era toda naranja, sin la tienda.
+  it('muestra la tienda arriba: su nombre es el titulo principal y el estado va debajo', () => {
+    mockTienda = { ...TIENDA_SOL, data: { ...TIENDA_SOL.data, primary_color: '#ff70fa' } }
+    renderEn('/booking/sol?payment_id=p1')
+
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Peluqueria Sol')
+    expect(
+      screen.getByRole('heading', { level: 2, name: 'Reserva confirmada' })
+    ).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Mis turnos' })).toHaveAttribute(
+      'href',
+      '/b/sol/mis-turnos'
+    )
+    expect(screen.getByRole('main').style.getPropertyValue('--brand-fill')).toBe('#ff70fa')
+    const volver = screen.getByRole('button', { name: 'Volver a la tienda' })
+    expect(volver.getAttribute('style')).toContain('var(--brand-fill,')
+    expect(volver.getAttribute('style')).toContain('var(--brand-on-fill,')
   })
 
   it('"Volver a la tienda" monta un wizard nuevo sin recargar la pagina (F11b-20)', () => {
