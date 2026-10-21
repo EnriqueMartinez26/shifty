@@ -112,9 +112,9 @@ export const brandCssVariables = (theme: BrandTheme): React.CSSProperties =>
     '--brand-on-fill': theme.onFill,
     '--brand-ink': theme.ink,
     // El resplandor sale del color de la tienda; sin color queda el naranja.
-    ...(theme.isDefault
-      ? {}
-      : { '--brand-glow': 'color-mix(in srgb, var(--brand-fill) 25%, transparent)' })
+    // rgba precalculado y no color-mix(): Safari < 16.2 lo ignora y anulaba
+    // toda la sombra (QA visual 2026-10-21).
+    ...(theme.isDefault ? {} : { '--brand-glow': `rgba(${toRgb(theme.fill).join(', ')}, 0.25)` })
   }) as React.CSSProperties
 
 /**

@@ -382,4 +382,19 @@ describe('BookingStepService con el color de la tienda', () => {
     const otro = screen.getByRole('button', { name: /Barba/ })
     expect(otro.getAttribute('style')).not.toContain('var(--brand-fill,')
   })
+
+  // QA visual 2026-10-21: la tarjeta elegida era la ultima con el brillo
+  // naranja fijo debajo del color de la tienda.
+  it('el servicio elegido brilla con el color de la tienda, no con el naranja fijo', () => {
+    mockUsePublicServices.mockReturnValue({
+      isLoading: false,
+      data: [servicio('svc-1', 'Corte', 30, 1000)]
+    })
+
+    render(<BookingStepService storePublicId="store-1" selectedId="svc-1" onSelect={jest.fn()} />)
+
+    const style = screen.getByRole('button', { name: /Corte/ }).getAttribute('style') ?? ''
+    // El naranja solo queda como respaldo dentro del var(), sin color de tienda.
+    expect(style).toContain('var(--brand-glow,')
+  })
 })

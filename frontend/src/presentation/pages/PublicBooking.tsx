@@ -129,7 +129,7 @@ const PublicBooking: React.FC = () => {
       >
         {header}
         <section
-          className="mx-auto mt-6 w-full max-w-xl rounded-lg bg-white p-4 sm:p-8 text-center space-y-5"
+          className="mx-auto mt-6 w-full max-w-2xl rounded-lg bg-white p-4 sm:p-8 text-center space-y-5"
           style={{ boxShadow: colors2000s.shadows.outer }}
         >
           {approved ? (

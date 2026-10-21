@@ -64,7 +64,9 @@ describe('resolveBrandTheme', () => {
       '--brand-fill-bottom': expect.stringMatching(/^#[\da-f]{6}$/),
       '--brand-on-fill': expect.stringMatching(/^#(000000|ffffff)$/),
       '--brand-ink': expect.stringMatching(/^#[\da-f]{6}$/),
-      '--brand-glow': 'color-mix(in srgb, var(--brand-fill) 25%, transparent)'
+      // rgba precalculado: sin color-mix(), que Safari < 16.2 no entiende y
+      // anulaba toda la sombra (QA visual 2026-10-21).
+      '--brand-glow': 'rgba(59, 130, 246, 0.25)'
     })
   })
 
