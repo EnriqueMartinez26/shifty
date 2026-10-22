@@ -67,4 +67,20 @@ describe('StoreSettingsService', () => {
     expect(body.get('file')).toBe(file)
     expect(config).toEqual({ headers: { 'Content-Type': 'multipart/form-data' } })
   })
+
+  // 2026-10-21 (S2): la portada se sube por el mismo endpoint que el logo.
+  it('uploadCover manda el mismo multipart con kind=cover y devuelve la respuesta', async () => {
+    const file = new File(['webp'], 'portada.webp', { type: 'image/webp' })
+    const subida = { url: '/media/cover.webp', media_id: 'm1', kind: 'cover' }
+    mockPost.mockResolvedValue({ data: subida })
+
+    await expect(storeSettingsService.uploadCover(file)).resolves.toEqual(subida)
+
+    const [path, body, config] = mockPost.mock.calls[0] as [string, FormData, unknown]
+    expect(path).toBe('/stores/me/media')
+    expect(body).toBeInstanceOf(FormData)
+    expect(body.get('kind')).toBe('cover')
+    expect(body.get('file')).toBe(file)
+    expect(config).toEqual({ headers: { 'Content-Type': 'multipart/form-data' } })
+  })
 })

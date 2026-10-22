@@ -4,28 +4,33 @@ import { ArrowRight } from 'lucide-react'
 
 import { formatCurrency } from '@shared/utils/currency'
 
-import { colors2000s, orangeCtaGradient } from '../../../../theme/colors'
+import { sumAmounts } from './addonGroups'
+import { colors2000s } from '../../../../theme/colors'
+import { brandCtaStyle } from '../../../lib/brandTheme'
 
 interface BookingServicesBarProps {
   /** Servicios elegidos (al menos uno: sin nada elegido la barra no se muestra). */
   count: number
   durationMinutes: number
   /**
-   * Suma de los precios de lista. El total a cobrar (promo, adicionales) lo
+   * Suma de los precios de lista. El total a cobrar (promo incluida) lo
    * confirma el backend en el ultimo paso.
    */
   listPrice: number
+  /** Suma de los adicionales elegidos; entra en el total que se muestra. */
+  addonsTotal?: number
   onContinue: () => void
 }
 
 /**
- * Barra de "varios servicios en un turno": cuantos, cuanto dura y cuanto
- * suman, con el boton para seguir al horario. Solo pinta.
+ * Barra del paso del servicio: cuantos servicios, cuanto dura y cuanto suman
+ * (con los adicionales), con el boton para seguir al horario. Solo pinta.
  */
 export const BookingServicesBar: React.FC<BookingServicesBarProps> = ({
   count,
   durationMinutes,
   listPrice,
+  addonsTotal = 0,
   onContinue
 }) => (
   <div
@@ -44,18 +49,13 @@ export const BookingServicesBar: React.FC<BookingServicesBarProps> = ({
       style={{ color: colors2000s.text.primary }}
     >
       {count === 1 ? '1 servicio' : `${count} servicios`} · {durationMinutes} min ·{' '}
-      {formatCurrency(listPrice)}
+      {formatCurrency(sumAmounts(listPrice, addonsTotal))}
     </p>
     <button
       type="button"
       onClick={onContinue}
-      className="inline-flex items-center gap-2 px-4 py-3 rounded-xl border text-xs font-black uppercase tracking-widest active:scale-95"
-      style={{
-        background: orangeCtaGradient,
-        borderColor: colors2000s.orange.dark,
-        color: colors2000s.text.onOrangeSelection,
-        boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerOrange}`
-      }}
+      className="inline-flex min-h-11 items-center gap-2 px-4 py-3 rounded-xl border text-xs font-black uppercase tracking-widest active:scale-95"
+      style={brandCtaStyle}
     >
       Continuar
       <ArrowRight className="w-4 h-4" />

@@ -43,7 +43,6 @@ export interface FeedbackMessage {
 export interface StoreFormState {
   name: string
   slug: string
-  logo_url: string
   primary_color: string
   cancellation_hours: string
   buffer_minutes: string
@@ -136,7 +135,6 @@ export const emptyStateStyle = create2000sEmptyStateStyle()
 export const createEmptyStoreForm = (): StoreFormState => ({
   name: '',
   slug: '',
-  logo_url: '',
   primary_color: '#ff8c42',
   cancellation_hours: '24',
   buffer_minutes: '0',
@@ -282,7 +280,6 @@ export const isValidSlug = (slug: string) => SLUG_PATTERN.test(slug)
 export const SUPERADMIN_FIELD_ERRORS: Partial<Record<string, string>> = {
   slug: SLUG_RULE_TEXT,
   name: 'Revisá el nombre: es demasiado corto, largo o tiene caracteres no permitidos.',
-  logo_url: 'El logo tiene que ser una URL https válida.',
   primary_color: 'El color tiene que ser un hexadecimal, por ejemplo #ff8c42.',
   email: 'Revisá el email: no parece válido.',
   password: PASSWORD_REJECTED_MESSAGE,

@@ -377,11 +377,11 @@ describe('SuperAdminPage', () => {
     fireEvent.change(first(textboxes.slice(1)), { target: { value: 'barber-dos' } })
     fireEvent.submit(form)
 
+    // 2026-10-21 (S2b): sin logo_url; el logo lo sube la tienda desde su panel.
     await waitFor(() => {
       expect(mockMutations.createStore).toHaveBeenCalledWith({
         name: 'Barber Dos',
         slug: 'barber-dos',
-        logo_url: null,
         primary_color: '#ff8c42',
         cancellation_hours: 24,
         buffer_minutes: 0,
@@ -390,6 +390,43 @@ describe('SuperAdminPage', () => {
       })
     })
     expect(await screen.findByText('Tienda creada: Barber Dos')).toBeInTheDocument()
+  })
+
+  // 2026-10-21 (S2b): el modal ya no tiene el campo del logo. Mandar
+  // `logo_url` desde un formulario sin el campo borraria el logo que la tienda
+  // subio; sin la clave, el PATCH (exclude_unset) lo deja como esta.
+  it('editar una tienda con logo reenvia sus datos y no toca el logo', async () => {
+    const conLogo = { ...mockStoreUno, logo_url: '/media/logo.png' }
+    mockStores = [conLogo]
+    const overview = mockOverview.store
+    mockOverview.store = { ...overview, logo_url: '/media/logo.png' }
+    try {
+      render(<SuperAdminPage />)
+
+      fireEvent.click(first(screen.getAllByRole('button', { name: 'Editar tienda' })))
+      const form = openModalForm()
+      expect(within(form).queryByLabelText('Logo URL')).not.toBeInTheDocument()
+      fireEvent.submit(form)
+
+      await waitFor(() => {
+        expect(mockMutations.updateStore).toHaveBeenCalledWith({
+          storePublicId: 'store-1',
+          payload: {
+            name: 'Barber Uno',
+            slug: 'barber-uno',
+            primary_color: '#ff8c42',
+            cancellation_hours: 24,
+            buffer_minutes: 0,
+            send_email_confirmation: true,
+            send_email_reminders: true,
+            is_active: true
+          }
+        })
+      })
+      expect(await screen.findByText('Tienda actualizada: Barber Uno')).toBeInTheDocument()
+    } finally {
+      mockOverview.store = overview
+    }
   })
 
   it('edita un plan reenviando sus valores actuales', async () => {

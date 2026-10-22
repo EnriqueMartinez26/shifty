@@ -2,13 +2,18 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
 
 import { NetworkError, NotFoundError, ServiceUnavailableError } from '@shared/errors'
+import { savePriorDesignHandoff } from '@shared/utils/priorDesignHandoff'
 
 import PublicBooking from './PublicBooking'
 
 const mockRefetch = jest.fn()
 const mockRefetchTienda = jest.fn()
 let mockPago = {
-  data: { payment_status: 'approved', appointment_status: 'confirmed' },
+  data: {
+    payment_status: 'approved',
+    appointment_status: 'confirmed',
+    appointment_public_id: 'apt-9'
+  },
   pollingStopped: false
 }
 
@@ -17,7 +22,11 @@ const TIENDA_SOL = {
     public_id: 'store-1',
     name: 'Peluqueria Sol',
     slug: 'sol',
-    description: null,
+    description: null as string | null,
+    logo_url: null as string | null,
+    cover_url: null as string | null,
+    cover_position: null as 'top' | 'center' | 'bottom' | null,
+    primary_color: '#000000',
     whatsapp_number: null as string | null,
     deposit_policy: null as string | null
   },
@@ -71,11 +80,15 @@ const renderEn = (entrada: string) =>
 
 describe('PublicBooking al volver del pago', () => {
   const pagoCon = (payment_status: string, appointment_status: string, pollingStopped = false) => {
-    mockPago = { data: { payment_status, appointment_status }, pollingStopped }
+    mockPago = {
+      data: { payment_status, appointment_status, appointment_public_id: 'apt-9' },
+      pollingStopped
+    }
   }
 
   beforeEach(() => {
     mockRefetch.mockReset()
+    mockTienda = TIENDA_SOL
     pagoCon('approved', 'confirmed')
   })
 
@@ -124,6 +137,29 @@ describe('PublicBooking al volver del pago', () => {
     expect(mockRefetch).toHaveBeenCalledTimes(1)
   })
 
+  // QA 2026-10-21 (S3): la vuelta de Mercado Pago era toda naranja, sin la tienda.
+  it('muestra la tienda arriba: su nombre es el titulo principal y el estado va debajo', () => {
+    mockTienda = { ...TIENDA_SOL, data: { ...TIENDA_SOL.data, primary_color: '#ff70fa' } }
+    renderEn('/booking/sol?payment_id=p1')
+
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Peluqueria Sol')
+    expect(
+      screen.getByRole('heading', { level: 2, name: 'Reserva confirmada' })
+    ).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Mis turnos' })).toHaveAttribute(
+      'href',
+      '/b/sol/mis-turnos'
+    )
+    expect(screen.getByRole('main').style.getPropertyValue('--brand-fill')).toBe('#ff70fa')
+    // S9: la misma vidriera que la reserva, con la portada arriba.
+    expect(screen.getByRole('banner').firstElementChild).toBe(
+      screen.getByTestId('store-cover-band')
+    )
+    const volver = screen.getByRole('button', { name: 'Volver a la tienda' })
+    expect(volver.getAttribute('style')).toContain('var(--brand-fill,')
+    expect(volver.getAttribute('style')).toContain('var(--brand-on-fill,')
+  })
+
   it('"Volver a la tienda" monta un wizard nuevo sin recargar la pagina (F11b-20)', () => {
     // F11b-20 (2026-09-30): el boton hacia window.location.assign, una recarga
     // completa de la SPA para volver a la misma tienda. Quitar payment_id de la
@@ -137,6 +173,93 @@ describe('PublicBooking al volver del pago', () => {
     expect(screen.getByText('Wizard de reserva')).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Reserva confirmada' })).not.toBeInTheDocument()
     expect(screen.getByLabelText('ubicacion')).toHaveTextContent(/^\/booking\/sol$/)
+  })
+})
+
+// QA 2026-10-21 (S7, Mateo): "si tengo seña por mercado pago me paga y le sale
+// una redireccion al numero de natalia para enviar el diseño junto con el turno
+// respectivo". El paso de confirmacion guarda el resumen antes de ir a MP y la
+// vuelta muestra el mismo bloque del diseño previo.
+describe('PublicBooking: diseño previo al volver de Mercado Pago', () => {
+  const BOTON = 'Enviar mi diseño por WhatsApp'
+  const pagoCon = (payment_status: string, appointment_status: string) => {
+    mockPago = {
+      data: { payment_status, appointment_status, appointment_public_id: 'apt-9' },
+      pollingStopped: false
+    }
+  }
+  const guardarResumen = (appointmentPublicId = 'apt-9') =>
+    savePriorDesignHandoff('store-1', {
+      appointmentPublicId,
+      serviceName: 'Uñas esculpidas',
+      servicesLabel: null,
+      addons: [{ name: 'Strass', quantity: 6 }],
+      clientFirstName: 'Lucia',
+      startsAt: '2026-10-23T18:00:00+00:00',
+      message: 'Mandame una foto'
+    })
+
+  beforeEach(() => {
+    window.sessionStorage.clear()
+    pagoCon('approved', 'confirmed')
+    mockTienda = { ...TIENDA_SOL, data: { ...TIENDA_SOL.data, whatsapp_number: '11 5555 0303' } }
+  })
+
+  afterEach(() => {
+    jest.restoreAllMocks()
+    mockTienda = TIENDA_SOL
+  })
+
+  it.each([
+    ['aprobado', 'approved', 'confirmed', 'Reserva confirmada'],
+    ['pendiente', 'pending', 'pending_payment', 'Estamos validando tu pago']
+  ])(
+    'con el pago %s y el resumen del turno muestra el mensaje y el boton de WhatsApp',
+    (_caso, pago, turno, titulo) => {
+      pagoCon(pago, turno)
+      guardarResumen()
+      renderEn('/booking/sol?payment_id=p1')
+
+      expect(screen.getByRole('heading', { level: 2, name: titulo })).toBeInTheDocument()
+      expect(screen.getByText('Mandame una foto')).toBeInTheDocument()
+      const href = screen.getByRole('link', { name: BOTON }).getAttribute('href') ?? ''
+      expect(href).toMatch(/^https:\/\/wa\.me\/5491155550303\?text=/)
+      expect(decodeURIComponent(href.split('?text=')[1] ?? '')).toContain(
+        'soy Lucia.\nReservé Uñas esculpidas (Strass x6) para el'
+      )
+      expect(decodeURIComponent(href)).toContain('(turno apt-9)')
+    }
+  )
+
+  it.each([
+    ['rechazado', 'rejected', 'expired'],
+    ['vencido', 'expired', 'expired']
+  ])('con el pago %s no lo muestra', (_caso, pago, turno) => {
+    pagoCon(pago, turno)
+    guardarResumen()
+    renderEn('/booking/sol?payment_id=p1')
+
+    expect(screen.getByRole('heading', { name: 'La seña no fue aprobada' })).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: BOTON })).not.toBeInTheDocument()
+  })
+
+  it('con el resumen de otro turno no lo muestra', () => {
+    guardarResumen('apt-otro')
+    renderEn('/booking/sol?payment_id=p1')
+
+    expect(screen.getByRole('heading', { name: 'Reserva confirmada' })).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: BOTON })).not.toBeInTheDocument()
+  })
+
+  it('sin storage no muestra el bloque y el estado del pago sigue igual', () => {
+    jest.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new DOMException('bloqueado', 'SecurityError')
+    })
+    renderEn('/booking/sol?payment_id=p1')
+
+    expect(screen.getByRole('heading', { name: 'Reserva confirmada' })).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: BOTON })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Volver a la tienda' })).toBeInTheDocument()
   })
 })
 
@@ -168,6 +291,84 @@ describe('PublicBooking: WhatsApp de la tienda', () => {
   })
 })
 
+// 2026-10-21 (S1, S2): el encabezado decia "Reservar turno" sobre un icono
+// generico; ahora es la tienda (logo, nombre, WhatsApp) con su portada.
+describe('PublicBooking: encabezado y portada de la tienda', () => {
+  const conTienda = (data: Partial<typeof TIENDA_SOL.data>) => {
+    mockTienda = { ...TIENDA_SOL, data: { ...TIENDA_SOL.data, ...data } }
+  }
+
+  afterEach(() => {
+    mockTienda = TIENDA_SOL
+  })
+
+  it('el titulo principal es el nombre de la tienda, no "Reservar turno"', () => {
+    renderEn('/booking/sol')
+
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Peluqueria Sol')
+    expect(screen.queryByText('Reservar turno')).not.toBeInTheDocument()
+  })
+
+  it('muestra el logo y la portada que subio la tienda', () => {
+    conTienda({ logo_url: '/media/logo.png', cover_url: '/media/cover.webp' })
+    const { container } = renderEn('/booking/sol')
+
+    expect(screen.getByRole('img', { name: 'Logo de Peluqueria Sol' })).toHaveAttribute(
+      'src',
+      '/media/logo.png'
+    )
+    expect(container.querySelector('img[src="/media/cover.webp"]')).toHaveAttribute('alt', '')
+  })
+
+  // S10.1 (2026-10-22): la tienda elige que parte de la foto se ve.
+  it('la portada se encuadra donde lo eligio la tienda', () => {
+    conTienda({ cover_url: '/media/cover.webp', cover_position: 'bottom' })
+    const { container } = renderEn('/booking/sol')
+
+    const portada = container.querySelector('img[src="/media/cover.webp"]') as HTMLElement
+    expect(portada.style.objectPosition).toBe('center 80%')
+  })
+
+  it('sin logo ni portada usa la inicial y el degradado con el color de la tienda', () => {
+    conTienda({ primary_color: '#123456' })
+    renderEn('/booking/sol')
+
+    expect(screen.getByText('P').style.background).toBe('rgb(18, 52, 86)')
+    expect(screen.getByTestId('store-cover-band').getAttribute('style')).toContain(
+      'rgba(18, 52, 86,'
+    )
+  })
+
+  // S9 (2026-10-22): la portada va arriba de todo, de borde a borde en el
+  // celular; el resto de la pagina conserva su margen lateral.
+  it('la portada va arriba de todo y el contenido conserva el margen lateral', () => {
+    conTienda({ cover_url: '/media/cover.webp', description: 'Cortes y color.' })
+    const { container } = renderEn('/booking/sol')
+
+    const main = screen.getByRole('main')
+    expect(main).not.toHaveClass('px-4')
+    expect(main).not.toHaveClass('pt-8')
+    expect(main.firstElementChild).toBe(screen.getByRole('banner'))
+    const portada = container.querySelector('img[src="/media/cover.webp"]') as HTMLElement
+    expect(screen.getByRole('banner').contains(portada)).toBe(true)
+    expect(screen.getByText('Cortes y color.').closest('.px-4')).not.toBeNull()
+  })
+
+  it('sin WhatsApp no dice "Reserva por web disponible"', () => {
+    renderEn('/booking/sol')
+
+    expect(screen.queryByText('Reserva por web disponible')).not.toBeInTheDocument()
+  })
+
+  it('la descripcion y el wizard siguen debajo', () => {
+    conTienda({ description: 'Cortes y color en el centro.' })
+    renderEn('/booking/sol')
+
+    expect(screen.getByText('Cortes y color en el centro.')).toBeInTheDocument()
+    expect(screen.getByText('Wizard de reserva')).toBeInTheDocument()
+  })
+})
+
 describe('PublicBooking: objetivos táctiles', () => {
   it('expone el contenido de la reserva dentro de un landmark principal', () => {
     renderEn('/booking/sol')
@@ -178,7 +379,9 @@ describe('PublicBooking: objetivos táctiles', () => {
   it('mantiene Mis turnos y los enlaces legales con altura mínima de 44 px', () => {
     renderEn('/booking/sol')
 
-    expect(screen.getByRole('link', { name: 'Mis turnos' })).toHaveClass('min-h-11')
+    const misTurnos = screen.getByRole('link', { name: 'Mis turnos' })
+    expect(misTurnos).toHaveClass('min-h-11')
+    expect(misTurnos).toHaveAttribute('href', '/b/sol/mis-turnos')
     expect(screen.getByRole('link', { name: 'Términos y condiciones' })).toHaveClass('min-h-11')
     expect(screen.getByRole('link', { name: 'Privacidad' })).toHaveClass('min-h-11')
   })
@@ -188,6 +391,24 @@ describe('PublicBooking: objetivos táctiles', () => {
 
     expect(screen.getByRole('link', { name: 'Términos y condiciones' })).toHaveClass('min-h-11')
     expect(screen.getByRole('link', { name: 'Privacidad' })).toHaveClass('min-h-11')
+  })
+
+  // QA 2026-10-21 (S5): en el celular la barra fija de pago tapaba los links
+  // del pie al final de la pagina.
+  it('en la confirmacion la pagina reserva abajo el alto de la barra fija, solo en el celular', () => {
+    renderEn('/booking/sol?step=2')
+
+    expect(screen.getByRole('main')).toHaveClass(
+      'pb-[calc(8rem+env(safe-area-inset-bottom))]',
+      'sm:pb-12'
+    )
+  })
+
+  it('en los otros pasos la pagina no reserva ese espacio', () => {
+    renderEn('/booking/sol?step=1')
+
+    expect(screen.getByRole('main')).not.toHaveClass('pb-[calc(8rem+env(safe-area-inset-bottom))]')
+    expect(screen.getByRole('main')).toHaveClass('pb-8')
   })
 })
 
@@ -313,5 +534,31 @@ describe('PublicBooking: titulo de la pestaña', () => {
     renderEn('/booking/no-existe')
 
     expect(document.title).toBe('Negocio no encontrado · Shifty')
+  })
+})
+
+// Review de PR #250 (2026-10-22): el portal cierra con una sola fuente de
+// color. El acento Shifty (`brand-accent`, colors2000s.orange.accent) pinta el
+// texto chico y los anillos de foco; nada de utilidades orange-* de Tailwind.
+describe('PublicBooking: acento Shifty', () => {
+  afterEach(() => {
+    mockTienda = TIENDA_SOL
+  })
+
+  it('"POWERED BY SHIFTY" usa el acento Shifty para texto chico', () => {
+    renderEn('/booking/sol')
+
+    const marca = screen.getByText('SHIFTY')
+    expect(marca).toHaveClass('text-brand-accent')
+    expect(marca.className).not.toMatch(/orange-\d+/)
+  })
+
+  it('el foco del WhatsApp del encabezado usa el acento Shifty', () => {
+    mockTienda = { ...TIENDA_SOL, data: { ...TIENDA_SOL.data, whatsapp_number: '351 555-1234' } }
+    renderEn('/booking/sol')
+
+    const link = screen.getByRole('link', { name: '351 555-1234' })
+    expect(link).toHaveClass('focus-visible:outline-brand-accent')
+    expect(link.className).not.toMatch(/orange-\d+/)
   })
 })

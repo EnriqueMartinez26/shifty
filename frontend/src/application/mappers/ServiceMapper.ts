@@ -1,4 +1,8 @@
-import { Service, type ServiceWriteInput } from '../../domain/entities/Service'
+import {
+  normalizePriorDesignMessage,
+  Service,
+  type ServiceWriteInput
+} from '../../domain/entities/Service'
 import type { ServiceResponseDTO } from '../dtos/ServiceDTO'
 
 /**
@@ -26,6 +30,8 @@ export class ServiceMapper {
       deposit_type: dto.deposit_type,
       deposit_amount: dto.deposit_amount,
       is_active: dto.is_active,
+      requires_prior_design: dto.requires_prior_design,
+      prior_design_message: dto.prior_design_message,
       addons: dto.addons ?? []
     })
   }
@@ -45,6 +51,8 @@ export class ServiceMapper {
       deposit_type: primitives.deposit_type,
       deposit_amount: primitives.deposit_amount,
       is_active: primitives.is_active,
+      requires_prior_design: primitives.requires_prior_design,
+      prior_design_message: primitives.prior_design_message,
       addons: primitives.addons.map((addon) => ({ ...addon, id: addon.id ?? '' }))
     }
   }
@@ -79,6 +87,13 @@ export class ServiceMapper {
     assignDefined(payload, 'deposit_mode', source.depositMode)
     assignDefined(payload, 'deposit_type', source.depositType)
     assignDefined(payload, 'deposit_amount', source.depositAmount)
+    assignDefined(payload, 'requires_prior_design', source.requiresPriorDesign)
+    // Recortado como lo guarda el backend; vacio viaja como null y lo borra.
+    assignDefined(
+      payload,
+      'prior_design_message',
+      normalizePriorDesignMessage(source.priorDesignMessage)
+    )
     // El conjunto entero o nada: la posicion es el indice. El id viaja solo
     // en los que ya existen, para que el backend los actualice en el lugar.
     assignDefined(

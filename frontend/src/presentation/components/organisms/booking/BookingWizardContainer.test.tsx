@@ -6,12 +6,14 @@ import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-rou
 import { forgetClientToken, rememberClientToken } from '@application/services/clientToken'
 
 import { NetworkError, RateLimitError } from '@shared/errors'
+import { formatCurrency } from '@shared/utils/currency'
 import { forgetOtpVerification, rememberOtpVerification } from '@shared/utils/otpSession'
 
 import { BookingWizardContainer } from './BookingWizardContainer'
 import { EMPTY_PRESELECT, initialStepFor } from './deepLink'
 import { useBookingStepParam } from '../../../hooks/useBookingStepParam'
 import type { PublicStore } from '../../../hooks/usePublic'
+import { brandCssVariables, DEFAULT_BRAND_THEME, resolveBrandTheme } from '../../../lib/brandTheme'
 
 const mockServices = jest.fn()
 const mockStaff = jest.fn()
@@ -19,6 +21,7 @@ const mockAvailability = jest.fn()
 const mockRequestOtp = jest.fn()
 const mockVerifyOtp = jest.fn()
 const mockCreateBooking = jest.fn()
+const mockPreviewPromotion = jest.fn()
 
 jest.mock('../../../hooks/usePublic', () => ({
   usePublicServices: (...args: unknown[]) => mockServices(...args),
@@ -39,7 +42,7 @@ jest.mock('../../../hooks/usePublic', () => ({
     },
     isLoading: false
   }),
-  usePreviewPublicPromotion: () => ({ mutateAsync: jest.fn(), isPending: false }),
+  usePreviewPublicPromotion: () => ({ mutateAsync: mockPreviewPromotion, isPending: false }),
   useJoinWaitlist: () => ({ mutateAsync: jest.fn(), isPending: false, isSuccess: false }),
   useCreatePublicBooking: () => ({ mutateAsync: mockCreateBooking, isPending: false }),
   useRequestPublicOtp: () => ({ mutateAsync: mockRequestOtp, isPending: false }),
@@ -391,10 +394,10 @@ describe('BookingWizardContainer', () => {
     await waitFor(() => expect(screen.getByText(HORARIO)).toBeInTheDocument())
     fireEvent.click(screen.getByText('09:00'))
 
-    const dato = (etiqueta: string) =>
-      screen.getByText(etiqueta, { selector: 'dt' }).nextElementSibling?.textContent
-    expect(dato('Servicio')).toBe('Servicio a')
-    expect(dato('Profesional')).toBe('Pro')
+    // La confirmacion compacta resume el turno en una linea (S5).
+    const resumen = screen.getByTestId('booking-summary-line')
+    expect(resumen).toHaveTextContent('Servicio a')
+    expect(resumen).toHaveTextContent('con Pro')
   })
 
   it('el codigo OTP se pide por email, al email que escribe el cliente', async () => {
@@ -492,6 +495,8 @@ describe('BookingWizardContainer', () => {
         expect(screen.getByText('Teléfono validado correctamente')).toBeInTheDocument()
       )
 
+      // Las notas van plegadas detras de un link (S5).
+      fireEvent.click(screen.getByText('Agregar una nota para la tienda'))
       fireEvent.change(screen.getByPlaceholderText('Algo que debamos saber?'), {
         target: { value: 'Llego 5 minutos tarde' }
       })
@@ -625,10 +630,12 @@ describe('BookingWizardContainer', () => {
       })
       mockCreateBooking.mockRejectedValue(new NetworkError('No se pudo conectar con el servidor.'))
       render(<WizardEnRuta store={tienda(false)} />)
-      await waitFor(() => expect(screen.getByText(HORARIO)).toBeInTheDocument())
+      // S4 (2026-10-21): los adicionales se eligen en el paso del servicio.
+      fireEvent.click(screen.getByText('Servicio a'))
+      fireEvent.click(screen.getByRole('button', { name: 'Agregar uno de Strass' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Agregar uno de Strass' }))
+      fireEvent.click(screen.getByRole('button', { name: /Continuar/ }))
       fireEvent.click(screen.getByText('09:00'))
-      fireEvent.click(screen.getByRole('button', { name: 'Agregar uno de Strass' }))
-      fireEvent.click(screen.getByRole('button', { name: 'Agregar uno de Strass' }))
       fireEvent.change(screen.getByPlaceholderText('Ej: Juan Perez'), {
         target: { value: 'Lucia' }
       })
@@ -648,7 +655,13 @@ describe('BookingWizardContainer', () => {
         addons: [{ addon_id: 'strass', quantity: 2 }]
       })
 
+      // Del pedido al horario y del horario al servicio, con lo elegido.
+      atrasDelNavegador()
+      atrasDelNavegador()
       fireEvent.click(screen.getByRole('button', { name: 'Quitar uno de Strass' }))
+      fireEvent.click(screen.getByRole('button', { name: /Continuar/ }))
+      fireEvent.click(screen.getByText('09:00'))
+      fireEvent.click(screen.getByRole('checkbox'))
       await waitFor(() => expect(screen.getByText('Confirmar reserva')).not.toBeDisabled())
       await enviar()
 
@@ -683,6 +696,34 @@ describe('BookingWizardContainer', () => {
       await waitFor(() =>
         expect(window.sessionStorage.getItem('shifty:booking-idem:tienda')).toBeNull()
       )
+    })
+
+    // QA 2026-10-21: la pantalla de exito seguia mostrando "Paso 3 de 3" sin
+    // tildar. Con la reserva hecha ya no hay pasos: el indicador se oculta.
+    it('con la reserva hecha oculta el indicador de pasos y al volver a reservar reaparece', async () => {
+      mockCreateBooking.mockResolvedValue({
+        public_id: 'appt-1',
+        service_id: 'a',
+        service_name: 'Servicio a',
+        staff_id: 'st-1',
+        staff_name: 'Pro',
+        starts_at: slot.starts_at,
+        ends_at: slot.ends_at,
+        status: 'confirmed',
+        client_name: 'Lucia',
+        client_phone: '+5491155550101',
+        payment_required: false
+      })
+      render(<WizardEnRuta store={tienda(false)} />)
+      expect(screen.getByRole('list', { name: 'Pasos de la reserva' })).toBeInTheDocument()
+
+      await confirmarReserva()
+
+      expect(await screen.findByText('Reserva Confirmada')).toBeInTheDocument()
+      expect(screen.queryByRole('list', { name: 'Pasos de la reserva' })).not.toBeInTheDocument()
+
+      atrasDelNavegador()
+      expect(screen.getByRole('list', { name: 'Pasos de la reserva' })).toBeInTheDocument()
     })
   })
 
@@ -910,6 +951,23 @@ describe('BookingWizardContainer', () => {
       expect(pedido).toMatchObject({ service_id: 'a', extra_service_ids: ['b'] })
     })
 
+    // QA 2026-10-21 (S4): la barra no quedaba fija abajo porque la raiz del
+    // wizard tenia overflow-hidden, que anula el sticky de los descendientes.
+    it('la barra queda fija abajo: ningun ancestro la encierra en un contenedor con scroll', () => {
+      render(<WizardEnRuta store={tiendaMulti(true)} />)
+      fireEvent.click(screen.getByText('Servicio a'))
+
+      const barra = screen.getByTestId('booking-services-bar')
+      expect(barra).toHaveClass('sticky', 'bottom-0')
+      const encierran: string[] = []
+      for (let node = barra.parentElement; node; node = node.parentElement) {
+        if (/\boverflow(-[xy])?-(hidden|auto|scroll)\b/.test(node.className)) {
+          encierran.push(node.className)
+        }
+      }
+      expect(encierran).toEqual([])
+    })
+
     it('con el flag y un solo servicio elegido el pedido es el de siempre', async () => {
       render(<WizardEnRuta store={tiendaMulti(true)} />)
 
@@ -1035,5 +1093,282 @@ describe('BookingWizardContainer', () => {
         expect(screen.getByText('10:00')).toBeInTheDocument()
       })
     })
+  })
+})
+
+// S4 (2026-10-21): los adicionales se eligen en el paso del servicio, debajo
+// de cada servicio elegido, y la barra suma el total al momento.
+describe('BookingWizardContainer con adicionales en el paso del servicio', () => {
+  const adicional = (id: string, name: string, unit_price: number) => ({
+    id,
+    name,
+    unit_price,
+    max_quantity: 5,
+    position: 0
+  })
+  const conAdicionales = (public_id: string, addons: ReturnType<typeof adicional>[]) => ({
+    ...servicio(public_id),
+    addons
+  })
+  const corteConStrass = conAdicionales('a', [adicional('strass', 'Strass', 500)])
+  const barbaConBrillo = conAdicionales('b', [adicional('brillo', 'Brillo', 300)])
+  const tiendaMulti = (): PublicStore => {
+    const base = tienda(false)
+    return { ...base, feature_flags: { ...base.feature_flags, multi_service_booking: true } }
+  }
+  const agregar = (name: string) =>
+    fireEvent.click(screen.getByRole('button', { name: `Agregar uno de ${name}` }))
+  const continuar = () => fireEvent.click(screen.getByRole('button', { name: /Continuar/ }))
+
+  const reservar = async () => {
+    fireEvent.click(screen.getByText('09:00'))
+    fireEvent.change(screen.getByPlaceholderText('Ej: Juan Perez'), {
+      target: { value: 'Lucia' }
+    })
+    fireEvent.change(screen.getByPlaceholderText('Ej: 351 1234567'), {
+      target: { value: '+5491155550101' }
+    })
+    fireEvent.change(screen.getByPlaceholderText('juan@email.com'), {
+      target: { value: 'lucia@example.com' }
+    })
+    fireEvent.click(screen.getByRole('checkbox'))
+    await waitFor(() => expect(screen.getByText('Confirmar reserva')).not.toBeDisabled())
+    await act(async () => {
+      fireEvent.click(screen.getByText('Confirmar reserva'))
+    })
+    await waitFor(() => expect(mockCreateBooking).toHaveBeenCalledTimes(1))
+    return mockCreateBooking.mock.calls[0]?.[0] as Record<string, unknown>
+  }
+
+  beforeEach(() => {
+    mockServices.mockReset()
+    mockAvailability.mockReset()
+    mockCreateBooking.mockReset()
+    mockPreviewPromotion.mockReset()
+    mockStaff.mockReturnValue({
+      data: [
+        { public_id: 'st-1', kind: 'person', display_name: 'Pro', service_ids: ['a', 'b', 'c'] }
+      ],
+      isLoading: false
+    })
+    mockAvailability.mockReturnValue({ data: [slot], isLoading: false })
+    mockCreateBooking.mockRejectedValue(new NetworkError('No se pudo conectar con el servidor.'))
+    forgetOtpVerification('tienda')
+    forgetClientToken()
+    window.sessionStorage.clear()
+  })
+
+  it('un solo servicio con adicionales muestra el paso; tocarlo abre el contador sin avanzar', async () => {
+    mockServices.mockReturnValue({ data: [corteConStrass], isLoading: false })
+    render(<WizardEnRuta store={tienda(false)} />)
+
+    expect(screen.getByText(SERVICIO)).toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: 'Adicionales de Servicio a' })).toBeNull()
+
+    fireEvent.click(screen.getByText('Servicio a'))
+
+    expect(screen.getByText(SERVICIO)).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'Adicionales de Servicio a' })).toBeInTheDocument()
+    expect(screen.getByTestId('booking-services-bar')).toHaveTextContent(
+      `1 servicio · 30 min · ${formatCurrency(1000)}`
+    )
+    agregar('Strass')
+    agregar('Strass')
+    expect(screen.getByTestId('booking-services-bar')).toHaveTextContent(
+      `1 servicio · 30 min · ${formatCurrency(2000)}`
+    )
+
+    continuar()
+    expect(screen.getByText(HORARIO)).toBeInTheDocument()
+    const pedido = await reservar()
+    expect(pedido).toMatchObject({ service_id: 'a', addons: [{ addon_id: 'strass', quantity: 2 }] })
+  })
+
+  it('sin el flag, un servicio sin adicionales sigue eligiendo y avanzando', () => {
+    mockServices.mockReturnValue({ data: [corteConStrass, servicio('c')], isLoading: false })
+    render(<WizardEnRuta store={tienda(false)} />)
+
+    fireEvent.click(screen.getByText('Servicio a'))
+    expect(screen.getByText(SERVICIO)).toBeInTheDocument()
+    fireEvent.click(screen.getByText('Servicio c'))
+
+    expect(screen.getByText(HORARIO)).toBeInTheDocument()
+  })
+
+  it('con varios servicios cada uno lleva sus adicionales al pedido', async () => {
+    mockServices.mockReturnValue({ data: [corteConStrass, barbaConBrillo], isLoading: false })
+    render(<WizardEnRuta store={tiendaMulti()} />)
+
+    fireEvent.click(screen.getByText('Servicio a'))
+    fireEvent.click(screen.getByText('Servicio b'))
+    agregar('Strass')
+    agregar('Brillo')
+    agregar('Brillo')
+    // 1000 + 1000 + 500 + 2 x 300
+    expect(screen.getByTestId('booking-services-bar')).toHaveTextContent(
+      `2 servicios · 60 min · ${formatCurrency(3100)}`
+    )
+    continuar()
+
+    const pedido = await reservar()
+    expect(pedido).toMatchObject({
+      service_id: 'a',
+      extra_service_ids: ['b'],
+      addons: [
+        { addon_id: 'strass', quantity: 1 },
+        { addon_id: 'brillo', quantity: 2 }
+      ]
+    })
+  })
+
+  it('quitar un servicio se lleva sus adicionales', async () => {
+    mockServices.mockReturnValue({ data: [corteConStrass, barbaConBrillo], isLoading: false })
+    render(<WizardEnRuta store={tiendaMulti()} />)
+
+    fireEvent.click(screen.getByText('Servicio a'))
+    fireEvent.click(screen.getByText('Servicio b'))
+    agregar('Strass')
+    agregar('Brillo')
+    fireEvent.click(screen.getByText('Servicio b'))
+
+    expect(screen.queryByRole('region', { name: 'Adicionales de Servicio b' })).toBeNull()
+    expect(screen.getByTestId('booking-services-bar')).toHaveTextContent(
+      `1 servicio · 30 min · ${formatCurrency(1500)}`
+    )
+    continuar()
+    const pedido = await reservar()
+    expect(pedido).not.toHaveProperty('extra_service_ids')
+    expect(pedido.addons).toEqual([{ addon_id: 'strass', quantity: 1 }])
+  })
+
+  it('un deep-link a un servicio con adicionales arranca en el horario y "Volver" los ofrece', () => {
+    mockServices.mockReturnValue({ data: [corteConStrass], isLoading: false })
+    render(
+      <WizardEnRuta
+        store={tienda(false)}
+        preselect={{ serviceId: 'a', staffId: null, date: null }}
+      />
+    )
+    expect(screen.getByText(HORARIO)).toBeInTheDocument()
+
+    fireEvent.click(volver())
+
+    expect(screen.getByText(SERVICIO)).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'Adicionales de Servicio a' })).toBeInTheDocument()
+  })
+
+  // La promo se mide contra el total: con otros adicionales el codigo aplicado
+  // se conserva y se vuelve a validar contra la seleccion nueva al llegar a la
+  // confirmacion (antes se borraba en silencio).
+  it('cambiar los adicionales en el servicio conserva el codigo y lo revalida con los nuevos', async () => {
+    mockServices.mockReturnValue({ data: [corteConStrass], isLoading: false })
+    mockPreviewPromotion.mockResolvedValue({
+      code: 'BIENVENIDA10',
+      title: 'Bienvenida',
+      promotion_type: 'percent',
+      base_amount: 1000,
+      discount_amount: 100,
+      final_amount: 900
+    })
+    render(<WizardEnRuta store={tienda(false)} />)
+    fireEvent.click(screen.getByText('Servicio a'))
+    continuar()
+    fireEvent.click(screen.getByText('09:00'))
+    fireEvent.click(screen.getByText('¿Tenés un código de descuento?'))
+    fireEvent.change(screen.getByPlaceholderText('Ej: BIENVENIDA10'), {
+      target: { value: 'bienvenida10' }
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Aplicar' }))
+    })
+    await waitFor(() => expect(mockPreviewPromotion).toHaveBeenCalled())
+
+    atrasDelNavegador()
+    atrasDelNavegador()
+    agregar('Strass')
+    continuar()
+    mockPreviewPromotion.mockClear()
+    const pedido = await reservar()
+
+    expect(mockPreviewPromotion).toHaveBeenCalledTimes(1)
+    expect(mockPreviewPromotion.mock.calls[0][0]).toEqual(
+      expect.objectContaining({ code: 'BIENVENIDA10', addons: ['strass:1'] })
+    )
+    expect(pedido.promotion_code).toBe('BIENVENIDA10')
+    expect(pedido.addons).toEqual([{ addon_id: 'strass', quantity: 1 }])
+  })
+})
+
+// S3 (2026-10-21, Mateo): "recorda que esto era personalizable por tienda y se
+// elegia en produccion". El color de la tienda se fija una vez en la raiz del
+// wizard y los pasos leen var(--brand-*).
+describe('BookingWizardContainer con el color de la tienda', () => {
+  const raiz = () =>
+    screen.getByRole('region', { name: 'Paso 1 de 3: Servicio' }).parentElement as HTMLElement
+  // Todas las variables de marca que la raiz fija (sin color de tienda no hay --brand-glow).
+  const variables = (element: HTMLElement) =>
+    Object.fromEntries(
+      Array.from(element.style)
+        .filter((name) => name.startsWith('--brand-'))
+        .map((name) => [name, element.style.getPropertyValue(name)])
+    )
+
+  beforeEach(() => {
+    mockServices.mockReturnValue({ data: [servicio('a'), servicio('b')], isLoading: false })
+    mockStaff.mockReturnValue({ data: [], isLoading: false })
+    mockAvailability.mockReturnValue({ data: [slot], isLoading: false })
+  })
+
+  it('expone el color elegido por la tienda como variables en la raiz', () => {
+    render(<WizardEnRuta store={{ ...tienda(false), primary_color: '#3B82F6' }} />)
+
+    expect(variables(raiz())).toEqual(brandCssVariables(resolveBrandTheme('#3b82f6')))
+    expect(raiz().style.getPropertyValue('--brand-fill')).toBe('#3b82f6')
+  })
+
+  it.each(['#000000', '#000', '', undefined])(
+    'sin color elegido (%s) queda el naranja de Shifty',
+    (primary_color) => {
+      render(<WizardEnRuta store={{ ...tienda(false), primary_color: primary_color as string }} />)
+
+      expect(variables(raiz())).toEqual({
+        '--brand-fill': DEFAULT_BRAND_THEME.fill,
+        '--brand-fill-bottom': DEFAULT_BRAND_THEME.fillBottom,
+        '--brand-on-fill': DEFAULT_BRAND_THEME.onFill
+      })
+    }
+  )
+
+  it('el paso actual del indicador usa el color de marca', () => {
+    render(<WizardEnRuta store={{ ...tienda(false), primary_color: '#3b82f6' }} />)
+
+    const actual = screen.getByRole('listitem', { current: 'step' })
+    const circulo = actual.querySelector('div') as HTMLElement
+    expect(circulo.getAttribute('style')).toContain('var(--brand-fill,')
+    expect(circulo.getAttribute('style')).toContain('var(--brand-on-fill,')
+    // S9: el rotulo del paso es texto neutro; la marca queda en el circulo.
+    expect(actual.querySelector('span')?.getAttribute('style') ?? '').not.toContain('--brand')
+  })
+
+  // S9 (2026-10-22, Mateo: "hay colores que no parecen ser respetados"): con
+  // un amarillo los titulos salian oliva y con un rosa, violeta. El color de
+  // marca solo es relleno; el unico texto con variable de marca es el que va
+  // sobre ese relleno (--brand-on-fill).
+  it('ningun texto ni icono de los pasos usa un tono de marca', () => {
+    const textoDeMarca = () =>
+      Array.from(document.body.querySelectorAll<HTMLElement>('[style]'))
+        .map((el) => el.style.color)
+        .filter((color) => color.includes('--brand-') && !color.includes('--brand-on-fill'))
+
+    render(<WizardEnRuta store={{ ...tienda(false), primary_color: '#ffff00' }} />)
+    expect(textoDeMarca()).toEqual([])
+
+    fireEvent.click(screen.getByText('Servicio a'))
+    expect(screen.getByText('09:00')).toBeInTheDocument()
+    expect(textoDeMarca()).toEqual([])
+
+    fireEvent.click(screen.getByText('09:00'))
+    expect(screen.getByPlaceholderText(DATOS)).toBeInTheDocument()
+    expect(textoDeMarca()).toEqual([])
   })
 })

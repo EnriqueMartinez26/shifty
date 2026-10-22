@@ -291,3 +291,30 @@ describe('HttpServiceRepository — imagen del servicio', () => {
     await expect(repository.uploadImage('svc-1', new Blob(['x']))).rejects.toBe(conflicto)
   })
 })
+
+describe('HttpServiceRepository — diseño previo (S7)', () => {
+  it('un PATCH que no los menciona no manda los campos del diseño previo', async () => {
+    const { patch, repository } = createClient()
+
+    await repository.update('svc-1', { name: 'Solo el nombre' })
+
+    expect(bodyOf(patch)).not.toHaveProperty('requires_prior_design')
+    expect(bodyOf(patch)).not.toHaveProperty('prior_design_message')
+  })
+
+  it('el POST manda la opcion y el mensaje del servicio nuevo', async () => {
+    const { post, repository } = createClient()
+
+    const nuevo = ServiceMapper.toDomain({
+      ...serviceConSena,
+      requires_prior_design: true,
+      prior_design_message: 'Mandá tu diseño'
+    })
+    await repository.create(nuevo)
+
+    expect(bodyOf(post)).toMatchObject({
+      requires_prior_design: true,
+      prior_design_message: 'Mandá tu diseño'
+    })
+  })
+})

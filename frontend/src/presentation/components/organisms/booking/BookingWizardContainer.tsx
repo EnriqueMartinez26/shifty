@@ -13,13 +13,14 @@ import { getErrorCode, getErrorMessage, getRetryAfterSeconds } from '@shared/err
 import { bookingIdempotencyKey, forgetBookingIdempotency } from '@shared/utils/bookingIdempotency'
 import { isOtpStillValid, phoneDigits, rememberOtpVerification } from '@shared/utils/otpSession'
 
+import { groupAddonsByService, withAddonQuantity } from './addonGroups'
 import { BookingStepConfirmation } from './BookingStepConfirmation'
 import { BookingStepDateTime } from './BookingStepDateTime'
 import { BookingStepService } from './BookingStepService'
 import { EMPTY_PRESELECT, type BookingPreselect } from './deepLink'
 import { clampStep, resolveBackJump, resolveStepJump } from './stepFlow'
 import type { BookingOtpState, BookingStepChange, BookingWizardState } from './types'
-import { colors2000s, orangeCtaGradient } from '../../../../theme/colors'
+import { colors2000s } from '../../../../theme/colors'
 import {
   type PublicStore,
   useCreatePublicBooking,
@@ -29,6 +30,12 @@ import {
   useVerifyPublicOtp
 } from '../../../hooks/usePublic'
 import { useResendCooldown } from '../../../hooks/useResendCooldown'
+import {
+  brandColor,
+  brandCssVariables,
+  brandGlowShadow,
+  resolveBrandTheme
+} from '../../../lib/brandTheme'
 import { createBookingSurfaceStyle } from '../../../lib/surfaceStyles'
 
 interface BookingWizardContainerProps {
@@ -123,6 +130,15 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
     if (currentStep !== step) onStepChange({ to: currentStep, from: step, mode: 'replace' })
   }, [currentStep, step, onStepChange])
 
+  // Con la reserva hecha la pantalla de exito no es un paso: el indicador se
+  // oculta. Cambiar de paso (p. ej. "atras" del navegador) lo vuelve a mostrar.
+  const [booked, setBooked] = useState(false)
+  const [bookedOnStep, setBookedOnStep] = useState(currentStep)
+  if (bookedOnStep !== currentStep) {
+    setBookedOnStep(currentStep)
+    setBooked(false)
+  }
+
   const stepRegionRef = useRef<HTMLDivElement>(null)
   const previousStepRef = useRef(currentStep)
 
@@ -201,6 +217,32 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
       date: null,
       startTime: null,
       startsAt: null
+    })
+  }
+
+  // Los adicionales se eligen en el paso del servicio, debajo de cada servicio
+  // elegido (S4, 2026-10-21). `bookingState.addons` sigue siendo la unica
+  // fuente: los grupos se concilian contra el catalogo en cada render.
+  const chosenServiceIds = bookingState.serviceId
+    ? [bookingState.serviceId, ...bookingState.extraServiceIds]
+    : []
+  const addonGroups = groupAddonsByService(chosenServiceIds, services, bookingState.addons)
+  const serviceHasAddons = (id: string) =>
+    Boolean(services?.find((service) => service.public_id === id)?.addons?.length)
+
+  const continueFromService = () => {
+    trackBookingEvent('service_selected')
+    nextStep()
+  }
+
+  // La promo se mide contra el total (servicio y adicionales): con otros
+  // adicionales el descuento calculado ya no vale, pero el codigo se conserva
+  // y la confirmacion lo vuelve a validar al entrar (avisa si deja de aplicar).
+  // Borrarlo en silencio obligaba a la clienta a cargarlo de nuevo.
+  const handleAddonChange = (serviceId: string, addonId: string, quantity: number) => {
+    updateState({
+      addons: withAddonQuantity(addonGroups, serviceId, addonId, quantity),
+      promotionPreview: null
     })
   }
 
@@ -324,25 +366,25 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
                   background: isCompleted
                     ? `linear-gradient(180deg, ${colors2000s.status.success.light} 0%, ${colors2000s.status.success.dark} 100%)`
                     : isActive
-                      ? orangeCtaGradient
+                      ? brandColor.fillGradient
                       : `linear-gradient(180deg, ${colors2000s.bg.disabled} 0%, ${colors2000s.bg.disabledBottom} 100%)`,
                   boxShadow: isCompleted
                     ? `${colors2000s.shadows.insetLight}, 0 2px 4px rgba(16,185,129,0.3)`
                     : isActive
-                      ? `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerOrange}`
+                      ? `${colors2000s.shadows.insetLight}, ${brandGlowShadow}`
                       : `${colors2000s.shadows.insetLight}, 0 1px 2px rgba(0,0,0,0.05)`,
                   color: isCompleted
                     ? colors2000s.text.onOrange
                     : isActive
-                      ? colors2000s.text.onOrangeSelection
+                      ? brandColor.onFill
                       : colors2000s.text.secondary
                 }}
               >
                 {isCompleted ? <Check className="w-4 h-4 font-black" /> : i + 1}
               </div>
               <span
-                className={`text-[9px] uppercase tracking-wider hidden md:block mt-1 font-black text-center ${isActive ? 'text-orange-600' : isCompleted ? 'text-green-600' : 'text-gray-400'}`}
-                style={isActive ? { color: colors2000s.orange.accent } : undefined}
+                className={`text-[9px] uppercase tracking-wider hidden md:block mt-1 font-black text-center ${isActive ? '' : isCompleted ? 'text-green-600' : 'text-gray-400'}`}
+                style={isActive ? { color: colors2000s.text.primary } : undefined}
               >
                 {label}
               </span>
@@ -376,8 +418,13 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
     <div
       // Menos relleno en el telefono: con p-8 + p-6 la tarjeta del servicio
       // quedaba de 227 px en 390 y cortaba los nombres (QA movil 2026-10-08).
-      className="max-w-2xl mx-auto rounded-lg p-4 sm:p-8 relative overflow-hidden duration-700"
+      // overflow-clip y no overflow-hidden: recorta igual las esquinas pero no
+      // crea un contenedor de scroll, asi la barra del servicio queda sticky
+      // contra la pantalla (QA 2026-10-21).
+      className="max-w-2xl mx-auto rounded-lg p-4 sm:p-8 relative overflow-clip duration-700"
       style={{
+        // El color de la tienda (S3), una sola vez: los pasos leen var(--brand-*).
+        ...brandCssVariables(resolveBrandTheme(store.primary_color)),
         background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
         border: `1px solid ${colors2000s.border.default}`,
         boxShadow: `${colors2000s.shadows.insetLight}, 0 10px 30px rgba(0, 0, 0, 0.08)`
@@ -392,14 +439,14 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
         }}
       />
 
-      {renderStepIndicator()}
+      {!booked && renderStepIndicator()}
 
       <div
         ref={stepRegionRef}
         role="region"
         aria-label={`Paso ${currentStep + 1} de ${steps.length}: ${steps[currentStep]}`}
         tabIndex={-1}
-        className="min-h-[400px] p-3 sm:p-6 rounded-lg relative focus:outline-none focus:ring-2 focus:ring-orange-500 focus:ring-offset-2"
+        className="min-h-[400px] p-3 sm:p-6 rounded-lg relative focus:outline-none focus:ring-2 focus:ring-brand-accent focus:ring-offset-2"
         style={{
           background: 'rgba(255, 255, 255, 0.4)',
           border: '1px solid rgba(255, 255, 255, 0.5)',
@@ -411,7 +458,11 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
             storePublicId={store.public_id}
             selectedId={bookingState.serviceId}
             onSelect={(id) => {
-              trackBookingEvent('service_selected')
+              // Con adicionales, tocarlo lo elige y abre su contador: se sigue
+              // con la barra. Tocar de nuevo el elegido no borra lo elegido.
+              const withAddons = serviceHasAddons(id)
+              if (withAddons && id === bookingState.serviceId) return
+              if (!withAddons) trackBookingEvent('service_selected')
               updateState({
                 serviceId: id,
                 extraServiceIds: [],
@@ -427,7 +478,12 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
                 startTime: null,
                 startsAt: null
               })
-              nextStep()
+              if (!withAddons) nextStep()
+            }}
+            addons={{
+              groups: addonGroups,
+              onChange: handleAddonChange,
+              onContinue: continueFromService
             }}
             multiService={
               multiService
@@ -437,10 +493,7 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
                       : [],
                     onToggle: handleToggleService,
                     performers: storeStaff ? publicPerformers(storeStaff) : undefined,
-                    onContinue: () => {
-                      trackBookingEvent('service_selected')
-                      nextStep()
-                    }
+                    onContinue: continueFromService
                   }
                 : undefined
             }
@@ -518,6 +571,10 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
               updateState({ promotionCode, promotionPreview })
             }
             onAddonsChange={(addons) => updateState({ addons })}
+            // Los adicionales se eligen en el paso del servicio (S4): editarlos
+            // vuelve ahi, con lo elegido.
+            onEditAddons={() => onStepChange({ to: 0, from: currentStep, mode: 'push' })}
+            onBooked={() => setBooked(true)}
             onConfirm={async (paymentMethod, acceptsTerms, addons) => {
               const pedido = {
                 store_public_id: store.public_id,

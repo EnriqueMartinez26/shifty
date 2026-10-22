@@ -8,6 +8,8 @@ import {
 
 const uno = [{ public_id: 'a' }]
 const dos = [{ public_id: 'a' }, { public_id: 'b' }]
+const strass = { id: 'strass', name: 'Strass', unit_price: 500, max_quantity: 10, position: 0 }
+const unoConAdicionales = [{ public_id: 'a', addons: [strass] }]
 
 describe('pasos que se saltean solos (wizard de 3 pasos)', () => {
   it('con varios servicios no saltea nada', () => {
@@ -16,6 +18,19 @@ describe('pasos que se saltean solos (wizard de 3 pasos)', () => {
 
   it('un solo servicio lleva directo al horario con ese servicio elegido', () => {
     expect(resolveStepJump(0, { services: uno })).toEqual({ step: 1, serviceId: 'a' })
+  })
+
+  // S4 (2026-10-21): los adicionales se eligen en el paso del servicio; con
+  // un solo servicio que los tiene, el paso ya no se saltea.
+  it('un solo servicio con adicionales no saltea el paso del servicio', () => {
+    expect(resolveStepJump(0, { services: unoConAdicionales })).toEqual({ step: 0 })
+  })
+
+  it('un solo servicio con la lista de adicionales vacia se sigue salteando', () => {
+    expect(resolveStepJump(0, { services: [{ public_id: 'a', addons: [] }] })).toEqual({
+      step: 1,
+      serviceId: 'a'
+    })
   })
 
   it('mientras la lista carga no saltea (evita elegir a ciegas)', () => {
@@ -33,6 +48,10 @@ describe('volver atras', () => {
     expect(resolveBackJump(1, { services: uno })).toBe(1)
     // Desde los datos se vuelve al horario normalmente.
     expect(resolveBackJump(2, { services: uno })).toBe(1)
+  })
+
+  it('con un solo servicio con adicionales se vuelve del horario al servicio', () => {
+    expect(resolveBackJump(1, { services: unoConAdicionales })).toBe(0)
   })
 
   it('con varios servicios retrocede de a un paso', () => {

@@ -55,3 +55,31 @@ Esta excepción no cierra los smoke funcionales, la revisión legal del texto de
   - QA manual en un celular real de las pantallas del cliente que cambiaron;
   - constancia escrita de la revisión legal de las páginas legales: falta un correo o comentario que diga qué páginas se revisaron y en qué fecha. Hasta tenerla no se registra ninguna fecha ni versión revisada.
 - Rollback: `bash scripts/deploy.sh rollback`, que vuelve a `.deploy/previous` sin migrar.
+
+## Release del 2026-10-22: backend del rediseño del portal
+
+- Release: `059f8e857bef0098c22154789d8b91cbec00177d` (antes corría `109f38fe232cd73fa4df4c2a5528bf7ef53ec22d`).
+- Ventana: deploy del 2026-10-22, de 06:17:28 a 06:19:54 UTC (`bash scripts/deploy.sh deploy`).
+- Contenido:
+  - #236: una reserva pública sin cobro nace confirmada, y un turno a más de 30 días con seña obligatoria se cobra solo por Mercado Pago (`D-20261020-01`, `D-20261020-02`);
+  - #240: CTA y selección en la rampa naranja oscura con texto blanco;
+  - #243: `services.requires_prior_design` y `services.prior_design_message` (diseño previo);
+  - #249: `cover_position` de la tienda en `theme_config`;
+  - #232: E2E aislado con Playwright en CI;
+  - #248: dos tests intermitentes estabilizados.
+  - El frontend del rediseño todavía no sale: la cadena #239 → #250 espera revisión.
+- Decisión aplicada: `D-20261021-01` (excepción de la aceptación de capacidad hasta 20 tiendas). Los demás ítems del checklist siguen vigentes.
+- Evidencia del deploy:
+  - preflight: Quality verde en `main` para el SHA, compose 5.6.0, disco al 6 %;
+  - migración con el código viejo sirviendo: `Running upgrade c9e1a3b5d7f2 -> a7c9e1b3d5f7, services.requires_prior_design + prior_design_message: diseno previo`;
+  - log del deploy: "backend: 2 replicas nuevas sirviendo" (contenedores `Healthy`) y "frontend: 1 replicas nuevas sirviendo", seguidos de `nginx -t` ok y reload;
+  - compuerta: `ok (0 fallos sueltos, 5xx 0/26)`, y el script terminó con `deploy: ok, corre 059f8e857bef0098c22154789d8b91cbec00177d`;
+  - después del deploy, desde afuera:
+    - `/api/ops/health/ready` respondió 200;
+    - `GET /public/stores/jaziz-nails` trae `cover_position` y `deposit_far_limit_days`, los dos en `null`, lo correcto para una tienda sin encuadre elegido y con Mercado Pago;
+    - `GET /public/services` trae `requires_prior_design` y `prior_design_message` en los 4 servicios;
+    - el smoke de solo lectura del portal de la primera tienda no encontró problemas.
+- Pendiente:
+  - QA manual en un celular real;
+  - constancia escrita de la revisión legal: qué páginas se revisaron y en qué fecha y versión.
+- Rollback: `bash scripts/deploy.sh rollback`, que vuelve a `.deploy/previous` sin migrar. La migración solo agrega columnas con valor por defecto, así que el código anterior corre sobre el esquema nuevo.

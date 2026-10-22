@@ -1,5 +1,6 @@
 import { BaseService } from './BaseService'
 import {
+  normalizePriorDesignMessage,
   Service,
   type ServiceDepositMode,
   type ServiceDepositType,
@@ -47,6 +48,8 @@ export class ServiceService extends BaseService<Service> {
     depositMode?: ServiceDepositMode
     depositType?: ServiceDepositType
     depositAmount?: number | null
+    requiresPriorDesign?: boolean
+    priorDesignMessage?: string | null
     addons?: readonly ServiceAddonInput[]
   }): Promise<Service> {
     return await this.execute(async () => {
@@ -58,6 +61,9 @@ export class ServiceService extends BaseService<Service> {
         deposit_mode: data.depositMode,
         deposit_type: data.depositType,
         deposit_amount: data.depositAmount,
+        requires_prior_design: data.requiresPriorDesign,
+        // Se valida recortado, como viaja.
+        prior_design_message: normalizePriorDesignMessage(data.priorDesignMessage),
         addons: data.addons?.map((addon) => ({
           name: addon.name,
           unit_price: addon.unitPrice,
@@ -79,6 +85,8 @@ export class ServiceService extends BaseService<Service> {
         depositType: validated.deposit_type,
         depositAmount: validated.deposit_amount ?? null,
         isActive: true,
+        requiresPriorDesign: validated.requires_prior_design,
+        priorDesignMessage: validated.prior_design_message ?? null,
         // La posicion es el orden del formulario.
         addons: (data.addons ?? []).map((addon, index) => ServiceAddon.create(addon, index))
       })

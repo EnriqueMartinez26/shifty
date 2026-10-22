@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useId } from 'react'
 
 import {
   X,
@@ -12,10 +12,18 @@ import {
   Wallet,
   Image as ImageIcon,
   Trash2,
-  Upload
+  Upload,
+  PenTool
 } from 'lucide-react'
 
-import { Service, type ServiceDepositMode, type ServiceDepositType } from '@domain/entities/Service'
+import {
+  defaultPriorDesignMessage,
+  MAX_PRIOR_DESIGN_MESSAGE_LENGTH,
+  normalizePriorDesignMessage,
+  Service,
+  type ServiceDepositMode,
+  type ServiceDepositType
+} from '@domain/entities/Service'
 
 import { getClientValidationMessages } from '@application/validators/service.validators'
 
@@ -30,10 +38,26 @@ import type { ServiceFormValues } from '../../types/forms'
 import { FormErrorAlert } from '../molecules/FormErrorAlert'
 import { ServiceAddonsEditor } from '../molecules/ServiceAddonsEditor'
 
+/**
+ * Lo que manda el formulario. Los campos del diseño previo (S7) viajan en el
+ * alta y, al editar, solo si cambiaron: como los adicionales, editar otra cosa
+ * no los toca.
+ */
+export type ServiceFormSubmitValues = ServiceFormValues & {
+  requiresPriorDesign?: boolean
+  priorDesignMessage?: string | null
+}
+
+/** Estado del formulario: el mensaje es el texto tal cual se tipea. */
+type ServiceFormState = ServiceFormValues & {
+  requiresPriorDesign: boolean
+  priorDesignMessage: string
+}
+
 interface ServiceFormModalProps {
   isOpen: boolean
   onClose: () => void
-  onSubmit: (data: ServiceFormValues) => Promise<void>
+  onSubmit: (data: ServiceFormSubmitValues) => Promise<void>
   editingService?: Service | null
   // Subir y quitar la imagen persisten al instante, sin pasar por Guardar.
   onUploadImage: (id: string, file: File) => Promise<Service>
@@ -81,7 +105,9 @@ const DEPOSIT_TYPE_LABELS: ReadonlyArray<{ value: ServiceDepositType; label: str
   { value: 'full', label: 'Total' }
 ]
 
-const EMPTY_FORM: ServiceFormValues = {
+const PRIOR_DESIGN_PLACEHOLDER = `Si lo dejás vacío: ${defaultPriorDesignMessage('tu negocio')}`
+
+const EMPTY_FORM: ServiceFormState = {
   name: '',
   description: '',
   durationMinutes: 30,
@@ -93,6 +119,8 @@ const EMPTY_FORM: ServiceFormValues = {
   depositMode: 'none',
   depositType: 'percent',
   depositAmount: null,
+  requiresPriorDesign: false,
+  priorDesignMessage: '',
   addons: []
 }
 
@@ -108,7 +136,9 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
   const blockedTitle = readOnlyReason ?? undefined
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [formData, setFormData] = useState<ServiceFormValues>(EMPTY_FORM)
+  const [formData, setFormData] = useState<ServiceFormState>(EMPTY_FORM)
+  const priorDesignHintId = useId()
+  const priorDesignCounterId = useId()
   const [imageBusy, setImageBusy] = useState(false)
   const [imageError, setImageError] = useState<string | null>(null)
 
@@ -130,6 +160,8 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
         depositMode: p.deposit_mode,
         depositType: p.deposit_type,
         depositAmount: p.deposit_amount,
+        requiresPriorDesign: p.requires_prior_design,
+        priorDesignMessage: p.prior_design_message ?? '',
         // Los adicionales que tiene, con su id: si la lista cambia se manda
         // entera y el backend actualiza en el lugar los que traen id.
         addons: toAddonFormValues(editingService.addons)
@@ -148,6 +180,9 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
   // con el modal scrolleado no se veia (QA 2026-10-02).
   const percentTooHigh =
     needsDepositAmount && formData.depositType === 'percent' && (formData.depositAmount ?? 0) > 100
+  // El tope del mensaje se cuenta recortado, como lo guarda el backend.
+  const priorDesignLength = formData.priorDesignMessage.trim().length
+  const priorDesignTooLong = priorDesignLength > MAX_PRIOR_DESIGN_MESSAGE_LENGTH
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -156,9 +191,20 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
     try {
       // Sin cambios en los adicionales, la edicion no los manda: editar solo la
       // descripcion no debe tocarlos.
-      const { addons, ...rest } = formData
+      const { addons, requiresPriorDesign, priorDesignMessage, ...rest } = formData
       const sendAddons = !editingService || addonsChanged(editingService.addons, addons ?? [])
-      await onSubmit(sendAddons ? formData : rest)
+      // Mismo criterio para el diseño previo: el mensaje va recortado (vacio es
+      // null) y destildar la opcion no lo borra: el backend lo conserva.
+      const message = normalizePriorDesignMessage(priorDesignMessage) ?? null
+      const sendRequires =
+        !editingService || requiresPriorDesign !== editingService.requiresPriorDesign
+      const sendMessage = !editingService || message !== editingService.priorDesignMessage
+      await onSubmit({
+        ...rest,
+        ...(sendAddons ? { addons } : {}),
+        ...(sendRequires ? { requiresPriorDesign } : {}),
+        ...(sendMessage ? { priorDesignMessage: message } : {})
+      })
       onClose()
     } catch (err) {
       // D-20260930-09: si lo rechazo la validacion del cliente se dice que
@@ -443,6 +489,69 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
               addons={formData.addons ?? []}
               onChange={(addons) => setFormData({ ...formData, addons })}
             />
+
+            {/* Diseño previo (S7): solo un aviso a la clienta en la pantalla de
+                exito, con un boton al WhatsApp de la tienda. El cobro y el
+                estado del turno no cambian. */}
+            <div className="space-y-3 pt-2">
+              <div className="flex items-center gap-3 min-h-[44px]">
+                <input
+                  id="requires-prior-design"
+                  type="checkbox"
+                  checked={formData.requiresPriorDesign}
+                  onChange={(e) =>
+                    setFormData({ ...formData, requiresPriorDesign: e.target.checked })
+                  }
+                  aria-describedby={priorDesignHintId}
+                  className="w-5 h-5 cursor-pointer accent-orange-500"
+                />
+                <label
+                  htmlFor="requires-prior-design"
+                  className="flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-gray-500 cursor-pointer"
+                >
+                  <PenTool size={14} aria-hidden="true" />
+                  Requiere diseño previo
+                </label>
+              </div>
+              <p id={priorDesignHintId} className="text-[10px] font-bold text-gray-400 ml-1">
+                Después de reservar, la clienta ve un botón para mandarte su diseño por WhatsApp. El
+                pago y la seña no cambian.
+              </p>
+
+              {formData.requiresPriorDesign && (
+                <div className="space-y-1.5">
+                  <label
+                    htmlFor="prior-design-message"
+                    className="text-[10px] font-black uppercase tracking-widest text-gray-400 ml-1"
+                  >
+                    Mensaje para la clienta
+                  </label>
+                  <textarea
+                    id="prior-design-message"
+                    value={formData.priorDesignMessage}
+                    onChange={(e) =>
+                      setFormData({ ...formData, priorDesignMessage: e.target.value })
+                    }
+                    aria-describedby={priorDesignCounterId}
+                    aria-invalid={priorDesignTooLong || undefined}
+                    className="w-full rounded-xl px-4 py-3 font-bold border text-sm transition-all min-h-[80px] resize-none"
+                    style={create2000sModalInputStyle()}
+                    // Sin `maxLength` nativo: el tope se cuenta recortado y el
+                    // motivo lo da el schema del servicio, como la seña.
+                    placeholder={PRIOR_DESIGN_PLACEHOLDER}
+                  />
+                  <p
+                    id={priorDesignCounterId}
+                    aria-live="polite"
+                    className={`text-[10px] font-bold ml-1 ${
+                      priorDesignTooLong ? 'text-red-600' : 'text-gray-400'
+                    }`}
+                  >
+                    {priorDesignLength}/{MAX_PRIOR_DESIGN_MESSAGE_LENGTH}
+                  </p>
+                </div>
+              )}
+            </div>
 
             <div className="space-y-1.5">
               <label className="text-[10px] font-black uppercase tracking-widest text-gray-400 ml-1 flex items-center gap-2">

@@ -17,6 +17,8 @@ interface BookingAddonsPickerProps {
   disabled?: boolean
   /** Encabezado; con varios servicios nombra el servicio ("Adicionales de Corte"). */
   title?: string
+  /** Id del bloque, para que el servicio que lo abre lo apunte (`aria-controls`). */
+  id?: string
 }
 
 const stepperButtonStyle: React.CSSProperties = {
@@ -28,27 +30,29 @@ const stepperButtonStyle: React.CSSProperties = {
 
 /**
  * Adicionales del servicio con un contador de 0 al maximo de cada uno. Solo
- * pinta: las cantidades y el total los lleva el paso de confirmacion. Un
- * adicional suma precio, nunca tiempo.
+ * pinta: las cantidades y el total los lleva quien lo usa. Un adicional suma
+ * precio, nunca tiempo.
  */
 export const BookingAddonsPicker: React.FC<BookingAddonsPickerProps> = ({
   addons,
   quantities,
   onChange,
   disabled = false,
-  title = 'Adicionales'
+  title = 'Adicionales',
+  id
 }) => {
   // Un id por bloque: con varios servicios hay un picker por servicio.
   const titleId = useId()
   if (addons.length === 0) return null
   return (
     <section
+      id={id}
       className="p-4 border space-y-3"
       style={createBookingAccentBoxStyle('#ffffff', '#e5e7eb')}
       aria-labelledby={titleId}
     >
       <div className="flex items-center gap-2">
-        <Sparkles className="w-4 h-4 text-orange-500" />
+        <Sparkles className="w-4 h-4" style={{ color: colors2000s.text.secondary }} />
         <h3 id={titleId} className="text-[10px] font-black uppercase tracking-widest text-gray-400">
           {title}
         </h3>
@@ -77,7 +81,7 @@ export const BookingAddonsPicker: React.FC<BookingAddonsPickerProps> = ({
                   aria-label={`Quitar uno de ${addon.name}`}
                   disabled={disabled || quantity <= 0}
                   onClick={() => onChange(addon.id, quantity - 1)}
-                  className="w-8 h-8 rounded-full flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed"
+                  className="w-11 h-11 rounded-full flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed"
                   style={stepperButtonStyle}
                 >
                   <Minus className="w-4 h-4" />
@@ -94,7 +98,7 @@ export const BookingAddonsPicker: React.FC<BookingAddonsPickerProps> = ({
                   aria-label={`Agregar uno de ${addon.name}`}
                   disabled={disabled || quantity >= addon.maxQuantity}
                   onClick={() => onChange(addon.id, quantity + 1)}
-                  className="w-8 h-8 rounded-full flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed"
+                  className="w-11 h-11 rounded-full flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed"
                   style={stepperButtonStyle}
                 >
                   <Plus className="w-4 h-4" />

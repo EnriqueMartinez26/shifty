@@ -1,19 +1,22 @@
 import React from 'react'
 
-import { CalendarCheck, Check, Clock3, MapPin, Phone, Store, X } from 'lucide-react'
+import { Check, Clock3, X } from 'lucide-react'
 import { useNavigate, useParams, useSearchParams } from 'react-router'
 
+import { BookingPriorDesignAfterPayment } from '@presentation/components/organisms/booking/BookingPriorDesign'
 import { BookingWizardContainer } from '@presentation/components/organisms/booking/BookingWizardContainer'
 import {
   initialStepFor,
   resolveBookingPreselect
 } from '@presentation/components/organisms/booking/deepLink'
 import { STEP_CONFIRMATION } from '@presentation/components/organisms/booking/stepFlow'
+import { StoreHeader } from '@presentation/components/organisms/storefront/StoreHeader'
 import { useBookingStepParam } from '@presentation/hooks/useBookingStepParam'
+import { brandCssVariables, brandCtaStyle, resolveBrandTheme } from '@presentation/lib/brandTheme'
 
-import { buildWaMeUrl } from '@shared/utils/whatsAppPhone'
+import { readPriorDesignHandoff } from '@shared/utils/priorDesignHandoff'
 
-import { buttonStyles2000s, colors2000s } from '../../theme/colors'
+import { colors2000s } from '../../theme/colors'
 import LegalFooterLinks from '../components/navigation/LegalFooterLinks'
 import { NotFoundScreen } from '../components/organisms/NotFoundScreen'
 import { isStoreMissing, StoreLoadError } from '../components/organisms/StoreLoadError'
@@ -26,29 +29,6 @@ import {
 } from '../hooks/usePublic'
 
 const LEGAL_FOOTER_TARGET_CLASSES = '[&_a]:inline-flex [&_a]:min-h-11 [&_a]:items-center [&_a]:px-1'
-
-/**
- * WhatsApp de la tienda: texto libre que carga el dueno. Si no se puede leer
- * como un numero confiable se muestra tal cual, sin link: un wa.me roto
- * mandaba la consulta a otro pais.
- */
-const StoreWhatsAppContact: React.FC<{ phone: string; storeName: string }> = ({
-  phone,
-  storeName
-}) => {
-  const href = buildWaMeUrl(phone, `Hola ${storeName}! Quiero consultar por un turno.`)
-  if (!href) return <span>{phone}</span>
-  return (
-    <a
-      href={href}
-      target="_blank"
-      rel="noreferrer"
-      className="inline-flex min-h-11 min-w-11 max-w-full items-center justify-center break-all rounded-sm px-1 py-2 underline underline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-orange-500"
-    >
-      {phone}
-    </a>
-  )
-}
 
 const PublicBooking: React.FC = () => {
   const { slug = '' } = useParams()
@@ -117,200 +97,180 @@ const PublicBooking: React.FC = () => {
     )
   }
 
+  const brand = resolveBrandTheme(store.primary_color)
+  const header = (
+    <StoreHeader
+      name={store.name}
+      logoUrl={store.logo_url}
+      coverUrl={store.cover_url}
+      coverPosition={store.cover_position}
+      whatsappNumber={store.whatsapp_number}
+      misTurnosHref={`/b/${store.slug}/mis-turnos`}
+      brand={brand}
+    />
+  )
+
   if (paymentId) {
     const payment = paymentStatus.data
     const approved =
       payment?.payment_status === 'approved' && payment.appointment_status === 'confirmed'
     const failed = ['rejected', 'expired', 'refunded'].includes(payment?.payment_status || '')
+    // Diseño previo (S7): el resumen que guardo el paso de confirmacion antes
+    // de ir a MP, solo para este turno y mientras el pago no fallo.
+    const priorDesign =
+      payment && !failed
+        ? readPriorDesignHandoff(store.public_id, payment.appointment_public_id)
+        : null
     return (
+      // La vuelta de Mercado Pago lleva la tienda y su color (S3) con la misma
+      // vidriera que la reserva (S9): el nombre sigue siendo el h1 y el estado
+      // del pago va debajo. Sin margen lateral en el celular: la portada va de
+      // borde a borde y el contenido pone el suyo.
       <main
-        className="min-h-screen grid place-items-center px-4"
-        style={{ background: colors2000s.bg.primary }}
+        className="min-h-screen pb-8 sm:px-6 sm:pb-12"
+        style={{ ...brandCssVariables(brand), background: colors2000s.bg.primary }}
       >
-        <section
-          className="w-full max-w-xl rounded-lg bg-white p-4 sm:p-8 text-center space-y-5"
-          style={{ boxShadow: colors2000s.shadows.outer }}
-        >
-          {approved ? (
-            <Check className="w-16 h-16 mx-auto" color={colors2000s.status.success.light} />
-          ) : failed ? (
-            <X className="w-16 h-16 mx-auto" color={colors2000s.status.danger.light} />
-          ) : (
-            <Clock3
-              className="w-16 h-16 mx-auto animate-pulse"
-              color={colors2000s.status.warning.light}
-            />
-          )}
-          <h1 className="text-2xl font-black uppercase tracking-tight">
-            {approved
-              ? 'Reserva confirmada'
-              : failed
-                ? 'La seña no fue aprobada'
-                : 'Estamos validando tu pago'}
-          </h1>
-          <p className="text-sm font-bold" style={{ color: colors2000s.text.secondary }}>
-            {approved
-              ? 'Mercado Pago acreditó la seña y tu turno quedó reservado.'
-              : failed
-                ? 'El turno no fue confirmado. Podés volver a intentarlo desde la tienda.'
-                : paymentStatus.pollingStopped
-                  ? 'Todavía no recibimos la confirmación del pago. Si ya pagaste, tu turno se confirma cuando Mercado Pago avise; podés volver a consultar o hablar con la tienda.'
-                  : 'No cierres esta pantalla. El turno se confirma cuando Mercado Pago nos avisa del pago.'}
-          </p>
-          {paymentStatus.pollingStopped && (
-            // Pasados 30 min el sondeo corta (F4-05); consultar de nuevo es a
-            // pedido. Solo relee el estado: confirmar es del webhook (regla 7).
+        {header}
+        <div className="px-4 sm:px-0">
+          <section
+            className="mx-auto mt-6 w-full max-w-2xl rounded-lg bg-white p-4 sm:p-8 text-center space-y-5"
+            style={{ boxShadow: colors2000s.shadows.outer }}
+          >
+            {approved ? (
+              <Check className="w-16 h-16 mx-auto" color={colors2000s.status.success.light} />
+            ) : failed ? (
+              <X className="w-16 h-16 mx-auto" color={colors2000s.status.danger.light} />
+            ) : (
+              <Clock3
+                className="w-16 h-16 mx-auto animate-pulse"
+                color={colors2000s.status.warning.light}
+              />
+            )}
+            <h2 className="text-2xl font-black uppercase tracking-tight">
+              {approved
+                ? 'Reserva confirmada'
+                : failed
+                  ? 'La seña no fue aprobada'
+                  : 'Estamos validando tu pago'}
+            </h2>
+            <p className="text-sm font-bold" style={{ color: colors2000s.text.secondary }}>
+              {approved
+                ? 'Mercado Pago acreditó la seña y tu turno quedó reservado.'
+                : failed
+                  ? 'El turno no fue confirmado. Podés volver a intentarlo desde la tienda.'
+                  : paymentStatus.pollingStopped
+                    ? 'Todavía no recibimos la confirmación del pago. Si ya pagaste, tu turno se confirma cuando Mercado Pago avise; podés volver a consultar o hablar con la tienda.'
+                    : 'No cierres esta pantalla. El turno se confirma cuando Mercado Pago nos avisa del pago.'}
+            </p>
+            {priorDesign && (
+              <BookingPriorDesignAfterPayment
+                handoff={priorDesign}
+                storeName={store.name}
+                whatsappNumber={store.whatsapp_number}
+              />
+            )}
+            {paymentStatus.pollingStopped && (
+              // Pasados 30 min el sondeo corta (F4-05); consultar de nuevo es a
+              // pedido. Solo relee el estado: confirmar es del webhook (regla 7).
+              <button
+                type="button"
+                onClick={() => void paymentStatus.refetch()}
+                disabled={paymentStatus.isFetching}
+                className="w-full min-h-11 py-4 rounded-xl font-black uppercase tracking-widest text-xs border disabled:opacity-60"
+                style={{
+                  borderColor: colors2000s.border.default,
+                  color: colors2000s.text.primary
+                }}
+              >
+                Volver a consultar
+              </button>
+            )}
+            {paymentStatus.isError && (
+              <p
+                role="alert"
+                className="text-sm font-bold"
+                style={{ color: colors2000s.status.danger.dark }}
+              >
+                No pudimos consultar el estado del pago. Actualizá la página en unos instantes.
+              </p>
+            )}
             <button
               type="button"
-              onClick={() => void paymentStatus.refetch()}
-              disabled={paymentStatus.isFetching}
-              className="w-full min-h-11 py-4 rounded-xl font-black uppercase tracking-widest text-xs border disabled:opacity-60"
-              style={{
-                borderColor: colors2000s.border.default,
-                color: colors2000s.text.primary
-              }}
+              // Sin payment_id en la URL se monta un wizard nuevo (estado y clave de
+              // idempotencia nuevos) sin recargar la SPA (F11b-20).
+              onClick={() => void navigate(`/booking/${slug}`)}
+              className="w-full min-h-11 py-4 rounded-xl border font-black uppercase tracking-widest text-xs"
+              style={brandCtaStyle}
             >
-              Volver a consultar
+              Volver a la tienda
             </button>
-          )}
-          {paymentStatus.isError && (
-            <p
-              role="alert"
-              className="text-sm font-bold"
-              style={{ color: colors2000s.status.danger.dark }}
-            >
-              No pudimos consultar el estado del pago. Actualizá la página en unos instantes.
-            </p>
-          )}
-          <button
-            type="button"
-            // Sin payment_id en la URL se monta un wizard nuevo (estado y clave de
-            // idempotencia nuevos) sin recargar la SPA (F11b-20).
-            onClick={() => void navigate(`/booking/${slug}`)}
-            className="w-full min-h-11 py-4 rounded-xl text-white font-black uppercase tracking-widest text-xs"
-            style={buttonStyles2000s.selected}
-          >
-            Volver a la tienda
-          </button>
-          <LegalFooterLinks className={`pt-2 ${LEGAL_FOOTER_TARGET_CLASSES}`} />
-        </section>
+            <LegalFooterLinks className={`pt-2 ${LEGAL_FOOTER_TARGET_CLASSES}`} />
+          </section>
+        </div>
       </main>
     )
   }
 
+  // En la confirmacion el boton de pago queda fijo al pie en el celular
+  // (BookingConfirmationCard): la pagina reserva su alto, gesto de inicio
+  // incluido, para que no tape los links del pie al final. Arriba no hay
+  // margen: la portada toca el borde (S9).
+  const bottomPadding =
+    bookingStep.step === STEP_CONFIRMATION
+      ? 'pb-[calc(8rem+env(safe-area-inset-bottom))] sm:pb-12'
+      : 'pb-8 sm:pb-12'
+
   return (
+    // Sin margen lateral en el celular: la portada va de borde a borde y el
+    // contenido de abajo pone el suyo.
     <main
-      className="min-h-screen py-8 px-4 sm:py-12 sm:px-6 lg:px-8"
+      className={`min-h-screen sm:px-6 lg:px-8 ${bottomPadding}`}
       style={{ background: colors2000s.bg.primary }}
     >
-      {/* Header Info */}
-      <div className="max-w-2xl mx-auto mb-8 text-center duration-700">
-        <div
-          className="inline-flex items-center justify-center w-16 h-16 rounded-md text-white mb-4 transform -rotate-6 border"
-          style={{
-            background: `linear-gradient(135deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`,
-            borderColor: colors2000s.orange.accent,
-            boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerOrange}`
-          }}
-        >
-          <Store className="w-8 h-8 group-hover:scale-110 transition-transform duration-300" />
-        </div>
-
-        <h1
-          className="break-words text-3xl sm:text-4xl lg:text-5xl font-black tracking-tighter uppercase mb-4"
-          style={{ color: colors2000s.orange.heading }}
-        >
-          Reservar turno
-        </h1>
-
-        <div className="flex flex-col items-stretch justify-center gap-3 text-xs font-black uppercase tracking-widest sm:flex-row sm:flex-wrap sm:items-center sm:gap-4">
+      {header}
+      <div className="mt-6 px-4 sm:mt-8 sm:px-0">
+        {store.description && (
           <div
-            className="flex min-h-11 w-full max-w-full items-center gap-2 break-words px-3 py-2.5 rounded-md border sm:w-auto sm:px-4"
+            className="max-w-2xl mx-auto mb-6 rounded-lg p-6 text-center border"
             style={{
               background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
               borderColor: colors2000s.border.default,
-              boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`,
-              color: colors2000s.text.primary
+              boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`
             }}
           >
-            <MapPin size={14} className="text-orange-500 stroke-[2.5px]" />
-            <span className="min-w-0 break-words">{store.name}</span>
+            <p
+              className="text-sm font-bold leading-relaxed"
+              style={{ color: colors2000s.text.primary }}
+            >
+              {store.description}
+            </p>
           </div>
+        )}
 
-          <div
-            className="flex min-h-11 w-full max-w-full items-center gap-2 break-words px-3 py-2.5 rounded-md border sm:w-auto sm:px-4"
-            style={{
-              background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
-              borderColor: colors2000s.border.default,
-              boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`,
-              color: colors2000s.text.primary
-            }}
-          >
-            <Phone size={14} className="text-orange-500 stroke-[2.5px]" />
-            {store.whatsapp_number ? (
-              <StoreWhatsAppContact phone={store.whatsapp_number} storeName={store.name} />
-            ) : (
-              <span>Reserva por web disponible</span>
-            )}
-          </div>
+        {/* The Wizard Component */}
+        <BookingWizardContainer
+          store={store}
+          preselect={preselect}
+          step={bookingStep.step}
+          onStepChange={bookingStep.changeStep}
+        />
 
-          <a
-            href={`/b/${store.slug}/mis-turnos`}
-            className="flex min-h-11 w-full items-center justify-center gap-2 px-3 py-2.5 rounded-xl border sm:w-auto sm:px-4"
-            style={{
-              background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
-              borderColor: colors2000s.border.default,
-              boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`,
-              color: colors2000s.text.primary
-            }}
-          >
-            <CalendarCheck size={14} className="text-orange-500 stroke-[2.5px]" />
-            <span>Mis turnos</span>
-          </a>
-        </div>
-      </div>
-
-      {store.description && (
-        <div
-          className="max-w-2xl mx-auto mb-6 rounded-lg p-6 text-center border"
-          style={{
-            background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
-            borderColor: colors2000s.border.default,
-            boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`
-          }}
-        >
-          <p
-            className="text-sm font-bold leading-relaxed"
-            style={{ color: colors2000s.text.primary }}
-          >
-            {store.description}
-          </p>
-        </div>
-      )}
-
-      {/* The Wizard Component */}
-      <BookingWizardContainer
-        store={store}
-        preselect={preselect}
-        step={bookingStep.step}
-        onStepChange={bookingStep.changeStep}
-      />
-
-      {/* Footer minimalista. En el paso de confirmacion la politica de seña
+        {/* Footer minimalista. En el paso de confirmacion la politica de seña
           se muestra completa junto a la seña, antes de aceptar y reservar:
           repetir aca que existe era ruido. Terminos y privacidad quedan en
           todos los pasos. */}
-      <div className="max-w-2xl mx-auto mt-12 text-center space-y-3">
-        <LegalFooterLinks
-          depositPolicy={bookingStep.step === STEP_CONFIRMATION ? null : store.deposit_policy}
-          className={LEGAL_FOOTER_TARGET_CLASSES}
-        />
-        <p
-          className="text-[10px] font-black uppercase tracking-widest"
-          style={{ color: colors2000s.text.secondary }}
-        >
-          POWERED BY <span className="text-orange-500 font-extrabold">SHIFTY</span>
-        </p>
+        <div className="max-w-2xl mx-auto mt-12 text-center space-y-3">
+          <LegalFooterLinks
+            depositPolicy={bookingStep.step === STEP_CONFIRMATION ? null : store.deposit_policy}
+            className={LEGAL_FOOTER_TARGET_CLASSES}
+          />
+          <p
+            className="text-[10px] font-black uppercase tracking-widest"
+            style={{ color: colors2000s.text.secondary }}
+          >
+            POWERED BY <span className="text-brand-accent font-extrabold">SHIFTY</span>
+          </p>
+        </div>
       </div>
     </main>
   )

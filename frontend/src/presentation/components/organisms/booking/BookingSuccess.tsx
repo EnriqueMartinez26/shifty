@@ -1,23 +1,21 @@
-import React from 'react'
+import React, { useId } from 'react'
 
-import { Briefcase, Calendar, Check, Clock, ExternalLink } from 'lucide-react'
+import { Briefcase, Calendar, Check, Clock, ExternalLink, UserRound } from 'lucide-react'
 
 import { formatAddonLabel } from '@domain/value-objects/AddonSelection'
 
-import type { BookingConfirmation } from '@application/services/PublicBookingService'
+import type { BookingConfirmation, PublicService } from '@application/services/PublicBookingService'
 
-import {
-  formatArgentinaDateDisplay,
-  formatArgentinaDayHeading,
-  formatArgentinaTime
-} from '@shared/utils/argentinaTime'
+import { formatArgentinaDateDisplay } from '@shared/utils/argentinaTime'
 import { formatCurrency } from '@shared/utils/currency'
 import { asSafeHttpsUrl } from '@shared/utils/safeUrl'
 import { buildWaMeUrl } from '@shared/utils/whatsAppPhone'
 
 import { BookingNoEmailActions, bookedSummary } from './BookingNoEmailActions'
+import { BookingPriorDesign, turnWhenLabel, WhatsAppLinkButton } from './BookingPriorDesign'
 import type { BookingWizardState } from './types'
-import { colors2000s, orangeCtaGradient } from '../../../../theme/colors'
+import { colors2000s } from '../../../../theme/colors'
+import { brandCtaStyle } from '../../../lib/brandTheme'
 
 // Estado del cobro en castellano: el cliente leia "Estado: pending".
 const PAYMENT_STATUS_LABELS: Record<string, string> = {
@@ -31,14 +29,6 @@ const PAYMENT_STATUS_LABELS: Record<string, string> = {
 
 const paymentStatusLabel = (status: string | null | undefined): string =>
   status ? (PAYMENT_STATUS_LABELS[status] ?? status) : 'pendiente'
-
-/** "sábado 12/10 a las 15:00" en hora argentina, o null si no hay plazo. */
-const deadlineLabel = (deadline: string | null | undefined): string | null => {
-  if (!deadline) return null
-  const day = formatArgentinaDayHeading(deadline)
-  const time = formatArgentinaTime(deadline)
-  return day && time ? `${day} a las ${time}` : null
-}
 
 interface ServicePriceLine {
   key: string
@@ -93,6 +83,11 @@ interface BookingSuccessProps {
   storeSlug?: string
   storeName: string
   whatsappNumber?: string | null
+  /**
+   * Servicios del turno (principal y sumados) segun el catalogo publico: de
+   * aca sale si alguno pide diseño previo (S7). Sin ellos no se muestra.
+   */
+  bookedServices?: readonly Pick<PublicService, 'requires_prior_design' | 'prior_design_message'>[]
 }
 
 /** Pantalla de exito de la reserva; BookingStepConfirmation decide cuando se muestra. */
@@ -101,13 +96,15 @@ export const BookingSuccess: React.FC<BookingSuccessProps> = ({
   bookingState,
   storeSlug,
   storeName,
-  whatsappNumber
+  whatsappNumber,
+  bookedServices = []
 }) => {
+  const detailsHeadingId = useId()
   // Seña obligatoria que se paga por WhatsApp (decision de Mateo, 2026-10-03):
   // el canal viene explicito en la respuesta (antes se inferia de la falta de
   // link). La tienda la confirma a mano cuando le pagan, hasta el plazo.
   const isWhatsappDeposit = confirmation.deposit_channel === 'whatsapp'
-  const whatsappDeadline = isWhatsappDeposit ? deadlineLabel(confirmation.deposit_deadline) : null
+  const whatsappDeadline = isWhatsappDeposit ? turnWhenLabel(confirmation.deposit_deadline) : null
   const depositLabel = confirmation.payment_amount
     ? formatCurrency(Number(confirmation.payment_amount))
     : null
@@ -120,6 +117,10 @@ export const BookingSuccess: React.FC<BookingSuccessProps> = ({
     whatsappNumber,
     `Hola ${storeName}, reservé el turno ${confirmation.public_id ?? ''} para el ${formatArgentinaDateDisplay(bookingState.date ?? '')} a las ${bookingState.startTime}. ${paymentRequest}`
   )
+  // Quien atiende (S5): el de la respuesta; si no vino, el del horario elegido.
+  // Una cancha o sala no es "un profesional".
+  const staffName = confirmation.staff_name?.trim() || bookingState.assignedStaff?.name.trim()
+  const staffLabel = bookingState.assignedStaff?.isResource ? 'Cancha / sala' : 'Profesional'
   const isPendingPayment = confirmation.status === 'pending_payment'
   const isPendingReview = confirmation.status === 'pending'
   // Sin email (propuesta por Mateo, 2026-10-16): no hay avisos ni "Mis
@@ -171,7 +172,7 @@ export const BookingSuccess: React.FC<BookingSuccessProps> = ({
 
       <h2
         className="text-3xl font-black uppercase tracking-tight leading-none mb-2"
-        style={{ color: colors2000s.orange.accent }}
+        style={{ color: colors2000s.text.primary }}
       >
         {title}
       </h2>
@@ -182,7 +183,10 @@ export const BookingSuccess: React.FC<BookingSuccessProps> = ({
       )}
       {subtitle && <p className="text-sm font-bold text-gray-500 mb-10">{subtitle}</p>}
 
-      <div
+      {/* El detalle completo del turno vive aca desde S5: el paso de
+          confirmacion lo resume en una linea. */}
+      <section
+        aria-labelledby={detailsHeadingId}
         className="w-full rounded-lg p-6 text-left border"
         style={{
           background: '#ffffff',
@@ -190,16 +194,20 @@ export const BookingSuccess: React.FC<BookingSuccessProps> = ({
           boxShadow: colors2000s.shadows.insetDark
         }}
       >
-        <h3 className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-4 ml-1">
+        <h3
+          id={detailsHeadingId}
+          className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-4 ml-1"
+        >
           Detalles del Turno
         </h3>
 
         <div className="grid gap-4">
           <div className="flex items-center gap-3">
             <div
-              className="p-2.5 rounded-md text-orange-500"
+              className="p-2.5 rounded-md"
               style={{
                 background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
+                color: colors2000s.text.primary,
                 boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`
               }}
             >
@@ -239,9 +247,10 @@ export const BookingSuccess: React.FC<BookingSuccessProps> = ({
           {(confirmation.services_label || confirmation.service_name) && (
             <div className="flex items-center gap-3">
               <div
-                className="p-2.5 rounded-md text-orange-500"
+                className="p-2.5 rounded-md"
                 style={{
                   background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
+                  color: colors2000s.text.primary,
                   boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`
                 }}
               >
@@ -253,6 +262,29 @@ export const BookingSuccess: React.FC<BookingSuccessProps> = ({
                 </p>
                 <p className="font-black text-gray-700 text-lg leading-tight break-words">
                   {confirmation.services_label || confirmation.service_name}
+                </p>
+              </div>
+            </div>
+          )}
+
+          {staffName && (
+            <div className="flex items-center gap-3">
+              <div
+                className="p-2.5 rounded-md"
+                style={{
+                  background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
+                  color: colors2000s.text.primary,
+                  boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`
+                }}
+              >
+                <UserRound size={18} className="stroke-[2.5px]" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-[9px] font-black uppercase tracking-wider text-gray-400">
+                  {staffLabel}
+                </p>
+                <p className="font-black text-gray-700 text-lg leading-tight break-words">
+                  {staffName}
                 </p>
               </div>
             </div>
@@ -314,7 +346,7 @@ export const BookingSuccess: React.FC<BookingSuccessProps> = ({
             </div>
           )}
         </div>
-      </div>
+      </section>
 
       {confirmation.payment_link && (
         <a
@@ -322,34 +354,18 @@ export const BookingSuccess: React.FC<BookingSuccessProps> = ({
           target="_blank"
           rel="noreferrer"
           className="w-full mt-6 font-black py-4 rounded-xl transition-all uppercase tracking-widest text-xs border cursor-pointer select-none inline-flex items-center justify-center gap-2"
-          style={{
-            background: orangeCtaGradient,
-            borderColor: colors2000s.orange.dark,
-            color: colors2000s.text.onOrangeSelection,
-            boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerOrange}`
-          }}
+          style={brandCtaStyle}
         >
           Ir a pagar
           <ExternalLink className="w-4 h-4" />
         </a>
       )}
 
-      {whatsappHref && !confirmation.payment_link && (
-        <a
-          href={whatsappHref}
-          target="_blank"
-          rel="noreferrer"
-          className="w-full mt-6 font-black py-4 rounded-xl transition-all uppercase tracking-widest text-xs border cursor-pointer select-none inline-flex items-center justify-center gap-2"
-          style={{
-            background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
-            borderColor: colors2000s.border.default,
-            color: colors2000s.orange.accent,
-            boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`
-          }}
-        >
-          Coordinar el pago por WhatsApp
-          <ExternalLink className="w-4 h-4" />
-        </a>
+      {/* Solo con una seña que pagar fuera de MP: payment_required es el turno
+          pending_payment con cobro vivo (por WhatsApp, o sin canal en una
+          respuesta vieja). Sin seña no hay pago que coordinar. */}
+      {whatsappHref && confirmation.payment_required && !confirmation.payment_link && (
+        <WhatsAppLinkButton href={whatsappHref}>Coordinar el pago por WhatsApp</WhatsAppLinkButton>
       )}
 
       {isWhatsappDeposit && !whatsappHref && (
@@ -357,6 +373,16 @@ export const BookingSuccess: React.FC<BookingSuccessProps> = ({
           Comunicate con {storeName} para pagar la seña.
         </p>
       )}
+
+      {/* S7: el diseño va por WhatsApp en cualquier rama; el pago no cambia. */}
+      <BookingPriorDesign
+        services={bookedServices}
+        confirmation={confirmation}
+        clientName={confirmation.client_name?.trim() || bookingState.client.name}
+        when={turnWhenLabel(confirmation.starts_at)}
+        storeName={storeName}
+        whatsappNumber={whatsappNumber}
+      />
 
       {withoutEmail && (
         <BookingNoEmailActions

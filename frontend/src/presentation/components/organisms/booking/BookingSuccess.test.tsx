@@ -1,6 +1,6 @@
 import React from 'react'
 
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 
 import type { BookingConfirmation } from '@application/services/PublicBookingService'
 
@@ -149,8 +149,34 @@ describe('BookingSuccess', () => {
       expect(screen.queryByText(COORDINAR)).not.toBeInTheDocument()
     })
 
-    it('sin link de pago ofrece coordinar por WhatsApp con el numero de la tienda', () => {
-      render(<BookingSuccess {...props({ whatsappNumber: '+54 9 11 5555-0000' })} />)
+    // QA 2026-10-21: un turno confirmado sin seña ofrecia "Coordinar el pago".
+    it.each([
+      ['confirmada', 'confirmed'],
+      ['pendiente de revision', 'pending']
+    ])('%s sin seña no ofrece coordinar un pago que no existe', (_caso, status) => {
+      render(
+        <BookingSuccess
+          {...props({
+            whatsappNumber: '+54 9 11 5555-0000',
+            confirmation: confirmacion({ status })
+          })}
+        />
+      )
+
+      expect(screen.queryByRole('link', { name: IR_A_PAGAR })).not.toBeInTheDocument()
+      expect(screen.queryByRole('link', { name: COORDINAR })).not.toBeInTheDocument()
+    })
+
+    it('con seña requerida y sin link de pago ofrece coordinar por WhatsApp con la tienda', () => {
+      render(
+        <BookingSuccess
+          {...props({
+            whatsappNumber: '+54 9 11 5555-0000',
+            // Una respuesta sin canal (backend anterior) con la seña pendiente.
+            confirmation: confirmacion({ status: 'pending_payment', payment_required: true })
+          })}
+        />
+      )
 
       expect(screen.queryByRole('link', { name: IR_A_PAGAR })).not.toBeInTheDocument()
       expect(screen.getByRole('link', { name: COORDINAR }).getAttribute('href')).toMatch(
@@ -409,6 +435,73 @@ describe('BookingSuccess: adicionales', () => {
   })
 })
 
+// S5 (2026-10-21): el detalle completo pasa del paso de confirmacion a esta
+// pantalla, con el profesional que antes faltaba.
+describe('BookingSuccess: detalle completo del turno', () => {
+  const detalle = () => screen.getByRole('region', { name: 'Detalles del Turno' })
+
+  it('muestra profesional, servicios, adicionales, total y la seña pendiente', () => {
+    render(
+      <BookingSuccess
+        {...props({
+          confirmation: confirmacion({
+            status: 'pending_payment',
+            staff_name: 'Natalia',
+            service_name: 'Semipermanente',
+            service_price: 20000,
+            final_price: 23000,
+            addons_amount: 3000,
+            addons: [
+              { addon_id: 'deco', name: 'Decoración', unit_price: 1000, quantity: 3, amount: 3000 }
+            ],
+            payment_required: true,
+            deposit_channel: 'whatsapp',
+            payment_amount: 6900,
+            payment_status: 'pending'
+          })
+        })}
+      />
+    )
+
+    expect(within(detalle()).getByText('Profesional')).toBeInTheDocument()
+    expect(within(detalle()).getByText('Natalia')).toBeInTheDocument()
+    expect(within(detalle()).getByText('Semipermanente')).toBeInTheDocument()
+    expect(within(detalle()).getByText(/Decoración x3:/)).toHaveTextContent('3.000')
+    expect(within(detalle()).getByText(/Total final:/)).toHaveTextContent('23.000')
+    expect(within(detalle()).getByText('Seña a pagar por WhatsApp')).toBeInTheDocument()
+    expect(within(detalle()).getByText(/6\.900/)).toBeInTheDocument()
+    expect(within(detalle()).getByText('Estado: pendiente')).toBeInTheDocument()
+  })
+
+  it('una cancha o sala no se presenta como profesional', () => {
+    render(
+      <BookingSuccess
+        {...props({
+          bookingState: estado({ assignedStaff: { name: 'Cancha 1', isResource: true } }),
+          confirmation: confirmacion({ staff_name: 'Cancha 1' })
+        })}
+      />
+    )
+
+    expect(within(detalle()).getByText('Cancha / sala')).toBeInTheDocument()
+    expect(within(detalle()).getByText('Cancha 1')).toBeInTheDocument()
+    expect(within(detalle()).queryByText('Profesional')).not.toBeInTheDocument()
+  })
+
+  it('sin el nombre de quien atiende no lo inventa', () => {
+    render(
+      <BookingSuccess
+        {...props({
+          bookingState: estado({ assignedStaff: null }),
+          confirmation: confirmacion({ staff_name: '  ' })
+        })}
+      />
+    )
+
+    expect(within(detalle()).queryByText('Profesional')).not.toBeInTheDocument()
+  })
+})
+
 describe('BookingSuccess: reserva sin email', () => {
   const sinEmail = estado({
     client: { name: 'Lucia', email: '  ', phone: '1155550101', notes: '', customFields: {} }
@@ -528,5 +621,134 @@ describe('BookingSuccess: reserva sin email', () => {
     expect(screen.getByRole('heading', { name: 'Reserva registrada' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: COORDINAR })).toBeInTheDocument()
     expect(screen.getByText('Seña a pagar por WhatsApp')).toBeInTheDocument()
+  })
+})
+
+describe('BookingSuccess: diseño previo (S7)', () => {
+  const ENVIAR = 'Enviar mi diseño por WhatsApp'
+  const DEFAULT = 'Mandale tu diseño a Tienda por WhatsApp para que lo vea antes del turno.'
+  const conDiseno = [{ requires_prior_design: true, prior_design_message: null }]
+  // 18:00 UTC = 15:00 en Argentina, viernes 23/10/2026.
+  const turno = confirmacion({
+    public_id: 'apt-77',
+    starts_at: '2026-10-23T18:00:00Z',
+    ends_at: '2026-10-23T18:30:00Z'
+  })
+  const sinEmail = estado({
+    client: { name: 'Lucia', email: '', phone: '1155550101', notes: '', customFields: {} }
+  })
+
+  it('sin un servicio con la opcion no muestra nada nuevo', () => {
+    render(<BookingSuccess {...props({ whatsappNumber: '11 5555 0303' })} />)
+
+    expect(screen.queryByRole('link', { name: ENVIAR })).not.toBeInTheDocument()
+    expect(screen.queryByText(DEFAULT)).not.toBeInTheDocument()
+  })
+
+  it('confirmada sin seña: mensaje y boton con el turno en hora argentina', () => {
+    render(
+      <BookingSuccess
+        {...props({
+          confirmation: turno,
+          whatsappNumber: '11 5555 0303',
+          bookedServices: conDiseno
+        })}
+      />
+    )
+
+    expect(screen.getByText('Reserva Confirmada')).toBeInTheDocument()
+    expect(screen.getByText(DEFAULT)).toBeInTheDocument()
+    const href = screen.getByRole('link', { name: ENVIAR }).getAttribute('href') ?? ''
+    expect(href).toMatch(/^https:\/\/wa\.me\/5491155550303\?text=/)
+    expect(decodeURIComponent(href.split('?text=')[1] ?? '')).toBe(
+      [
+        'Hola Tienda, soy Lucia.',
+        'Reservé Corte para el viernes 23/10 a las 15:00 (turno apt-77).',
+        'Te mando mi diseño para que lo veas antes del turno.'
+      ].join('\n')
+    )
+  })
+
+  it('con seña por Mercado Pago pendiente lo muestra junto a "Ir a pagar"', () => {
+    render(
+      <BookingSuccess
+        {...props({
+          whatsappNumber: '11 5555 0303',
+          bookedServices: conDiseno,
+          confirmation: {
+            ...turno,
+            status: 'pending_payment',
+            payment_required: true,
+            payment_link: 'https://www.mercadopago.com.ar/checkout/v1/redirect?pref_id=1'
+          }
+        })}
+      />
+    )
+
+    expect(screen.getByRole('link', { name: /Ir a pagar/ })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: ENVIAR })).toBeInTheDocument()
+  })
+
+  it('con seña por WhatsApp mantiene el boton de pago y suma el del diseño', () => {
+    render(
+      <BookingSuccess
+        {...props({
+          whatsappNumber: '11 5555 0303',
+          bookedServices: conDiseno,
+          confirmation: {
+            ...turno,
+            status: 'pending_payment',
+            payment_required: true,
+            deposit_channel: 'whatsapp',
+            payment_amount: 3000
+          }
+        })}
+      />
+    )
+
+    expect(screen.getByRole('link', { name: COORDINAR })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: ENVIAR })).toBeInTheDocument()
+  })
+
+  it('sin email tambien lo muestra', () => {
+    render(
+      <BookingSuccess
+        {...props({
+          bookingState: sinEmail,
+          confirmation: turno,
+          whatsappNumber: '11 5555 0303',
+          bookedServices: conDiseno
+        })}
+      />
+    )
+
+    expect(screen.getByText('Turno reservado')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: ENVIAR })).toBeInTheDocument()
+  })
+
+  it('sin un WhatsApp confiable muestra el mensaje sin el boton', () => {
+    render(
+      <BookingSuccess
+        {...props({ confirmation: turno, whatsappNumber: null, bookedServices: conDiseno })}
+      />
+    )
+
+    expect(screen.getByText(DEFAULT)).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: ENVIAR })).not.toBeInTheDocument()
+  })
+})
+
+// S9 (2026-10-22): el titulo y los iconos del detalle eran un tono oscurecido
+// del color de la tienda (amarillo a oliva). Ahora son texto neutro; la marca
+// queda solo en el relleno del boton principal.
+describe('BookingSuccess sin tonos de marca en el texto', () => {
+  it('ningun texto ni icono usa una variable de marca salvo el texto sobre el relleno', () => {
+    const { container } = render(<BookingSuccess {...props({ whatsappNumber: '351 555-1234' })} />)
+
+    const teñidos = Array.from(container.querySelectorAll<HTMLElement>('[style]'))
+      .map((el) => el.style.color)
+      .filter((color) => color.includes('--brand-') && !color.includes('--brand-on-fill'))
+    expect(teñidos).toEqual([])
+    expect(screen.getAllByRole('heading', { level: 2 })[0]?.style.color).toBe('rgb(64, 64, 64)')
   })
 })

@@ -4,6 +4,7 @@ import { ShieldCheck, TriangleAlert } from 'lucide-react'
 
 import type { BookingOtpState } from './types'
 import { buttonStyles2000s, colors2000s } from '../../../../theme/colors'
+import { brandSelectedStyle } from '../../../lib/brandTheme'
 import {
   createBookingAccentBoxStyle,
   createBookingClientInputStyle,
@@ -44,7 +45,7 @@ export const BookingOtpSection: React.FC<BookingOtpSectionProps> = ({
   return (
     <div className="p-5 bg-white space-y-4" style={createBookingSurfaceStyle()}>
       <div className="flex items-start gap-3">
-        <ShieldCheck className="w-5 h-5 mt-0.5 text-orange-500" />
+        <ShieldCheck className="w-5 h-5 mt-0.5" style={{ color: colors2000s.text.primary }} />
         <div>
           <p className="text-sm font-black" style={{ color: colors2000s.text.primary }}>
             Verificamos tu teléfono
@@ -159,7 +160,7 @@ export const BookingOtpSection: React.FC<BookingOtpSectionProps> = ({
             disabled={!otpState.code || isVerifyingOtp}
             onClick={onVerifyOtp}
             className="w-full px-4 py-3 text-xs font-black uppercase tracking-widest disabled:opacity-50"
-            style={{ ...buttonStyles2000s.selected, borderRadius: 6 }}
+            style={{ ...brandSelectedStyle, borderRadius: 6 }}
           >
             {isVerifyingOtp ? 'Verificando...' : 'Verificar código'}
           </button>

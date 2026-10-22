@@ -34,6 +34,12 @@ export interface StoreFeatureFlags {
   multi_service_booking: boolean
 }
 
+/**
+ * Que parte de la portada se ve cuando se recorta (S10.1). `null`: sin
+ * elegir. Opcional en las respuestas: un backend anterior no lo manda.
+ */
+export type CoverPosition = 'top' | 'center' | 'bottom'
+
 export interface StoreSettings {
   public_id: string
   name: string
@@ -42,6 +48,7 @@ export interface StoreSettings {
   logo_url: string | null
   primary_color: string
   cover_url?: string | null
+  cover_position?: CoverPosition | null
   description?: string | null
   whatsapp_number?: string | null
   instagram_url?: string | null
@@ -82,6 +89,7 @@ export interface StoreUpdatePayload {
   logo_url?: string | null
   primary_color?: string
   cover_url?: string | null
+  cover_position?: CoverPosition | null
   description?: string | null
   whatsapp_number?: string | null
   instagram_url?: string | null
@@ -143,9 +151,18 @@ class StoreSettingsService {
     return data
   }
 
-  async uploadLogo(file: File): Promise<StoreMediaUploadResult> {
+  uploadLogo(file: File): Promise<StoreMediaUploadResult> {
+    return this.uploadImage('logo', file)
+  }
+
+  uploadCover(file: File): Promise<StoreMediaUploadResult> {
+    return this.uploadImage('cover', file)
+  }
+
+  /** `kind` es `ALLOWED_KINDS` de backend/modules/stores/media.py. */
+  private async uploadImage(kind: 'logo' | 'cover', file: File): Promise<StoreMediaUploadResult> {
     const form = new FormData()
-    form.append('kind', 'logo')
+    form.append('kind', kind)
     form.append('file', file)
     // Se fuerza multipart (el cliente por defecto manda application/json) para
     // que axios/el navegador arme el boundary; el backend valida por magic bytes.

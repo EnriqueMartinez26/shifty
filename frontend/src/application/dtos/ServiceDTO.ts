@@ -16,6 +16,9 @@ export interface ServiceResponseDTO {
   deposit_type: ServiceDepositType
   deposit_amount: number | null
   is_active: boolean
+  /** Diseño previo (S7). Opcionales: un backend anterior no los manda. */
+  requires_prior_design?: boolean
+  prior_design_message?: string | null
   /** Ordenados por `position`. Opcional: se tolera un payload que no los traiga. */
   addons?: ServiceAddonDTO[]
 }

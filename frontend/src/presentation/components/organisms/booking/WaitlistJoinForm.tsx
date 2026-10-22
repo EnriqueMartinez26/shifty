@@ -7,6 +7,7 @@ import { argentinaLocalToUtcIso, formatArgentinaDateDisplay } from '@shared/util
 
 import { buttonStyles2000s, colors2000s } from '../../../../theme/colors'
 import { useJoinWaitlist } from '../../../hooks/usePublic'
+import { brandSelectedStyle } from '../../../lib/brandTheme'
 import { createBookingInputStyle, createBookingSurfaceStyle } from '../../../lib/surfaceStyles'
 
 interface WaitlistJoinFormProps {
@@ -107,7 +108,7 @@ export const WaitlistJoinForm: React.FC<WaitlistJoinFormProps> = ({
     >
       <p
         className="text-[10px] font-black uppercase tracking-widest"
-        style={{ color: colors2000s.orange.accent }}
+        style={{ color: colors2000s.text.primary }}
       >
         Lista de espera para el {formatArgentinaDateDisplay(dayWindow(date).starts)}
       </p>
@@ -151,7 +152,7 @@ export const WaitlistJoinForm: React.FC<WaitlistJoinFormProps> = ({
         type="submit"
         disabled={join.isPending}
         className="w-full py-3 rounded-xl text-white text-[10px] font-black uppercase tracking-widest disabled:opacity-60"
-        style={buttonStyles2000s.selected}
+        style={brandSelectedStyle}
       >
         {join.isPending ? 'Anotando...' : 'Anotarme'}
       </button>

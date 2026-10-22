@@ -3,7 +3,7 @@ import apiClient from '@infrastructure/http/client'
 import type { BusinessType } from '@shared/types/business'
 
 import { clientTokenConfig, forgetClientToken, rememberClientToken } from './clientToken'
-import type { StoreCustomField } from './StoreSettingsService'
+import type { CoverPosition, StoreCustomField } from './StoreSettingsService'
 
 interface PublicStoreFeatureFlags {
   payments: boolean
@@ -28,6 +28,7 @@ export interface PublicStore {
   cancellation_hours: number
   description?: string | null
   cover_url?: string | null
+  cover_position?: CoverPosition | null
   whatsapp_number?: string | null
   website_url?: string | null
   allow_manual_coordination?: boolean
@@ -57,6 +58,13 @@ export interface PublicService {
   deposit_amount: number | null
   color: string | null
   image_url: string | null
+  /**
+   * Diseño previo (S7): tras reservar, la clienta le manda su diseño a la
+   * tienda por WhatsApp. Opcionales: un backend anterior no los manda y eso
+   * es "no". El mensaje se muestra solo con la opcion prendida.
+   */
+  requires_prior_design?: boolean
+  prior_design_message?: string | null
   /** Adicionales del servicio, ordenados por `position`. */
   addons?: PublicServiceAddon[]
 }

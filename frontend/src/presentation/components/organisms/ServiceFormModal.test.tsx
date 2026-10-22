@@ -618,3 +618,171 @@ describe('ServiceFormModal — adicionales', () => {
     ])
   })
 })
+
+describe('ServiceFormModal — diseño previo (S7)', () => {
+  const conDiseno = (
+    patch: { requires_prior_design?: boolean; prior_design_message?: string | null } = {}
+  ) =>
+    Service.fromPrimitives({
+      ...servicioConSena().toPrimitives(),
+      id: 'svc_1',
+      requires_prior_design: true,
+      prior_design_message: 'Traé tu idea en una foto',
+      ...patch
+    })
+  const repositorio = () =>
+    ({
+      findAll: jest.fn(),
+      findById: jest.fn(),
+      create: jest.fn().mockImplementation(async (created: Service) => created),
+      update: jest.fn().mockImplementation(async () => conDiseno()),
+      delete: jest.fn(),
+      uploadImage: jest.fn(),
+      removeImage: jest.fn()
+    }) as jest.Mocked<IServiceRepository>
+
+  const opcion = () =>
+    screen.getByRole<HTMLInputElement>('checkbox', { name: 'Requiere diseño previo' })
+  const mensaje = () => screen.getByLabelText<HTMLTextAreaElement>('Mensaje para la clienta')
+
+  const editar = (servicio: Service, onSubmit = jest.fn().mockResolvedValue(undefined)) => {
+    render(
+      <ServiceFormModal
+        isOpen
+        onClose={jest.fn()}
+        onSubmit={onSubmit}
+        editingService={servicio}
+        {...sinImagen()}
+      />
+    )
+    return onSubmit
+  }
+
+  const enviado = async (onSubmit: jest.Mock) => {
+    fireEvent.click(screen.getByRole('button', { name: /Guardar/i }))
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1))
+    return onSubmit.mock.calls[0]?.[0] as Record<string, unknown>
+  }
+
+  it('un servicio nuevo arranca sin la opcion y sin el campo del mensaje', () => {
+    render(<ServiceFormModal isOpen onClose={jest.fn()} onSubmit={jest.fn()} {...sinImagen()} />)
+
+    expect(opcion().checked).toBe(false)
+    expect(screen.queryByLabelText('Mensaje para la clienta')).not.toBeInTheDocument()
+  })
+
+  it('al crear con la opcion y un mensaje los manda recortados', async () => {
+    const repo = repositorio()
+    const service = new ServiceService(repo)
+    render(
+      <ServiceFormModal
+        isOpen
+        onClose={jest.fn()}
+        onSubmit={async (data) => {
+          await service.createService(data)
+        }}
+        {...sinImagen()}
+      />
+    )
+
+    fireEvent.change(screen.getByPlaceholderText('Ej: Corte de Cabello Premium'), {
+      target: { value: 'Uñas esculpidas' }
+    })
+    fireEvent.click(opcion())
+    expect(mensaje().getAttribute('placeholder')).toBe(
+      'Si lo dejás vacío: Mandale tu diseño a tu negocio por WhatsApp para que lo vea antes del turno.'
+    )
+    fireEvent.change(mensaje(), { target: { value: '  Mandame una foto de referencia  ' } })
+    fireEvent.click(screen.getByRole('button', { name: /Crear Servicio/i }))
+
+    await waitFor(() => expect(repo.create).toHaveBeenCalledTimes(1))
+    const creado = repo.create.mock.calls[0]?.[0] as Service
+    expect(creado.requiresPriorDesign).toBe(true)
+    expect(creado.priorDesignMessage).toBe('Mandame una foto de referencia')
+  })
+
+  it('al editar arranca con la opcion y el mensaje guardados, con el contador', () => {
+    editar(conDiseno())
+
+    expect(opcion().checked).toBe(true)
+    expect(mensaje().value).toBe('Traé tu idea en una foto')
+    expect(screen.getByText('24/500')).toHaveAttribute('aria-live', 'polite')
+  })
+
+  it('editar el mensaje manda solo el mensaje', async () => {
+    const onSubmit = editar(conDiseno())
+
+    fireEvent.change(mensaje(), { target: { value: 'Otra indicación ' } })
+    const data = await enviado(onSubmit)
+
+    expect(data.priorDesignMessage).toBe('Otra indicación')
+    expect(data).not.toHaveProperty('requiresPriorDesign')
+  })
+
+  it('vaciar el mensaje lo borra (null)', async () => {
+    const onSubmit = editar(conDiseno())
+
+    fireEvent.change(mensaje(), { target: { value: '   ' } })
+    const data = await enviado(onSubmit)
+
+    expect(data.priorDesignMessage).toBeNull()
+  })
+
+  it('editar otra cosa no manda ningun campo del diseño previo', async () => {
+    const onSubmit = editar(conDiseno())
+
+    fireEvent.change(screen.getByDisplayValue('Con lavado'), { target: { value: 'Con secado' } })
+    const data = await enviado(onSubmit)
+
+    expect(data).toMatchObject({ description: 'Con secado' })
+    expect(data).not.toHaveProperty('requiresPriorDesign')
+    expect(data).not.toHaveProperty('priorDesignMessage')
+  })
+
+  it('destildar la opcion la apaga y conserva el mensaje guardado', async () => {
+    const onSubmit = editar(conDiseno())
+
+    fireEvent.click(opcion())
+    expect(screen.queryByLabelText('Mensaje para la clienta')).not.toBeInTheDocument()
+    const data = await enviado(onSubmit)
+
+    expect(data.requiresPriorDesign).toBe(false)
+    expect(data).not.toHaveProperty('priorDesignMessage')
+  })
+
+  it('un mensaje de 501 caracteres se rechaza con el motivo y no llama a la API', async () => {
+    const repo = repositorio()
+    const service = new ServiceService(repo)
+    editar(
+      conDiseno(),
+      jest.fn(async (data) => {
+        await service.updateService('svc_1', data)
+      })
+    )
+
+    fireEvent.change(mensaje(), { target: { value: 'a'.repeat(501) } })
+    fireEvent.click(screen.getByRole('button', { name: /Guardar/i }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'El mensaje del diseño previo no puede superar los 500 caracteres'
+    )
+    expect(repo.update).not.toHaveBeenCalled()
+  })
+
+  it('500 caracteres con espacios alrededor pasan recortados', async () => {
+    const repo = repositorio()
+    const service = new ServiceService(repo)
+    editar(
+      conDiseno(),
+      jest.fn(async (data) => {
+        await service.updateService('svc_1', data)
+      })
+    )
+
+    fireEvent.change(mensaje(), { target: { value: `  ${'a'.repeat(500)}  ` } })
+    fireEvent.click(screen.getByRole('button', { name: /Guardar/i }))
+
+    await waitFor(() => expect(repo.update).toHaveBeenCalledTimes(1))
+    expect(repo.update.mock.calls[0]?.[1]).toMatchObject({ priorDesignMessage: 'a'.repeat(500) })
+  })
+})

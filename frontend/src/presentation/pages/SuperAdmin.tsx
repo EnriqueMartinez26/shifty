@@ -184,10 +184,6 @@ const SuperAdminPage: React.FC = () => {
     setStoreForm({
       name: store.name,
       slug: store.slug,
-      logo_url:
-        overview?.store.public_id === store.public_id
-          ? overview.store.logo_url || ''
-          : store.logo_url || '',
       primary_color: store.primary_color,
       cancellation_hours: String(
         overview?.store.public_id === store.public_id
@@ -325,10 +321,11 @@ const SuperAdminPage: React.FC = () => {
     }
 
     try {
+      // Sin logo_url: el logo lo sube la tienda desde su panel, y mandarlo
+      // desde un formulario sin ese campo lo borraria (el PATCH es parcial).
       const payload = {
         name: storeForm.name.trim(),
         slug: storeForm.slug.trim(),
-        logo_url: storeForm.logo_url.trim() || null,
         primary_color: storeForm.primary_color.trim() || '#ff8c42',
         cancellation_hours: Number(storeForm.cancellation_hours || 0),
         buffer_minutes: Number(storeForm.buffer_minutes || 0),

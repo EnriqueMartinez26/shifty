@@ -182,9 +182,11 @@ export const createBookingChoiceCardStyle = (isSelected: boolean): CSSProperties
 // lo pone la clase Tailwind del boton, esto solo aporta el color). Se deja
 // fuera de createSurfaceStyle a proposito - forzarlo ahi cambiaria que
 // propiedad CSS emite (`border` completo en vez de solo `borderColor`).
+// "Volver" es secundario (QA visual 2026-10-21): superficie neutra para no
+// competir con el boton principal del paso. El color lo pone quien lo usa.
 export const createBookingBackButtonStyle = (): CSSProperties => ({
-  background: SURFACE_BACKGROUNDS.orange,
-  borderColor: colors2000s.orange.accent,
-  boxShadow: SURFACE_SHADOWS.raisedOrange,
-  color: colors2000s.text.onOrangeSelection
+  background: SURFACE_BACKGROUNDS.brand,
+  borderColor: colors2000s.border.default,
+  boxShadow: SURFACE_SHADOWS.raisedSoft,
+  color: colors2000s.text.primary
 })
