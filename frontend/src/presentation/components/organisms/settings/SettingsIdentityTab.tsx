@@ -1,6 +1,8 @@
-import React from 'react'
+import React, { useId } from 'react'
 
 import { ImageIcon, Loader2, Store, Upload } from 'lucide-react'
+
+import type { CoverPosition } from '@application/services/StoreSettingsService'
 
 import type { BusinessType } from '@shared/types/business'
 
@@ -11,6 +13,7 @@ import type { SettingsFormData } from '../../../lib/settingsDraft'
 import { normalizeSlugInput } from '../../../lib/settingsValidation'
 import { createSettingsInputStyle } from '../../../lib/surfaceStyles'
 import { ShareLinksPanel } from '../ShareLinksPanel'
+import { coverObjectPosition } from '../storefront/coverPosition'
 
 type IdentitySettings = Pick<
   SettingsFormData,
@@ -20,6 +23,7 @@ type IdentitySettings = Pick<
   | 'logo_url'
   | 'primary_color'
   | 'cover_url'
+  | 'cover_position'
   | 'whatsapp_number'
   | 'description'
   | 'custom_client_fields'
@@ -74,6 +78,60 @@ const ImageUploadButton: React.FC<{
     />
   </label>
 )
+
+const COVER_POSITION_OPTIONS: { value: CoverPosition; label: string }[] = [
+  { value: 'top', label: 'Arriba' },
+  { value: 'center', label: 'Centro' },
+  { value: 'bottom', label: 'Abajo' }
+]
+
+/**
+ * Que parte de la portada se ve en el portal (S10.1). Radios nativos: el
+ * teclado y el lector de pantalla los manejan solos.
+ */
+const CoverPositionPicker: React.FC<{
+  value: CoverPosition | null
+  onChange: (value: CoverPosition) => void
+}> = ({ value, onChange }) => {
+  const id = useId()
+  return (
+    <div className="space-y-2">
+      <p
+        id={`${id}-label`}
+        className="text-[10px] font-black uppercase tracking-widest"
+        style={{ color: colors2000s.text.secondary }}
+      >
+        Qué parte de la foto se ve
+      </p>
+      <div role="radiogroup" aria-labelledby={`${id}-label`} className="flex flex-wrap gap-2">
+        {COVER_POSITION_OPTIONS.map((option) => {
+          const checked = value === option.value
+          return (
+            <label
+              key={option.value}
+              className="inline-flex min-h-11 min-w-11 cursor-pointer items-center justify-center px-4 py-2.5 text-[11px] font-black uppercase tracking-widest transition-all active:scale-95 focus-within:outline focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-orange-500"
+              style={
+                checked
+                  ? { ...buttonStyles2000s.default, ...buttonStyles2000s.selected }
+                  : buttonStyles2000s.default
+              }
+            >
+              <input
+                type="radio"
+                name={`${id}-cover-position`}
+                value={option.value}
+                checked={checked}
+                onChange={() => onChange(option.value)}
+                className="sr-only"
+              />
+              {option.label}
+            </label>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
 
 const UploadError: React.FC<{ message: string | null }> = ({ message }) =>
   message ? (
@@ -270,11 +328,18 @@ export const SettingsIdentityTab: React.FC<SettingsIdentityTabProps> = ({
             loading="lazy"
             decoding="async"
             className="h-full w-full object-cover"
+            style={{ objectPosition: coverObjectPosition(value.cover_position) }}
           />
         ) : (
           <ImageIcon className="h-8 w-8" style={{ color: colors2000s.text.secondary }} />
         )}
       </div>
+      {value.cover_url && (
+        <CoverPositionPicker
+          value={value.cover_position}
+          onChange={(cover_position) => onChange({ cover_position })}
+        />
+      )}
       <ImageUploadButton
         label="Subir portada"
         uploading={uploadingCover}

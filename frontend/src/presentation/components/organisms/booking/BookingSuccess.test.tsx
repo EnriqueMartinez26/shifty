@@ -737,3 +737,18 @@ describe('BookingSuccess: diseño previo (S7)', () => {
     expect(screen.queryByRole('link', { name: ENVIAR })).not.toBeInTheDocument()
   })
 })
+
+// S9 (2026-10-22): el titulo y los iconos del detalle eran un tono oscurecido
+// del color de la tienda (amarillo a oliva). Ahora son texto neutro; la marca
+// queda solo en el relleno del boton principal.
+describe('BookingSuccess sin tonos de marca en el texto', () => {
+  it('ningun texto ni icono usa una variable de marca salvo el texto sobre el relleno', () => {
+    const { container } = render(<BookingSuccess {...props({ whatsappNumber: '351 555-1234' })} />)
+
+    const teñidos = Array.from(container.querySelectorAll<HTMLElement>('[style]'))
+      .map((el) => el.style.color)
+      .filter((color) => color.includes('--brand-') && !color.includes('--brand-on-fill'))
+    expect(teñidos).toEqual([])
+    expect(screen.getAllByRole('heading', { level: 2 })[0]?.style.color).toBe('rgb(64, 64, 64)')
+  })
+})

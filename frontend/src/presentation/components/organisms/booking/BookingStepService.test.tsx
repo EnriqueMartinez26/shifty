@@ -121,7 +121,7 @@ describe('BookingStepService', () => {
   it.each([
     ['sin color propio', null],
     ['con color propio', '#ffff00']
-  ])('el icono del servicio %s usa la tinta de marca, legible sobre claro', (_caso, color) => {
+  ])('el icono del servicio %s es neutro, legible sobre claro (S9)', (_caso, color) => {
     mockUsePublicServices.mockReturnValue({
       isLoading: false,
       data: [{ ...servicio('corte', 'Corte', 30, 10000), color }]
@@ -130,7 +130,8 @@ describe('BookingStepService', () => {
     render(<BookingStepService storePublicId="store-1" selectedId={null} onSelect={jest.fn()} />)
 
     const avatar = screen.getByRole('button').querySelector('svg.lucide-briefcase')?.parentElement
-    expect(avatar?.getAttribute('style')).toContain('color: var(--brand-ink,')
+    expect(avatar?.getAttribute('style')).not.toContain('--brand')
+    expect(avatar?.style.color).toBe('rgb(64, 64, 64)')
   })
 
   it('sin varios servicios tocar uno lo elige y no muestra la barra', () => {
@@ -390,7 +391,7 @@ describe('BookingStepService con adicionales', () => {
 // S3 (2026-10-21): el servicio elegido se pinta con el color de la tienda
 // (var(--brand-*), fijadas en la raiz del wizard), no con el naranja fijo.
 describe('BookingStepService con el color de la tienda', () => {
-  it('el servicio elegido usa el relleno, el borde y el texto de marca', () => {
+  it('el servicio elegido usa el relleno de marca, su borde y el texto sobre el relleno', () => {
     mockUsePublicServices.mockReturnValue({
       isLoading: false,
       data: [servicio('svc-1', 'Corte', 30, 1000), servicio('svc-2', 'Barba', 20, 900)]
@@ -400,7 +401,8 @@ describe('BookingStepService con el color de la tienda', () => {
 
     const elegido = screen.getByRole('button', { name: /Corte/ })
     expect(elegido.getAttribute('style')).toContain('var(--brand-fill,')
-    expect(elegido.getAttribute('style')).toContain('var(--brand-ink,')
+    expect(elegido.getAttribute('style')).toContain('var(--brand-fill-bottom,')
+    expect(elegido.getAttribute('style')).not.toContain('--brand-ink')
     expect(screen.getByText('Corte').getAttribute('style')).toContain('var(--brand-on-fill,')
     const otro = screen.getByRole('button', { name: /Barba/ })
     expect(otro.getAttribute('style')).not.toContain('var(--brand-fill,')

@@ -12,12 +12,11 @@ import type { PriorDesignHandoff } from '@shared/utils/priorDesignHandoff'
 import { buildWaMeUrl } from '@shared/utils/whatsAppPhone'
 
 import { colors2000s } from '../../../../theme/colors'
-import { brandColor } from '../../../lib/brandTheme'
 
 const whatsAppButtonStyle: React.CSSProperties = {
   background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
   borderColor: colors2000s.border.default,
-  color: brandColor.ink,
+  color: colors2000s.text.primary,
   boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`
 }
 
@@ -125,7 +124,7 @@ export const BookingPriorDesign: React.FC<BookingPriorDesignProps> = ({
         id={headingId}
         className="flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-gray-500"
       >
-        <PenTool size={14} aria-hidden="true" style={{ color: brandColor.ink }} />
+        <PenTool size={14} aria-hidden="true" style={{ color: colors2000s.text.secondary }} />
         Diseño previo
       </h3>
       <p className="text-sm font-bold text-gray-700 mt-2 whitespace-pre-line break-words">

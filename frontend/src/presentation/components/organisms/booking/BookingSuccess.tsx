@@ -15,7 +15,7 @@ import { BookingNoEmailActions, bookedSummary } from './BookingNoEmailActions'
 import { BookingPriorDesign, turnWhenLabel, WhatsAppLinkButton } from './BookingPriorDesign'
 import type { BookingWizardState } from './types'
 import { colors2000s } from '../../../../theme/colors'
-import { brandColor, brandCtaStyle } from '../../../lib/brandTheme'
+import { brandCtaStyle } from '../../../lib/brandTheme'
 
 // Estado del cobro en castellano: el cliente leia "Estado: pending".
 const PAYMENT_STATUS_LABELS: Record<string, string> = {
@@ -172,7 +172,7 @@ export const BookingSuccess: React.FC<BookingSuccessProps> = ({
 
       <h2
         className="text-3xl font-black uppercase tracking-tight leading-none mb-2"
-        style={{ color: brandColor.ink }}
+        style={{ color: colors2000s.text.primary }}
       >
         {title}
       </h2>
@@ -207,7 +207,7 @@ export const BookingSuccess: React.FC<BookingSuccessProps> = ({
               className="p-2.5 rounded-md"
               style={{
                 background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
-                color: brandColor.ink,
+                color: colors2000s.text.primary,
                 boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`
               }}
             >
@@ -250,7 +250,7 @@ export const BookingSuccess: React.FC<BookingSuccessProps> = ({
                 className="p-2.5 rounded-md"
                 style={{
                   background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
-                  color: brandColor.ink,
+                  color: colors2000s.text.primary,
                   boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`
                 }}
               >
@@ -273,7 +273,7 @@ export const BookingSuccess: React.FC<BookingSuccessProps> = ({
                 className="p-2.5 rounded-md"
                 style={{
                   background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
-                  color: brandColor.ink,
+                  color: colors2000s.text.primary,
                   boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`
                 }}
               >

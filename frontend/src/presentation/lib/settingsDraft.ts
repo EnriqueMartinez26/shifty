@@ -29,6 +29,7 @@
  */
 
 import type {
+  CoverPosition,
   StoreCustomField,
   StoreFeatureFlags,
   StoreSettings,
@@ -48,6 +49,8 @@ export type SettingsFormData = {
   business_type: BusinessType
   logo_url: string
   cover_url: string
+  /** `null`: la tienda no eligio encuadre; no es un input de texto. */
+  cover_position: CoverPosition | null
   description: string
   whatsapp_number: string
   instagram_url: string
@@ -94,6 +97,7 @@ export const buildSettingsBase = (
   business_type: store.business_type || 'generic',
   logo_url: store.logo_url || '',
   cover_url: store.cover_url || '',
+  cover_position: store.cover_position ?? null,
   description: store.description || '',
   whatsapp_number: store.whatsapp_number || '',
   instagram_url: store.instagram_url || '',

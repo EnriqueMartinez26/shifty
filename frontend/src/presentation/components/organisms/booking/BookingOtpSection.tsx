@@ -4,7 +4,7 @@ import { ShieldCheck, TriangleAlert } from 'lucide-react'
 
 import type { BookingOtpState } from './types'
 import { buttonStyles2000s, colors2000s } from '../../../../theme/colors'
-import { brandColor, brandSelectedStyle } from '../../../lib/brandTheme'
+import { brandSelectedStyle } from '../../../lib/brandTheme'
 import {
   createBookingAccentBoxStyle,
   createBookingClientInputStyle,
@@ -45,7 +45,7 @@ export const BookingOtpSection: React.FC<BookingOtpSectionProps> = ({
   return (
     <div className="p-5 bg-white space-y-4" style={createBookingSurfaceStyle()}>
       <div className="flex items-start gap-3">
-        <ShieldCheck className="w-5 h-5 mt-0.5" style={{ color: brandColor.ink }} />
+        <ShieldCheck className="w-5 h-5 mt-0.5" style={{ color: colors2000s.text.primary }} />
         <div>
           <p className="text-sm font-black" style={{ color: colors2000s.text.primary }}>
             Verificamos tu teléfono

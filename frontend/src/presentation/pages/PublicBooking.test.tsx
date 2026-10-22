@@ -25,6 +25,7 @@ const TIENDA_SOL = {
     description: null as string | null,
     logo_url: null as string | null,
     cover_url: null as string | null,
+    cover_position: null as 'top' | 'center' | 'bottom' | null,
     primary_color: '#000000',
     whatsapp_number: null as string | null,
     deposit_policy: null as string | null
@@ -150,6 +151,10 @@ describe('PublicBooking al volver del pago', () => {
       '/b/sol/mis-turnos'
     )
     expect(screen.getByRole('main').style.getPropertyValue('--brand-fill')).toBe('#ff70fa')
+    // S9: la misma vidriera que la reserva, con la portada arriba.
+    expect(screen.getByRole('banner').firstElementChild).toBe(
+      screen.getByTestId('store-cover-band')
+    )
     const volver = screen.getByRole('button', { name: 'Volver a la tienda' })
     expect(volver.getAttribute('style')).toContain('var(--brand-fill,')
     expect(volver.getAttribute('style')).toContain('var(--brand-on-fill,')
@@ -315,12 +320,38 @@ describe('PublicBooking: encabezado y portada de la tienda', () => {
     expect(container.querySelector('img[src="/media/cover.webp"]')).toHaveAttribute('alt', '')
   })
 
-  it('sin logo ni portada usa la inicial y la franja con el color de la tienda', () => {
+  // S10.1 (2026-10-22): la tienda elige que parte de la foto se ve.
+  it('la portada se encuadra donde lo eligio la tienda', () => {
+    conTienda({ cover_url: '/media/cover.webp', cover_position: 'bottom' })
+    const { container } = renderEn('/booking/sol')
+
+    const portada = container.querySelector('img[src="/media/cover.webp"]') as HTMLElement
+    expect(portada.style.objectPosition).toBe('center 80%')
+  })
+
+  it('sin logo ni portada usa la inicial y el degradado con el color de la tienda', () => {
     conTienda({ primary_color: '#123456' })
     renderEn('/booking/sol')
 
     expect(screen.getByText('P').style.background).toBe('rgb(18, 52, 86)')
-    expect(screen.getByTestId('store-cover-band').style.background).toBe('rgb(18, 52, 86)')
+    expect(screen.getByTestId('store-cover-band').getAttribute('style')).toContain(
+      'rgba(18, 52, 86,'
+    )
+  })
+
+  // S9 (2026-10-22): la portada va arriba de todo, de borde a borde en el
+  // celular; el resto de la pagina conserva su margen lateral.
+  it('la portada va arriba de todo y el contenido conserva el margen lateral', () => {
+    conTienda({ cover_url: '/media/cover.webp', description: 'Cortes y color.' })
+    const { container } = renderEn('/booking/sol')
+
+    const main = screen.getByRole('main')
+    expect(main).not.toHaveClass('px-4')
+    expect(main).not.toHaveClass('pt-8')
+    expect(main.firstElementChild).toBe(screen.getByRole('banner'))
+    const portada = container.querySelector('img[src="/media/cover.webp"]') as HTMLElement
+    expect(screen.getByRole('banner').contains(portada)).toBe(true)
+    expect(screen.getByText('Cortes y color.').closest('.px-4')).not.toBeNull()
   })
 
   it('sin WhatsApp no dice "Reserva por web disponible"', () => {
@@ -377,7 +408,7 @@ describe('PublicBooking: objetivos táctiles', () => {
     renderEn('/booking/sol?step=1')
 
     expect(screen.getByRole('main')).not.toHaveClass('pb-[calc(8rem+env(safe-area-inset-bottom))]')
-    expect(screen.getByRole('main')).toHaveClass('py-8')
+    expect(screen.getByRole('main')).toHaveClass('pb-8')
   })
 })
 
@@ -503,5 +534,31 @@ describe('PublicBooking: titulo de la pestaña', () => {
     renderEn('/booking/no-existe')
 
     expect(document.title).toBe('Negocio no encontrado · Shifty')
+  })
+})
+
+// Review de PR #250 (2026-10-22): el portal cierra con una sola fuente de
+// color. El acento Shifty (`brand-accent`, colors2000s.orange.accent) pinta el
+// texto chico y los anillos de foco; nada de utilidades orange-* de Tailwind.
+describe('PublicBooking: acento Shifty', () => {
+  afterEach(() => {
+    mockTienda = TIENDA_SOL
+  })
+
+  it('"POWERED BY SHIFTY" usa el acento Shifty para texto chico', () => {
+    renderEn('/booking/sol')
+
+    const marca = screen.getByText('SHIFTY')
+    expect(marca).toHaveClass('text-brand-accent')
+    expect(marca.className).not.toMatch(/orange-\d+/)
+  })
+
+  it('el foco del WhatsApp del encabezado usa el acento Shifty', () => {
+    mockTienda = { ...TIENDA_SOL, data: { ...TIENDA_SOL.data, whatsapp_number: '351 555-1234' } }
+    renderEn('/booking/sol')
+
+    const link = screen.getByRole('link', { name: '351 555-1234' })
+    expect(link).toHaveClass('focus-visible:outline-brand-accent')
+    expect(link.className).not.toMatch(/orange-\d+/)
   })
 })

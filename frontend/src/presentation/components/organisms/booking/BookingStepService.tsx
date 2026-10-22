@@ -100,7 +100,7 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
           ? {
               ...createBookingChoiceCardStyle(true),
               background: brandColor.fillGradient,
-              borderColor: brandColor.ink,
+              borderColor: brandColor.fillBottom,
               boxShadow: `${colors2000s.shadows.insetLight}, ${brandGlowShadow}`
             }
           : createBookingChoiceCardStyle(false)
@@ -119,8 +119,8 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
           boxShadow: isSelected
             ? 'inset 0 1px 2px rgba(255,255,255,0.5)'
             : colors2000s.shadows.insetDark,
-          // La tinta de marca, no el relleno: un color claro no se lee sobre blanco.
-          color: isSelected ? brandColor.onFill : brandColor.ink
+          // Neutro (S9): un tono de marca no se lee igual en cada color de tienda.
+          color: isSelected ? brandColor.onFill : colors2000s.text.primary
         }}
       >
         {svc.image_url ? (
@@ -160,7 +160,7 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
               color: colors2000s.text.primary
             }}
           >
-            <Clock className="w-3.5 h-3.5" style={{ color: brandColor.ink }} />{' '}
+            <Clock className="w-3.5 h-3.5" style={{ color: colors2000s.text.secondary }} />{' '}
             {svc.duration_minutes} min
           </span>
 
@@ -169,7 +169,7 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
             style={{
               background: '#ffffff',
               boxShadow: colors2000s.shadows.insetDark,
-              color: brandColor.ink
+              color: colors2000s.text.primary
             }}
           >
             {formatCurrency(svc.price)}
@@ -214,7 +214,10 @@ export const BookingStepService: React.FC<BookingStepServiceProps> = ({
   if (isLoading) {
     return (
       <div className="flex flex-col items-center justify-center h-48">
-        <Loader2 className="w-8 h-8 animate-spin mb-4" style={{ color: brandColor.ink }} />
+        <Loader2
+          className="w-8 h-8 animate-spin mb-4"
+          style={{ color: colors2000s.text.secondary }}
+        />
         <p className="text-sm font-black text-gray-500 uppercase tracking-widest">
           Cargando servicios...
         </p>
@@ -244,7 +247,7 @@ export const BookingStepService: React.FC<BookingStepServiceProps> = ({
       <div className="mb-6">
         <h2
           className="text-2xl font-black uppercase tracking-tight"
-          style={{ color: brandColor.ink }}
+          style={{ color: colors2000s.text.primary }}
         >
           ¿Qué servicio necesitás?
         </h2>

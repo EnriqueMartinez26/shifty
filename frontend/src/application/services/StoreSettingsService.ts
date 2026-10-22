@@ -34,6 +34,12 @@ export interface StoreFeatureFlags {
   multi_service_booking: boolean
 }
 
+/**
+ * Que parte de la portada se ve cuando se recorta (S10.1). `null`: sin
+ * elegir. Opcional en las respuestas: un backend anterior no lo manda.
+ */
+export type CoverPosition = 'top' | 'center' | 'bottom'
+
 export interface StoreSettings {
   public_id: string
   name: string
@@ -42,6 +48,7 @@ export interface StoreSettings {
   logo_url: string | null
   primary_color: string
   cover_url?: string | null
+  cover_position?: CoverPosition | null
   description?: string | null
   whatsapp_number?: string | null
   instagram_url?: string | null
@@ -82,6 +89,7 @@ export interface StoreUpdatePayload {
   logo_url?: string | null
   primary_color?: string
   cover_url?: string | null
+  cover_position?: CoverPosition | null
   description?: string | null
   whatsapp_number?: string | null
   instagram_url?: string | null

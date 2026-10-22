@@ -5,9 +5,9 @@ import { BellRing, Check } from 'lucide-react'
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
 import { argentinaLocalToUtcIso, formatArgentinaDateDisplay } from '@shared/utils/argentinaTime'
 
-import { buttonStyles2000s } from '../../../../theme/colors'
+import { buttonStyles2000s, colors2000s } from '../../../../theme/colors'
 import { useJoinWaitlist } from '../../../hooks/usePublic'
-import { brandColor, brandSelectedStyle } from '../../../lib/brandTheme'
+import { brandSelectedStyle } from '../../../lib/brandTheme'
 import { createBookingInputStyle, createBookingSurfaceStyle } from '../../../lib/surfaceStyles'
 
 interface WaitlistJoinFormProps {
@@ -108,7 +108,7 @@ export const WaitlistJoinForm: React.FC<WaitlistJoinFormProps> = ({
     >
       <p
         className="text-[10px] font-black uppercase tracking-widest"
-        style={{ color: brandColor.ink }}
+        style={{ color: colors2000s.text.primary }}
       >
         Lista de espera para el {formatArgentinaDateDisplay(dayWindow(date).starts)}
       </p>

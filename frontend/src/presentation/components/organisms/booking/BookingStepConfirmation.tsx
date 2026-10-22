@@ -48,7 +48,6 @@ import { BookingSuccess } from './BookingSuccess'
 import { depositBreakdownText } from './depositReasons'
 import type { BookingClientData, BookingOtpState, BookingWizardState } from './types'
 import { colors2000s } from '../../../../theme/colors'
-import { brandColor } from '../../../lib/brandTheme'
 import { revealOnMount } from '../../../lib/revealOnMount'
 import {
   createBookingClientInputStyle,
@@ -858,7 +857,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
             setNotesOpen(true)
           }}
           className="min-h-11 inline-flex items-center gap-2 text-xs font-black underline"
-          style={{ color: brandColor.ink }}
+          style={{ color: colors2000s.text.primary }}
         >
           <FileText className="w-4 h-4" />
           Agregar una nota para la tienda
@@ -888,7 +887,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
           setPromotionOpen(true)
         }}
         className="min-h-11 inline-flex items-center gap-2 text-xs font-black underline"
-        style={{ color: brandColor.ink }}
+        style={{ color: colors2000s.text.primary }}
       >
         <Tag className="w-4 h-4" />
         ¿Tenés un código de descuento?
@@ -899,7 +898,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
         style={{ ...createBookingAccentBoxStyle('#ffffff', '#e5e7eb') }}
       >
         <div className="flex items-center gap-2">
-          <Tag className="w-4 h-4" style={{ color: brandColor.ink }} />
+          <Tag className="w-4 h-4" style={{ color: colors2000s.text.secondary }} />
           <label
             htmlFor={`${fieldId}-promo-code`}
             className="text-[10px] font-black uppercase tracking-widest text-gray-400"
@@ -1080,10 +1079,13 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
   if (submission.phase === 'submitting') {
     return (
       <div className="flex flex-col items-center justify-center py-20 duration-500">
-        <Loader2 className="w-16 h-16 animate-spin mb-6" style={{ color: brandColor.ink }} />
+        <Loader2
+          className="w-16 h-16 animate-spin mb-6"
+          style={{ color: colors2000s.text.secondary }}
+        />
         <h2
           className="text-2xl font-black uppercase tracking-tight"
-          style={{ color: brandColor.ink }}
+          style={{ color: colors2000s.text.primary }}
         >
           Confirmando...
         </h2>
@@ -1113,7 +1115,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
         <div>
           <h2
             className="break-words text-2xl font-black uppercase tracking-tight"
-            style={{ color: brandColor.ink }}
+            style={{ color: colors2000s.text.primary }}
           >
             Tus datos y confirmación
           </h2>

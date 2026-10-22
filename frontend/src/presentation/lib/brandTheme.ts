@@ -8,24 +8,20 @@ import { buttonStyles2000s, colors2000s } from '../../theme/colors'
  *
  * - `fill` / `fillBottom`: background of primary actions and selected states.
  * - `onFill`: text and icons on the fill; AA (>= 4.5:1) against both ends.
- * - `ink`: brand-tinted text, links and borders on white and on the gray
- *   buttons and cards; AA against both.
+ *
+ * Text and icons on white or gray use the neutral text tokens, never a brand
+ * tint (S9, 2026-10-22): the store color only appears as itself, as a fill.
  */
 interface BrandTheme {
   fill: string
   fillBottom: string
   onFill: string
-  ink: string
   /** True when the store did not pick a color and the Shifty orange is used. */
   isDefault: boolean
 }
 
 const HEX_COLOR = /^#([\da-f]{3}|[\da-f]{6})$/i
 const AA_MIN_CONTRAST = 4.5
-const WHITE = '#ffffff'
-// El texto de marca va sobre blanco y sobre el degradado gris de botones y
-// tarjetas (bg.button -> bg.buttonBottom); el fondo es el mas oscuro.
-const INK_SURFACES = [WHITE, colors2000s.bg.buttonBottom] as const
 // The backend stores #000000 when a store never picked a color
 // (`modules/stores/model.py`). It means "not chosen", not "black on purpose".
 const UNSET_STORE_COLOR = '#000000'
@@ -38,7 +34,6 @@ export const DEFAULT_BRAND_THEME: BrandTheme = {
   fill: colors2000s.orange.light,
   fillBottom: colors2000s.orange.dark,
   onFill: getContrastingForeground(colors2000s.orange.dark),
-  ink: colors2000s.orange.accent,
   isDefault: true
 }
 
@@ -80,21 +75,6 @@ export const contrastRatio = (foreground: string, background: string): number =>
 const darken = (hex: string, amount: number): string =>
   toHex(toRgb(hex).map((value) => value * (1 - amount)) as [number, number, number])
 
-const readsOnLightSurfaces = (ink: string): boolean =>
-  INK_SURFACES.every((surface) => contrastRatio(ink, surface) >= AA_MIN_CONTRAST)
-
-/**
- * El paso mas claro en que el color se lee como texto (AA) sobre blanco y
- * sobre el gris de botones y tarjetas. Un color que ya pasa queda igual.
- */
-const inkOnLightSurfaces = (hex: string): string => {
-  let ink = expandHex(hex).toLowerCase()
-  for (let step = 0; step < 20 && !readsOnLightSurfaces(ink); step += 1) {
-    ink = darken(ink, 0.08)
-  }
-  return ink
-}
-
 export const resolveBrandTheme = (primaryColor: string | null | undefined): BrandTheme => {
   const color = (primaryColor ?? '').trim()
   if (!HEX_COLOR.test(color) || expandHex(color).toLowerCase() === UNSET_STORE_COLOR) {
@@ -106,7 +86,7 @@ export const resolveBrandTheme = (primaryColor: string | null | undefined): Bran
   // A darker bottom lowers the contrast of black text: keep the gradient only
   // when the text still passes AA on both ends.
   const fillBottom = contrastRatio(onFill, darker) >= AA_MIN_CONTRAST ? darker : fill
-  return { fill, fillBottom, onFill, ink: inkOnLightSurfaces(fill), isDefault: false }
+  return { fill, fillBottom, onFill, isDefault: false }
 }
 
 /** CSS custom properties for the portal root; components read `var(--brand-*)`. */
@@ -115,12 +95,20 @@ export const brandCssVariables = (theme: BrandTheme): React.CSSProperties =>
     '--brand-fill': theme.fill,
     '--brand-fill-bottom': theme.fillBottom,
     '--brand-on-fill': theme.onFill,
-    '--brand-ink': theme.ink,
     // El resplandor sale del color de la tienda; sin color queda el naranja.
     // rgba precalculado y no color-mix(): Safari < 16.2 lo ignora y anulaba
     // toda la sombra (QA visual 2026-10-21).
     ...(theme.isDefault ? {} : { '--brand-glow': `rgba(${toRgb(theme.fill).join(', ')}, 0.25)` })
   }) as React.CSSProperties
+
+/**
+ * Portada sin imagen (S9): un degradado suave del color de la tienda sobre el
+ * fondo gris de la pagina. rgba precalculado, sin color-mix() (Safari < 16.2).
+ */
+export const brandCoverWash = (theme: BrandTheme): string => {
+  const rgb = toRgb(theme.fill).join(', ')
+  return `linear-gradient(135deg, rgba(${rgb}, 0.35) 0%, rgba(${rgb}, 0.75) 100%)`
+}
 
 /**
  * `var()` references to the variables `brandCssVariables` sets at the portal
@@ -138,7 +126,6 @@ export const brandColor = {
   fill,
   fillBottom,
   onFill: `var(--brand-on-fill, ${DEFAULT_BRAND_THEME.onFill})`,
-  ink: `var(--brand-ink, ${DEFAULT_BRAND_THEME.ink})`,
   fillGradient: `linear-gradient(180deg, ${fill} 0%, ${fillBottom} 100%)`
 } as const
 
@@ -161,7 +148,7 @@ export const brandCtaStyle: React.CSSProperties = {
 export const brandSelectedStyle: React.CSSProperties = {
   ...buttonStyles2000s.selected,
   background: brandColor.fillGradient,
-  border: `1px solid ${brandColor.ink}`,
+  border: `1px solid ${brandColor.fillBottom}`,
   color: brandColor.onFill,
   boxShadow: `${colors2000s.shadows.insetLight}, ${brandGlowShadow}`
 }

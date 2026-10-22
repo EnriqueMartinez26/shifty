@@ -279,6 +279,22 @@ describe('SettingsPage - portada', () => {
     expect(updateStore).toHaveBeenCalledWith({ cover_url: '/media/cover.webp' })
   })
 
+  // S10.1 (2026-10-22): la tienda elige que parte de la portada se ve.
+  it('elegir el encuadre mueve la vista previa y Guardar manda solo el encuadre', () => {
+    storeQuery = {
+      data: { ...store, cover_url: '/media/cover.webp' },
+      isLoading: false,
+      error: null
+    }
+    renderSettings()
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Arriba' }))
+
+    expect(screen.getByRole('img', { name: 'Portada' }).style.objectPosition).toBe('center 20%')
+    fireEvent.click(screen.getByRole('button', { name: 'Guardar Cambios' }))
+    expect(updateStore).toHaveBeenCalledWith({ cover_position: 'top' })
+  })
+
   it('si la subida falla lo dice debajo de la portada', async () => {
     coverMutation.mutateAsync.mockReset().mockRejectedValue(new Error('500'))
     renderSettings()

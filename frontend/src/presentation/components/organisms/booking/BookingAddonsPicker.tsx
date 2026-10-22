@@ -7,7 +7,6 @@ import type { AddonOption } from '@domain/value-objects/AddonSelection'
 import { formatCurrency } from '@shared/utils/currency'
 
 import { colors2000s } from '../../../../theme/colors'
-import { brandColor } from '../../../lib/brandTheme'
 import { createBookingAccentBoxStyle } from '../../../lib/surfaceStyles'
 
 interface BookingAddonsPickerProps {
@@ -53,7 +52,7 @@ export const BookingAddonsPicker: React.FC<BookingAddonsPickerProps> = ({
       aria-labelledby={titleId}
     >
       <div className="flex items-center gap-2">
-        <Sparkles className="w-4 h-4" style={{ color: brandColor.ink }} />
+        <Sparkles className="w-4 h-4" style={{ color: colors2000s.text.secondary }} />
         <h3 id={titleId} className="text-[10px] font-black uppercase tracking-widest text-gray-400">
           {title}
         </h3>

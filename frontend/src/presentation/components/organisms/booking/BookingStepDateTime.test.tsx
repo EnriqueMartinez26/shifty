@@ -953,13 +953,13 @@ describe('BookingStepDateTime con el color de la tienda', () => {
     const horario = screen.getByRole('button', { name: /09:00/ })
     expect(horario).toHaveAttribute('aria-pressed', 'true')
     expect(horario.getAttribute('style')).toContain('var(--brand-fill,')
-    expect(horario.getAttribute('style')).toContain('var(--brand-ink,')
+    expect(horario.getAttribute('style')).toContain('var(--brand-fill-bottom,')
+    expect(horario.getAttribute('style')).not.toContain('--brand-ink')
     expect(horario.getAttribute('style')).toContain('var(--brand-on-fill,')
 
     const otroHorario = screen.getByRole('button', { name: /10:00/ })
     expect(otroHorario.getAttribute('style')).not.toContain('var(--brand-fill,')
-    expect(screen.getByRole('heading', { level: 2 }).getAttribute('style')).toContain(
-      'var(--brand-ink,'
-    )
+    // S9: el titulo es texto neutro, no un tono de marca.
+    expect(screen.getByRole('heading', { level: 2 }).getAttribute('style')).not.toContain('--brand')
   })
 })
