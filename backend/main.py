@@ -13,6 +13,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from core.config import SETTINGS_BOOT_ERROR, settings
 from core.database import assert_rls_capable_role, engine
+from core.db_errors import CONCURRENCY_SQLSTATES, sqlstate_of
 from core.middleware import TenantMiddleware
 from core.logging import configure_logging
 from core.observability import init_observability
@@ -291,21 +292,7 @@ async def stale_data_exception_handler(
     return _concurrent_modification_response()
 
 
-# SQLSTATE de Postgres que son carreras legitimas entre transacciones, no
-# fallos del servidor: deadlock_detected, serialization_failure y
-# lock_not_available.
-#
-# 55P03 entra porque la migracion `app_role_timeouts` le pone al rol de la app
-# `lock_timeout = '5s'`: en una rafaga sobre el mismo profesional, el que
-# espera mas de ese plazo por el `SELECT ... FOR UPDATE` recibe 55P03. Es la
-# misma carrera entre dos actores que 40P01, provocada por una guarda propia
-# del repo, y salia como 500 (AUD2-B7-02, 2026-09-20). La regla de CLAUDE.md
-# §4 exige cero 5xx en la prueba de rafaga.
-#
-# 57014 (statement_timeout) NO entra: ahi no hay otro actor esperando, es una
-# consulta que tardo demasiado, o sea un problema del servidor que tiene que
-# seguir siendo 500 visible.
-_CONCURRENCY_SQLSTATES = frozenset({"40P01", "40001", "55P03"})
+# Que SQLSTATE son una carrera y no un fallo: ``core/db_errors.py``.
 
 
 # Marca en la propia excepcion de que su `db_error` ya se escribio. Starlette
@@ -314,17 +301,6 @@ _CONCURRENCY_SQLSTATES = frozenset({"40P01", "40001", "55P03"})
 # esto cada error de base dejaba dos trazas identicas y parecia haber fallado
 # dos veces (AUD2-B7-01, seguimiento 2026-09-20).
 _ATRIBUTO_YA_LOGUEADO = "_shifty_db_error_logged"
-
-
-def _sqlstate(exc: DBAPIError) -> str | None:
-    """SQLSTATE del error del driver (asyncpg: ``sqlstate``; psycopg: ``pgcode``)."""
-    candidatos = [exc.orig, getattr(exc.orig, "__cause__", None)]
-    for error in candidatos:
-        for atributo in ("sqlstate", "pgcode"):
-            valor = getattr(error, atributo, None)
-            if isinstance(valor, str):
-                return valor
-    return None
 
 
 @app.exception_handler(DBAPIError)
@@ -352,8 +328,8 @@ async def dbapi_error_handler(request: Request, exc: DBAPIError) -> JSONResponse
     la ruta y despues `ExceptionMiddleware`), asi que el log lleva marca en la
     excepcion para escribirse una sola vez.
     """
-    sqlstate = _sqlstate(exc)
-    if sqlstate in _CONCURRENCY_SQLSTATES:
+    sqlstate = sqlstate_of(exc)
+    if sqlstate in CONCURRENCY_SQLSTATES:
         logger.warning(
             "db_concurrency_conflict",
             path=str(request.url.path),

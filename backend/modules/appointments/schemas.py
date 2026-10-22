@@ -378,8 +378,9 @@ class BulkCancelRequest(BaseModel):
 class BulkCancelSkipped(BaseModel):
     id: str
     # El ``error_code`` de la cancelacion de a uno (p. ej.
-    # ``APPOINTMENT_ALREADY_CANCELLED``, ``APPOINTMENT_ALREADY_STARTED``), o
-    # ``NOT_FOUND`` si el turno no existe o es de otra tienda.
+    # ``APPOINTMENT_ALREADY_CANCELLED``, ``APPOINTMENT_ALREADY_STARTED``),
+    # ``NOT_FOUND`` si el turno no existe o es de otra tienda, o
+    # ``CONCURRENT_MODIFICATION`` si perdio una carrera con otra transaccion.
     code: str
 
 

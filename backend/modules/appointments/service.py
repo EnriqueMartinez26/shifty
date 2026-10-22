@@ -14,12 +14,16 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import TYPE_CHECKING, TypedDict
 
+import structlog
 import ulid
 
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.exc import StaleDataError
 
 from core.availability_cache import AvailabilityCacheClient, invalidate_availability
 from core.database import _apply_tenant_context
+from core.db_errors import is_concurrency_conflict
 from core.roles import STORE_MANAGERS, require_roles
 from core.utils import ensure_utc_aware, now_utc
 from core.uow import AbstractUnitOfWork
@@ -71,6 +75,8 @@ from modules.waitlist.events import EVENT_SLOT_RELEASED, slot_released_payload
 
 if TYPE_CHECKING:
     pass
+
+logger = structlog.get_logger()
 
 
 class AppointmentBookPayload(TypedDict, total=False):
@@ -440,46 +446,54 @@ class AppointmentService:
         su transaccion. Solo administradores (lo exige el router).
 
         Una transaccion por turno, con su commit (el de ``cancel``): un turno
-        que no se puede cancelar no deshace los demas. Lo que no se cancela se
+        que no se puede cancelar no deshace los demas. Cada turno corre en su
+        savepoint: lo que no se cancela vuelve atras (lock incluido) y se
         saltea con el ``error_code`` de la cancelacion de a uno (``NOT_FOUND``
-        si no existe o es de otra tienda); las guardas levantan antes de
-        escribir nada, asi que un salteado no deja cambios pendientes. Los ids
-        se recorren ordenados: el lock de un salteado vive hasta el commit
-        siguiente, y con un orden total dos limpiezas a la vez sobre los
-        mismos turnos no se cruzan en deadlock. La disponibilidad se invalida
-        una vez al final, con todos los horarios liberados (cada dia se toca
-        una sola vez).
+        si no existe o es de otra tienda). Un turno que pierde una carrera con
+        otra transaccion (deadlock, serializacion, ``lock_timeout`` o la
+        columna ``version``: ``core/db_errors.is_concurrency_conflict``) se
+        saltea con ``CONCURRENT_MODIFICATION``, el codigo del 409 de
+        ``main.py``, y el resto sigue: sin esto, uno solo devolvia 500 con los
+        anteriores ya cancelados. Cualquier otro error sube como 500. Los ids
+        se recorren ordenados: con un orden total dos limpiezas a la vez sobre
+        los mismos turnos no se cruzan en deadlock. La disponibilidad se
+        invalida una vez al final, con todos los horarios liberados (cada dia
+        se toca una sola vez).
         """
         store_id = actor.store_id
         store = await self.uow.appointments.get_store_by_id(store_id)
         result = BulkCancelResult()
         liberados: list[datetime] = []
-        lock_suelto = False
         for public_id in sorted(set(public_ids)):
             try:
-                appointment = await self._cancel_locked(
-                    public_id=public_id,
-                    actor=actor,
-                    charge_reason="bulk_cancel",
-                    audit_extra={"reason": "bulk_cancel", "cancel_reason": reason},
-                )
+                async with self.uow.session.begin_nested():
+                    appointment = await self._cancel_locked(
+                        public_id=public_id,
+                        actor=actor,
+                        charge_reason="bulk_cancel",
+                        audit_extra={"reason": "bulk_cancel", "cancel_reason": reason},
+                    )
+                    self._publish_cancellation_mail(appointment, store, reason)
             except AppointmentNotFoundException:
                 result.skipped.append((public_id, "NOT_FOUND"))
-                lock_suelto = True
                 continue
             except AppException as exc:
                 result.skipped.append((public_id, exc.error_code))
-                lock_suelto = True
                 continue
-            self._publish_cancellation_mail(appointment, store, reason)
+            except (DBAPIError, StaleDataError) as exc:
+                if not is_concurrency_conflict(exc):
+                    raise
+                logger.warning(
+                    "bulk_cancel_concurrency_conflict",
+                    store_id=store_id,
+                    appointment_id=public_id,
+                    error_type=type(exc).__name__,
+                )
+                result.skipped.append((public_id, "CONCURRENT_MODIFICATION"))
+                continue
             await self.uow.commit()
-            lock_suelto = False
             result.cancelled.append(appointment.public_id)
             liberados.append(appointment.starts_at)
-        if lock_suelto:
-            # El ultimo salteado tomo su lock: se suelta ya, no al cerrar la
-            # sesion.
-            await self.uow.rollback()
         if liberados:
             await invalidate_availability(self.cache, store_id, *liberados)
         return result
