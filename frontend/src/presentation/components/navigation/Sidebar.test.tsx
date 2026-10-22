@@ -213,3 +213,41 @@ describe('Sidebar: grupos que siguen a la ruta (F11a-11)', () => {
     expect(screen.getByRole('link', { name: 'Usuarios' })).toBeInTheDocument()
   })
 })
+
+// S6 antiabuso (2026-10-22): la limpieza de reservas del portal es solo del
+// dueno o administrador, como POST /appointments/bulk-cancel en el backend.
+describe('Sidebar: reservas del portal', () => {
+  const linksVisibles = () => screen.getAllByRole('link').map((el) => el.textContent)
+
+  const renderComo = (role: string, isGlobalAdmin = false) => {
+    mockUser = { first_name: 'Ana', email: 'ana@example.com', role, is_global_admin: isGlobalAdmin }
+    render(
+      <MemoryRouter initialEntries={['/dashboard']}>
+        <Sidebar />
+      </MemoryRouter>
+    )
+  }
+
+  it.each([
+    ['store_admin', false],
+    ['admin', false],
+    ['receptionist', true]
+  ])('el rol %s (llave global: %s) ve el acceso', (role, isGlobalAdmin) => {
+    renderComo(role, isGlobalAdmin)
+
+    expect(screen.getByRole('link', { name: 'Reservas del portal' })).toHaveAttribute(
+      'href',
+      '/dashboard/portal-bookings'
+    )
+  })
+
+  it.each([
+    ['professional', ['Dashboard', 'Agenda', 'Lista de espera', 'Reportes', 'Manual de uso']],
+    ['receptionist', ['Dashboard', 'Agenda', 'Lista de espera', 'Manual de uso']]
+  ])('el rol %s no lo ve y conserva sus accesos de siempre', (role, esperados) => {
+    renderComo(role)
+
+    expect(screen.queryByRole('link', { name: 'Reservas del portal' })).not.toBeInTheDocument()
+    expect(linksVisibles()).toEqual(esperados)
+  })
+})

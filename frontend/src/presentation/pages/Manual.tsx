@@ -87,6 +87,11 @@ const SECTIONS: ManualSection[] = [
       {
         title: 'Liberar un turno con pago pendiente',
         body: 'Si alguien reservó y no pagó la seña, usá el botón Liberar. Primero vence el link de pago y después suelta el horario, así nadie puede pagar un turno que ya no existe.'
+      },
+      {
+        title: 'Limpiar reservas sospechosas del portal',
+        body: 'En Reservas del portal ves los turnos que entraron por tu página pública en las últimas 24 horas, 72 horas o 7 días. Si alguien llenó tu agenda con reservas falsas, seleccionalas y cancelalas juntas: a los clientes que dejaron email les llega el aviso de cancelación.',
+        tip: 'Solo el dueño o un administrador ve esta pantalla.'
       }
     ]
   },

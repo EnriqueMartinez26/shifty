@@ -7,6 +7,7 @@ import {
   mdiCashClock,
   mdiCashMultiple,
   mdiCalendar,
+  mdiCalendarSearch,
   mdiChartBar,
   mdiClose,
   mdiChevronDown,
@@ -75,6 +76,14 @@ const menuEntries: MenuEntry[] = [
     label: 'Lista de espera',
     path: '/dashboard/waitlist',
     roles: [ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN, ROLE_PROFESSIONAL, ROLE_RECEPTIONIST]
+  }),
+  // Junto a Agenda y Lista de espera: es trabajo sobre turnos, no catalogo ni
+  // ventas. Solo el dueno o administrador, como el backend (S6 antiabuso).
+  link({
+    iconPath: mdiCalendarSearch,
+    label: 'Reservas del portal',
+    path: '/dashboard/portal-bookings',
+    roles: [ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN]
   }),
   link({
     iconPath: mdiChartBar,
