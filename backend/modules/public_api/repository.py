@@ -21,6 +21,7 @@ from sqlalchemy.sql.elements import ColumnElement
 import ulid
 
 from core.security import hash_password
+from infrastructure.persistence.models.appointment import BOOKED_VIA_PANEL
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.auth.service import normalize_email
 from modules.appointments.repository import (
@@ -778,6 +779,7 @@ class PublicRepository:
         addons_amount: Decimal = Decimal("0.00"),
         addons_snapshot: list[dict[str, str | int]] | None = None,
         extra_services: ExtraServicesForBooking | None = None,
+        booked_via: str = BOOKED_VIA_PANEL,
     ) -> tuple[Appointment, Service, Staff]:
         """Alta del turno: lock del profesional, relectura bajo lock e INSERT.
 
@@ -827,6 +829,9 @@ class PublicRepository:
             extra_services_snapshot=extras.quote.snapshot(),
             expires_at=expires_at,
             terms_accepted_at=terms_accepted_at,
+            # Origen de la reserva (antiabuso, S5): el portal pasa "portal"; la
+            # lista de espera del lado de la tienda queda en "panel".
+            booked_via=booked_via,
             terms_version=(accepted_versions or AcceptedVersions()).terms_version,
             privacy_version=(accepted_versions or AcceptedVersions()).privacy_version,
         )

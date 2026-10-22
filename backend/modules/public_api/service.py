@@ -66,6 +66,7 @@ from modules.appointments.guards import (
     reject_already_cancelled,
     reject_inactive,
 )
+from infrastructure.persistence.models.appointment import BOOKED_VIA_PORTAL
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.billing.dependencies import reject_new_public_business_when_suspended
 from modules.notifications.model import NotificationType
@@ -1299,6 +1300,7 @@ class PublicBookingService:
         # viaja (F3-03), y la retencion del slot y el consentimiento van en el
         # INSERT del turno.
         appointment, service, staff = await self.repo.create_appointment(
+            booked_via=BOOKED_VIA_PORTAL,
             store_id=store_id,
             service_public_id=data.service_id,
             service=request.service,
@@ -1956,6 +1958,8 @@ def _rescheduled_copy(
         idempotency_key=data.idempotency_key,
         status=estado,
         expires_at=vence,
+        # El turno movido sigue siendo del mismo origen (antiabuso, S5).
+        booked_via=original.booked_via,
     )
 
 
