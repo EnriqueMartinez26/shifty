@@ -892,8 +892,14 @@ Una instrucción en lenguaje natural no es una garantía.
   `BOOKING_DAILY_LIMIT` con `Retry-After`. Entre la lectura y el consumo dos
   pedidos simultáneos de la misma IP pueden pasar los dos: el tope es blando
   por esa concurrencia, no por más. El replay de idempotencia no la mira.
+  Y una trampa para bots: `PublicBookingCreate` acepta `website` (campo
+  oculto del wizard, tiene que llegar vacío) y `form_elapsed_ms` (opcionales,
+  regla 9); un `website` no vacío o un `form_elapsed_ms` menor a 2500 es 400
+  `BOOKING_REJECTED` antes de leer la base, de escribir y de mirar la cuota
+  diaria (`public_api/service.py::reject_bot_submission`). Sin los campos
+  pasa, y ninguno entra en la clave de idempotencia.
   (`test_portal_tope_por_telefono.py`, `test_pg_tope_por_telefono.py`,
-  `test_portal_cuota_diaria_por_ip.py`)
+  `test_portal_cuota_diaria_por_ip.py`, `test_portal_trampa_de_bots.py`)
 - **Un teléfono identifica a UN cliente por tienda**: índice único parcial
   `uq_users_client_phone_per_store` (`role = 'client' AND phone IS NOT NULL`;
   el personal puede compartir el teléfono del local). La migración que lo crea

@@ -368,6 +368,37 @@ async def consume_daily_booking_quota(store_id: str, client_ip: str) -> None:
         logger.warning("public_booking_daily_quota_not_consumed", store_id=store_id)
 
 
+# Menos que esto entre que se abre el formulario y se manda no lo llena una
+# persona (S4): lo manda un script.
+MIN_FORM_ELAPSED_MS = 2500
+
+
+def reject_bot_submission(data: PublicBookingCreate) -> None:
+    """400 neutro si la reserva cayo en la trampa para bots (S4).
+
+    El campo oculto ``website`` con algo adentro, o un formulario mandado en
+    menos de ``MIN_FORM_ELAPSED_MS``. Corre antes de cualquier lectura o
+    escritura y antes de la cuota diaria: un bot no gasta el cupo de la IP ni
+    deja ficha. Sin los campos pasa (clientes viejos). El mensaje no dice por
+    que: un bot no aprende que corregir.
+    """
+    rapido = (
+        data.form_elapsed_ms is not None and data.form_elapsed_ms < MIN_FORM_ELAPSED_MS
+    )
+    if not data.website and not rapido:
+        return
+    logger.warning(
+        "public_booking_rejected_as_bot",
+        service_id=data.service_id,
+        reason="honeypot" if data.website else "too_fast",
+    )
+    raise AppException(
+        message="No pudimos registrar la reserva. Probá de nuevo.",
+        http_status=status.HTTP_400_BAD_REQUEST,
+        error_code="BOOKING_REJECTED",
+    )
+
+
 def booking_horizon_exceeded() -> AppException:
     """422 de una reserva o reprogramacion del portal mas alla de los 120
     dias (paquete antiabuso, D-20261022-01, propuesta por Mateo, pendiente
@@ -941,7 +972,9 @@ class PublicBookingService:
         (best-effort). ``client_ip`` (la del router, nunca persistida) activa
         la cuota diaria por IP y tienda; sin ella no se aplica.
         """
-        # Antes de tocar la base: una version vieja no reserva (PV-09).
+        # Antes de tocar la base y la cuota: la trampa para bots (S4) y una
+        # version vieja de los terminos (PV-09).
+        reject_bot_submission(data)
         check_accepted_versions(data.terms_version, data.privacy_version)
         service, store = await self._resolve_store_and_service(data)
         if client_ip is not None:

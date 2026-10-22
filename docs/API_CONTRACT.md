@@ -3993,6 +3993,8 @@ Type: `enum("efectivo", "transferencia", "mercadopago", "otro")`
 | `privacy_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 | `addons` | array<PublicAddonChoice> | no | maxItems=20 |
 | `extra_service_ids` | array<string> | no | maxItems=9 |
+| `website` | string \| null | no | maxLength=200 |
+| `form_elapsed_ms` | integer \| null | no | minimum=0.0, maximum=86400000.0 |
 
 ### PublicBookingExtraService
 
@@ -4994,4 +4996,4 @@ Type: `enum("admin", "staff", "receptionist", "client")`
 | `terms_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 | `privacy_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 
-Generado desde app.openapi() el 2026-10-21, commit 4fd7a258
+Generado desde app.openapi() el 2026-10-22, commit 6801c1f0

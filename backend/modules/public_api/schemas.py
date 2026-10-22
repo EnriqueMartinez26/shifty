@@ -191,6 +191,14 @@ class PublicBookingCreate(BaseModel):
     extra_service_ids: list[ExtraServiceId] = Field(
         default_factory=list, max_length=EXTRA_SERVICES_INPUT_MAX
     )
+    # Trampa para bots (paquete antiabuso, S4). Opcionales: sin ellos la
+    # reserva es la de siempre. ``website`` es un campo oculto del wizard que
+    # una persona nunca ve (tiene que llegar vacio) y ``form_elapsed_ms`` lo
+    # que tardo en llenarse el formulario. El rechazo (400
+    # ``BOOKING_REJECTED``) lo decide el service; no entran en la clave de
+    # idempotencia (``router._public_booking_idempotency_key``).
+    website: str | None = Field(default=None, max_length=200)
+    form_elapsed_ms: int | None = Field(default=None, ge=0, le=86_400_000)
 
     @model_validator(mode="before")
     @classmethod
