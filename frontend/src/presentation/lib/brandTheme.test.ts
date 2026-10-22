@@ -47,8 +47,17 @@ describe('resolveBrandTheme', () => {
     ).toBeGreaterThanOrEqual(4.5)
   })
 
-  // 2026-10-22 (#240): el naranja de CTA y seleccion paso a una rampa oscura
-  // con texto blanco; el tema por defecto tiene que seguir esa rampa entera.
+  // 2026-10-22 (revision de #239): el respaldo usaba la rampa oscura de CTA
+  // del panel (#c04f00 -> #b84d00) y no coincidia con el naranja del logo.
+  it('uses the logo orange ramp for stores without a color', () => {
+    expect(DEFAULT_BRAND_THEME.fill).toBe(colors2000s.orange.light)
+    expect(DEFAULT_BRAND_THEME.fillBottom).toBe(colors2000s.orange.dark)
+    expect(DEFAULT_BRAND_THEME.fill).toBe('#ff8c42')
+    expect(DEFAULT_BRAND_THEME.fillBottom).toBe('#e67e22')
+  })
+
+  // El texto blanco no llega a AA sobre el naranja del logo (2.31:1 y 2.85:1):
+  // el texto del respaldo tiene que pasar AA en los dos extremos.
   it('keeps AA for the default Shifty orange on both ends of the fill', () => {
     const theme = DEFAULT_BRAND_THEME
     expect(contrastRatio(theme.onFill, theme.fill)).toBeGreaterThanOrEqual(4.5)
@@ -90,7 +99,7 @@ describe('brand variable references', () => {
     expect([brandColor.fill, brandColor.fillBottom, brandColor.onFill, brandColor.ink]).toEqual(
       Object.entries(defaults).map(([name, value]) => `var(${name}, ${value})`)
     )
-    expect(brandColor.fill).toBe(`var(--brand-fill, ${colors2000s.orange.cta})`)
+    expect(brandColor.fill).toBe(`var(--brand-fill, ${colors2000s.orange.light})`)
     expect(brandColor.ink).toBe(`var(--brand-ink, ${colors2000s.orange.accent})`)
     expect(brandColor.fillGradient).toBe(
       `linear-gradient(180deg, ${brandColor.fill} 0%, ${brandColor.fillBottom} 100%)`

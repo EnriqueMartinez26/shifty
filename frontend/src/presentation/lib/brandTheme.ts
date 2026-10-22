@@ -33,10 +33,14 @@ const GRADIENT_DARKEN = 0.1
 // El color de `shadows.outerOrange`: el resplandor sin color de tienda.
 const DEFAULT_GLOW_COLOR = 'rgba(200, 90, 15, 0.25)'
 
+// Stores without a color get the logo orange (`orange.light` -> `orange.dark`),
+// not the darker CTA ramp of the panel (`orange.cta`). White text misses AA on
+// the logo orange, so the text is picked against the darker bottom end, which
+// is the harder one for a dark foreground.
 export const DEFAULT_BRAND_THEME: BrandTheme = {
-  fill: colors2000s.orange.cta,
-  fillBottom: colors2000s.orange.ctaEnd,
-  onFill: colors2000s.text.onOrangeSelection,
+  fill: colors2000s.orange.light,
+  fillBottom: colors2000s.orange.dark,
+  onFill: getContrastingForeground(colors2000s.orange.dark),
   ink: colors2000s.orange.accent,
   isDefault: true
 }
