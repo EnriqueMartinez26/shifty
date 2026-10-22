@@ -459,6 +459,21 @@ async def _buscar_turnos(m: Mundo, a: Actor, t: Tienda) -> Llamada:
     return Llamada("GET", "/appointments/search", params={"page": 1, "page_size": 100})
 
 
+async def _reservas_recientes_del_portal(m: Mundo, a: Actor, t: Tienda) -> Llamada:
+    return Llamada("GET", "/appointments/recent-portal", params={"hours": 72})
+
+
+async def _cancelar_en_bloque(m: Mundo, a: Actor, t: Tienda) -> Llamada:
+    turno = await m.reserva_publica(
+        t, telefono=m.telefono_nuevo(), nombre="Cliente Limpieza"
+    )
+    return Llamada(
+        "POST",
+        "/appointments/bulk-cancel",
+        json={"appointment_ids": [turno], "reason": "Reservas falsas"},
+    )
+
+
 async def _tablero(m: Mundo, a: Actor, t: Tienda) -> Llamada:
     return Llamada("GET", "/dashboard/summary")
 
@@ -1311,6 +1326,28 @@ TABLA: tuple[Ruta, ...] = (
         idor=IDOR_POR_ID,
     ),
     R("GET", "/appointments/search", PERSONAL, A.PROPIA, _buscar_turnos),
+    # Limpieza de reservas del portal (S6, 2026-10-22): ``require_roles`` con
+    # ``STORE_MANAGERS`` en el handler, o sea admin de la tienda y superadmin.
+    R(
+        "GET",
+        "/appointments/recent-portal",
+        ADMINS,
+        A.PROPIA,
+        _reservas_recientes_del_portal,
+    ),
+    # Un id de otra tienda no se cancela: el item sale en ``skipped`` como
+    # ``NOT_FOUND`` y el request responde 200 (cada id es independiente). Que
+    # el turno ajeno sigue intacto lo prueba
+    # tests/integration/test_limpieza_de_reservas_del_portal.py
+    # (``test_cancela_del_portal_y_del_panel_y_saltea_lo_que_no_puede``).
+    R(
+        "POST",
+        "/appointments/bulk-cancel",
+        ADMINS,
+        A.RECURSO,
+        _cancelar_en_bloque,
+        idor=frozenset({200}),
+    ),
     R("GET", "/dashboard/summary", PERSONAL, A.PROPIA, _tablero),
     # usuarios
     R("POST", "/users/", ADMINS, A.PROPIA, _crear_usuario),
