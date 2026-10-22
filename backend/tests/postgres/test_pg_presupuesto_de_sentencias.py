@@ -127,6 +127,10 @@ SIN_PRESUPUESTO: dict[str, str] = {
     "PATCH /appointments/{public_id}/notes-staff": "edicion unitaria",
     "PATCH /appointments/{public_id}/release": "transicion unitaria, fuera del camino caliente",
     "PATCH /appointments/{public_id}/reschedule": "transicion unitaria, fuera del camino caliente",
+    # Limpieza de reservas del portal (S6, 2026-10-22): las abre el dueno a
+    # mano despues de una ola de reservas falsas, no el dia a dia de la agenda.
+    "GET /appointments/recent-portal": "lectura manual del administrador para limpiar el portal; una consulta con tope de 200 filas",
+    "POST /appointments/bulk-cancel": "accion manual del administrador; la cancelacion de a uno por turno (tope 100 ids), como PATCH .../cancel",
     "GET /reports/audit-logs": "paginado con tope 100; lectura de superadmin/dueno ocasional",
     "GET /reports/professionals": "agregado en SQL (test_reportes_dinero_en_sql)",
     "GET /reports/trend": "agregado en SQL (test_pg_tendencia_mes_local)",

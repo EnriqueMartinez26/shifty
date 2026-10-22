@@ -473,7 +473,8 @@ async def bulk_cancel_appointments(
     outbox, con ``reason`` como motivo. Lo que no se puede cancelar se saltea
     con su codigo (``APPOINTMENT_ALREADY_CANCELLED``,
     ``APPOINTMENT_ALREADY_STARTED``, ``NOT_FOUND`` si no existe o es de otra
-    tienda); lo demas se cancela igual.
+    tienda, ``CONCURRENT_MODIFICATION`` si otra operacion lo tenia tomado);
+    lo demas se cancela igual.
     """
     require_roles(
         user,

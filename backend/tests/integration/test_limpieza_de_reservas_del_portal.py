@@ -29,7 +29,9 @@ import pytest
 import ulid
 from httpx import AsyncClient
 from sqlalchemy import select, update
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.exc import StaleDataError
 
 import modules.appointments.service as appointments_service
 from core.availability_cache import invalidate_availability
@@ -547,4 +549,114 @@ async def test_con_la_tienda_suspendida_se_lista_pero_no_se_cancela_en_bloque(
     assert lista.status_code == 200, lista.text
     assert bloque.status_code == 402, bloque.text
     assert bloque.json()["error_code"] == "SUBSCRIPTION_SUSPENDED"
+    assert (await _turno(test_session, turno)).status == "confirmed"
+
+
+class _ErrorDelDriver(Exception):
+    """Lo que trae ``DBAPIError.orig`` de asyncpg: el SQLSTATE en ``sqlstate``."""
+
+    def __init__(self, sqlstate: str) -> None:
+        super().__init__(f"sqlstate {sqlstate}")
+        self.sqlstate = sqlstate
+
+
+def _error_de_base(sqlstate: str) -> DBAPIError:
+    return DBAPIError("UPDATE appointments ...", {}, _ErrorDelDriver(sqlstate))
+
+
+def _fallar_en(monkeypatch: pytest.MonkeyPatch, turno: str, error: Exception) -> None:
+    """``turno`` hace TODO el trabajo de su cancelacion y despues levanta
+    ``error``, como un deadlock o un ``version`` viejo al escribir: lo que hizo
+    tiene que volver atras."""
+    original = appointments_service.AppointmentService._cancel_locked
+
+    async def cancelar(self: Any, *, public_id: str, **kwargs: Any) -> Appointment:
+        appointment = await original(self, public_id=public_id, **kwargs)
+        if public_id == turno:
+            raise error
+        return appointment
+
+    monkeypatch.setattr(
+        appointments_service.AppointmentService, "_cancel_locked", cancelar
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("carrera", "error"),
+    [
+        ("deadlock", _error_de_base("40P01")),
+        ("serializacion", _error_de_base("40001")),
+        ("lock-timeout", _error_de_base("55P03")),
+        ("version", StaleDataError("version vieja")),
+    ],
+    ids=["deadlock", "serializacion", "lock-timeout", "version"],
+)
+async def test_cancelar_en_bloque_saltea_el_turno_que_pierde_una_carrera(
+    client: AsyncClient,
+    test_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    carrera: str,
+    error: Exception,
+) -> None:
+    """2026-10-22, revision del paquete antiabuso: un deadlock o un error de
+    serializacion en un turno respondia 500 con los anteriores ya cancelados.
+    Ahora ese turno vuelve atras y se saltea con ``CONCURRENT_MODIFICATION``
+    (el codigo del 409 de ``main.py``) y los demas se cancelan."""
+    t = await _tienda(client, monkeypatch, f"bulk-carrera-{carrera}", sena=False)
+    turnos = [
+        await _alta_del_panel(client, t, hora, email=f"carrera-{hora}@example.com")
+        for hora in (9, 10, 11)
+    ]
+    # El que falla es el PRIMERO en el orden del recorrido: el resto sigue.
+    perdedor, *ganadores = sorted(turnos)
+    _fallar_en(monkeypatch, perdedor, error)
+    liberados_antes = len(await _eventos(test_session, CUPO_LIBERADO))
+
+    res = await client.post(
+        "/appointments/bulk-cancel",
+        headers=auth_headers(t.admin),
+        json={"appointment_ids": turnos, "reason": "Reservas falsas"},
+    )
+
+    assert res.status_code == 200, res.text
+    assert res.json() == {
+        "cancelled": ganadores,
+        "skipped": [{"id": perdedor, "code": "CONCURRENT_MODIFICATION"}],
+    }
+    assert (await _turno(test_session, perdedor)).status == "confirmed"
+    for turno in ganadores:
+        assert (await _turno(test_session, turno)).status == "cancelled"
+    # Nada del perdedor quedo escrito: ni auditoria, ni cupo, ni mail.
+    auditados = (
+        await test_session.execute(
+            select(AuditLog.resource_id).where(
+                AuditLog.action == AuditAction.STATUS_CHANGE,
+                AuditLog.resource_id.in_(turnos),
+            )
+        )
+    ).scalars()
+    assert sorted(auditados) == ganadores
+    assert len(await _eventos(test_session, CUPO_LIBERADO)) - liberados_antes == 2
+    mails = await _eventos(test_session, MAIL_DE_CANCELACION)
+    assert sorted(m["public_id"] for m in mails) == ganadores
+
+
+@pytest.mark.asyncio
+async def test_cancelar_en_bloque_no_esconde_un_error_de_base_que_no_es_carrera(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Un error de base que no es una carrera (aca 42501, una politica de RLS)
+    no se saltea: sube como 500 visible, con traza y Sentry."""
+    t = await _tienda(client, monkeypatch, "bulk-error-real", sena=False)
+    turno = await _alta_del_panel(client, t, 10)
+    _fallar_en(monkeypatch, turno, _error_de_base("42501"))
+
+    with pytest.raises(DBAPIError):
+        await client.post(
+            "/appointments/bulk-cancel",
+            headers=auth_headers(t.admin),
+            json={"appointment_ids": [turno]},
+        )
+
     assert (await _turno(test_session, turno)).status == "confirmed"
