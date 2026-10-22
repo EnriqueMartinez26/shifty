@@ -1186,9 +1186,9 @@ def _self_booking(
     """Turno del panel a nombre del propio actor (client_id=actor.id).
 
     Es un auto-booking, no un alta para un tercero. Cargar un walk-in (un
-    cliente distinto al staff logueado) es responsabilidad del alta publica
-    (``PublicBookingService.book``), que acepta client_name/phone/email y es
-    lo que usa el boton "Nuevo turno" del panel admin.
+    cliente distinto al staff logueado) es el alta del panel para un cliente
+    (``POST /appointments/`` con client_name/phone/email: ``book_for_client``
+    y ``_client_booking``), que es lo que usa el boton "Nuevo turno" del panel.
     """
     return Appointment(
         id=str(ulid.ULID()),
