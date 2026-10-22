@@ -123,6 +123,11 @@ async def test_la_conciliacion_guarda_el_pago_sin_datos_del_pagador_ni_tarjeta(
     client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(settings, "RECONCILIATION_MIN_AGE_MINUTES", 0)
+    # 2026-10-22: fallo intermitente en CI (#247). La referencia del link es
+    # aleatoria y salio "117606b737040358", que contiene "3704" (los ultimos
+    # digitos de la tarjeta de prueba). Se fija esa referencia para que el
+    # caso quede cubierto siempre.
+    monkeypatch.setattr(payments_service, "new_link_ref", lambda: "117606b737040358")
     _mp(monkeypatch, None)
     store, token = await register_and_login(
         client, slug="min-concilia", email="min-concilia@test.com"
@@ -161,7 +166,23 @@ async def test_la_conciliacion_guarda_el_pago_sin_datos_del_pagador_ni_tarjeta(
     assert datos.get("transaction_amount") == float(cobro.amount)
     assert datos.get("external_reference") == cobro.current_external_reference
     assert datos.get("metadata") == {"appointment_id": turno}
-    texto = _texto(guardado)
+    # Por estructura: ningun campo del pagador ni de la tarjeta llega a data.
+    for campo in (
+        "payer",
+        "card",
+        "additional_info",
+        "point_of_interaction",
+        "identification",
+    ):
+        assert campo not in datos, f"{campo!r} quedo en raw_payload: {datos}"
+    # La referencia y el id del turno se verifican arriba por igualdad; se
+    # sacan del texto porque son aleatorios y pueden contener por azar los
+    # digitos que se buscan (2026-10-22, falso positivo en CI).
+    texto = (
+        _texto(guardado)
+        .replace(str(cobro.current_external_reference), "<referencia>")
+        .replace(turno, "<turno>")
+    )
     for dato in (
         "pagador-real@example.com",
         "30123456",
