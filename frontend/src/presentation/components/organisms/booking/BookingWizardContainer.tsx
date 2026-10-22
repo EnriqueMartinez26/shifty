@@ -19,7 +19,7 @@ import { BookingStepService } from './BookingStepService'
 import { EMPTY_PRESELECT, type BookingPreselect } from './deepLink'
 import { clampStep, resolveBackJump, resolveStepJump } from './stepFlow'
 import type { BookingOtpState, BookingStepChange, BookingWizardState } from './types'
-import { colors2000s, orangeCtaGradient } from '../../../../theme/colors'
+import { colors2000s } from '../../../../theme/colors'
 import {
   type PublicStore,
   useCreatePublicBooking,
@@ -29,6 +29,7 @@ import {
   useVerifyPublicOtp
 } from '../../../hooks/usePublic'
 import { useResendCooldown } from '../../../hooks/useResendCooldown'
+import { brandColor, brandCssVariables, resolveBrandTheme } from '../../../lib/brandTheme'
 import { createBookingSurfaceStyle } from '../../../lib/surfaceStyles'
 
 interface BookingWizardContainerProps {
@@ -324,7 +325,7 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
                   background: isCompleted
                     ? `linear-gradient(180deg, ${colors2000s.status.success.light} 0%, ${colors2000s.status.success.dark} 100%)`
                     : isActive
-                      ? orangeCtaGradient
+                      ? brandColor.fillGradient
                       : `linear-gradient(180deg, ${colors2000s.bg.disabled} 0%, ${colors2000s.bg.disabledBottom} 100%)`,
                   boxShadow: isCompleted
                     ? `${colors2000s.shadows.insetLight}, 0 2px 4px rgba(16,185,129,0.3)`
@@ -334,15 +335,15 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
                   color: isCompleted
                     ? colors2000s.text.onOrange
                     : isActive
-                      ? colors2000s.text.onOrangeSelection
+                      ? brandColor.onFill
                       : colors2000s.text.secondary
                 }}
               >
                 {isCompleted ? <Check className="w-4 h-4 font-black" /> : i + 1}
               </div>
               <span
-                className={`text-[9px] uppercase tracking-wider hidden md:block mt-1 font-black text-center ${isActive ? 'text-orange-600' : isCompleted ? 'text-green-600' : 'text-gray-400'}`}
-                style={isActive ? { color: colors2000s.orange.accent } : undefined}
+                className={`text-[9px] uppercase tracking-wider hidden md:block mt-1 font-black text-center ${isActive ? '' : isCompleted ? 'text-green-600' : 'text-gray-400'}`}
+                style={isActive ? { color: brandColor.ink } : undefined}
               >
                 {label}
               </span>
@@ -378,6 +379,8 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
       // quedaba de 227 px en 390 y cortaba los nombres (QA movil 2026-10-08).
       className="max-w-2xl mx-auto rounded-lg p-4 sm:p-8 relative overflow-hidden duration-700"
       style={{
+        // El color de la tienda (S3), una sola vez: los pasos leen var(--brand-*).
+        ...brandCssVariables(resolveBrandTheme(store.primary_color)),
         background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
         border: `1px solid ${colors2000s.border.default}`,
         boxShadow: `${colors2000s.shadows.insetLight}, 0 10px 30px rgba(0, 0, 0, 0.08)`

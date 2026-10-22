@@ -3,7 +3,8 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import { formatCurrency } from '@shared/utils/currency'
 
 import { BookingStepService } from './BookingStepService'
-import { colors2000s, orangeCtaGradient } from '../../../../theme/colors'
+import { colors2000s } from '../../../../theme/colors'
+import { contrastRatio, DEFAULT_BRAND_THEME } from '../../../lib/brandTheme'
 
 // 2026-10-02 (F4-15): las fotos del primer paso de la reserva no tenian tamano
 // ni carga diferida: el celular bajaba todas y la lista saltaba al llegar cada
@@ -60,7 +61,7 @@ describe('BookingStepService', () => {
     expect(img).toHaveAttribute('height', '56')
   })
 
-  it('muestra la selección naranja con texto blanco de contraste AA', () => {
+  it('muestra la selección con el naranja del logo y texto de contraste AA', () => {
     mockUsePublicServices.mockReturnValue({
       isLoading: false,
       data: [servicio('corte', 'Corte', 30, 10000)]
@@ -68,10 +69,17 @@ describe('BookingStepService', () => {
 
     render(<BookingStepService storePublicId="store-1" selectedId="corte" onSelect={jest.fn()} />)
 
+    // Con el color de la tienda (S3) la seleccion lee var(--brand-*); sin
+    // color de tienda el respaldo es el naranja del logo con texto oscuro
+    // (revision de Enrique en #239: el blanco no llega a AA sobre ese naranja).
     const title = screen.getByText('Corte')
-    expect(title.style.color).toBe('rgb(255, 255, 255)')
-    expect(colors2000s.text.onOrangeSelection).toBe('#ffffff')
-    expect(title.closest('button')?.style.background).toBe(orangeCtaGradient)
+    expect(title.style.color).toBe(`var(--brand-on-fill, ${DEFAULT_BRAND_THEME.onFill})`)
+    expect(
+      contrastRatio(DEFAULT_BRAND_THEME.onFill, DEFAULT_BRAND_THEME.fill)
+    ).toBeGreaterThanOrEqual(4.5)
+    const fondo = title.closest('button')?.style.background ?? ''
+    expect(fondo).toContain(`var(--brand-fill, ${colors2000s.orange.light})`)
+    expect(fondo).toContain(`var(--brand-fill-bottom, ${colors2000s.orange.dark})`)
   })
 
   // QA movil 2026-10-08 (QA!): en 390 px el nombre salia cortado ("BARBA Y
@@ -215,5 +223,25 @@ describe('BookingStepService', () => {
         screen.queryByText('Ningún profesional lo hace junto con lo que elegiste.')
       ).not.toBeInTheDocument()
     })
+  })
+})
+
+// S3 (2026-10-21): el servicio elegido se pinta con el color de la tienda
+// (var(--brand-*), fijadas en la raiz del wizard), no con el naranja fijo.
+describe('BookingStepService con el color de la tienda', () => {
+  it('el servicio elegido usa el relleno, el borde y el texto de marca', () => {
+    mockUsePublicServices.mockReturnValue({
+      isLoading: false,
+      data: [servicio('svc-1', 'Corte', 30, 1000), servicio('svc-2', 'Barba', 20, 900)]
+    })
+
+    render(<BookingStepService storePublicId="store-1" selectedId="svc-1" onSelect={jest.fn()} />)
+
+    const elegido = screen.getByRole('button', { name: /Corte/ })
+    expect(elegido.getAttribute('style')).toContain('var(--brand-fill,')
+    expect(elegido.getAttribute('style')).toContain('var(--brand-ink,')
+    expect(screen.getByText('Corte').getAttribute('style')).toContain('var(--brand-on-fill,')
+    const otro = screen.getByRole('button', { name: /Barba/ })
+    expect(otro.getAttribute('style')).not.toContain('var(--brand-fill,')
   })
 })

@@ -39,3 +39,16 @@ describe('BookingServicesBar', () => {
     expect(onContinue).toHaveBeenCalledTimes(1)
   })
 })
+
+// S3 (2026-10-21): el boton principal usa el color de la tienda.
+describe('BookingServicesBar con el color de la tienda', () => {
+  it('Continuar usa el relleno y el texto de marca', () => {
+    render(
+      <BookingServicesBar count={2} durationMinutes={45} listPrice={15000} onContinue={jest.fn()} />
+    )
+
+    const continuar = screen.getByRole('button', { name: /Continuar/ })
+    expect(continuar.getAttribute('style')).toContain('var(--brand-fill,')
+    expect(continuar.getAttribute('style')).toContain('var(--brand-on-fill,')
+  })
+})

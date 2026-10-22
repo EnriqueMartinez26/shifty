@@ -51,7 +51,8 @@ import { BookingPriceSummary } from './BookingPriceSummary'
 import { BookingSuccess } from './BookingSuccess'
 import { depositBreakdownText } from './depositReasons'
 import type { BookingClientData, BookingOtpState, BookingWizardState } from './types'
-import { buttonStyles2000s, colors2000s, orangeCtaGradient } from '../../../../theme/colors'
+import { buttonStyles2000s, colors2000s } from '../../../../theme/colors'
+import { brandColor, brandCtaStyle } from '../../../lib/brandTheme'
 import { revealOnMount } from '../../../lib/revealOnMount'
 import {
   createBookingClientInputStyle,
@@ -813,10 +814,10 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
   if (submission.phase === 'submitting') {
     return (
       <div className="flex flex-col items-center justify-center py-20 duration-500">
-        <Loader2 className="w-16 h-16 animate-spin text-orange-500 mb-6" />
+        <Loader2 className="w-16 h-16 animate-spin mb-6" style={{ color: brandColor.ink }} />
         <h2
           className="text-2xl font-black uppercase tracking-tight"
-          style={{ color: colors2000s.orange.accent }}
+          style={{ color: brandColor.ink }}
         >
           Confirmando...
         </h2>
@@ -844,7 +845,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
         <div>
           <h2
             className="break-words text-2xl font-black uppercase tracking-tight"
-            style={{ color: colors2000s.orange.accent }}
+            style={{ color: brandColor.ink }}
           >
             Tus datos y confirmación
           </h2>
@@ -907,7 +908,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
               setPromotionOpen(true)
             }}
             className="inline-flex items-center gap-2 text-xs font-black underline"
-            style={{ color: colors2000s.orange.accent }}
+            style={{ color: brandColor.ink }}
           >
             <Tag className="w-4 h-4" />
             ¿Tenés un código de descuento?
@@ -918,7 +919,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
             style={{ ...createBookingAccentBoxStyle('#ffffff', '#e5e7eb') }}
           >
             <div className="flex items-center gap-2">
-              <Tag className="w-4 h-4 text-orange-500" />
+              <Tag className="w-4 h-4" style={{ color: brandColor.ink }} />
               <label
                 htmlFor={`${fieldId}-promo-code`}
                 className="text-[10px] font-black uppercase tracking-widest text-gray-400"
@@ -1221,7 +1222,8 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
             type="checkbox"
             checked={acceptsTerms}
             onChange={(event) => setAcceptsTerms(event.target.checked)}
-            className="mt-0.5 w-4 h-4 accent-orange-500 cursor-pointer"
+            className="mt-0.5 w-4 h-4 cursor-pointer"
+            style={{ accentColor: brandColor.fill }}
           />
           <span>
             Acepto los{' '}
@@ -1230,7 +1232,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
               target="_blank"
               rel="noreferrer"
               className="underline"
-              style={{ color: colors2000s.orange.accent }}
+              style={{ color: brandColor.ink }}
             >
               términos y condiciones
             </a>
@@ -1240,7 +1242,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
               target="_blank"
               rel="noreferrer"
               className="underline"
-              style={{ color: colors2000s.orange.accent }}
+              style={{ color: brandColor.ink }}
             >
               política de privacidad
             </a>
@@ -1256,16 +1258,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
               void handleConfirm('manual')
             }}
             className="w-full min-h-11 font-black py-4 rounded-xl transition-all uppercase tracking-widest text-xs active:scale-95 border cursor-pointer select-none disabled:cursor-not-allowed"
-            style={
-              canSubmit
-                ? {
-                    background: orangeCtaGradient,
-                    borderColor: colors2000s.orange.dark,
-                    color: colors2000s.text.onOrangeSelection,
-                    boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerOrange}`
-                  }
-                : buttonStyles2000s.disabled
-            }
+            style={canSubmit ? brandCtaStyle : buttonStyles2000s.disabled}
           >
             {owesDepositByWhatsApp ? (
               <>
@@ -1288,16 +1281,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
               void handleConfirm('mercadopago')
             }}
             className="w-full min-h-11 font-black py-4 rounded-xl transition-all uppercase tracking-widest text-xs active:scale-95 border cursor-pointer select-none inline-flex items-center justify-center gap-2 disabled:cursor-not-allowed"
-            style={
-              canSubmit
-                ? {
-                    background: orangeCtaGradient,
-                    borderColor: colors2000s.orange.dark,
-                    color: colors2000s.text.onOrangeSelection,
-                    boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerOrange}`
-                  }
-                : buttonStyles2000s.disabled
-            }
+            style={canSubmit ? brandCtaStyle : buttonStyles2000s.disabled}
           >
             <WalletCards className="w-4 h-4" />
             Pagar seña con Mercado Pago

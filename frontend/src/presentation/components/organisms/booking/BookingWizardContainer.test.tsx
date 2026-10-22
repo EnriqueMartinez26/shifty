@@ -10,8 +10,10 @@ import { forgetOtpVerification, rememberOtpVerification } from '@shared/utils/ot
 
 import { BookingWizardContainer } from './BookingWizardContainer'
 import { EMPTY_PRESELECT, initialStepFor } from './deepLink'
+import { colors2000s } from '../../../../theme/colors'
 import { useBookingStepParam } from '../../../hooks/useBookingStepParam'
 import type { PublicStore } from '../../../hooks/usePublic'
+import { brandCssVariables, DEFAULT_BRAND_THEME, resolveBrandTheme } from '../../../lib/brandTheme'
 
 const mockServices = jest.fn()
 const mockStaff = jest.fn()
@@ -1035,5 +1037,57 @@ describe('BookingWizardContainer', () => {
         expect(screen.getByText('10:00')).toBeInTheDocument()
       })
     })
+  })
+})
+
+// S3 (2026-10-21, Mateo): "recorda que esto era personalizable por tienda y se
+// elegia en produccion". El color de la tienda se fija una vez en la raiz del
+// wizard y los pasos leen var(--brand-*).
+describe('BookingWizardContainer con el color de la tienda', () => {
+  const raiz = () =>
+    screen.getByRole('region', { name: 'Paso 1 de 3: Servicio' }).parentElement as HTMLElement
+  const variables = (element: HTMLElement) =>
+    Object.fromEntries(
+      ['--brand-fill', '--brand-fill-bottom', '--brand-on-fill', '--brand-ink'].map((name) => [
+        name,
+        element.style.getPropertyValue(name)
+      ])
+    )
+
+  beforeEach(() => {
+    mockServices.mockReturnValue({ data: [servicio('a'), servicio('b')], isLoading: false })
+    mockStaff.mockReturnValue({ data: [], isLoading: false })
+    mockAvailability.mockReturnValue({ data: [slot], isLoading: false })
+  })
+
+  it('expone el color elegido por la tienda como variables en la raiz', () => {
+    render(<WizardEnRuta store={{ ...tienda(false), primary_color: '#3B82F6' }} />)
+
+    expect(variables(raiz())).toEqual(brandCssVariables(resolveBrandTheme('#3b82f6')))
+    expect(raiz().style.getPropertyValue('--brand-fill')).toBe('#3b82f6')
+  })
+
+  it.each(['#000000', '#000', '', undefined])(
+    'sin color elegido (%s) queda el naranja de Shifty',
+    (primary_color) => {
+      render(<WizardEnRuta store={{ ...tienda(false), primary_color: primary_color as string }} />)
+
+      expect(variables(raiz())).toEqual({
+        '--brand-fill': DEFAULT_BRAND_THEME.fill,
+        '--brand-fill-bottom': DEFAULT_BRAND_THEME.fillBottom,
+        '--brand-on-fill': DEFAULT_BRAND_THEME.onFill,
+        '--brand-ink': colors2000s.orange.accent
+      })
+    }
+  )
+
+  it('el paso actual del indicador usa el color de marca', () => {
+    render(<WizardEnRuta store={{ ...tienda(false), primary_color: '#3b82f6' }} />)
+
+    const actual = screen.getByRole('listitem', { current: 'step' })
+    const circulo = actual.querySelector('div') as HTMLElement
+    expect(circulo.getAttribute('style')).toContain('var(--brand-fill,')
+    expect(circulo.getAttribute('style')).toContain('var(--brand-on-fill,')
+    expect(actual.querySelector('span')?.getAttribute('style')).toContain('var(--brand-ink,')
   })
 })

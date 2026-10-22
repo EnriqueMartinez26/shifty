@@ -22,7 +22,8 @@ import { formatArgentinaDate, formatArgentinaTime } from '@shared/utils/argentin
 import { BookingBackButton } from './BookingBackButton'
 import type { BookingSlotStaff } from './types'
 import { WaitlistJoinForm } from './WaitlistJoinForm'
-import { colors2000s, orangeCtaGradient } from '../../../../theme/colors'
+import { colors2000s } from '../../../../theme/colors'
+import { brandColor } from '../../../lib/brandTheme'
 import { createBookingSurfaceStyle } from '../../../lib/surfaceStyles'
 
 interface BookingStepDateTimeProps {
@@ -263,7 +264,7 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
         <div>
           <h2
             className="text-2xl font-black uppercase tracking-tight"
-            style={{ color: colors2000s.orange.heading }}
+            style={{ color: brandColor.ink }}
           >
             {heading}
           </h2>
@@ -274,7 +275,7 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
       {!lockedStaffId && soloStaff && (
         <div>
           <div className="flex items-center gap-2 mb-1 text-xs font-black text-gray-500 uppercase tracking-widest ml-1">
-            <Users size={14} className="text-orange-500" />
+            <Users size={14} style={{ color: brandColor.ink }} />
             <span>{staffLabel}</span>
           </div>
           <p className="ml-1 text-sm font-black" style={{ color: colors2000s.text.primary }}>
@@ -289,7 +290,7 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
             className="flex items-center gap-2 mb-3 text-xs font-black uppercase tracking-widest ml-1"
             style={{ color: colors2000s.text.secondary }}
           >
-            <Users size={14} className="text-orange-500" />
+            <Users size={14} style={{ color: brandColor.ink }} />
             <span>{staffLabel}</span>
           </div>
 
@@ -300,7 +301,7 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
             className="flex gap-2 overflow-x-auto overscroll-x-contain pb-2 hide-scrollbar"
           >
             {isStaffLoading ? (
-              <Loader2 className="w-5 h-5 animate-spin text-orange-500" />
+              <Loader2 className="w-5 h-5 animate-spin" style={{ color: brandColor.ink }} />
             ) : (
               staffOptions.map((option) => {
                 const isSelected = selectedStaffId === option.id
@@ -313,16 +314,12 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
                     className="min-h-11 min-w-11 flex items-center gap-1.5 px-3 py-2 text-xs font-black uppercase tracking-widest whitespace-nowrap border transition-all active:scale-95"
                     style={{
                       borderRadius: 6,
-                      background: isSelected ? orangeCtaGradient : '#ffffff',
-                      borderColor: isSelected
-                        ? colors2000s.orange.dark
-                        : colors2000s.border.default,
+                      background: isSelected ? brandColor.fillGradient : '#ffffff',
+                      borderColor: isSelected ? brandColor.fillBottom : colors2000s.border.default,
                       boxShadow: isSelected
                         ? colors2000s.shadows.insetLight
                         : colors2000s.shadows.insetDark,
-                      color: isSelected
-                        ? colors2000s.text.onOrangeSelection
-                        : colors2000s.text.primary
+                      color: isSelected ? brandColor.onFill : colors2000s.text.primary
                     }}
                   >
                     {option.id === null && <Sparkles className="w-3.5 h-3.5" />}
@@ -346,7 +343,7 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
       <div>
         <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 mb-3 ml-1">
           <div className="flex min-w-0 items-center gap-2 text-xs font-black text-gray-500 uppercase tracking-widest">
-            <CalendarIcon size={14} className="text-orange-500" />
+            <CalendarIcon size={14} style={{ color: brandColor.ink }} />
             <span>Fechas disponibles</span>
           </div>
           <span className="ml-auto text-right text-[10px] font-semibold text-gray-500">
@@ -424,13 +421,13 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
                 className="min-h-11 min-w-[72px] flex flex-col items-center justify-center py-3 rounded-md border transition-all snap-center active:scale-95"
                 style={{
                   background: isSelected
-                    ? orangeCtaGradient
+                    ? brandColor.fillGradient
                     : `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
-                  borderColor: isSelected ? colors2000s.orange.dark : colors2000s.border.default,
+                  borderColor: isSelected ? brandColor.fillBottom : colors2000s.border.default,
                   boxShadow: isSelected
                     ? `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerOrange}`
                     : `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`,
-                  color: isSelected ? colors2000s.text.onOrangeSelection : colors2000s.text.primary
+                  color: isSelected ? brandColor.onFill : colors2000s.text.primary
                 }}
               >
                 <span className="text-[9px] uppercase font-black tracking-widest opacity-80">
@@ -449,7 +446,7 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
       <div className="pt-2">
         <div className="flex items-center justify-between mb-4 ml-1">
           <div className="flex items-center gap-2 text-xs font-black text-gray-500 uppercase tracking-widest">
-            <Clock size={14} className="text-orange-500" />
+            <Clock size={14} style={{ color: brandColor.ink }} />
             <span>Horarios Disponibles</span>
           </div>
           {/* Un boton real con role="switch": entra en el orden de Tab y
@@ -467,7 +464,8 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
             </span>
             <span
               aria-hidden="true"
-              className={`block w-9 h-5 rounded-full p-1 transition-colors ${forceAll ? 'bg-orange-500' : 'bg-gray-300'}`}
+              className={`block w-9 h-5 rounded-full p-1 transition-colors ${forceAll ? '' : 'bg-gray-300'}`}
+              style={forceAll ? { background: brandColor.fill } : undefined}
             >
               <span
                 className={`block w-3 h-3 bg-white rounded-full shadow-sm transform transition-transform ${forceAll ? 'translate-x-4' : 'translate-x-0'}`}
@@ -521,7 +519,7 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
                 aria-label="Cargando horarios"
                 className="flex flex-col items-center justify-center py-10"
               >
-                <Loader2 className="w-8 h-8 animate-spin text-orange-500 mb-4" />
+                <Loader2 className="w-8 h-8 animate-spin mb-4" style={{ color: brandColor.ink }} />
               </div>
             ) : isError && !availability ? (
               <div
@@ -542,7 +540,7 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
                     void refetchAvailability()
                   }}
                   className="text-xs font-black underline"
-                  style={{ color: colors2000s.orange.accent }}
+                  style={{ color: brandColor.ink }}
                 >
                   Reintentar
                 </button>
@@ -599,17 +597,13 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
                       className="min-h-11 min-w-0 py-2 sm:py-3 rounded-md font-black text-base sm:text-lg transition-all active:scale-95 border"
                       style={{
                         background: isSelected
-                          ? orangeCtaGradient
+                          ? brandColor.fillGradient
                           : `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
-                        borderColor: isSelected
-                          ? colors2000s.orange.accent
-                          : colors2000s.border.default,
+                        borderColor: isSelected ? brandColor.ink : colors2000s.border.default,
                         boxShadow: isSelected
                           ? `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerOrange}`
                           : `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`,
-                        color: isSelected
-                          ? colors2000s.text.onOrangeSelection
-                          : colors2000s.text.primary
+                        color: isSelected ? brandColor.onFill : colors2000s.text.primary
                       }}
                     >
                       <div>{timeString}</div>
@@ -617,9 +611,7 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
                         <div
                           className="text-[8px] uppercase tracking-widest mt-1"
                           style={{
-                            color: isSelected
-                              ? colors2000s.text.onOrangeSelection
-                              : colors2000s.text.secondary
+                            color: isSelected ? brandColor.onFill : colors2000s.text.secondary
                           }}
                         >
                           {slot.staff_name}

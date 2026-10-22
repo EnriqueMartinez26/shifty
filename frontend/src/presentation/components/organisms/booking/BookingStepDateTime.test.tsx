@@ -900,3 +900,66 @@ describe('BookingStepDateTime', () => {
     })
   })
 })
+
+// S3 (2026-10-21): el dia y el horario elegidos usan el color de la tienda.
+describe('BookingStepDateTime con el color de la tienda', () => {
+  beforeEach(() => {
+    mockAvailability.mockReset()
+    mockStaff.mockReset()
+    mockStaff.mockReturnValue({ data: [], isLoading: false })
+  })
+
+  it('el dia y el horario elegidos usan el relleno y el texto de marca', () => {
+    const hoy = formatArgentinaDate(new Date().toISOString())
+    mockAvailability.mockReturnValue({
+      isLoading: false,
+      data: [
+        {
+          staff_id: 'st-1',
+          staff_name: 'Pro',
+          starts_at: '2026-09-15T12:00:00+00:00',
+          ends_at: '2026-09-15T12:30:00+00:00',
+          status: 'available',
+          reason: null
+        },
+        {
+          staff_id: 'st-1',
+          staff_name: 'Pro',
+          starts_at: '2026-09-15T13:00:00+00:00',
+          ends_at: '2026-09-15T13:30:00+00:00',
+          status: 'available',
+          reason: null
+        }
+      ]
+    })
+
+    render(
+      <BookingStepDateTime
+        storePublicId="store-1"
+        serviceId="svc-1"
+        staffId="st-1"
+        selectedDate={hoy}
+        selectedTime="09:00"
+        onSelect={() => undefined}
+        onBack={() => undefined}
+      />
+    )
+
+    const dia = screen.getByTestId(`date-${hoy}`)
+    expect(dia).toHaveAttribute('aria-pressed', 'true')
+    expect(dia.getAttribute('style')).toContain('var(--brand-fill,')
+    expect(dia.getAttribute('style')).toContain('var(--brand-on-fill,')
+
+    const horario = screen.getByRole('button', { name: /09:00/ })
+    expect(horario).toHaveAttribute('aria-pressed', 'true')
+    expect(horario.getAttribute('style')).toContain('var(--brand-fill,')
+    expect(horario.getAttribute('style')).toContain('var(--brand-ink,')
+    expect(horario.getAttribute('style')).toContain('var(--brand-on-fill,')
+
+    const otroHorario = screen.getByRole('button', { name: /10:00/ })
+    expect(otroHorario.getAttribute('style')).not.toContain('var(--brand-fill,')
+    expect(screen.getByRole('heading', { level: 2 }).getAttribute('style')).toContain(
+      'var(--brand-ink,'
+    )
+  })
+})

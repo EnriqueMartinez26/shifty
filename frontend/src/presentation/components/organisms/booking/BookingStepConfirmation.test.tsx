@@ -1844,3 +1844,38 @@ describe('BookingStepConfirmation: reservar solo con el importe confirmado', () 
     expect(screen.queryByText(/No pudimos volver a validar el código/)).not.toBeInTheDocument()
   })
 })
+
+// S3 (2026-10-21): confirmar y los links de la tienda usan su color.
+describe('BookingStepConfirmation con el color de la tienda', () => {
+  beforeEach(() => {
+    mockDepositPreview.mockReset()
+    mockServices.mockReset()
+    mockDepositPreview.mockReturnValue({ data: undefined, isLoading: false })
+    mockServices.mockReturnValue({ data: [], isLoading: false })
+  })
+
+  it('el boton de confirmar habilitado y los links usan el color de marca', () => {
+    render(
+      <BookingStepConfirmation
+        {...props({
+          bookingState: estado({ client: cliente({ name: 'Lucia', phone: '351 1234567' }) })
+        })}
+      />
+    )
+    aceptarTerminos()
+
+    expect(botonReservar()).not.toBeDisabled()
+    expect(botonReservar().getAttribute('style')).toContain('var(--brand-fill,')
+    expect(botonReservar().getAttribute('style')).toContain('var(--brand-on-fill,')
+    expect(
+      screen.getByRole('link', { name: 'términos y condiciones' }).getAttribute('style')
+    ).toContain('var(--brand-ink,')
+  })
+
+  it('deshabilitado sigue con el estilo neutro de siempre', () => {
+    render(<BookingStepConfirmation {...props()} />)
+
+    expect(botonReservar()).toBeDisabled()
+    expect(botonReservar().getAttribute('style')).not.toContain('var(--brand-fill,')
+  })
+})

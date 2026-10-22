@@ -17,7 +17,8 @@ import { buildWaMeUrl } from '@shared/utils/whatsAppPhone'
 
 import { BookingNoEmailActions, bookedSummary } from './BookingNoEmailActions'
 import type { BookingWizardState } from './types'
-import { colors2000s, orangeCtaGradient } from '../../../../theme/colors'
+import { colors2000s } from '../../../../theme/colors'
+import { brandColor, brandCtaStyle } from '../../../lib/brandTheme'
 
 // Estado del cobro en castellano: el cliente leia "Estado: pending".
 const PAYMENT_STATUS_LABELS: Record<string, string> = {
@@ -171,7 +172,7 @@ export const BookingSuccess: React.FC<BookingSuccessProps> = ({
 
       <h2
         className="text-3xl font-black uppercase tracking-tight leading-none mb-2"
-        style={{ color: colors2000s.orange.accent }}
+        style={{ color: brandColor.ink }}
       >
         {title}
       </h2>
@@ -197,9 +198,10 @@ export const BookingSuccess: React.FC<BookingSuccessProps> = ({
         <div className="grid gap-4">
           <div className="flex items-center gap-3">
             <div
-              className="p-2.5 rounded-md text-orange-500"
+              className="p-2.5 rounded-md"
               style={{
                 background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
+                color: brandColor.ink,
                 boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`
               }}
             >
@@ -239,9 +241,10 @@ export const BookingSuccess: React.FC<BookingSuccessProps> = ({
           {(confirmation.services_label || confirmation.service_name) && (
             <div className="flex items-center gap-3">
               <div
-                className="p-2.5 rounded-md text-orange-500"
+                className="p-2.5 rounded-md"
                 style={{
                   background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
+                  color: brandColor.ink,
                   boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`
                 }}
               >
@@ -322,12 +325,7 @@ export const BookingSuccess: React.FC<BookingSuccessProps> = ({
           target="_blank"
           rel="noreferrer"
           className="w-full mt-6 font-black py-4 rounded-xl transition-all uppercase tracking-widest text-xs border cursor-pointer select-none inline-flex items-center justify-center gap-2"
-          style={{
-            background: orangeCtaGradient,
-            borderColor: colors2000s.orange.dark,
-            color: colors2000s.text.onOrangeSelection,
-            boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerOrange}`
-          }}
+          style={brandCtaStyle}
         >
           Ir a pagar
           <ExternalLink className="w-4 h-4" />
@@ -343,7 +341,7 @@ export const BookingSuccess: React.FC<BookingSuccessProps> = ({
           style={{
             background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
             borderColor: colors2000s.border.default,
-            color: colors2000s.orange.accent,
+            color: brandColor.ink,
             boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`
           }}
         >

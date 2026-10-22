@@ -2,6 +2,7 @@ import React from 'react'
 
 import { ArrowLeft } from 'lucide-react'
 
+import { brandColor } from '../../../lib/brandTheme'
 import { createBookingBackButtonStyle } from '../../../lib/surfaceStyles'
 
 interface BookingBackButtonProps {
@@ -18,7 +19,12 @@ export const BookingBackButton: React.FC<BookingBackButtonProps> = ({ onBack }) 
     type="button"
     onClick={onBack}
     className="inline-flex min-h-11 min-w-11 items-center gap-1.5 px-3 py-2 rounded-md border text-xs font-black uppercase tracking-widest transition-all active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-500 focus-visible:ring-offset-2"
-    style={createBookingBackButtonStyle()}
+    style={{
+      ...createBookingBackButtonStyle(),
+      background: brandColor.fillGradient,
+      borderColor: brandColor.ink,
+      color: brandColor.onFill
+    }}
   >
     <ArrowLeft size={16} aria-hidden="true" className="stroke-[3px]" />
     <span>Volver</span>
