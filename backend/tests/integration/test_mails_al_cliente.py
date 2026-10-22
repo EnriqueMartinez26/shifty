@@ -33,6 +33,7 @@ import modules.notifications.tasks as tasks
 from core.utils import ARGENTINA_TZ
 from modules.appointments.model import Appointment
 from modules.payments.jobs import process_outbox_batch
+from tests.integration.pendiente_heredado import como_pendiente_heredado
 from tests.integration.test_feature_flags_finance_and_public_privacy import (
     add_staff_schedule,
     auth_headers,
@@ -142,7 +143,9 @@ async def test_reservar_y_confirmar_mandan_mail_en_hora_argentina(
     assert buzon.enviados == []
     public_id = reserva.json()["public_id"]
     [encolado] = cola.encolados
-    assert encolado[0] == "registration"
+    # Sin cobro nace confirmada (decision de Mateo, 2026-10-20): "turno
+    # confirmado" en vez de "reserva registrada".
+    assert encolado[0] == "confirmation"
     assert encolado[2] == public_id
     # PV-19: por el broker viajan ids, no datos personales.
     assert "carla" not in repr(encolado).lower()
@@ -151,14 +154,16 @@ async def test_reservar_y_confirmar_mandan_mail_en_hora_argentina(
     assert len(buzon.enviados) == 1
     destino, asunto, cuerpo = buzon.enviados[0]
     assert destino == "carla@example.com"
-    assert asunto.startswith("Reserva registrada")
+    assert asunto.startswith("Turno confirmado")
     assert "Hola Carla Ruiz" in cuerpo
     local = slot.astimezone(ARGENTINA_TZ)
     assert local.strftime("%d/%m/%Y") in cuerpo and "10:00 hs" in cuerpo
     assert "T13:00" not in cuerpo, "la hora no puede salir en ISO UTC"
     assert "desde la app" not in cuerpo
-    assert "/b/mail-ok" in cuerpo
 
+    # Confirmar desde el panel un pendiente de antes del 2026-10-20 (el alta
+    # ya no los crea) manda su "turno confirmado" por el outbox.
+    await como_pendiente_heredado(test_session, public_id)
     confirmar = await client.patch(
         f"/appointments/{public_id}/confirm",
         headers=auth_headers(token),
@@ -306,6 +311,9 @@ async def test_el_worker_no_manda_la_confirmacion_de_un_turno_que_ya_no_esta_con
     )
     assert reserva.status_code == 201, reserva.text
     public_id = reserva.json()["public_id"]
+    # Nace confirmada (decision de Mateo, 2026-10-20); un pendiente de antes
+    # es el turno que ya no esta confirmado.
+    await como_pendiente_heredado(test_session, public_id)
     turno = await test_session.get(Appointment, public_id)
     assert turno is not None and turno.status == "pending"
     store_id = turno.store_id

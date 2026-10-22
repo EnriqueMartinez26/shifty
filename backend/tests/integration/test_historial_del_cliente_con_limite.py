@@ -80,8 +80,9 @@ async def test_por_defecto_devuelve_los_50_mas_recientes(
     assert len(turnos) == 50
     inicios = [t["starts_at"] for t in turnos]
     assert inicios == sorted(inicios, reverse=True), "mas recientes primero"
-    # El primero es el turno futuro (el alta), que sigue autogestionable.
-    assert turnos[0]["status"] == "pending"
+    # El primero es el turno futuro (el alta), que sigue autogestionable. Sin
+    # cobro nace confirmado (decision de Mateo, 2026-10-20); antes "pending".
+    assert turnos[0]["status"] == "confirmed"
     assert turnos[0]["can_cancel"] is True
     assert {t["service_name"] for t in turnos} == {"Consulta"}
     assert {t["staff_name"] for t in turnos} == {"Pro Demo"}

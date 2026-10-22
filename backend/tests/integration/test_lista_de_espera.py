@@ -28,6 +28,7 @@ from tests.integration.test_feature_flags_finance_and_public_privacy import (
     register_and_login,
 )
 from tests.integration.test_mails_al_cliente import Buzon
+from tests.integration.pendiente_heredado import como_pendiente_heredado
 
 
 async def _tienda(
@@ -133,8 +134,10 @@ async def test_cada_camino_que_libera_un_cupo_publica_el_evento(
     assert res.status_code == 200, res.text
     assert len(await _eventos(test_session)) == 1
 
-    # 2. Liberar un pendiente.
+    # 2. Liberar un pendiente. La reserva sin cobro ya nace confirmada
+    # (decision de Mateo, 2026-10-20): el pendiente es uno de antes.
     pid = await _reservar(client, store, service, staff, slot, "caminos-000002")
+    await como_pendiente_heredado(test_session, pid)
     res = await client.patch(
         f"/appointments/{pid}/release", headers=auth_headers(token)
     )

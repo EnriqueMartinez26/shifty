@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 from http import HTTPStatus
 from typing import Any
@@ -24,6 +24,13 @@ from infrastructure.persistence.models.staff_service import StaffServiceModel
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.legal.versions import AcceptedVersions, check_accepted_versions
 from modules.notifications.tasks import EVENT_APPOINTMENT_CONFIRMED
+from modules.payments.deposit_channels import (
+    FarBookingUnavailableError,
+    deposit_channels_for,
+    deposit_mode_of,
+    far_booking_blocked,
+    report_far_booking_unavailable,
+)
 from modules.payments.model import JsonValue, OutboxMessage
 from modules.public_api.repository import PublicRepository
 from modules.services.model import Service
@@ -89,6 +96,28 @@ class WaitlistService:
         self.public_repo = PublicRepository(db)
 
     # ------------------------------------------------------------------ alta
+    async def _reject_far_window(
+        self, store: Store, service: Service, window_ends_at: datetime
+    ) -> None:
+        """La ventana no llega a un dia que el alta rechazaria por la reserva
+        lejana (decision de Mateo, 2026-10-20; revision de la PR #236): con
+        sena obligatoria y sin MP usable, 422 ``FAR_BOOKING_UNAVAILABLE`` antes
+        de escribir. Si no, la lista ofreceria cupos que nadie puede reservar.
+        Se mira el ultimo instante de la ventana (su fin es exclusivo); los
+        canales solo se leen para una sena obligatoria.
+        """
+        channels = await deposit_channels_for(
+            self.db, store, deposit_mode=deposit_mode_of(service)
+        )
+        if far_booking_blocked(
+            [service],
+            store,
+            channels,
+            starts_at=window_ends_at - timedelta(microseconds=1),
+        ):
+            report_far_booking_unavailable(store_id=store.id, service_id=service.id)
+            raise FarBookingUnavailableError()
+
     async def join(
         self,
         *,
@@ -114,6 +143,7 @@ class WaitlistService:
                 http_status=HTTPStatus.UNPROCESSABLE_ENTITY,
                 error_code="WAITLIST_WINDOW_PAST",
             )
+        await self._reject_far_window(store, service, window_ends_at)
         if await self._open_duplicate(
             store.id, client_phone, service.id, window_starts_at
         ):

@@ -116,7 +116,9 @@ async def test_los_tres_mails_del_lote_salen_con_el_evento_ya_commiteado(
     await _enable_payments(client, token)
     await _configure_gateway(client, token)
 
-    # 1) Reserva manual -> aviso al dueno (appointment.pending_confirmation).
+    # 1) Reserva manual -> aviso al dueno (appointment.booked_online: sin
+    # cobro nace confirmada, decision de Mateo 2026-10-20; antes era
+    # appointment.pending_confirmation).
     await _reserva_manual(
         client, store, service, staff, cuando, nombre="Cliente Uno", key="outbox-txn-1"
     )
@@ -157,7 +159,7 @@ async def test_los_tres_mails_del_lote_salen_con_el_evento_ya_commiteado(
         *, email: str, title: str, body: str | None = None, smtp: Any = None
     ) -> dict[str, str]:
         vistos["dueno"] = await _processed_at_en_base(
-            test_session, NotificationType.APPOINTMENT_PENDING_CONFIRMATION.value
+            test_session, NotificationType.APPOINTMENT_BOOKED_ONLINE.value
         )
         return {"status": "sent"}
 

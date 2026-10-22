@@ -13,7 +13,7 @@ from decimal import Decimal
 from enum import Enum
 from datetime import datetime, timedelta
 
-from sqlalchemy import Select, distinct, exists, func, select
+from sqlalchemy import Select, and_, distinct, exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, raiseload, selectinload
 from sqlalchemy.sql.elements import ColumnElement
@@ -30,6 +30,7 @@ from modules.appointments.repository import (
 )
 from modules.appointments.working_hours import staff_ids_working_range
 from modules.legal.versions import AcceptedVersions
+from modules.payments.model import PAYMENT_PROVIDER_MERCADOPAGO, PaymentGatewayConfig
 from modules.payments.deposit_rules import ClientHistory
 from modules.payments.repository import live_charge_provider_of, paid_appointment_of
 from modules.services.model import Service, ServiceAddon
@@ -124,11 +125,29 @@ class PublicRepository:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    async def get_store_by_slug(self, slug: str) -> Store | None:
-        result = await self.db.execute(
-            select(Store).where(Store.slug == slug, *_visible_en_el_portal())
-        )
-        return result.scalar_one_or_none()
+    async def get_store_by_slug(
+        self, slug: str
+    ) -> tuple[Store, PaymentGatewayConfig | None] | None:
+        """La tienda de la vitrina y su config de Mercado Pago, en la MISMA
+        sentencia (LEFT JOIN): la vitrina informa hasta cuando se reserva un
+        servicio con sena obligatoria (``deposit_far_limit_days``, decision de
+        Mateo 2026-10-20) sin sumar una consulta."""
+        row = (
+            await self.db.execute(
+                select(Store, PaymentGatewayConfig)
+                .outerjoin(
+                    PaymentGatewayConfig,
+                    and_(
+                        PaymentGatewayConfig.store_id == Store.id,
+                        PaymentGatewayConfig.provider == PAYMENT_PROVIDER_MERCADOPAGO,
+                    ),
+                )
+                .where(Store.slug == slug, *_visible_en_el_portal())
+            )
+        ).one_or_none()
+        if row is None:
+            return None
+        return row[0], row[1]
 
     async def get_store_ref_by_slug(self, slug: str) -> tuple[str, str, str] | None:
         """``(id, public_id, name)`` de una tienda activa por slug, en columnas.
