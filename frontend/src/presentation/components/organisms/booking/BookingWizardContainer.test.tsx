@@ -14,7 +14,7 @@ import { EMPTY_PRESELECT, initialStepFor } from './deepLink'
 import { colors2000s } from '../../../../theme/colors'
 import { useBookingStepParam } from '../../../hooks/useBookingStepParam'
 import type { PublicStore } from '../../../hooks/usePublic'
-import { brandCssVariables, resolveBrandTheme } from '../../../lib/brandTheme'
+import { brandCssVariables, DEFAULT_BRAND_THEME, resolveBrandTheme } from '../../../lib/brandTheme'
 
 const mockServices = jest.fn()
 const mockStaff = jest.fn()
@@ -1280,9 +1280,9 @@ describe('BookingWizardContainer con el color de la tienda', () => {
       render(<WizardEnRuta store={{ ...tienda(false), primary_color: primary_color as string }} />)
 
       expect(variables(raiz())).toEqual({
-        '--brand-fill': colors2000s.orange.cta,
-        '--brand-fill-bottom': colors2000s.orange.ctaEnd,
-        '--brand-on-fill': colors2000s.text.onOrangeSelection,
+        '--brand-fill': DEFAULT_BRAND_THEME.fill,
+        '--brand-fill-bottom': DEFAULT_BRAND_THEME.fillBottom,
+        '--brand-on-fill': DEFAULT_BRAND_THEME.onFill,
         '--brand-ink': colors2000s.orange.accent
       })
     }
