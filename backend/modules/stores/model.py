@@ -1,5 +1,5 @@
 from datetime import time
-from typing import Any
+from typing import Any, Literal, cast
 
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy import (
@@ -27,6 +27,10 @@ FeatureFlags = dict[str, bool]
 BusinessHoursPeriod = dict[str, str]
 BusinessHours = dict[str, list[BusinessHoursPeriod]]
 CustomClientFieldData = dict[str, Any]
+# Punto focal de la portada que elige la tienda (S10.1, 2026-10-22). Vive aca y
+# no en schemas.py porque la propiedad de abajo lo usa para leer theme_config.
+CoverPosition = Literal["top", "center", "bottom"]
+COVER_POSITIONS: tuple[CoverPosition, ...] = ("top", "center", "bottom")
 
 
 class StoreSchedule(BaseEntity):
@@ -166,6 +170,13 @@ class Store(BaseEntity):
     @property
     def cover_url(self) -> str | None:
         return (self.theme_config or {}).get("cover_url")
+
+    @property
+    def cover_position(self) -> CoverPosition | None:
+        # Solo el PATCH validado la escribe; un valor ajeno en el JSON se lee
+        # como "sin elegir" en vez de romper la respuesta tipada.
+        valor = (self.theme_config or {}).get("cover_position")
+        return cast(CoverPosition, valor) if valor in COVER_POSITIONS else None
 
     @property
     def description(self) -> str | None:

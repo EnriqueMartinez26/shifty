@@ -8,6 +8,10 @@ siempre y seguia contando como activo en las consultas de choque.
 
 Decision (OK global del usuario, sugerencia del brief): mismo criterio de
 ``expires_at`` que el alta.
+
+Desde el 2026-10-20 (decision de Mateo) el alta sin cobro nace ``confirmed``
+y sin ``expires_at``; el caso de este archivo es un ``pending`` de antes, que
+sigue en produccion y se reprograma con la misma retencion.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -26,6 +30,7 @@ from tests.integration.test_feature_flags_finance_and_public_privacy import (
     create_staff,
     register_and_login,
 )
+from tests.integration.pendiente_heredado import como_pendiente_heredado
 
 TELEFONO = "+5491155553001"
 
@@ -62,6 +67,7 @@ async def test_el_turno_reprogramado_expira_como_uno_del_alta(
         },
     )
     assert reserva.status_code == 201, reserva.text
+    await como_pendiente_heredado(test_session, reserva.json()["public_id"])
     pedido = await client.post(
         "/public/otp/request",
         json={"store_public_id": store, "phone": TELEFONO, "channel": "whatsapp"},
