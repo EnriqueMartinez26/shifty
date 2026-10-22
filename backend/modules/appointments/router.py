@@ -38,6 +38,8 @@ from modules.appointments.availability import AvailabilityService
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.appointments.repository import AppointmentSearchRow, SearchCharge
 from modules.appointments.schemas import (
+    RECENT_PORTAL_HOURS_DEFAULT,
+    RECENT_PORTAL_HOURS_MAX,
     AppointmentAddonItem,
     AppointmentCreate,
     AppointmentExtraServiceItem,
@@ -49,6 +51,11 @@ from modules.appointments.schemas import (
     AppointmentResponse,
     AppointmentSearchResponse,
     AppointmentSearchResult,
+    BulkCancelRequest,
+    BulkCancelResponse,
+    BulkCancelSkipped,
+    RecentPortalAppointment,
+    RecentPortalResponse,
 )
 from modules.appointments.service import AppointmentBookPayload, AppointmentService
 from modules.auth.dependencies import (
@@ -410,6 +417,77 @@ async def cancel_appointment(
     """
     appointment = await svc.cancel(public_id=public_id, actor=user)
     return _to_appointment_response(appointment)
+
+
+# ---------------------------------------------------------------------------
+# Limpieza de reservas del portal (S6, paquete antiabuso, 2026-10-22)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/recent-portal", response_model=RecentPortalResponse)
+async def list_recent_portal_bookings(
+    hours: int = Query(RECENT_PORTAL_HOURS_DEFAULT, ge=1, le=RECENT_PORTAL_HOURS_MAX),
+    user: User = Depends(get_current_user),
+    svc: AppointmentService = Depends(get_appointment_service),
+) -> RecentPortalResponse:
+    """Turnos futuros activos que entraron por el portal en las ultimas
+    ``hours`` horas (1..168, 72 por defecto), el mas nuevo primero. Solo el
+    dueno/administrador de la tienda."""
+    require_roles(
+        user,
+        STORE_MANAGERS,
+        "Solo el dueno o administrador de la tienda puede ver las reservas del portal",
+    )
+    filas, truncated = await svc.recent_portal(actor=user, hours=hours)
+    return RecentPortalResponse(
+        items=[
+            RecentPortalAppointment(
+                public_id=fila.id,
+                client_name=fila.client_name,
+                client_phone=fila.client_phone,
+                service_name=services_label(
+                    fila.service_name, fila.extra_services_snapshot
+                ),
+                staff_name=fila.staff_name,
+                starts_at=fila.starts_at,
+                created_at=fila.created_at,
+                status=AppointmentStatus(fila.status),
+            )
+            for fila in filas
+        ],
+        truncated=truncated,
+    )
+
+
+@router.post("/bulk-cancel", response_model=BulkCancelResponse)
+async def bulk_cancel_appointments(
+    data: BulkCancelRequest,
+    user: User = Depends(get_current_user),
+    svc: AppointmentService = Depends(get_appointment_service),
+) -> BulkCancelResponse:
+    """Cancela varios turnos de la tienda (1..100 ids distintos). Solo el
+    dueno/administrador.
+
+    Cada turno pasa por la cancelacion de la agenda (cobro vivo vencido,
+    auditoria, cupo a la lista de espera) y su cliente recibe el aviso por el
+    outbox, con ``reason`` como motivo. Lo que no se puede cancelar se saltea
+    con su codigo (``APPOINTMENT_ALREADY_CANCELLED``,
+    ``APPOINTMENT_ALREADY_STARTED``, ``NOT_FOUND`` si no existe o es de otra
+    tienda, ``CONCURRENT_MODIFICATION`` si otra operacion lo tenia tomado);
+    lo demas se cancela igual.
+    """
+    require_roles(
+        user,
+        STORE_MANAGERS,
+        "Solo el dueno o administrador de la tienda puede cancelar turnos en bloque",
+    )
+    result = await svc.bulk_cancel(
+        public_ids=data.appointment_ids, reason=data.reason, actor=user
+    )
+    return BulkCancelResponse(
+        cancelled=result.cancelled,
+        skipped=[BulkCancelSkipped(id=id_, code=code) for id_, code in result.skipped],
+    )
 
 
 @router.patch("/{public_id}/release", response_model=AppointmentResponse)
