@@ -53,6 +53,14 @@ ALLOWED_STATUS_TRANSITIONS: dict[str, set[str]] = {
 }
 
 
+# Origen de la reserva (S5, paquete antiabuso, 2026-10-22): de donde entro el
+# turno. Lo lee la limpieza de reservas del portal
+# (``GET /appointments/recent-portal``). Solo el origen: no se guarda IP ni
+# user agent (la politica de privacidad no los cubre).
+BOOKED_VIA_PORTAL = "portal"
+BOOKED_VIA_PANEL = "panel"
+
+
 class AppointmentModel(Base):
     __tablename__ = "appointments"
 
@@ -137,6 +145,17 @@ class AppointmentModel(Base):
     # tienda. Queda registrado como respaldo ante un reclamo.
     terms_accepted_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True)
+    )
+    # ``portal`` (la reserva publica) o ``panel`` (lo que carga o mueve la
+    # tienda); reprogramar desde "Mis turnos" conserva el del original. NOT
+    # NULL con default ``panel``: un INSERT que no lo diga es de la tienda.
+    # Migraciones c7cd51eba96c + 733220bbf66e (backfill de lo historico por
+    # ``terms_accepted_at``, que solo escribe el portal).
+    booked_via: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default=BOOKED_VIA_PANEL,
+        server_default=text("'panel'"),
     )
     # Versiones de los terminos y de la politica de privacidad que acepto
     # (PV-09, 2026-09-25). NULL si el portal no las mando o si el turno lo
@@ -229,6 +248,10 @@ class AppointmentModel(Base):
         CheckConstraint(
             "extra_services_amount >= 0",
             name="ck_appointments_extra_services_amount",
+        ),
+        CheckConstraint(
+            "booked_via IN ('portal', 'panel')",
+            name="ck_appointments_booked_via",
         ),
         # Retenciones vivas para el job de vencimiento (cada minuto):
         # ``expires_at`` nunca se limpia y el indice plano barria todas las

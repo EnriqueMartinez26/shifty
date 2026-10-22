@@ -206,6 +206,10 @@ Una instrucción en lenguaje natural no es una garantía.
    - cancelar desde el panel (`AppointmentService.cancel`, cualquier
      personal; un turno ya cancelado es 409 `APPOINTMENT_ALREADY_CANCELLED`;
      cancelar no toca un pago acreditado);
+   - cancelar en bloque desde el panel (`AppointmentService.bulk_cancel`,
+     `POST /appointments/bulk-cancel`, solo administradores): cada turno pasa
+     por el mismo núcleo que `cancel` (`_cancel_locked`), en su savepoint;
+     ver "Reservas recientes del portal" más abajo;
    - reprogramar desde el panel (`reschedule`) un turno con link del panel:
      vence el link y el turno nuevo nace sin cobro. Un `pending_payment`
      (seña REQUERIDA pendiente, por MP o por WhatsApp) no se reprograma: 409
@@ -851,6 +855,33 @@ Una instrucción en lenguaje natural no es una garantía.
   reserva y anotarse en la lista de espera
   (`reject_new_public_business_when_suspended`, mismo 404 que la vitrina);
   cancelar y reprogramar siguen. (`test_suspension_por_endpoint.py`)
+- **Reservas recientes del portal: origen y limpieza en bloque** (paquete
+  antiabuso, propuesta por Mateo el 2026-10-22, pendiente de OK del dueño).
+  `appointments.booked_via` dice de dónde vino el turno: `portal` | `panel`,
+  NOT NULL con default `panel` y `ck_appointments_booked_via`. Todo lo que
+  carga o mueve la tienda escribe `panel`, también reprogramar desde el panel
+  un turno del portal (lo movió la tienda). La migración `733220bbf66e` marca
+  `portal` en lo histórico donde `terms_accepted_at IS NOT NULL` (solo el
+  portal lo escribe, PV-09). No se guarda IP ni user agent. Dos endpoints
+  para limpiar una ola de reservas falsas, solo para administradores de la
+  tienda (`STORE_MANAGERS`): `GET /appointments/recent-portal?hours=` (1..168,
+  72 por defecto) lista los turnos futuros activos del portal creados en esas
+  horas, el más nuevo primero y con tope de 200 filas (`truncated`), y
+  `POST /appointments/bulk-cancel` (1..100 ids distintos, `reason` opcional
+  hasta 200) cancela cada uno como la regla 3 y devuelve `cancelled` y
+  `skipped` con el código de cada salteado (`APPOINTMENT_ALREADY_CANCELLED`,
+  `APPOINTMENT_ALREADY_STARTED`, `NOT_FOUND` si no existe o es de otra tienda,
+  `CONCURRENT_MODIFICATION` si perdió una carrera con otra transacción,
+  `core/db_errors.is_concurrency_conflict`; otro error de base sube como 500).
+  A diferencia de la cancelación de a uno, que no avisa al cliente, la
+  limpieza le manda el mail de la cancelación por bloqueo: publica
+  `appointment.cancelled_by_block` en el outbox en la transacción de cada
+  turno, con `reason` como "Motivo". Con la tienda suspendida el listado
+  responde y `bulk-cancel` es 402 `SUBSCRIPTION_SUSPENDED` (no está en
+  `SUSPENSION_ALLOWED_WRITES`).
+  (`test_limpieza_de_reservas_del_portal.py`,
+  `test_pg_limpieza_de_reservas_del_portal.py`,
+  `test_migracion_origen_de_la_reserva.py`)
 - **Anotarse en la lista de espera es anónimo, así que tiene topes.**
   `MAX_OPEN_ENTRIES_PER_PHONE` (3) entradas abiertas por teléfono y tienda, y
   quien deja pasar `MAX_LAPSED_OFFERS` (2) ofertas expira solo
