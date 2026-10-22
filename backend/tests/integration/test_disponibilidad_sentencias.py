@@ -382,3 +382,93 @@ async def test_toda_invalidacion_cubre_los_dos_niveles(
     assert despues == await _disponibilidad(client, t, t.servicios[0])
     if cambio != "servicio":
         assert despues != antes, f"{cambio}: la grilla no cambio"
+
+
+# ---------------------------------------------------------------------------
+# Reserva lejana (decision de Mateo, 2026-10-20; revision de la PR #236)
+# ---------------------------------------------------------------------------
+# Un dia a mas de ``FAR_BOOKING_DAYS`` suma UNA sentencia, antes del cache:
+# los servicios elegidos con su tienda y la config de MP en un LEFT JOIN
+# (``far_day_closed_by_deposit``). Un dia cercano no paga nada (los tests de
+# arriba siguen en 1 y <= 6). Cinco semanas despues: mismo dia de la semana.
+LEJOS = timedelta(weeks=5)
+
+
+async def _disponibilidad_del(
+    client: AsyncClient, t: _Tienda, servicio: str, dia: date
+) -> Any:
+    res = await client.get(
+        "/public/availability",
+        params={
+            "store_public_id": t.store,
+            "service_id": servicio,
+            "date": dia.isoformat(),
+            "force_all": "true",
+        },
+    )
+    assert res.status_code == 200, res.text
+    return res.json()
+
+
+def _sin_cascadas(sentencias: list[str]) -> bool:
+    return not any("store_schedules" in s for s in sentencias)
+
+
+@pytest.mark.asyncio
+async def test_un_dia_lejano_suma_una_sentencia_al_hit_y_al_miss(
+    client: AsyncClient,
+    test_engine: AsyncEngine,
+    test_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    t = await _tienda(client, monkeypatch, "sentencias-lejos")
+    lejos = t.dia + LEJOS
+    _cache_nuevo()
+    test_session.expunge_all()
+
+    with _sentencias(test_engine) as miss:
+        primera = await _disponibilidad_del(client, t, t.servicios[0], lejos)
+    test_session.expunge_all()
+    with _sentencias(test_engine) as hit:
+        segunda = await _disponibilidad_del(client, t, t.servicios[0], lejos)
+
+    assert primera and segunda == primera, "sin sena el dia lejano se ofrece"
+    # El miss de un dia cercano (5 en SQLite y en Postgres) + la de la regla.
+    assert len(miss) <= 6, miss
+    assert len(hit) == 2, hit
+    assert "from stores" in hit[0]
+    assert "payment_gateway_configs" in hit[1] and "from services" in hit[1]
+    assert _sin_cascadas(miss + hit), miss + hit
+
+
+@pytest.mark.asyncio
+async def test_un_dia_lejano_con_sena_y_sin_mp_no_se_ofrece_en_dos_sentencias(
+    client: AsyncClient,
+    test_engine: AsyncEngine,
+    test_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from sqlalchemy import update
+
+    from modules.services.model import Service
+
+    t = await _tienda(client, monkeypatch, "sentencias-lejos-sena")
+    # Sena obligatoria en una tienda sin MP (la API exige un canal para
+    # configurarla; para contar sentencias alcanza con la fila).
+    await test_session.execute(
+        update(Service)
+        .where(Service.public_id == t.servicios[0])
+        .values(deposit_mode="required", deposit_type="percent", deposit_amount=30)
+    )
+    await test_session.commit()
+    _cache_nuevo()
+    test_session.expunge_all()
+
+    with _sentencias(test_engine) as sentencias:
+        lejos = await _disponibilidad_del(client, t, t.servicios[0], t.dia + LEJOS)
+
+    assert lejos == []
+    assert len(sentencias) == 2, sentencias
+    assert _sin_cascadas(sentencias), sentencias
+    # Cerca, la misma seleccion se ofrece como siempre.
+    assert await _disponibilidad_del(client, t, t.servicios[0], t.dia)
