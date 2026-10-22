@@ -1,13 +1,21 @@
 from datetime import date, datetime, timezone
 from decimal import Decimal
-from typing import Dict, List, Optional
+from typing import Annotated, Dict, List, Optional
 
-from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    EmailStr,
+    Field,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
 
 from core.utils import MAX_BOOKING_AHEAD
 from core.validation import (
     PUBLIC_ID_PATTERN,
     normalize_client_phone,
+    reject_control_chars,
     reject_payload_control_chars,
 )
 from modules.appointments.model import AppointmentStatus
@@ -92,9 +100,10 @@ class AppointmentCreate(BaseModel):
         return self
 
     def _within_horizon(self, val: datetime) -> bool:
-        """Las dos formas, hasta 2 anios (``MAX_BOOKING_AHEAD``): el alta para
-        un cliente reemplaza al "Nuevo turno" que hoy reserva por el portal con
-        fecha libre, y 120 dias ahi seria un cambio de producto."""
+        """Las dos formas, hasta 2 anios (``MAX_BOOKING_AHEAD``): el "Nuevo
+        turno" del panel reserva por ``POST /appointments/`` (el alta para un
+        cliente) con fecha libre; los 120 dias son del cliente final en el
+        portal, no de la tienda."""
         from core.utils import within_max_ahead
 
         return within_max_ahead(val, MAX_BOOKING_AHEAD)
@@ -302,3 +311,78 @@ class AppointmentSearchResponse(BaseModel):
     # Cursor opaco de la pagina siguiente (``after``); ``None`` si no hay mas
     # (F3-08). Sale tambien en las paginas pedidas por ``page``.
     next_cursor: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# Limpieza de reservas del portal (S6, paquete antiabuso, 2026-10-22)
+# ---------------------------------------------------------------------------
+
+RECENT_PORTAL_HOURS_DEFAULT = 72
+RECENT_PORTAL_HOURS_MAX = 168
+# Tope de filas del listado: una ola de reservas falsas se limpia por tandas.
+RECENT_PORTAL_LIMIT = 200
+BULK_CANCEL_MAX = 100
+BULK_CANCEL_REASON_MAX = 200
+
+
+class RecentPortalAppointment(BaseModel):
+    """Un turno futuro activo que entro por el portal publico."""
+
+    public_id: str
+    # Snapshot de contacto del turno: lo que dejo quien reservo.
+    client_name: str
+    client_phone: Optional[str] = None
+    service_name: str
+    staff_name: str
+    starts_at: datetime
+    created_at: datetime
+    status: AppointmentStatus
+
+
+class RecentPortalResponse(BaseModel):
+    items: List[RecentPortalAppointment]
+    # Hay mas de ``RECENT_PORTAL_LIMIT``: se ven los mas nuevos.
+    truncated: bool
+
+
+AppointmentPublicId = Annotated[
+    str, StringConstraints(min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)
+]
+
+
+class BulkCancelRequest(BaseModel):
+    """Cancelacion en bloque desde el panel (solo administradores)."""
+
+    appointment_ids: List[AppointmentPublicId] = Field(
+        ..., min_length=1, max_length=BULK_CANCEL_MAX
+    )
+    # Va al aviso al cliente ("Motivo: ...") y a la auditoria.
+    reason: Optional[str] = Field(None, max_length=BULK_CANCEL_REASON_MAX)
+
+    @field_validator("appointment_ids")
+    @classmethod
+    def ids_without_duplicates(cls, value: List[str]) -> List[str]:
+        if len(set(value)) != len(value):
+            raise ValueError("Hay turnos repetidos en la lista.")
+        return value
+
+    @field_validator("reason")
+    @classmethod
+    def clean_reason(cls, value: Optional[str]) -> Optional[str]:
+        limpio = reject_control_chars(value)
+        if limpio is None:
+            return None
+        return limpio.strip() or None
+
+
+class BulkCancelSkipped(BaseModel):
+    id: str
+    # El ``error_code`` de la cancelacion de a uno (p. ej.
+    # ``APPOINTMENT_ALREADY_CANCELLED``, ``APPOINTMENT_ALREADY_STARTED``), o
+    # ``NOT_FOUND`` si el turno no existe o es de otra tienda.
+    code: str
+
+
+class BulkCancelResponse(BaseModel):
+    cancelled: List[str]
+    skipped: List[BulkCancelSkipped]

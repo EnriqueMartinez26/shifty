@@ -3,7 +3,7 @@
 Generado automaticamente desde `app.openapi()` del backend (FastAPI); no editar a mano. Regenerar con `backend/scripts/gen_api_contract.py` (el comando esta en su docstring).
 
 - OpenAPI: 3.1.0
-- Paths: 119 — Operaciones: 149
+- Paths: 121 — Operaciones: 151
 
 ## /
 
@@ -185,6 +185,36 @@ Parameters:
 Responses:
 
 - `200` Successful Response — `application/json`: `ApiSuccess_list_object__`
+- `422` Validation Error — `application/json`: `HTTPValidationError`
+
+### POST /appointments/bulk-cancel
+
+- Summary: Bulk Cancel Appointments
+- operationId: `bulk_cancel_appointments_appointments_bulk_cancel_post`
+
+Request body (required):
+
+- `application/json`: `BulkCancelRequest`
+
+Responses:
+
+- `200` Successful Response — `application/json`: `ApiSuccess_BulkCancelResponse_`
+- `422` Validation Error — `application/json`: `HTTPValidationError`
+
+### GET /appointments/recent-portal
+
+- Summary: List Recent Portal Bookings
+- operationId: `list_recent_portal_bookings_appointments_recent_portal_get`
+
+Parameters:
+
+| in | name | required | type | constraints |
+|---|---|---|---|---|
+| query | `hours` | no | integer | minimum=1, maximum=168, default=72 |
+
+Responses:
+
+- `200` Successful Response — `application/json`: `ApiSuccess_RecentPortalResponse_`
 - `422` Validation Error — `application/json`: `HTTPValidationError`
 
 ### GET /appointments/search
@@ -2459,6 +2489,14 @@ Responses:
 | `data` | BlockPreviewResponse | yes |  |
 | `meta` | object \| null | no |  |
 
+### ApiSuccess_BulkCancelResponse_
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `success` | boolean | no | default=true |
+| `data` | BulkCancelResponse | yes |  |
+| `meta` | object \| null | no |  |
+
 ### ApiSuccess_ClientAppointmentsResponse_
 
 | field | type | required | constraints |
@@ -2873,6 +2911,14 @@ Responses:
 |---|---|---|---|
 | `success` | boolean | no | default=true |
 | `data` | PublicStoreResponse | yes |  |
+| `meta` | object \| null | no |  |
+
+### ApiSuccess_RecentPortalResponse_
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `success` | boolean | no | default=true |
+| `data` | RecentPortalResponse | yes |  |
 | `meta` | object \| null | no |  |
 
 ### ApiSuccess_ReconciliationSummaryResponse_
@@ -3324,6 +3370,27 @@ Type: `enum("efectivo", "transferencia", "mercadopago", "otro")`
 |---|---|---|---|
 | `kind` | string | yes |  |
 | `file` | string | yes |  |
+
+### BulkCancelRequest
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `appointment_ids` | array<string> | yes | minItems=1, maxItems=100 |
+| `reason` | string \| null | no | maxLength=200 |
+
+### BulkCancelResponse
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `cancelled` | array<string> | yes |  |
+| `skipped` | array<BulkCancelSkipped> | yes |  |
+
+### BulkCancelSkipped
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `id` | string | yes |  |
+| `code` | string | yes |  |
 
 ### BusinessHourPeriod-Input
 
@@ -4136,6 +4203,26 @@ Type: `enum("efectivo", "transferencia", "mercadopago", "otro")`
 | `custom_client_fields` | array<StoreCustomField> | no |  |
 | `feature_flags` | object<string, boolean> | no |  |
 | `deposit_far_limit_days` | integer \| null | no |  |
+
+### RecentPortalAppointment
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `public_id` | string | yes |  |
+| `client_name` | string | yes |  |
+| `client_phone` | string \| null | no |  |
+| `service_name` | string | yes |  |
+| `staff_name` | string | yes |  |
+| `starts_at` | string | yes | format="date-time" |
+| `created_at` | string | yes | format="date-time" |
+| `status` | AppointmentStatus | yes |  |
+
+### RecentPortalResponse
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `items` | array<RecentPortalAppointment> | yes |  |
+| `truncated` | boolean | yes |  |
 
 ### ReconciliationSummaryResponse
 
@@ -4996,4 +5083,4 @@ Type: `enum("admin", "staff", "receptionist", "client")`
 | `terms_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 | `privacy_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 
-Generado desde app.openapi() el 2026-10-22, commit 6801c1f0
+Generado desde app.openapi() el 2026-10-22, commit f2d03380
