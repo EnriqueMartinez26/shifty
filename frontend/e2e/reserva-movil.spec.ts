@@ -35,11 +35,69 @@ if (!apiUrl || apiUrl !== 'http://127.0.0.1:13000/api') {
   throw new Error('E2E solo admite la API loopback del stack descartable')
 }
 
+// El nombre con el que run-isolated.mjs da de alta la tienda de esta corrida.
+const storeName = `Tienda QA ${runId}`
+// El profesional del fixture es un recurso: la linea del turno muestra su nombre.
+const staffName = 'Recurso QA'
+// El fixture no tiene seña ni adicionales: el envio es "Confirmar reserva" (o el
+// de la seña por WhatsApp, si la tienda la pidiera).
+const SUBMIT_NAME = /^(confirmar reserva|reservar y pagar la seña por whatsapp)$/i
+const SUCCESS_HEADING = /^Reserva (Confirmada|Registrada|Pendiente de Pago)$/
+const TERMS_CHECKBOX = /acepto los términos y condiciones/i
+
+const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+const runSuffix = runId
+  .replace(/[^a-f0-9]/gi, '')
+  .slice(-12)
+  .split('')
+  .map((character) => (Number.parseInt(character, 16) % 10).toString())
+  .join('')
+
 const sinScrollHorizontal = async (page: Page, paso: string) => {
   const desborde = await page.evaluate(
     () => document.documentElement.scrollWidth - document.documentElement.clientWidth
   )
   expect(desborde, `el paso "${paso}" desborda horizontalmente`).toBeLessThanOrEqual(0)
+}
+
+/** Toca cada servicio del fixture (reserva multiservicio) y verifica que quede elegido. */
+const elegirServicios = async (page: Page) => {
+  for (const service of fixture.services) {
+    const card = page.getByRole('button', { name: new RegExp(escapeRegExp(service.name)) })
+    await card.click()
+    await expect(card).toHaveAttribute('aria-pressed', 'true')
+  }
+}
+
+/** Recorre los dias hasta el primero con horarios y toca el primer horario libre. */
+const elegirPrimerHorario = async (page: Page, motivo: string) => {
+  const days = page.locator('[data-testid^="date-"]')
+  const slots = page.locator('button:not([disabled])', { hasText: /^\d{2}:\d{2}/ })
+  const empty = page.getByText(/^(No hay turnos disponibles\.|Este día no hay atención\.)$/)
+  for (let index = 0; index < (await days.count()); index += 1) {
+    await days.nth(index).click()
+    // Esperar a que ese dia termine de cargar: aparece un slot o uno de los
+    // estados vacios (dia sin atencion o agenda completa).
+    await expect(slots.first().or(empty).first()).toBeVisible({ timeout: 10_000 })
+    if ((await slots.count()) > 0) break
+  }
+  await expect(slots.first(), motivo).toBeVisible()
+  await slots.first().click()
+}
+
+/**
+ * En el celular el boton de envio vive en la barra fija al pie (S5) y es el
+ * unico control que reserva: ningun otro boton confirma, paga ni reserva.
+ */
+const botonDeEnvioEnLaBarra = async (page: Page) => {
+  const payBar = page.getByTestId('booking-pay-bar')
+  const confirm = payBar.getByRole('button', { name: SUBMIT_NAME })
+  await expect(payBar).toHaveCSS('position', 'fixed')
+  await expect(confirm).toBeInViewport()
+  await expect(confirm).toHaveCSS('min-height', '44px')
+  await expect(page.getByRole('button', { name: /confirmar|pagar|reservar/i })).toHaveCount(1)
+  return confirm
 }
 
 test.describe('reserva pública aislada desde el celular', () => {
@@ -73,22 +131,22 @@ test.describe('reserva pública aislada desde el celular', () => {
       }
     })
     await page.goto(`/b/${fixture.storeSlug}`)
-    const tituloServicio = page.getByText('¿Qué servicio necesitás?')
+    const tituloServicio = page.getByRole('heading', { name: '¿Qué servicio necesitás?' })
     const tituloHorario = page.getByRole('heading', { name: /eleg[ií] fecha y hora/i })
     await expect(tituloServicio).toBeVisible()
-    await expect(page.getByRole('link', { name: 'Mis turnos' })).toHaveCSS('min-height', '44px')
+    // Encabezado de la tienda (S1, S9): el nombre de la tienda es el h1.
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText(storeName)
+    // En el celular "Mis turnos" es solo el icono: el nombre accesible sigue
+    // siendo el texto y el blanco tactil, de 44 px por lado.
+    const misTurnos = page.getByRole('link', { name: 'Mis turnos' })
+    await expect(misTurnos).toHaveCSS('min-height', '44px')
+    await expect(misTurnos).toHaveCSS('min-width', '44px')
     for (const nombre of ['Términos y condiciones', 'Privacidad']) {
       await expect(page.getByRole('link', { name: nombre })).toHaveCSS('min-height', '44px')
     }
     await sinScrollHorizontal(page, 'servicios')
 
-    for (const service of fixture.services) {
-      await page
-        .getByRole('button', {
-          name: new RegExp(service.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
-        })
-        .click()
-    }
+    await elegirServicios(page)
 
     const selectedSummary = page.getByTestId('booking-services-bar')
     const totalDuration = fixture.services.reduce(
@@ -99,35 +157,31 @@ test.describe('reserva pública aislada desde el celular', () => {
     await expect(selectedSummary).toContainText('2 servicios')
     await expect(selectedSummary).toContainText(`${totalDuration} min`)
     await expect(selectedSummary).toContainText(totalPrice.toLocaleString('es-AR'))
-    await page.getByRole('button', { name: 'Continuar' }).click()
+    await selectedSummary.getByRole('button', { name: 'Continuar' }).click()
 
     await expect(tituloHorario).toBeVisible()
     await sinScrollHorizontal(page, 'horario')
-    const days = page.locator('[data-testid^="date-"]')
-    const slots = page.locator('button:not([disabled])', { hasText: /^\d{2}:\d{2}/ })
-    const empty = page.getByText(/^(No hay turnos disponibles\.|Este día no hay atención\.)$/)
-    for (let index = 0; index < (await days.count()); index += 1) {
-      await days.nth(index).click()
-      // Esperar a que ese dia termine de cargar: aparece un slot o uno de los
-      // estados vacios (dia sin atencion o agenda completa).
-      await expect(slots.first().or(empty).first()).toBeVisible({ timeout: 10_000 })
-      if ((await slots.count()) > 0) break
-    }
-    await expect(slots.first(), 'el fixture debe ofrecer al menos un horario').toBeVisible()
-    await slots.first().click()
+    await elegirPrimerHorario(page, 'el fixture debe ofrecer al menos un horario')
 
     await expect(page.getByPlaceholder('Ej: 351 1234567')).toBeVisible()
     await sinScrollHorizontal(page, 'datos')
-    const runSuffix = runId
-      .replace(/[^a-f0-9]/gi, '')
-      .slice(-12)
-      .split('')
-      .map((character) => (Number.parseInt(character, 16) % 10).toString())
-      .join('')
+    // El turno en una linea (S5): servicios, duracion, horario y quien atiende.
+    const summaryLine = page.getByTestId('booking-summary-line')
+    await expect(summaryLine).toContainText(`${primaryService.name} + ${extraService.name}`)
+    await expect(summaryLine).toContainText(`${totalDuration} min`)
+    await expect(summaryLine).toContainText(/\d{2}:\d{2} hs/)
+    await expect(summaryLine).toContainText(staffName)
+    // La nota para la tienda queda plegada hasta que el cliente la pide.
+    await expect(
+      page.getByRole('button', { name: 'Agregar una nota para la tienda' })
+    ).toBeVisible()
+    await expect(page.getByPlaceholder('Algo que debamos saber?')).toHaveCount(0)
+
     await page.getByPlaceholder('Ej: Juan Perez').fill('Cliente QA descartable')
     await page.getByPlaceholder('juan@email.com').fill(`cliente-${runSuffix}@example.com`)
     await page.getByPlaceholder('Ej: 351 1234567').fill(`+54911${runSuffix.slice(-6)}00`)
-    await page.getByRole('checkbox').first().check()
+    await page.getByRole('checkbox', { name: TERMS_CHECKBOX }).check()
+    const confirm = await botonDeEnvioEnLaBarra(page)
 
     const bookingRequest = page.waitForRequest(
       (request) =>
@@ -139,9 +193,7 @@ test.describe('reserva pública aislada desde el celular', () => {
         response.request().method() === 'POST' &&
         new URL(response.url()).pathname.endsWith('/public/appointments')
     )
-    await page
-      .getByRole('button', { name: /^(confirmar reserva|reservar y pagar la seña por whatsapp)$/i })
-      .click()
+    await confirm.click()
 
     const request = await bookingRequest
     const payload = request.postDataJSON() as {
@@ -184,14 +236,16 @@ test.describe('reserva pública aislada desde el celular', () => {
       )
     ).toBe(totalDuration)
 
-    await expect(
-      page.getByRole('heading', { name: /^Reserva (Confirmada|Registrada|Pendiente de Pago)$/ })
-    ).toBeVisible({ timeout: 20_000 })
+    await expect(page.getByRole('heading', { name: SUCCESS_HEADING })).toBeVisible({
+      timeout: 20_000
+    })
     await expect(page.getByText('Detalles del Turno')).toBeVisible()
     await expect(
       page.getByText(`${primaryService.name} + ${extraService.name}`, { exact: true })
     ).toBeVisible()
     await expect(page.getByText('Resumen comercial')).toBeVisible()
+    // Ya reservado, la barra de pago no queda tapando la pantalla de exito.
+    await expect(page.getByTestId('booking-pay-bar')).toHaveCount(0)
     await sinScrollHorizontal(page, 'confirmación')
   })
 
@@ -230,49 +284,33 @@ test.describe('reserva pública aislada desde el celular', () => {
     })
 
     await page.goto(`/b/${fixture.storeSlug}`)
-    await expect(page.getByText('¿Qué servicio necesitás?')).toBeVisible()
-    for (const service of fixture.services) {
-      await page
-        .getByRole('button', {
-          name: new RegExp(service.name)
-        })
-        .click()
-    }
-    await page.getByRole('button', { name: 'Continuar' }).click()
+    await expect(page.getByRole('heading', { name: '¿Qué servicio necesitás?' })).toBeVisible()
+    await elegirServicios(page)
+    await page
+      .getByTestId('booking-services-bar')
+      .getByRole('button', { name: 'Continuar' })
+      .click()
     await expect(page.getByRole('heading', { name: /elegí fecha y hora/i })).toBeVisible()
 
-    const days = page.locator('[data-testid^="date-"]')
-    const slots = page.locator('button:not([disabled])', { hasText: /^\d{2}:\d{2}/ })
-    const empty = page.getByText(/^(No hay turnos disponibles\.|Este día no hay atención\.)$/)
-    for (let index = 0; index < (await days.count()); index += 1) {
-      await days.nth(index).click()
-      await expect(slots.first().or(empty)).toBeVisible({ timeout: 10_000 })
-      if ((await slots.count()) > 0) break
-    }
-    await expect(slots.first(), 'el fixture debe ofrecer otro horario disponible').toBeVisible()
-    await slots.first().click()
+    await elegirPrimerHorario(page, 'el fixture debe ofrecer otro horario disponible')
 
-    const runSuffix = runId
-      .replace(/[^a-f0-9]/gi, '')
-      .slice(-12)
-      .split('')
-      .map((character) => (Number.parseInt(character, 16) % 10).toString())
-      .join('')
     const clientPhone = `+54911${runSuffix.slice(-6)}00`
     await page.getByPlaceholder('Ej: Juan Perez').fill('Cliente QA reintento')
     await page.getByPlaceholder('juan@email.com').fill(`retry-${runSuffix}@example.com`)
     await page.getByPlaceholder('Ej: 351 1234567').fill(clientPhone)
-    await page.getByRole('checkbox').first().check()
+    const terms = page.getByRole('checkbox', { name: TERMS_CHECKBOX })
+    await terms.check()
 
-    const confirm = page.getByRole('button', {
-      name: /^(confirmar reserva|reservar y pagar la seña por whatsapp)$/i
-    })
+    const confirm = await botonDeEnvioEnLaBarra(page)
     await confirm.click()
 
     await expect(page.getByText('No pudimos procesar tu reserva. Probá de nuevo.')).toBeVisible()
     await expect(page.getByText(/horario.*ocupad/i)).toHaveCount(0)
     await expect(page.getByPlaceholder('Ej: Juan Perez')).toHaveValue('Cliente QA reintento')
     await expect(page.getByPlaceholder('Ej: 351 1234567')).toHaveValue(clientPhone)
+    await expect(terms).toBeChecked()
+    // El reintento sale del mismo boton, que sigue siendo el unico envio.
+    await botonDeEnvioEnLaBarra(page)
     await expect(confirm).toBeEnabled()
 
     const retryResponsePromise = page.waitForResponse(
@@ -284,9 +322,9 @@ test.describe('reserva pública aislada desde el celular', () => {
     const retryResponse = await retryResponsePromise
     expect(retryResponse.status()).toBe(201)
     expect(await retryResponse.json()).toEqual(createdBooking)
-    await expect(
-      page.getByRole('heading', { name: /^Reserva (Confirmada|Registrada|Pendiente de Pago)$/ })
-    ).toBeVisible({ timeout: 20_000 })
+    await expect(page.getByRole('heading', { name: SUCCESS_HEADING })).toBeVisible({
+      timeout: 20_000
+    })
     await expect(page.getByText('Detalles del Turno')).toBeVisible()
 
     expect(attempts).toBe(2)
