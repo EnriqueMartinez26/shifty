@@ -52,6 +52,7 @@ from core.exceptions import (
     ValidationException,
 )
 from core.feature_flags import is_store_feature_enabled
+from core.rate_limit import subject_quota_allows, subject_quota_exhausted
 from core.utils import (
     BOOKING_HORIZON_DAYS,
     ensure_utc_aware,
@@ -311,6 +312,60 @@ def too_many_future_bookings() -> AppException:
         http_status=status.HTTP_409_CONFLICT,
         error_code="TOO_MANY_FUTURE_BOOKINGS",
     )
+
+
+# Reservas publicas EXITOSAS por IP y tienda en el dia (paquete antiabuso,
+# S3). Cubetas fijas de 24 h alineadas a UTC (las del limitador). La IP no se
+# guarda: el limitador la hashea en la clave.
+PUBLIC_BOOKING_DAILY_ACTION = "public:booking:daily-per-ip-store"
+PUBLIC_BOOKINGS_PER_IP_PER_STORE_PER_DAY = 10
+PUBLIC_BOOKING_DAILY_WINDOW_SECONDS = 24 * 60 * 60
+
+
+def _daily_quota_subject(store_id: str, client_ip: str) -> str:
+    return f"{store_id}:{client_ip}"
+
+
+async def require_daily_booking_quota(store_id: str, client_ip: str) -> None:
+    """429 si esta IP ya hizo las reservas del dia en esta tienda.
+
+    Solo LEE (``subject_quota_exhausted``): el cupo se gasta despues de una
+    reserva hecha (``consume_daily_booking_quota``), asi un 409 o un 422 no
+    lo consumen. Redis caido: ``public-write`` falla cerrada (503) antes de
+    escribir.
+    """
+    retry_after = await subject_quota_exhausted(
+        PUBLIC_BOOKING_DAILY_ACTION,
+        _daily_quota_subject(store_id, client_ip),
+        limit=PUBLIC_BOOKINGS_PER_IP_PER_STORE_PER_DAY,
+        window_seconds=PUBLIC_BOOKING_DAILY_WINDOW_SECONDS,
+    )
+    if retry_after is None:
+        return
+    raise AppException(
+        message=(
+            "Alcanzaste el límite de reservas por hoy. Si necesitás otra, "
+            "escribile a la tienda."
+        ),
+        http_status=status.HTTP_429_TOO_MANY_REQUESTS,
+        error_code="BOOKING_DAILY_LIMIT",
+        headers={"Retry-After": str(retry_after)},
+    )
+
+
+async def consume_daily_booking_quota(store_id: str, client_ip: str) -> None:
+    """Gasta una unidad del cupo diario. Nunca levanta: la reserva ya esta
+    hecha, y un Redis caido aca (503 de la politica) la haria parecer
+    fallida. El limitador ya dejo el warning con la accion."""
+    try:
+        await subject_quota_allows(
+            PUBLIC_BOOKING_DAILY_ACTION,
+            _daily_quota_subject(store_id, client_ip),
+            limit=PUBLIC_BOOKINGS_PER_IP_PER_STORE_PER_DAY,
+            window_seconds=PUBLIC_BOOKING_DAILY_WINDOW_SECONDS,
+        )
+    except AppException:
+        logger.warning("public_booking_daily_quota_not_consumed", store_id=store_id)
 
 
 def booking_horizon_exceeded() -> AppException:
@@ -876,16 +931,21 @@ class PublicBookingService:
         idempotency_key: str,
         *,
         client_token: str | None = None,
+        client_ip: str | None = None,
     ) -> PublicBookingResponse:
         """Reserva desde el portal. El llamador maneja la idempotencia.
 
         Commit del alta -> invalidacion -> link de MP (fuera de la
-        transaccion, con compensacion) -> encolado del mail -> respuesta ->
-        cierre de la entrada de lista de espera (best-effort).
+        transaccion, con compensacion) -> cupo diario de la IP -> encolado
+        del mail -> respuesta -> cierre de la entrada de lista de espera
+        (best-effort). ``client_ip`` (la del router, nunca persistida) activa
+        la cuota diaria por IP y tienda; sin ella no se aplica.
         """
         # Antes de tocar la base: una version vieja no reserva (PV-09).
         check_accepted_versions(data.terms_version, data.privacy_version)
         service, store = await self._resolve_store_and_service(data)
+        if client_ip is not None:
+            await require_daily_booking_quota(store.id, client_ip)
         # Varios servicios en un turno (2026-10-16): flag, tope, 404 neutro y
         # duracion, antes de cualquier otra lectura. Sin extras, nada.
         extra_services = await resolve_extra_services(
@@ -904,6 +964,10 @@ class PublicBookingService:
             self.cache, request.store_id, booking.appointment.starts_at
         )
         await self._attach_payment_link(request, booking)
+        # La reserva quedo hecha (con su link, si cobra): recien ahora gasta
+        # el cupo diario de la IP.
+        if client_ip is not None:
+            await consume_daily_booking_quota(request.store_id, client_ip)
         # El encolado del mail (F2-01: hasta 2 s de publish en un hilo; el
         # SMTP lo hace el worker) corre sin transaccion: el commit de
         # TenantSession deja otra abierta al reaplicar el contexto (F1-05,

@@ -59,6 +59,10 @@ ACTION_POLICIES: dict[str, str] = {
     "public:otp:mail-destination:hour": "otp",
     "public:otp:mail-destination:day": "otp",
     "public:booking:create": "public-write",
+    # Reservas publicas exitosas por IP y tienda en el dia (paquete
+    # antiabuso, S3): se lee con ``subject_quota_exhausted`` antes de escribir
+    # y se consume con ``subject_quota_allows`` despues del alta.
+    "public:booking:daily-per-ip-store": "public-write",
     "public:client:cancel": "public-write",
     "public:client:reschedule": "public-write",
     "public:waitlist:join": "public-write",
@@ -157,13 +161,19 @@ def client_ip_from_request(request: Request) -> str:
     )
 
 
-async def _hit_rate_limit(
-    identifier: str, action: str, limit: int, window_seconds: int
-) -> int | None:
+def _bucket_key(identifier: str, action: str, window_seconds: int) -> tuple[str, int]:
+    """Clave de la cubeta vigente (ventana fija alineada a UTC) y cuantos
+    segundos le quedan. Una sola forma para consumir y para leer."""
     now = int(time.time())
     bucket = now // window_seconds
     retry_after = window_seconds - (now % window_seconds)
-    key = f"rate-limit:{action}:{_hash_identifier(identifier)}:{bucket}"
+    return f"rate-limit:{action}:{_hash_identifier(identifier)}:{bucket}", retry_after
+
+
+async def _hit_rate_limit(
+    identifier: str, action: str, limit: int, window_seconds: int
+) -> int | None:
+    key, retry_after = _bucket_key(identifier, action, window_seconds)
 
     redis = await get_redis()
     # Pipeline: INCR y EXPIRE viajan juntos; sin esto, si el proceso muere en
@@ -254,6 +264,35 @@ async def subject_quota_allows(
         _limiter_unavailable(action, exc)
         return True
     return retry_after is None
+
+
+async def subject_quota_exhausted(
+    action: str, subject: str, *, limit: int, window_seconds: int
+) -> int | None:
+    """Lee, SIN consumir, si ``subject`` ya gasto su cuota en la ventana.
+
+    Devuelve los segundos que faltan para la cubeta siguiente si ya hay
+    ``limit`` unidades consumidas, o ``None`` si queda cupo. Es para una
+    cuota que se consume solo cuando la operacion sale bien (la reserva
+    publica por IP y tienda): se lee antes de escribir y se consume despues
+    con ``subject_quota_allows``, sobre la misma clave. Entre la lectura y el
+    consumo dos pedidos simultaneos pueden pasar los dos: el tope es blando
+    por la concurrencia de una misma IP, no por mas. Redis caido: misma
+    politica por accion que ``subject_quota_allows`` (503 si falla cerrada,
+    ``None`` con aviso si no).
+    """
+    if not settings.RATE_LIMIT_ENABLED:
+        return None
+    key, retry_after = _bucket_key(f"subject:{subject}", action, window_seconds)
+    try:
+        redis = await get_redis()
+        current = await redis.get(key)
+    except REDIS_UNAVAILABLE_ERRORS as exc:
+        _limiter_unavailable(action, exc)
+        return None
+    if current is not None and int(current) >= limit:
+        return max(1, retry_after)
+    return None
 
 
 def _policy_for_request(method: str, path: str) -> tuple[str, int]:

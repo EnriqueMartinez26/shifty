@@ -881,7 +881,19 @@ Una instrucción en lenguaje natural no es una garantía.
   profesional. Es `NO KEY` y no `FOR UPDATE` porque el INSERT de un turno
   toma `FOR KEY SHARE` sobre la ficha por la FK, y el panel (profesional →
   FK del cliente) se trababa contra un `FOR UPDATE`.
-  (`test_portal_tope_por_telefono.py`, `test_pg_tope_por_telefono.py`)
+  Cada IP tiene además a lo sumo 10 reservas públicas EXITOSAS por tienda y
+  por día (`PUBLIC_BOOKINGS_PER_IP_PER_STORE_PER_DAY`, acción
+  `public:booking:daily-per-ip-store`, política `public-write`: falla cerrada
+  sin Redis). Cubetas fijas de 24 h alineadas a UTC, sujeto
+  `{store_id}:{ip}` hasheado en la clave: la IP no se guarda en ningún lado.
+  Se LEE antes de escribir (`core/rate_limit.subject_quota_exhausted`) y se
+  CONSUME solo con la reserva hecha (`subject_quota_allows`, que ahí nunca
+  levanta), así un 409 o un 422 no gastan cupo; pasarse es 429
+  `BOOKING_DAILY_LIMIT` con `Retry-After`. Entre la lectura y el consumo dos
+  pedidos simultáneos de la misma IP pueden pasar los dos: el tope es blando
+  por esa concurrencia, no por más. El replay de idempotencia no la mira.
+  (`test_portal_tope_por_telefono.py`, `test_pg_tope_por_telefono.py`,
+  `test_portal_cuota_diaria_por_ip.py`)
 - **Un teléfono identifica a UN cliente por tienda**: índice único parcial
   `uq_users_client_phone_per_store` (`role = 'client' AND phone IS NOT NULL`;
   el personal puede compartir el teléfono del local). La migración que lo crea
