@@ -116,11 +116,11 @@ describe('brand variable references', () => {
   })
 
   // QA 2026-10-21: el resplandor naranja quedaba debajo de un boton rosa.
-  it('the glow follows the brand and falls back to the orange shadow', () => {
-    expect(brandGlowShadow).toBe('0 2px 4px var(--brand-glow, rgba(200, 90, 15, 0.25))')
-    expect(brandGlowShadow.replace(/var\(--brand-glow, (.+)\)$/, '$1')).toBe(
-      colors2000s.shadows.outerOrange
-    )
+  // 2026-10-22 (revision de Enrique): sin color de tienda el resplandor sale
+  // del naranja del logo, no del naranja viejo de `shadows.outerOrange`.
+  it('the glow follows the brand and falls back to the logo orange', () => {
+    expect(brandGlowShadow).toBe('0 2px 4px var(--brand-glow, rgba(230, 126, 34, 0.25))')
+    expect(colors2000s.orange.dark).toBe('#e67e22')
   })
 
   it('paints the 2000s selected state with the brand and keeps its shape', () => {
