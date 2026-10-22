@@ -17,6 +17,7 @@ from core.validation import (
     reject_unsafe_url,
 )
 from modules.stores.media import validate_image_url
+from modules.stores.model import CoverPosition
 
 # Techos de los enteros expuestos por la API.
 #
@@ -85,6 +86,8 @@ class StoreUpdate(BaseModel):
     logo_url: Optional[str] = Field(None, max_length=500)
     primary_color: Optional[str] = Field(None, pattern=HEX_COLOR_PATTERN)
     cover_url: Optional[str] = Field(None, max_length=500)
+    # Punto focal de la portada; null lo vuelve a "sin elegir".
+    cover_position: Optional[CoverPosition] = None
     description: Optional[str] = Field(None, max_length=2000)
     whatsapp_number: Optional[str] = Field(None, max_length=50)
     instagram_url: Optional[str] = Field(None, max_length=500)
@@ -210,6 +213,7 @@ class StoreResponse(BaseModel):
     logo_url: Optional[str]
     primary_color: str
     cover_url: Optional[str] = None
+    cover_position: Optional[CoverPosition] = None
     description: Optional[str] = None
     whatsapp_number: Optional[str] = None
     instagram_url: Optional[str] = None

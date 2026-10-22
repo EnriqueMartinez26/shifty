@@ -42,6 +42,7 @@ from modules.payments.model import (
     WebhookInbox,
 )
 from modules.users.model import User
+from tests.integration.pendiente_heredado import como_pendiente_heredado
 
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
 
@@ -704,7 +705,8 @@ async def test_public_booking_requires_otp_when_feature_enabled(
 
     allowed_booking = await client.post("/public/appointments", json=booking_payload)
     assert allowed_booking.status_code == 201, allowed_booking.text
-    assert allowed_booking.json()["status"] == "pending"
+    # Sin cobro nace confirmada (decision de Mateo, 2026-10-20); antes "pending".
+    assert allowed_booking.json()["status"] == "confirmed"
 
 
 @pytest.mark.asyncio
@@ -1782,7 +1784,10 @@ async def test_pending_whatsapp_booking_expires_when_hold_deadline_passes(
         },
     )
     assert booking.status_code == 201, booking.text
-    assert booking.json()["status"] == "pending"
+    # Sin cobro nace confirmada (decision de Mateo, 2026-10-20): el caso es un
+    # ``pending`` de antes, que sigue venciendo cuando pasa su retencion.
+    assert booking.json()["status"] == "confirmed"
+    await como_pendiente_heredado(test_session, booking.json()["public_id"])
 
     result = await test_session.execute(
         select(modules.appointments.model.Appointment).where(

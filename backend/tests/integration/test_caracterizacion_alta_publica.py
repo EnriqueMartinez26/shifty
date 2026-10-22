@@ -215,7 +215,9 @@ async def test_reserva_manual_cuerpo_filas_outbox_cache_mail_y_replay(
         "service_name": "Consulta",
         "staff_id": t.staff,
         "staff_name": "Pro Demo",
-        "status": "pending",
+        # Sin cobro nace confirmada (decision de Mateo, 2026-10-20); antes
+        # nacia "pending" retenida hasta su inicio.
+        "status": "confirmed",
         "client_name": "Cliente Caracterizado",
         "client_phone": "5491155558001",
         "notes": "Primera vez",
@@ -250,25 +252,31 @@ async def test_reserva_manual_cuerpo_filas_outbox_cache_mail_y_replay(
         )
     ).scalar_one()
     tienda_del_turno = turno.store_id
-    assert turno.status == "pending"
-    assert ensure_utc_aware(turno.expires_at) == t.slot  # type: ignore[arg-type]
+    # 2026-10-20: confirmada y sin retencion (antes "pending" con
+    # ``expires_at`` = inicio).
+    assert turno.status == "confirmed"
+    assert turno.expires_at is None
     assert turno.price_amount == Decimal("10000.00")
     assert turno.idempotency_key == "carac-manual-0001"
     assert turno.client_email == "caracterizado@example.com"
     assert turno.terms_accepted_at is not None
+    # 2026-10-20: el aviso al dueno es informativo ("Nueva reserva"), no
+    # "pendiente de confirmar".
     assert await _eventos(test_session) == [
         (
-            "appointment.pending_confirmation",
+            "appointment.booked_online",
             {
                 "appointment_id": cuerpo["public_id"],
                 "client_name": "Cliente Caracterizado",
                 "service_name": "Consulta",
+                "starts_at": t.slot.isoformat(),
             },
         )
     ]
     # F2-01: el request encola (ids, sin datos personales) y manda el worker.
+    # 2026-10-20: "turno confirmado" en vez de "reserva registrada".
     assert buzon.enviados == []
-    assert cola.encolados == [("registration", tienda_del_turno, cuerpo["public_id"])]
+    assert cola.encolados == [("confirmation", tienda_del_turno, cuerpo["public_id"])]
     await cola.entregar()
     assert [m[0] for m in buzon.enviados] == ["caracterizado@example.com"]
 

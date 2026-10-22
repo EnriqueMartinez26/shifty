@@ -125,9 +125,11 @@ async def test_se_reserva_una_cancha_por_el_flujo_publico_y_el_mail_dice_en(
     )
     assert reserva.status_code == 201, reserva.text
     await cola.entregar()
-    registrada = next(e for e in enviados if e[1].startswith("Reserva registrada"))
-    assert "en Cancha 1" in registrada[2]
-    assert "con Cancha 1" not in registrada[2]
+    # Sin cobro nace confirmada (decision de Mateo, 2026-10-20): el mail es
+    # "turno confirmado", antes "reserva registrada".
+    confirmada = next(e for e in enviados if e[1].startswith("Turno confirmado"))
+    assert "en Cancha 1" in confirmada[2]
+    assert "con Cancha 1" not in confirmada[2]
 
     # Dos reservas en la misma cancha al mismo horario: la segunda choca.
     choque = await client.post(
