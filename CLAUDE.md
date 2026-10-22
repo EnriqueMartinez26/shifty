@@ -1049,14 +1049,22 @@ Una instrucción en lenguaje natural no es una garantía.
   docs y comandos usan `docker compose exec backend ...`, nunca
   `shifty_backend` ni `shifty_frontend`: esos nombres ya no existen y con un
   segundo proyecto (staging) apuntarían al equivocado.
-- El E2E con Playwright (`frontend/e2e/`, `npm run e2e`, workflow manual
-  `e2e.yml`) corrió por primera vez el 2026-09-16 contra el stack local
-  detrás de nginx (`E2E_BASE_URL=http://localhost`,
-  `E2E_API_URL=http://localhost/api`, `E2E_NO_WEBSERVER=1`, tienda de
-  carga `load-1789010879`). Dos trampas: el contenedor `frontend` sirve un
-  **build estático** (cambios del front exigen `docker-compose build
-  frontend`), y el `CORS_ORIGINS` del compose solo admite el origen de nginx,
-  así que el vite dev server en :5173 ve "Negocio no encontrado".
+- La suite E2E aislada de Playwright (`npm run e2e:isolated`,
+  `frontend/e2e/run-isolated.mjs`, workflow `.github/workflows/e2e.yml`)
+  crea una tienda sintética en un proyecto Compose propio, con credenciales
+  aleatorias, pagos desactivados y SMTP dirigido a un puerto de loopback
+  cerrado; sin workers no se envía ni se imprime correo (solo el OTP usa
+  `console`). Los puertos publicados quedan solo en loopback y los volúmenes
+  son propios; el `finally` baja contenedores y volúmenes.
+  El flujo cubre la reserva pública multi-servicio y el reintento después de
+  un 503: el primer POST llega al backend de prueba, el browser recibe el 503,
+  y el reintento con la misma clave de idempotencia debe devolver la misma
+  reserva. No cubre OTP, “Mis turnos” ni recorridos autenticados del panel;
+  esos flujos necesitan pruebas separadas. El E2E histórico del 2026-09-16
+  usaba el stack local detrás de nginx y una tienda de carga. El frontend de
+  ese stack sirve un **build estático** (los cambios exigen reconstruir la
+  imagen), y el compose restringe CORS al origen de nginx; por eso el vite dev
+  server en :5173 puede mostrar “Negocio no encontrado”.
 - Ya cubierto (2026-09-10): job `backend-postgres` en CI (RLS, exclusión
   GiST, triggers y migraciones desde base vacía, en `tests/postgres/`);
   SAST con CodeQL + escaneo de secretos con gitleaks (`.gitleaks.toml`);
