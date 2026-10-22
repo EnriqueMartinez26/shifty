@@ -868,7 +868,9 @@ Una instrucción en lenguaje natural no es una garantía.
 - **Reservas recientes del portal: origen y limpieza en bloque** (paquete
   antiabuso, propuesta por Mateo el 2026-10-22, pendiente de OK del dueño).
   `appointments.booked_via` dice de dónde vino el turno: `portal` | `panel`,
-  NOT NULL con default `panel` y `ck_appointments_booked_via`. Todo lo que
+  NOT NULL con default `panel` y `ck_appointments_booked_via`. La reserva
+  pública escribe `portal` (`public_api/service.py::_write_booking`) y "Mis
+  turnos" conserva el origen al reprogramar (`_rescheduled_copy`). Todo lo que
   carga o mueve la tienda escribe `panel`, también reprogramar desde el panel
   un turno del portal (lo movió la tienda). La migración `733220bbf66e` marca
   `portal` en lo histórico donde `terms_accepted_at IS NOT NULL` (solo el
@@ -906,8 +908,9 @@ Una instrucción en lenguaje natural no es una garantía.
   `TOO_MANY_FUTURE_BOOKINGS` antes de escribir. Cuentan todos los del
   cliente, los cargue quien los cargue (panel y ofertas de la lista de espera
   incluidos); el panel nunca se limita. El conteo corre bajo el lock de la
-  ficha del cliente (`FOR NO KEY UPDATE`,
-  `PublicRepository.lock_client_and_count_future_bookings`) dentro del
+  ficha del cliente (`FOR NO KEY UPDATE`: la ficha sale lockeada de
+  `PublicRepository.get_or_create_client_locked` y después cuenta
+  `count_future_bookings`) dentro del
   savepoint del alta y ANTES del lock del profesional: orden cliente →
   profesional. Es `NO KEY` y no `FOR UPDATE` porque el INSERT de un turno
   toma `FOR KEY SHARE` sobre la ficha por la FK, y el panel (profesional →
