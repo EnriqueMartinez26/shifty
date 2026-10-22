@@ -36,6 +36,7 @@ import {
   type ServiceAddonsGroup
 } from './addonGroups'
 import { BookingBackButton } from './BookingBackButton'
+import { type BookingBotTrap, BookingHoneypotField, formElapsedMs } from './BookingBotTrap'
 import {
   BookingConfirmationCard,
   type BookingPaymentMethod,
@@ -86,7 +87,10 @@ const SERVICE_COMBO_MESSAGES: Partial<Record<string, string>> = {
 }
 const BOOKING_CODE_MESSAGES: Partial<Record<string, string>> = {
   [ADDON_UNAVAILABLE]: ADDON_UNAVAILABLE_MESSAGE,
-  ...SERVICE_COMBO_MESSAGES
+  ...SERVICE_COMBO_MESSAGES,
+  // La trampa para bots (S4): el aviso no dice por que, para no ensenarle al
+  // bot que campo o que espera lo delato.
+  BOOKING_REJECTED: 'No pudimos registrar la reserva. Probá de nuevo.'
 }
 // Los adicionales se eligen en el primer paso (S4): aca solo se avisa.
 const ADDONS_CHANGED_MESSAGE =
@@ -130,10 +134,15 @@ interface BookingStepConfirmationProps {
   onEditAddons?: () => void
   /** La reserva quedo hecha y se muestra la pantalla de exito. */
   onBooked?: () => void
+  /**
+   * `botTrap` va al cuerpo de la reserva y nunca a su huella de idempotencia:
+   * otro tiempo de llenado no es otro pedido.
+   */
   onConfirm: (
     paymentMethod: 'manual' | 'mercadopago',
     acceptsTerms: boolean,
-    addons: PublicBookingAddon[]
+    addons: PublicBookingAddon[],
+    botTrap: BookingBotTrap
   ) => Promise<BookingConfirmation>
 }
 
@@ -560,6 +569,13 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
   // compartido entre esas invocaciones.
   const isSubmittingRef = useRef(false)
 
+  // Trampa para bots (S4): el campo oculto y cuando se mostro este paso. Se
+  // mide desde aca y no desde el inicio del wizard: elegir servicio y horario
+  // no es llenar el formulario, y un bot pasa esos pasos tan rapido como este.
+  // Un ref y no estado: solo se lee al enviar y no cambia lo que se pinta.
+  const [website, setWebsite] = useState('')
+  const shownAtRef = useRef(performance.now())
+
   const handleConfirm = async (paymentMethod: 'manual' | 'mercadopago') => {
     if (isSubmittingRef.current) return
     isSubmittingRef.current = true
@@ -569,7 +585,8 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
       const result = await onConfirm(
         paymentMethod,
         acceptsTerms,
-        addonGroups.flatMap((group) => group.selection.toPayload())
+        addonGroups.flatMap((group) => group.selection.toPayload()),
+        { website, formElapsedMs: formElapsedMs(shownAtRef.current, performance.now()) }
       )
       if (paymentMethod === 'mercadopago') {
         // La pantalla de exito no se ve con MP: el diseño previo (S7) se
@@ -691,6 +708,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
             placeholder="Ej: Juan Perez"
           />
         </div>
+        <BookingHoneypotField id={`${fieldId}-website`} value={website} onChange={setWebsite} />
       </div>
 
       <div className="relative">

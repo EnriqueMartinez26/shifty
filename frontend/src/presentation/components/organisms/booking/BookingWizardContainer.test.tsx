@@ -517,7 +517,7 @@ describe('BookingWizardContainer', () => {
     // F4-04 a (2026-10-01): la clave salia de createUuid() en un useState: al
     // recargar despues de una respuesta perdida, el mismo pedido viajaba con
     // otra clave y el backend no podia devolver la reserva ya hecha.
-    const confirmarReserva = async (nombre = 'Lucia') => {
+    const confirmarReserva = async (nombre = 'Lucia', antesDeEnviar = () => {}) => {
       await waitFor(() => expect(screen.getByText(HORARIO)).toBeInTheDocument())
       fireEvent.click(screen.getByText('09:00'))
       fireEvent.change(screen.getByPlaceholderText('Ej: Juan Perez'), {
@@ -533,6 +533,7 @@ describe('BookingWizardContainer', () => {
       fireEvent.click(screen.getByRole('checkbox'))
       // La seña se recalcula con el telefono tipeado (400 ms de espera).
       await waitFor(() => expect(screen.getByText('Confirmar reserva')).not.toBeDisabled())
+      antesDeEnviar()
       await enviar()
     }
     // La huella se calcula con crypto.subtle, que es asincronico: se espera al
@@ -594,6 +595,60 @@ describe('BookingWizardContainer', () => {
       await confirmarReserva('Lucia Perez')
 
       expect(claveDelIntento(1)).not.toBe(claveDelIntento(0))
+    })
+
+    // Trampa para bots (S4 del paquete antiabuso, 2026-10-22): el campo oculto
+    // y el tiempo de llenado viajan en el cuerpo, pero no en la huella. Si
+    // entraran, el reintento tras una respuesta perdida (otro tiempo) mandaria
+    // otra clave y el backend crearia una segunda reserva.
+    it('la trampa para bots viaja en el cuerpo y no cambia la clave', async () => {
+      jest.useFakeTimers()
+      try {
+        mockCreateBooking.mockRejectedValue(
+          new NetworkError('No se pudo conectar con el servidor.')
+        )
+        const primera = render(<WizardEnRuta store={tienda(false)} />)
+        await confirmarReserva('Lucia', () => {
+          act(() => {
+            jest.advanceTimersByTime(3_000)
+          })
+        })
+        primera.unmount()
+
+        render(<WizardEnRuta store={tienda(false)} />)
+        await confirmarReserva('Lucia', () => {
+          act(() => {
+            jest.advanceTimersByTime(60_000)
+          })
+        })
+
+        type Cuerpo = Record<string, unknown> & { form_elapsed_ms: number }
+        const cuerpo = (n: number) => mockCreateBooking.mock.calls[n]?.[0] as Cuerpo
+        expect(cuerpo(0)).toMatchObject({ website: '', form_elapsed_ms: expect.any(Number) })
+        expect(cuerpo(0).form_elapsed_ms).toBeGreaterThanOrEqual(3_000)
+        expect(cuerpo(1).form_elapsed_ms).toBeGreaterThanOrEqual(60_000)
+        expect(claveDelIntento(1)).toBe(claveDelIntento(0))
+
+        // La huella guardada es la del pedido SIN la trampa ni la clave (en el
+        // mismo orden de campos: la huella es el JSON tal cual).
+        const fueraDeLaHuella = ['idempotency_key', 'website', 'form_elapsed_ms']
+        const pedido = Object.fromEntries(
+          Object.entries(cuerpo(0)).filter(([campo]) => !fueraDeLaHuella.includes(campo))
+        )
+        const digest = await globalThis.crypto.subtle.digest(
+          'SHA-256',
+          new TextEncoder().encode(JSON.stringify(pedido))
+        )
+        const huella = Array.from(new Uint8Array(digest), (byte) =>
+          byte.toString(16).padStart(2, '0')
+        ).join('')
+        const guardado = JSON.parse(
+          window.sessionStorage.getItem('shifty:booking-idem:tienda') ?? '{}'
+        ) as { fpHash?: string }
+        expect(guardado.fpHash).toBe(huella)
+      } finally {
+        jest.useRealTimers()
+      }
     })
 
     // 2026-10-16 (pedido de Mateo): con un solo profesional no se ofrece

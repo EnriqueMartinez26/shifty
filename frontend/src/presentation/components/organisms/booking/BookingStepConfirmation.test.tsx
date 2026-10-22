@@ -12,8 +12,16 @@ import { formatArgentinaDayHeading } from '@shared/utils/argentinaTime'
 import { formatCurrency } from '@shared/utils/currency'
 import * as safeUrl from '@shared/utils/safeUrl'
 
+import type { BookingBotTrap } from './BookingBotTrap'
 import { BookingStepConfirmation } from './BookingStepConfirmation'
 import type { BookingClientData, BookingOtpState, BookingWizardState } from './types'
+
+// Lo que manda una persona en la trampa para bots (S4): el campo oculto vacio
+// y el tiempo que tardo, que en estos tests no importa.
+const TRAMPA_DE_UNA_PERSONA: BookingBotTrap = {
+  website: '',
+  formElapsedMs: expect.any(Number) as number
+}
 
 const mockDepositPreview = jest.fn()
 const mockPreviewPromotion = jest.fn()
@@ -1002,7 +1010,7 @@ describe('BookingStepConfirmation', () => {
       fireEvent.click(botonReservar())
 
       await waitFor(() => expect(screen.getByText('Reserva Confirmada')).toBeInTheDocument())
-      expect(base.onConfirm).toHaveBeenCalledWith('manual', true, [])
+      expect(base.onConfirm).toHaveBeenCalledWith('manual', true, [], TRAMPA_DE_UNA_PERSONA)
       expect(screen.getByText('Te enviamos los detalles a lucia@example.com')).toBeInTheDocument()
     })
 
@@ -1165,8 +1173,8 @@ describe('BookingStepConfirmation', () => {
       fireEvent.click(botonReservar())
       await waitFor(() => expect(screen.getByText('Reserva Confirmada')).toBeInTheDocument())
 
-      expect(base.onConfirm).toHaveBeenNthCalledWith(1, 'manual', true, [])
-      expect(base.onConfirm).toHaveBeenNthCalledWith(2, 'manual', true, [])
+      expect(base.onConfirm).toHaveBeenNthCalledWith(1, 'manual', true, [], TRAMPA_DE_UNA_PERSONA)
+      expect(base.onConfirm).toHaveBeenNthCalledWith(2, 'manual', true, [], TRAMPA_DE_UNA_PERSONA)
     })
 
     it('un 400 BOOKING_NOTICE_REQUIRED muestra el texto del servidor con las horas de anticipacion', async () => {
@@ -1345,9 +1353,12 @@ describe('BookingStepConfirmation: adicionales', () => {
     fireEvent.click(screen.getByRole('button', { name: RESERVAR_CON_SENA }))
 
     await waitFor(() =>
-      expect(base.onConfirm).toHaveBeenCalledWith('manual', true, [
-        { addon_id: 'strass', quantity: 6 }
-      ])
+      expect(base.onConfirm).toHaveBeenCalledWith(
+        'manual',
+        true,
+        [{ addon_id: 'strass', quantity: 6 }],
+        TRAMPA_DE_UNA_PERSONA
+      )
     )
   })
 
@@ -1383,9 +1394,12 @@ describe('BookingStepConfirmation: adicionales', () => {
     expect(screen.queryByText(/Los adicionales del servicio cambiaron/)).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: RESERVAR_CON_SENA }))
     await waitFor(() =>
-      expect(base.onConfirm).toHaveBeenCalledWith('manual', true, [
-        { addon_id: 'strass', quantity: 2 }
-      ])
+      expect(base.onConfirm).toHaveBeenCalledWith(
+        'manual',
+        true,
+        [{ addon_id: 'strass', quantity: 2 }],
+        TRAMPA_DE_UNA_PERSONA
+      )
     )
   })
 
@@ -2070,7 +2084,9 @@ describe('BookingStepConfirmation: confirmación compacta (S5)', () => {
 
     expect(botonesDeEnvio()).toHaveLength(1)
     fireEvent.click(screen.getByRole('button', { name: RESERVAR_CON_SENA }))
-    await waitFor(() => expect(base.onConfirm).toHaveBeenCalledWith('manual', true, []))
+    await waitFor(() =>
+      expect(base.onConfirm).toHaveBeenCalledWith('manual', true, [], TRAMPA_DE_UNA_PERSONA)
+    )
   })
 
   it('con un solo medio no pide elegir', () => {
@@ -2167,9 +2183,12 @@ describe('BookingStepConfirmation: confirmación compacta (S5)', () => {
       fireEvent.click(screen.getByRole('button', { name: PAGAR_MP }))
 
       await waitFor(() => expect(ir).toHaveBeenCalledWith('https://mp.example/pagar'))
-      expect(base.onConfirm).toHaveBeenCalledWith('mercadopago', true, [
-        { addon_id: 'deco', quantity: 3 }
-      ])
+      expect(base.onConfirm).toHaveBeenCalledWith(
+        'mercadopago',
+        true,
+        [{ addon_id: 'deco', quantity: 3 }],
+        TRAMPA_DE_UNA_PERSONA
+      )
       expect(screen.queryByText('Reserva Confirmada')).not.toBeInTheDocument()
     })
 
@@ -2379,5 +2398,117 @@ describe('BookingStepConfirmation: diseño previo (S7)', () => {
     it('sin servicios con diseño previo no guarda nada', async () => {
       expect(await pagarConMp([servicio()])).toBeNull()
     })
+  })
+})
+
+// Trampa para bots (S4 del paquete antiabuso, 2026-10-22): un campo oculto
+// que un bot llena y el tiempo que tardo en completarse el paso. El backend
+// rechaza un `website` no vacio o menos de 2,5 s con 400 BOOKING_REJECTED.
+describe('BookingStepConfirmation: trampa para bots', () => {
+  const completo = () =>
+    props({
+      bookingState: estado({
+        client: cliente({ name: 'Lucia', phone: '1155550101', email: 'lucia@example.com' })
+      })
+    })
+  const campoTrampa = (container: HTMLElement) =>
+    container.querySelector<HTMLInputElement>('input[name="website"]')
+
+  beforeEach(() => {
+    mockDepositPreview.mockReset()
+    mockServices.mockReset()
+    mockDepositPreview.mockReturnValue({ data: undefined, isLoading: false })
+    mockServices.mockReturnValue({ data: [], isLoading: false })
+    jest.useFakeTimers()
+  })
+  afterEach(() => jest.useRealTimers())
+
+  it('el campo oculto existe para un bot, pero no se alcanza con el teclado ni se anuncia', () => {
+    const { container } = render(<BookingStepConfirmation {...completo()} />)
+
+    const campo = campoTrampa(container)
+    expect(campo).not.toBeNull()
+    expect(campo?.tabIndex).toBe(-1)
+    expect(campo?.getAttribute('aria-hidden')).toBe('true')
+    expect(campo?.getAttribute('autocomplete')).toBe('off')
+    expect(campo?.value).toBe('')
+    // Un bot lo ve como un campo mas: ni display:none ni el atributo hidden.
+    expect(campo?.hidden).toBe(false)
+    expect(campo?.style.display).not.toBe('none')
+    expect(campo?.closest('[hidden]')).toBeNull()
+    expect(screen.getByLabelText('Sitio web')).toBe(campo)
+    // Fuera del arbol de accesibilidad: un lector de pantalla no lo ofrece.
+    expect(screen.queryByRole('textbox', { name: 'Sitio web' })).not.toBeInTheDocument()
+  })
+
+  it('manda el campo vacio y el tiempo que tardo en completarse el paso', async () => {
+    const base = completo()
+    render(<BookingStepConfirmation {...base} />)
+    act(() => {
+      jest.advanceTimersByTime(4_000)
+    })
+    aceptarTerminos()
+    fireEvent.click(botonReservar())
+
+    await waitFor(() => expect(screen.getByText('Reserva Confirmada')).toBeInTheDocument())
+    expect(base.onConfirm).toHaveBeenCalledWith('manual', true, [], {
+      website: '',
+      formElapsedMs: 4_000
+    })
+  })
+
+  it('lo que un bot escribe en el campo oculto viaja tal cual', async () => {
+    const base = completo()
+    const { container } = render(<BookingStepConfirmation {...base} />)
+    const campo = campoTrampa(container)
+    if (!campo) throw new Error('falta el campo oculto')
+    fireEvent.change(campo, { target: { value: 'https://spam.example' } })
+    act(() => {
+      jest.advanceTimersByTime(500)
+    })
+    aceptarTerminos()
+    fireEvent.click(botonReservar())
+
+    await waitFor(() => expect(base.onConfirm).toHaveBeenCalledTimes(1))
+    expect(base.onConfirm).toHaveBeenCalledWith('manual', true, [], {
+      website: 'https://spam.example',
+      formElapsedMs: 500
+    })
+  })
+
+  it('una pagina abierta mas de un dia manda el tope que acepta el backend', async () => {
+    // form_elapsed_ms lleva le=86_400_000: pasarlo seria un 422, no una reserva.
+    const base = completo()
+    render(<BookingStepConfirmation {...base} />)
+    act(() => {
+      jest.advanceTimersByTime(25 * 60 * 60_000)
+    })
+    aceptarTerminos()
+    fireEvent.click(botonReservar())
+
+    await waitFor(() => expect(base.onConfirm).toHaveBeenCalledTimes(1))
+    expect(base.onConfirm).toHaveBeenCalledWith('manual', true, [], {
+      website: '',
+      formElapsedMs: 86_400_000
+    })
+  })
+
+  it('un 400 BOOKING_REJECTED muestra el aviso neutro, sin decir por que', async () => {
+    const base = completo()
+    base.onConfirm = jest.fn().mockRejectedValue(
+      new ValidationError('Rechazado por la trampa', {
+        errorCode: 'BOOKING_REJECTED',
+        statusCode: 400
+      })
+    )
+    render(<BookingStepConfirmation {...base} />)
+    aceptarTerminos()
+    fireEvent.click(botonReservar())
+
+    expect(
+      await screen.findByText('No pudimos registrar la reserva. Probá de nuevo.')
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/trampa/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/El horario podria haberse ocupado/)).not.toBeInTheDocument()
   })
 })

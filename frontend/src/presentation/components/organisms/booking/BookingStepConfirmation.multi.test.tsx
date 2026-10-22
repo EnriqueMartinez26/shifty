@@ -11,8 +11,16 @@ import type {
 import { ValidationError } from '@shared/errors'
 import { formatCurrency } from '@shared/utils/currency'
 
+import type { BookingBotTrap } from './BookingBotTrap'
 import { BookingStepConfirmation } from './BookingStepConfirmation'
 import type { BookingWizardState } from './types'
+
+// Lo que manda una persona en la trampa para bots (S4): el campo oculto vacio
+// y el tiempo que tardo, que en estos tests no importa.
+const TRAMPA_DE_UNA_PERSONA: BookingBotTrap = {
+  website: '',
+  formElapsedMs: expect.any(Number) as number
+}
 
 // Varios servicios en un turno (2026-10-16). El total y la seña salen SOLO de
 // los previews del backend (decision de Mateo): el paso nunca los calcula.
@@ -256,10 +264,15 @@ describe('BookingStepConfirmation con varios servicios', () => {
       fireEvent.click(reservar)
     })
 
-    expect(onConfirm).toHaveBeenCalledWith('manual', true, [
-      { addon_id: 'lavado', quantity: 1 },
-      { addon_id: 'toalla', quantity: 1 }
-    ])
+    expect(onConfirm).toHaveBeenCalledWith(
+      'manual',
+      true,
+      [
+        { addon_id: 'lavado', quantity: 1 },
+        { addon_id: 'toalla', quantity: 1 }
+      ],
+      TRAMPA_DE_UNA_PERSONA
+    )
   })
 
   it('el resumen nombra cada servicio con sus adicionales', () => {

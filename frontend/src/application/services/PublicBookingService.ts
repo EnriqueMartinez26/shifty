@@ -153,6 +153,18 @@ export interface PublicBookingPayload {
   accepts_terms?: boolean
   /** Sin los adicionales en 0; vacio si no se eligio ninguno. */
   addons?: PublicBookingAddon[]
+  /**
+   * Trampa para bots (S4 del paquete antiabuso, 2026-10-22): el campo oculto
+   * del formulario, que una persona deja vacio. Con algo escrito el backend
+   * responde 400 `BOOKING_REJECTED`. Va fuera de la huella de idempotencia.
+   */
+  website?: string
+  /**
+   * Milisegundos entre que se mostro el paso de datos y el envio (0 a
+   * 86_400_000). Por debajo de 2500 el backend responde 400 `BOOKING_REJECTED`.
+   * Va fuera de la huella de idempotencia: otro tiempo no es otro pedido.
+   */
+  form_elapsed_ms?: number
 }
 
 export interface BookingConfirmation {
