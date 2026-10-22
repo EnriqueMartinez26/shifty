@@ -4,6 +4,7 @@ import { formatCurrency } from '@shared/utils/currency'
 
 import { BookingStepService } from './BookingStepService'
 import { colors2000s } from '../../../../theme/colors'
+import { contrastRatio, DEFAULT_BRAND_THEME } from '../../../lib/brandTheme'
 
 // 2026-10-02 (F4-15): las fotos del primer paso de la reserva no tenian tamano
 // ni carga diferida: el celular bajaba todas y la lista saltaba al llegar cada
@@ -60,7 +61,7 @@ describe('BookingStepService', () => {
     expect(img).toHaveAttribute('height', '56')
   })
 
-  it('muestra la selección naranja con texto blanco de contraste AA', () => {
+  it('muestra la selección con el naranja del logo y texto de contraste AA', () => {
     mockUsePublicServices.mockReturnValue({
       isLoading: false,
       data: [servicio('corte', 'Corte', 30, 10000)]
@@ -69,13 +70,16 @@ describe('BookingStepService', () => {
     render(<BookingStepService storePublicId="store-1" selectedId="corte" onSelect={jest.fn()} />)
 
     // Con el color de la tienda (S3) la seleccion lee var(--brand-*); sin
-    // color de tienda el respaldo de cada var() es la rampa de #240.
+    // color de tienda el respaldo es el naranja del logo con texto oscuro
+    // (revision de Enrique en #239: el blanco no llega a AA sobre ese naranja).
     const title = screen.getByText('Corte')
-    expect(title.style.color).toBe(`var(--brand-on-fill, ${colors2000s.text.onOrangeSelection})`)
-    expect(colors2000s.text.onOrangeSelection).toBe('#ffffff')
+    expect(title.style.color).toBe(`var(--brand-on-fill, ${DEFAULT_BRAND_THEME.onFill})`)
+    expect(
+      contrastRatio(DEFAULT_BRAND_THEME.onFill, DEFAULT_BRAND_THEME.fill)
+    ).toBeGreaterThanOrEqual(4.5)
     const fondo = title.closest('button')?.style.background ?? ''
-    expect(fondo).toContain(`var(--brand-fill, ${colors2000s.orange.cta})`)
-    expect(fondo).toContain(`var(--brand-fill-bottom, ${colors2000s.orange.ctaEnd})`)
+    expect(fondo).toContain(`var(--brand-fill, ${colors2000s.orange.light})`)
+    expect(fondo).toContain(`var(--brand-fill-bottom, ${colors2000s.orange.dark})`)
   })
 
   // QA movil 2026-10-08 (QA!): en 390 px el nombre salia cortado ("BARBA Y

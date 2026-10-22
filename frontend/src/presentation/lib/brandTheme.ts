@@ -27,10 +27,14 @@ const WHITE = '#ffffff'
 const UNSET_STORE_COLOR = '#000000'
 const GRADIENT_DARKEN = 0.1
 
+// Stores without a color get the logo orange (`orange.light` -> `orange.dark`),
+// not the darker CTA ramp of the panel (`orange.cta`). White text misses AA on
+// the logo orange, so the text is picked against the darker bottom end, which
+// is the harder one for a dark foreground.
 export const DEFAULT_BRAND_THEME: BrandTheme = {
-  fill: colors2000s.orange.cta,
-  fillBottom: colors2000s.orange.ctaEnd,
-  onFill: colors2000s.text.onOrangeSelection,
+  fill: colors2000s.orange.light,
+  fillBottom: colors2000s.orange.dark,
+  onFill: getContrastingForeground(colors2000s.orange.dark),
   ink: colors2000s.orange.accent,
   isDefault: true
 }
