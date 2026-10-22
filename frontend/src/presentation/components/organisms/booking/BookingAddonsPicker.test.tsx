@@ -47,6 +47,33 @@ describe('BookingAddonsPicker', () => {
     expect(onChange).toHaveBeenLastCalledWith('strass', 5)
   })
 
+  // S4 (2026-10-21): el contador se toca con el dedo en el telefono: cada
+  // boton mide al menos 44 px.
+  it('los botones del contador miden al menos 44 px', () => {
+    render(<BookingAddonsPicker addons={addons} quantities={{}} onChange={jest.fn()} />)
+
+    for (const name of ['Agregar uno de Strass', 'Quitar uno de Strass']) {
+      expect(screen.getByRole('button', { name })).toHaveClass('w-11', 'h-11')
+    }
+  })
+
+  it('con id propio el bloque lo usa (para asociarlo a su servicio)', () => {
+    render(
+      <BookingAddonsPicker
+        id="adicionales-corte"
+        title="Adicionales de Corte"
+        addons={addons}
+        quantities={{}}
+        onChange={jest.fn()}
+      />
+    )
+
+    expect(screen.getByRole('region', { name: 'Adicionales de Corte' })).toHaveAttribute(
+      'id',
+      'adicionales-corte'
+    )
+  })
+
   it('no baja de 0 ni pasa del maximo', () => {
     render(<BookingAddonsPicker addons={addons} quantities={{ diseno: 2 }} onChange={jest.fn()} />)
 

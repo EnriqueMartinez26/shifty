@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useId } from 'react'
 
 import { Briefcase, Clock, Loader2, Check } from 'lucide-react'
 
@@ -16,6 +16,8 @@ import { usePublicServices } from '@presentation/hooks/usePublic'
 
 import { formatCurrency } from '@shared/utils/currency'
 
+import { addonsTotalOf, type ServiceAddonsGroup } from './addonGroups'
+import { BookingAddonsPicker } from './BookingAddonsPicker'
 import { BookingServicesBar } from './BookingServicesBar'
 import { colors2000s } from '../../../../theme/colors'
 import { brandColor } from '../../../lib/brandTheme'
@@ -34,12 +36,25 @@ interface MultiServiceChoice {
   performers?: readonly ServicePerformer[]
 }
 
+/**
+ * Adicionales de lo elegido (S4, 2026-10-21): se abren debajo de cada servicio
+ * elegido. Los grupos los arma el contenedor con `groupAddonsByService`.
+ */
+interface ServiceAddonsChoice {
+  /** Un grupo por servicio elegido, en el orden elegido. */
+  groups: readonly ServiceAddonsGroup[]
+  onChange: (serviceId: string, addonId: string, quantity: number) => void
+  /** Sin varios servicios: seguir al horario despues de elegir los adicionales. */
+  onContinue: () => void
+}
+
 interface BookingStepServiceProps {
   storePublicId: string
   selectedId: string | null
   onSelect: (id: string) => void
   /** Presente: tocar un servicio lo suma o lo quita y se sigue con la barra. */
   multiService?: MultiServiceChoice
+  addons?: ServiceAddonsChoice
 }
 
 const BLOCK_HINTS: Record<ServiceBlockReason, string> = {
@@ -54,6 +69,10 @@ interface ServiceCardProps {
   /** Por que no se puede sumar (null: se puede). */
   blockHint: string | null
   multi: boolean
+  /** Con adicionales: si su contador esta abierto (sin adicionales, undefined). */
+  expanded?: boolean
+  /** Id del contador abierto debajo de la tarjeta. */
+  controls?: string
   onClick: () => void
 }
 
@@ -62,6 +81,8 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
   isSelected,
   blockHint,
   multi,
+  expanded,
+  controls,
   onClick
 }) => {
   const serviceColor = svc.color || brandColor.fill
@@ -71,6 +92,8 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
       onClick={onClick}
       disabled={blockHint !== null}
       aria-pressed={multi ? isSelected : undefined}
+      aria-expanded={expanded}
+      aria-controls={controls}
       className="w-full text-left p-3 pl-4 sm:p-5 flex items-center gap-2 sm:gap-4 transition-all active:scale-98 group border relative overflow-hidden disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100"
       style={
         isSelected
@@ -179,9 +202,12 @@ export const BookingStepService: React.FC<BookingStepServiceProps> = ({
   storePublicId,
   selectedId,
   onSelect,
-  multiService
+  multiService,
+  addons
 }) => {
   const { data: services, isLoading } = usePublicServices(storePublicId)
+  // Base de los ids de cada contador, para asociarlo a su tarjeta.
+  const addonsIdBase = useId()
 
   if (isLoading) {
     return (
@@ -197,6 +223,19 @@ export const BookingStepService: React.FC<BookingStepServiceProps> = ({
   const catalog = publicServiceOptions(services)
   const selection = ServiceSelection.of(multiService?.selectedIds ?? []).retainIn(catalog)
   const performers = multiService?.performers
+  const groups = addons?.groups ?? []
+  // Un servicio elegido con adicionales abre su contador debajo de la tarjeta.
+  const openGroup = (serviceId: string) =>
+    groups.find((group) => group.serviceId === serviceId && group.options.length > 0)
+  // Sin varios servicios, la barra aparece solo si el elegido tiene
+  // adicionales: sin ellos, tocarlo ya avanza.
+  const singleWithAddons = selectedId && openGroup(selectedId) ? selectedId : null
+  const barSelection = multiService
+    ? selection
+    : singleWithAddons
+      ? ServiceSelection.of([singleWithAddons]).retainIn(catalog)
+      : null
+  const onBarContinue = multiService ? multiService.onContinue : addons?.onContinue
 
   return (
     <div className="space-y-4 duration-500">
@@ -216,39 +255,53 @@ export const BookingStepService: React.FC<BookingStepServiceProps> = ({
 
       <div className="grid gap-4">
         {services?.map((svc) => {
-          if (!multiService) {
-            return (
-              <ServiceCard
-                key={svc.public_id}
-                service={svc}
-                isSelected={selectedId === svc.public_id}
-                blockHint={null}
-                multi={false}
-                onClick={() => onSelect(svc.public_id)}
-              />
-            )
-          }
-          const option = catalog.find((candidate) => candidate.id === svc.public_id)
-          const reason = option ? selection.blockReason(option, catalog, performers) : null
+          const option = multiService
+            ? catalog.find((candidate) => candidate.id === svc.public_id)
+            : undefined
+          const reason =
+            multiService && option ? selection.blockReason(option, catalog, performers) : null
+          const isSelected = multiService
+            ? selection.includes(svc.public_id)
+            : selectedId === svc.public_id
+          const expandable = Boolean(addons) && (svc.addons?.length ?? 0) > 0
+          const group = isSelected ? openGroup(svc.public_id) : undefined
+          const regionId = `${addonsIdBase}-adicionales-${svc.public_id}`
           return (
-            <ServiceCard
-              key={svc.public_id}
-              service={svc}
-              isSelected={selection.includes(svc.public_id)}
-              blockHint={reason ? BLOCK_HINTS[reason] : null}
-              multi
-              onClick={() => multiService.onToggle(svc.public_id)}
-            />
+            <div key={svc.public_id} className="space-y-2">
+              <ServiceCard
+                service={svc}
+                isSelected={isSelected}
+                blockHint={reason ? BLOCK_HINTS[reason] : null}
+                multi={Boolean(multiService)}
+                expanded={expandable ? Boolean(group) : undefined}
+                controls={group ? regionId : undefined}
+                onClick={() =>
+                  multiService ? multiService.onToggle(svc.public_id) : onSelect(svc.public_id)
+                }
+              />
+              {group && addons && (
+                <BookingAddonsPicker
+                  id={regionId}
+                  title={`Adicionales de ${svc.name}`}
+                  addons={group.options}
+                  quantities={group.selection.toQuantities()}
+                  onChange={(addonId, quantity) =>
+                    addons.onChange(svc.public_id, addonId, quantity)
+                  }
+                />
+              )}
+            </div>
           )
         })}
       </div>
 
-      {multiService && !selection.isEmpty() && (
+      {barSelection && !barSelection.isEmpty() && onBarContinue && (
         <BookingServicesBar
-          count={selection.count()}
-          durationMinutes={selection.totalDuration(catalog)}
-          listPrice={selection.listPrice(catalog)}
-          onContinue={multiService.onContinue}
+          count={barSelection.count()}
+          durationMinutes={barSelection.totalDuration(catalog)}
+          listPrice={barSelection.listPrice(catalog)}
+          addonsTotal={addonsTotalOf(groups)}
+          onContinue={onBarContinue}
         />
       )}
     </div>
