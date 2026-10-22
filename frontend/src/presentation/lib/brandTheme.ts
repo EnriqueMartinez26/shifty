@@ -26,9 +26,6 @@ const AA_MIN_CONTRAST = 4.5
 // (`modules/stores/model.py`). It means "not chosen", not "black on purpose".
 const UNSET_STORE_COLOR = '#000000'
 const GRADIENT_DARKEN = 0.1
-// El color de `shadows.outerOrange`: el resplandor sin color de tienda.
-const DEFAULT_GLOW_COLOR = 'rgba(200, 90, 15, 0.25)'
-
 // Stores without a color get the logo orange (`orange.light` -> `orange.dark`),
 // not the darker CTA ramp of the panel (`orange.cta`). White text misses AA on
 // the logo orange, so the text is picked against the darker bottom end, which
@@ -51,6 +48,10 @@ const toRgb = (hex: string): [number, number, number] => {
     number
   ]
 }
+
+// El resplandor sin color de tienda sale del naranja del logo (revision de
+// Enrique, 2026-10-22): una sola fuente de color para el portal.
+const DEFAULT_GLOW_COLOR = `rgba(${toRgb(colors2000s.orange.dark).join(', ')}, 0.25)`
 
 const toHex = (rgb: [number, number, number]): string =>
   `#${rgb.map((value) => Math.round(value).toString(16).padStart(2, '0')).join('')}`
