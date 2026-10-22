@@ -88,6 +88,10 @@ async def test_reprogramar_y_bloquear_en_orden_cruzado_no_da_5xx(
                     "BLOCK_HAS_APPOINTMENTS",
                     "RESOURCE_CONFLICT",
                     "INVALID_STATUS_TRANSITION",
+                    # El bloqueo cancelo el turno antes de que la reprogramacion
+                    # tomara su lock: un turno terminal no se reprograma (409).
+                    # 2026-10-22: fallo intermitente en CI de #244.
+                    "APPOINTMENT_NOT_ACTIVE",
                 }, res.text
 
     assert all(c < 500 for c in codigos), codigos
