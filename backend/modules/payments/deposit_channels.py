@@ -25,12 +25,20 @@ Una sena por WhatsApp se representa igual que la de MP: turno
 ``pending_payment`` y un ``Payment`` ``pending`` con link placeholder. Lo
 distingue ``Payment.provider = "manual"``: sin link ni consulta a MP, vence
 directo por el grafo. Su retencion es otra (``whatsapp_hold_deadline``).
+
+Reserva lejana (decision de Mateo, 2026-10-20): un turno que empieza a mas de
+``FAR_BOOKING_DAYS`` dias de calendario argentino y pide una sena obligatoria
+solo se cobra por Mercado Pago. Elegir WhatsApp es 422
+``FAR_BOOKING_REQUIRES_MERCADOPAGO``; una tienda sin MP usable no toma esa
+reserva (422 ``FAR_BOOKING_UNAVAILABLE``). Los dos se deciden antes de
+escribir nada; un servicio sin sena obligatoria no cambia.
 """
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Literal
 
@@ -42,15 +50,26 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.exceptions import AppException, StoreNotFoundException, ValidationException
 from core.feature_flags import is_store_feature_enabled
 from core.observability import OncePer, report_exception
-from core.utils import ensure_utc_aware, now_utc
+from core.utils import ARGENTINA_TZ, ensure_utc_aware, now_utc, today_local
 from core.whatsapp_phone import normalize_phone_for_whatsapp
 from modules.notifications.model import NotificationType
+from modules.payments.deposit_rules import (
+    UNKNOWN_HISTORY,
+    DepositRules,
+    decide_selection_deposit,
+    selection_deposit_mode,
+)
 from modules.payments.model import (
     PAYMENT_PROVIDER_MANUAL,
     PAYMENT_PROVIDER_MERCADOPAGO,
     OutboxMessage,
+    PaymentGatewayConfig,
 )
-from modules.payments.service import _get_store, mercadopago_connected
+from modules.payments.service import (
+    _get_store,
+    gateway_has_usable_token,
+    mercadopago_connected,
+)
 from modules.services.model import Service
 from modules.stores.model import Store
 
@@ -92,6 +111,85 @@ def whatsapp_hold_deadline(
     if plazo < piso:
         plazo = min(piso, inicio)
     return plazo
+
+
+# ---------------------------------------------------------------------------
+# Reserva lejana (decision de Mateo, 2026-10-20)
+# ---------------------------------------------------------------------------
+# Un turno a mas de esta cantidad de dias de calendario (hora argentina) con
+# sena obligatoria se cobra solo por Mercado Pago: por WhatsApp la sena quedaba
+# retenida semanas sin plata de por medio. Se cuenta por dia local, no por
+# horas (regla 24): el dia de hoy + 30 todavia no es lejano, el + 31 si.
+FAR_BOOKING_DAYS = 30
+
+
+def is_far_day(day: date, *, today: date | None = None) -> bool:
+    """El dia local ``day`` cae despues de hoy + ``FAR_BOOKING_DAYS``."""
+    hoy = today if today is not None else today_local()
+    return day > hoy + timedelta(days=FAR_BOOKING_DAYS)
+
+
+def is_far_booking(starts_at: datetime, *, today: date | None = None) -> bool:
+    """El turno empieza en un dia local lejano (``is_far_day``).
+
+    Un naive es UTC (regla 24). Una fecha que no se puede llevar a hora local
+    (anio 9999 con offset) cuenta como lejana: nunca levanta ``OverflowError``
+    (500), y de todos modos la corta el tope de ``MAX_BOOKING_AHEAD``.
+    """
+    aware = starts_at if starts_at.tzinfo else starts_at.replace(tzinfo=timezone.utc)
+    try:
+        dia = aware.astimezone(ARGENTINA_TZ).date()
+    except OverflowError:
+        return True
+    return is_far_day(dia, today=today)
+
+
+class FarBookingRequiresMercadoPagoError(AppException):
+    """422: el turno es lejano y su sena obligatoria se eligio por WhatsApp
+    (o es una sena por WhatsApp que se quiere mover a una fecha lejana)."""
+
+    def __init__(self, message: str | None = None) -> None:
+        super().__init__(
+            message=message
+            or (
+                f"Para reservar con más de {FAR_BOOKING_DAYS} días de "
+                "anticipación, la seña se paga con Mercado Pago."
+            ),
+            http_status=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            error_code="FAR_BOOKING_REQUIRES_MERCADOPAGO",
+        )
+
+
+# La autogestion no cambia el canal de la sena: una por WhatsApp pendiente
+# no se mueve a un dia lejano (``reschedule_by_client``).
+FAR_WHATSAPP_RESCHEDULE_DENIED = (
+    "Un turno con la seña pendiente por WhatsApp se puede mover hasta "
+    f"{FAR_BOOKING_DAYS} días adelante. Elegí una fecha más cercana."
+)
+
+
+class FarBookingUnavailableError(AppException):
+    """422: el turno es lejano, pide sena obligatoria y la tienda no tiene
+    Mercado Pago usable. Mensaje neutro (regla 20): no dice que le falta a la
+    tienda, solo hasta cuando se puede reservar."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            message=(
+                f"Este servicio se puede reservar con hasta {FAR_BOOKING_DAYS} "
+                "días de anticipación. Elegí una fecha más cercana."
+            ),
+            http_status=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            error_code="FAR_BOOKING_UNAVAILABLE",
+        )
+
+
+def far_booking_rule_applies(
+    *, far_booking: bool, deposit_mode: str, deposit_amount: Decimal
+) -> bool:
+    """La regla de la reserva lejana alcanza a esta reserva: es lejana y su
+    sena es obligatoria y mayor a cero. Sin sena (o con sena opcional) no."""
+    return far_booking and deposit_mode == "required" and deposit_amount > 0
 
 
 # ---------------------------------------------------------------------------
@@ -170,6 +268,27 @@ async def deposit_channels_of(db: AsyncSession, store: Store) -> DepositChannels
     )
 
 
+def deposit_channels_from(
+    store: Store, gateway: PaymentGatewayConfig | None
+) -> DepositChannels:
+    """``deposit_channels_of`` con la config de MP ya leida (``None``: no hay):
+    para quien la trae en la misma sentencia que la tienda y no quiere otra
+    consulta. Mismo predicado (``gateway_has_usable_token``)."""
+    payments_enabled = is_store_feature_enabled(store.feature_flags, "payments")
+    return DepositChannels(
+        mercadopago=payments_enabled and gateway_has_usable_token(gateway),
+        whatsapp=normalize_phone_for_whatsapp(store.whatsapp_number) is not None,
+        payments_enabled=payments_enabled,
+    )
+
+
+def far_limit_days(channels: DepositChannels) -> int | None:
+    """Hasta cuantos dias adelante se reserva un servicio con sena obligatoria
+    en esta tienda: ``FAR_BOOKING_DAYS`` sin MP usable, ``None`` (sin tope de
+    esta regla) con MP. Para que el portal corte el calendario."""
+    return None if channels.mercadopago else FAR_BOOKING_DAYS
+
+
 async def deposit_channels_for(
     db: AsyncSession, store: Store, *, deposit_mode: str
 ) -> DepositChannels:
@@ -214,14 +333,42 @@ def online_payment_mandatory(
     deposit_amount: Decimal,
     deposit_mode: str,
     allow_manual_coordination: bool,
+    far_booking: bool = False,
 ) -> bool:
-    """La sena obligatoria solo se puede pagar por Mercado Pago."""
-    return (
-        deposit_mode == "required"
-        and deposit_amount > 0
-        and channels.mercadopago
-        and not _whatsapp_usable(channels, allow_manual_coordination)
-    )
+    """La sena obligatoria solo se puede pagar por Mercado Pago: sin WhatsApp
+    usable, o porque la reserva es lejana (decision de Mateo, 2026-10-20)."""
+    if not (deposit_mode == "required" and deposit_amount > 0 and channels.mercadopago):
+        return False
+    return far_booking or not _whatsapp_usable(channels, allow_manual_coordination)
+
+
+def booking_blocked_code(
+    *,
+    channels: DepositChannels,
+    deposit_amount: Decimal,
+    deposit_mode: str,
+    allow_manual_coordination: bool,
+    far_booking: bool = False,
+) -> str | None:
+    """El codigo con el que el alta rechazaria esta reserva por su canal de
+    cobro, pague como pague el cliente, o ``None`` si se puede reservar.
+
+    Para el preview de la sena: el cliente ve la regla antes de reservar. Es
+    ``resolve_deposit_channel`` con ``auto`` (el metodo que mas canales
+    acepta), asi que no puede divergir del alta.
+    """
+    try:
+        resolve_deposit_channel(
+            "auto",
+            channels=channels,
+            deposit_amount=deposit_amount,
+            deposit_mode=deposit_mode,
+            allow_manual_coordination=allow_manual_coordination,
+            far_booking=far_booking,
+        )
+    except (DepositChannelUnavailableError, FarBookingUnavailableError) as exc:
+        return exc.error_code
+    return None
 
 
 def _explicit_mercadopago(*, payments_enabled: bool, deposit_amount: Decimal) -> None:
@@ -261,6 +408,7 @@ def resolve_deposit_channel(
     deposit_amount: Decimal,
     deposit_mode: str,
     allow_manual_coordination: bool,
+    far_booking: bool = False,
 ) -> DepositChannel | None:
     """Por donde se cobra la sena de esta reserva, o ``None`` si no se cobra.
 
@@ -271,9 +419,20 @@ def resolve_deposit_channel(
       siempre; ``auto`` cobra por MP si los cobros estan prendidos.
     - Sena obligatoria: ``auto`` prefiere MP y si no WhatsApp; ``manual`` es
       WhatsApp. Sin canal, 409 ``DEPOSIT_CHANNEL_UNAVAILABLE``.
+    - Sena obligatoria en una reserva lejana (``far_booking``, decision de
+      Mateo 2026-10-20): solo MP. Sin MP usable, 422
+      ``FAR_BOOKING_UNAVAILABLE`` (pague como pague); con MP, ``manual`` es
+      422 ``FAR_BOOKING_REQUIRES_MERCADOPAGO`` y ``auto`` es MP.
 
     Puede levantar ``ValidationException`` si el metodo pedido no es viable.
     """
+    lejana = far_booking_rule_applies(
+        far_booking=far_booking,
+        deposit_mode=deposit_mode,
+        deposit_amount=deposit_amount,
+    )
+    if lejana and not channels.mercadopago:
+        raise FarBookingUnavailableError()
     if payment_method == "mercadopago":
         _explicit_mercadopago(
             payments_enabled=channels.payments_enabled, deposit_amount=deposit_amount
@@ -284,8 +443,55 @@ def resolve_deposit_channel(
     if deposit_mode != "required":
         auto_online = payment_method == "auto" and channels.payments_enabled
         return "mercadopago" if auto_online else None
+    if lejana:
+        if payment_method == "manual":
+            raise FarBookingRequiresMercadoPagoError()
+        return "mercadopago"
     return _required_deposit_channel(
         payment_method, channels, allow_manual_coordination
+    )
+
+
+def far_booking_blocked(
+    services: Sequence[Service],
+    store: Store,
+    channels: DepositChannels,
+    *,
+    starts_at: datetime,
+    now: datetime | None = None,
+) -> bool:
+    """Un turno de estos servicios que empiece en ``starts_at`` lo rechazaria
+    el alta con 422 ``FAR_BOOKING_UNAVAILABLE`` (decision de Mateo,
+    2026-10-20).
+
+    Para quien todavia no tiene la reserva entera (la grilla publica, la lista
+    de espera): la sena se estima con el precio de lista y sin historial (un
+    recargo solo la sube; una promo que la deje en cero no se conoce) y la
+    decision es la de ``resolve_deposit_channel`` (``booking_blocked_code``),
+    la misma funcion del alta. Pura: los canales ya vienen resueltos.
+    """
+    if not services or selection_deposit_mode(services) != "required":
+        return False
+    if not is_far_booking(starts_at):
+        return False
+    ahora = now or now_utc()
+    precio = sum((Decimal(str(s.price or 0)) for s in services), Decimal("0"))
+    sena = decide_selection_deposit(
+        services,
+        price=precio,
+        notice=ensure_utc_aware(starts_at) - ahora,
+        rules=DepositRules.from_store(store),
+        history=UNKNOWN_HISTORY,
+    )
+    return (
+        booking_blocked_code(
+            channels=channels,
+            deposit_amount=sena.decision.amount,
+            deposit_mode=selection_deposit_mode(services),
+            allow_manual_coordination=store.allow_manual_coordination,
+            far_booking=True,
+        )
+        == "FAR_BOOKING_UNAVAILABLE"
     )
 
 
@@ -319,6 +525,33 @@ def report_deposit_channel_unavailable(
     )
     report_exception(
         DepositChannelUnavailableAlert("sena obligatoria sin canal de cobro"),
+        store_id=store_id,
+        service_id=service_id,
+    )
+
+
+# El rebote por la reserva lejana (``FAR_BOOKING_UNAVAILABLE``) deja el mismo
+# rastro, con su propia ventana: la tienda no tiene MP y un cliente quiso un
+# servicio con sena a mas de 30 dias (revision de la PR #236).
+_alertas_lejanas = OncePer(_ALERT_EVERY_SECONDS)
+
+
+class FarBookingUnavailableAlert(RuntimeError):
+    """Para Sentry: un cliente quiso reservar lejos un servicio con sena
+    obligatoria en una tienda sin MP usable (``report_far_booking_unavailable``)."""
+
+
+def report_far_booking_unavailable(
+    *, store_id: str, service_id: str, clock: float | None = None
+) -> None:
+    """Rastro de una reserva o un alta en la lista de espera rechazada con 422
+    ``FAR_BOOKING_UNAVAILABLE``: warning con ids y Sentry, a lo sumo uno por
+    tienda y hora."""
+    if not _alertas_lejanas.allow(store_id, now=clock):
+        return
+    logger.warning("far_booking_unavailable", store_id=store_id, service_id=service_id)
+    report_exception(
+        FarBookingUnavailableAlert("reserva lejana con sena sin Mercado Pago"),
         store_id=store_id,
         service_id=service_id,
     )
