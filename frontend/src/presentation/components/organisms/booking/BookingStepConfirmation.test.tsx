@@ -1,6 +1,6 @@
 import React from 'react'
 
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 
 import type {
   BookingConfirmation,
@@ -8,6 +8,9 @@ import type {
 } from '@application/services/PublicBookingService'
 
 import { ConflictError, ServiceUnavailableError, ValidationError } from '@shared/errors'
+import { formatArgentinaDayHeading } from '@shared/utils/argentinaTime'
+import { formatCurrency } from '@shared/utils/currency'
+import * as safeUrl from '@shared/utils/safeUrl'
 
 import { BookingStepConfirmation } from './BookingStepConfirmation'
 import type { BookingClientData, BookingOtpState, BookingWizardState } from './types'
@@ -129,7 +132,13 @@ const ConEstado: React.FC<{ base: Props }> = ({ base }) => {
 // WhatsApp (QA movil 2026-10-08: decia "pagar por WhatsApp" sin seña).
 const RESERVAR = 'Confirmar reserva'
 const RESERVAR_CON_SENA = 'Reservar y pagar la seña por WhatsApp'
-const PAGAR_MP = 'Pagar seña con Mercado Pago'
+// Un solo boton (S5): con Mercado Pago lleva el importe de la seña confirmada.
+const PAGAR_MP = /^Pagar seña/
+// Con los dos medios disponibles se elige antes del boton.
+const elegirMedio = (medio: RegExp) => fireEvent.click(screen.getByRole('radio', { name: medio }))
+// El turno va en una linea: "viernes 25/09 · 09:00 hs" (S5).
+const DIA = formatArgentinaDayHeading('2026-09-25')
+const lineaDelTurno = () => screen.getByTestId('booking-summary-line').textContent
 const aceptarTerminos = () => fireEvent.click(screen.getByRole('checkbox'))
 const botonReservar = () => screen.getByRole('button', { name: RESERVAR })
 // El codigo promocional va plegado detras de un link (2026-10-16).
@@ -151,8 +160,8 @@ describe('BookingStepConfirmation', () => {
 
       expect(screen.getByText('Tus datos y confirmación')).toBeInTheDocument()
       // 2026-10-02, QA en navegador: el resumen mostraba la fecha ISO.
-      expect(screen.getByText('25/09/2026')).toBeInTheDocument()
-      expect(screen.queryByText('2026-09-25')).not.toBeInTheDocument()
+      expect(screen.getByText(DIA)).toBeInTheDocument()
+      expect(lineaDelTurno()).not.toContain('2026-09-25')
       expect(screen.getByText('09:00 hs')).toBeInTheDocument()
       expect(screen.getByPlaceholderText('Ej: Juan Perez')).toBeInTheDocument()
       expect(screen.getByPlaceholderText('Ej: 351 1234567')).toBeInTheDocument()
@@ -161,7 +170,7 @@ describe('BookingStepConfirmation', () => {
     it('mantiene la fecha completa en una sola línea en el resumen angosto', () => {
       render(<BookingStepConfirmation {...props()} />)
 
-      const fecha = screen.getByText('25/09/2026')
+      const fecha = screen.getByText(DIA)
       expect(fecha).toHaveClass('whitespace-nowrap')
       expect(fecha).not.toHaveClass('break-words')
     })
@@ -210,6 +219,8 @@ describe('BookingStepConfirmation', () => {
       render(<BookingStepConfirmation {...props()} />)
 
       expect(screen.getByLabelText('Teléfono')).toHaveAttribute('placeholder', 'Ej: 351 1234567')
+      // Plegadas detras de un link desde S5.
+      fireEvent.click(screen.getByRole('button', { name: 'Agregar una nota para la tienda' }))
       expect(screen.getByLabelText('Notas para la tienda (opcional)')).toBeInTheDocument()
       expect(screen.queryByText(/PREFIJO/)).not.toBeInTheDocument()
       expect(screen.queryByText(/Notas Adicionales/)).not.toBeInTheDocument()
@@ -382,10 +393,9 @@ describe('BookingStepConfirmation', () => {
     })
   })
 
+  // Desde S5 el resumen es una linea de la tarjeta de pago: servicios · dia ·
+  // hora · profesional.
   describe('resumen del turno', () => {
-    const dato = (etiqueta: string) =>
-      screen.getByText(etiqueta, { selector: 'dt' }).nextElementSibling?.textContent
-
     it('muestra servicio y profesional junto a la fecha y la hora', () => {
       mockServices.mockReturnValue({
         data: [{ public_id: 'svc-1', name: 'Kapping', price: 27000, deposit_mode: 'none' }],
@@ -393,10 +403,7 @@ describe('BookingStepConfirmation', () => {
       })
       render(<BookingStepConfirmation {...props()} />)
 
-      expect(dato('Fecha')).toBe('25/09/2026')
-      expect(dato('Hora')).toBe('09:00 hs')
-      expect(dato('Servicio')).toBe('Kapping')
-      expect(dato('Profesional')).toBe('Ana')
+      expect(lineaDelTurno()).toBe(`Kapping · ${DIA} · 09:00 hs · con Ana`)
     })
 
     it('con "Cualquiera" muestra el profesional que asigno el horario', () => {
@@ -411,7 +418,7 @@ describe('BookingStepConfirmation', () => {
         />
       )
 
-      expect(dato('Profesional')).toBe('Bruno')
+      expect(lineaDelTurno()).toContain('· con Bruno')
     })
 
     it('sin el profesional del horario no lo inventa', () => {
@@ -419,8 +426,7 @@ describe('BookingStepConfirmation', () => {
         <BookingStepConfirmation {...props({ bookingState: estado({ assignedStaff: null }) })} />
       )
 
-      expect(screen.queryByText('Profesional', { selector: 'dt' })).not.toBeInTheDocument()
-      expect(dato('Fecha')).toBe('25/09/2026')
+      expect(lineaDelTurno()).toBe(`${DIA} · 09:00 hs`)
     })
 
     it('una cancha o sala no se presenta como profesional', () => {
@@ -432,8 +438,7 @@ describe('BookingStepConfirmation', () => {
         />
       )
 
-      expect(dato('Cancha / sala')).toBe('Cancha 1')
-      expect(screen.queryByText('Profesional', { selector: 'dt' })).not.toBeInTheDocument()
+      expect(lineaDelTurno()).toBe(`${DIA} · 09:00 hs · Cancha 1`)
     })
   })
 
@@ -446,18 +451,22 @@ describe('BookingStepConfirmation', () => {
       expect(screen.getByText('Política de seña de Tienda')).toBeInTheDocument()
     })
 
+    // Desde S5 el plegado es un boton con aria-expanded (antes, <details>).
     it('una politica larga va plegada detras de "Ver política de seña"', () => {
       const larga = `Se cobra el 50% al reservar. ${'Con menos de 24 horas de aviso no se devuelve. '.repeat(8)}`
       render(<BookingStepConfirmation {...props({ depositPolicy: larga })} />)
 
-      const resumen = screen.getByText('Ver política de seña de Tienda')
-      const plegable = resumen.closest('details')
-      expect(plegable).not.toHaveAttribute('open')
-      expect(plegable).toHaveTextContent('Se cobra el 50% al reservar.')
+      const ver = screen.getByRole('button', { name: 'Ver política de seña de Tienda' })
+      expect(ver).toHaveAttribute('aria-expanded', 'false')
+      expect(screen.queryByText(/Se cobra el 50% al reservar\./)).not.toBeInTheDocument()
 
-      fireEvent.click(resumen)
+      fireEvent.click(ver)
 
-      expect(plegable).toHaveAttribute('open')
+      expect(ver).toHaveAttribute('aria-expanded', 'true')
+      const texto = screen.getByText(/Se cobra el 50% al reservar\./)
+      expect(ver).toHaveAttribute('aria-controls', texto.id)
+      // Una sola vez: se ve donde se acepta, no se repite.
+      expect(screen.getAllByText(/Se cobra el 50% al reservar\./)).toHaveLength(1)
     })
   })
 
@@ -484,14 +493,18 @@ describe('BookingStepConfirmation', () => {
     // Revision de la PR #129: una seña OPCIONAL reservada sin Mercado Pago no
     // genera cobro (deposit_channels.resolve_deposit_channel devuelve None),
     // y el boton igual decia "pagar la seña por WhatsApp".
+    // S5: un solo boton; los dos medios se eligen antes.
     it('con seña opcional el boton manual confirma la reserva, no pide pagar por WhatsApp', () => {
       servicioConSena('optional')
       previewConSena()
       render(<BookingStepConfirmation {...props({ paymentsEnabled: true })} />)
 
+      expect(screen.getByRole('button', { name: PAGAR_MP })).toBeInTheDocument()
+      elegirMedio(/No la pago ahora/)
+
       expect(screen.getByRole('button', { name: RESERVAR })).toBeInTheDocument()
       expect(screen.queryByRole('button', { name: RESERVAR_CON_SENA })).not.toBeInTheDocument()
-      expect(screen.getByRole('button', { name: PAGAR_MP })).toBeInTheDocument()
+      expect(screen.queryByRole('radio', { name: /WhatsApp/ })).not.toBeInTheDocument()
     })
 
     it('con seña opcional inferida del servicio tampoco pide pagar por WhatsApp', () => {
@@ -519,7 +532,8 @@ describe('BookingStepConfirmation', () => {
       render(<BookingStepConfirmation {...props({ paymentsEnabled: true })} />)
 
       expect(screen.getByTestId('deposit-preview')).toHaveTextContent(/1\.500/)
-      expect(screen.getByRole('button', { name: PAGAR_MP })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: PAGAR_MP })).toHaveTextContent(/1\.500/)
+      elegirMedio(/WhatsApp/)
       expect(screen.getByRole('button', { name: RESERVAR_CON_SENA })).toBeInTheDocument()
     })
 
@@ -539,6 +553,7 @@ describe('BookingStepConfirmation', () => {
       render(<BookingStepConfirmation {...props({ paymentsEnabled: true })} />)
 
       expect(screen.getByRole('button', { name: PAGAR_MP })).toBeInTheDocument()
+      expect(screen.queryByRole('radiogroup')).not.toBeInTheDocument()
       expect(screen.queryByRole('button', { name: RESERVAR_CON_SENA })).not.toBeInTheDocument()
       expect(screen.queryByRole('button', { name: RESERVAR })).not.toBeInTheDocument()
     })
@@ -1253,43 +1268,33 @@ describe('BookingStepConfirmation: adicionales', () => {
     mockServices.mockReturnValue({ data: [servicioConAdicionales], isLoading: false })
   })
 
-  it('un servicio sin adicionales no muestra el selector ni el total', () => {
+  // S5: el total siempre se ve en la tarjeta de pago; sin adicionales ni
+  // descuento, solo el total ("Servicio" lo repetia; 2026-10-16, Mateo).
+  it('un servicio sin adicionales no muestra el selector y el total va sin detalle', () => {
     mockServices.mockReturnValue({
       data: [{ ...servicioConAdicionales, addons: [] }],
       isLoading: false
     })
+    mockDepositPreview.mockReturnValue({ data: undefined, isLoading: false })
     render(<BookingStepConfirmation {...completo()} />)
 
     expect(screen.queryByRole('heading', { name: 'Adicionales' })).not.toBeInTheDocument()
-    expect(screen.queryByTestId('booking-price-summary')).not.toBeInTheDocument()
+    expect(screen.getByTestId('booking-price-summary')).toHaveTextContent(/Total\s*\$\s*27\.000/)
+    expect(screen.getByTestId('booking-price-summary')).not.toHaveTextContent('Servicio')
   })
 
-  it('sumar adicionales actualiza el total y la seña se pide con ellos tras la espera', async () => {
+  // Los adicionales se eligen en el primer paso (S4): aca suman al total y la
+  // seña se pide con ellos.
+  it('los adicionales elegidos suman al total y la seña se pide con ellos', () => {
     mockDepositPreview.mockReturnValue({ data: undefined, isLoading: false })
-    render(<ConEstado base={completo()} />)
-
-    expect(screen.getByTestId('booking-price-summary')).toHaveTextContent(/Total\s*\$\s*27\.000/)
-    // Sin adicionales ni descuento solo el total: "Servicio" lo repetia
-    // (2026-10-16, pedido de Mateo).
-    expect(screen.getByTestId('booking-price-summary')).not.toHaveTextContent('Servicio')
-    expect(ultimoPreview().addons).toEqual([])
-
-    for (let i = 0; i < 6; i += 1) {
-      fireEvent.click(screen.getByRole('button', { name: 'Agregar uno de Strass' }))
-    }
+    render(<BookingStepConfirmation {...completo({ addons: strassX6 })} />)
 
     const resumen = screen.getByTestId('booking-price-summary')
     expect(resumen).toHaveTextContent(/Servicio\s*\$\s*27\.000/)
     expect(resumen).toHaveTextContent('Strass x6')
     expect(resumen).toHaveTextContent(/3\.000/)
     expect(resumen).toHaveTextContent(/Total\s*\$\s*30\.000/)
-    // Debounce: los toques del contador no piden la seña uno por uno.
-    expect(ultimoPreview().addons).toEqual([])
-    await waitFor(() => expect(ultimoPreview().addons).toEqual(['strass:6']))
-    const conAdicionales = mockDepositPreview.mock.calls
-      .map(([params]) => ((params as { addons?: string[] }).addons ?? []).join(','))
-      .filter(Boolean)
-    expect(new Set(conAdicionales)).toEqual(new Set(['strass:6']))
+    expect(ultimoPreview().addons).toEqual(['strass:6'])
   })
 
   it('mientras la seña se recalcula no deja reservar y muestra "Calculando…"', async () => {
@@ -1298,17 +1303,28 @@ describe('BookingStepConfirmation: adicionales', () => {
     aceptarTerminos()
 
     expect(screen.getByTestId('deposit-preview')).toHaveTextContent('Calculando…')
-    expect(screen.getByRole('button', { name: RESERVAR_CON_SENA })).toBeDisabled()
+    // Sin el importe confirmado el boton no lo muestra.
+    expect(screen.getByRole('button', { name: PAGAR_MP })).toHaveTextContent(
+      'Pagar seña con Mercado Pago'
+    )
     expect(screen.getByRole('button', { name: PAGAR_MP })).toBeDisabled()
+    elegirMedio(/WhatsApp/)
+    expect(screen.getByRole('button', { name: RESERVAR_CON_SENA })).toBeDisabled()
   })
 
-  it('durante la espera del debounce los botones quedan deshabilitados', async () => {
+  it('si cambian los adicionales, durante la espera del debounce el boton queda deshabilitado', async () => {
     mockDepositPreview.mockReturnValue(conSena())
-    render(<ConEstado base={{ ...completo({ addons: strassX6 }), paymentsEnabled: true }} />)
+    const base = { ...completo({ addons: strassX6 }), paymentsEnabled: true }
+    const { rerender } = render(<BookingStepConfirmation {...base} />)
     aceptarTerminos()
     expect(screen.getByRole('button', { name: PAGAR_MP })).not.toBeDisabled()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Agregar uno de Strass' }))
+    rerender(
+      <BookingStepConfirmation
+        {...base}
+        bookingState={{ ...base.bookingState, addons: [elegido('strass', 'Strass', 500, 7)] }}
+      />
+    )
 
     expect(screen.getByRole('button', { name: PAGAR_MP })).toBeDisabled()
     await waitFor(() => expect(screen.getByRole('button', { name: PAGAR_MP })).not.toBeDisabled())
@@ -1344,15 +1360,17 @@ describe('BookingStepConfirmation: adicionales', () => {
 
     expect(
       screen.getByText(
-        'Los adicionales del servicio cambiaron. Revisá tu selección antes de confirmar.'
+        'Los adicionales del servicio cambiaron. Revisá tu selección en el primer paso.'
       )
     ).toBeInTheDocument()
     expect(screen.getByRole('button', { name: RESERVAR_CON_SENA })).toBeDisabled()
     // Lo que sigue existiendo se conserva.
-    expect(screen.getByLabelText('Cantidad de Strass')).toHaveTextContent('1')
+    expect(screen.getByTestId('booking-price-summary')).toHaveTextContent('Strass x1')
 
-    fireEvent.click(screen.getByRole('button', { name: 'Revisé mi selección' }))
+    // S5: se revisa en el primer paso; lo vigente queda guardado en el wizard.
+    fireEvent.click(screen.getByRole('button', { name: 'Revisar adicionales' }))
 
+    expect(base.onBack).toHaveBeenCalledTimes(1)
     expect(screen.queryByText(/Los adicionales del servicio cambiaron/)).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: RESERVAR_CON_SENA })).not.toBeDisabled()
   })
@@ -1379,7 +1397,9 @@ describe('BookingStepConfirmation: adicionales', () => {
     )
 
     expect(screen.getByText(/Los adicionales del servicio cambiaron/)).toBeInTheDocument()
-    expect(screen.getByLabelText('Cantidad de Strass')).toHaveTextContent('0')
+    // Queda en 0: no se cobra ni se resume.
+    expect(screen.getByTestId('booking-price-summary')).not.toHaveTextContent('Strass')
+    expect(lineaDelTurno()).not.toContain('Strass')
   })
 
   it('un 422 ADDON_UNAVAILABLE pide el catalogo salteando caches y no culpa al horario', async () => {
@@ -1581,8 +1601,8 @@ describe('BookingStepConfirmation: la promo se revalida con los adicionales', ()
     },
     ...patch
   })
-  const quitarUno = () =>
-    fireEvent.click(screen.getByRole('button', { name: 'Quitar uno de Strass' }))
+  // S5: los adicionales se cambian en el primer paso; la revalidacion corre al
+  // volver a este paso con un codigo aplicado (antes, al tocar el contador).
 
   beforeEach(() => {
     mockDepositPreview.mockReset()
@@ -1594,8 +1614,15 @@ describe('BookingStepConfirmation: la promo se revalida con los adicionales', ()
 
   it('aplicar un codigo lo valida con los adicionales elegidos', async () => {
     mockPreviewPromotion.mockResolvedValue(promo())
-    render(<ConEstado base={props({ bookingState: estado({ addons: [] }) })} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Agregar uno de Strass' }))
+    render(
+      <ConEstado
+        base={props({
+          bookingState: estado({
+            addons: [{ addonId: 'strass', name: 'Strass', unitPrice: 500, quantity: 1 }]
+          })
+        })}
+      />
+    )
     abrirCodigo()
     fireEvent.change(screen.getByPlaceholderText('Ej: BIENVENIDA10'), {
       target: { value: 'min6000' }
@@ -1613,11 +1640,10 @@ describe('BookingStepConfirmation: la promo se revalida con los adicionales', ()
     )
   })
 
-  it('cambiar la seleccion vuelve a validar el codigo tras la espera, y mientras no deja reservar', async () => {
+  it('al volver con otra seleccion valida el codigo tras la espera, y mientras no deja reservar', async () => {
     mockPreviewPromotion.mockResolvedValue(promo({ base_amount: 5500, final_amount: 4950 }))
-    render(<ConEstado base={conPromo(2)} />)
+    render(<ConEstado base={conPromo(1)} />)
     aceptarTerminos()
-    quitarUno()
 
     expect(screen.getByRole('button', { name: RESERVAR })).toBeDisabled()
     expect(mockPreviewPromotion).not.toHaveBeenCalled()
@@ -1639,10 +1665,9 @@ describe('BookingStepConfirmation: la promo se revalida con los adicionales', ()
     mockPreviewPromotion.mockRejectedValue(
       new ValidationError('La promocion no aplica a este servicio', { statusCode: 400 })
     )
-    render(<ConEstado base={conPromo(2)} />)
+    render(<ConEstado base={conPromo(1)} />)
     expect(screen.getByText('Desde 6.000')).toBeInTheDocument()
     aceptarTerminos()
-    quitarUno()
 
     await waitFor(() =>
       expect(
@@ -1658,8 +1683,7 @@ describe('BookingStepConfirmation: la promo se revalida con los adicionales', ()
 
   it('un fallo de red no quita el codigo pero lo dice', async () => {
     mockPreviewPromotion.mockRejectedValue(new Error('sin red'))
-    render(<ConEstado base={conPromo(2)} />)
-    quitarUno()
+    render(<ConEstado base={conPromo(1)} />)
 
     await waitFor(() =>
       expect(screen.getByText(/No pudimos volver a validar el código MIN6000/)).toBeInTheDocument()
@@ -1667,11 +1691,20 @@ describe('BookingStepConfirmation: la promo se revalida con los adicionales', ()
     expect(screen.getByText('Desde 6.000')).toBeInTheDocument()
   })
 
-  it('sin codigo aplicado cambiar adicionales no consulta la promo', async () => {
-    render(<ConEstado base={props({ bookingState: estado({ addons: [] }) })} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Agregar uno de Strass' }))
+  it('sin codigo aplicado volver con adicionales no consulta la promo', async () => {
+    render(
+      <ConEstado
+        base={props({
+          bookingState: estado({
+            addons: [{ addonId: 'strass', name: 'Strass', unitPrice: 500, quantity: 1 }]
+          })
+        })}
+      />
+    )
 
-    await waitFor(() => expect(ultimoPreviewDeSena().addons).toEqual(['strass:1']))
+    expect(ultimoPreviewDeSena().addons).toEqual(['strass:1'])
+    // Pasada la espera de la revalidacion, sigue sin consultar.
+    await act(() => new Promise((resolve) => setTimeout(resolve, 350)))
     expect(mockPreviewPromotion).not.toHaveBeenCalled()
   })
 })
@@ -1766,9 +1799,11 @@ describe('BookingStepConfirmation: reservar solo con el importe confirmado', () 
     mockServices.mockReturnValue({ data: [servicio()], isLoading: false })
   })
 
-  it('con promo y adicionales, si el preview falla no deja reservar, lo dice y reintentar lo vuelve a pedir', () => {
+  it('con promo y adicionales, si el preview falla no deja reservar, lo dice y reintentar lo vuelve a pedir', async () => {
     // Revision de Enrique en #186: con el preview en error la pantalla decia
     // "Calculando…" pero volvia a habilitar Reservar.
+    // S5: al montar con el codigo aplicado se revalida (sale bien).
+    mockPreviewPromotion.mockResolvedValue(promo)
     let preview: unknown = undefined
     const refetch = jest.fn(() => {
       preview = confirmado
@@ -1790,7 +1825,7 @@ describe('BookingStepConfirmation: reservar solo con el importe confirmado', () 
 
     expect(screen.queryByText(/No pudimos confirmar el importe/)).not.toBeInTheDocument()
     expect(screen.getByTestId('booking-price-summary')).toHaveTextContent(/Total\s*\$\s*5\.400/)
-    expect(screen.getByRole('button', { name: RESERVAR })).not.toBeDisabled()
+    await waitFor(() => expect(screen.getByRole('button', { name: RESERVAR })).not.toBeDisabled())
   })
 
   it('con seña y el preview en error tampoco deja reservar ni pagar', () => {
@@ -1804,8 +1839,9 @@ describe('BookingStepConfirmation: reservar solo con el importe confirmado', () 
     )
     aceptarTerminos()
 
-    expect(screen.getByRole('button', { name: RESERVAR_CON_SENA })).toBeDisabled()
     expect(screen.getByRole('button', { name: PAGAR_MP })).toBeDisabled()
+    elegirMedio(/WhatsApp/)
+    expect(screen.getByRole('button', { name: RESERVAR_CON_SENA })).toBeDisabled()
     expect(screen.getByText(/No pudimos confirmar el importe/)).toBeInTheDocument()
   })
 
@@ -1826,9 +1862,9 @@ describe('BookingStepConfirmation: reservar solo con el importe confirmado', () 
       discount_amount: 550,
       final_amount: 4950
     })
+    // S5: la revalidacion corre al volver al paso con el codigo aplicado.
     render(<ConEstado base={conPromoYAdicionales()} />)
     aceptarTerminos()
-    fireEvent.click(screen.getByRole('button', { name: 'Quitar uno de Strass' }))
 
     await waitFor(() =>
       expect(screen.getByText(/No pudimos volver a validar el código/)).toBeInTheDocument()
@@ -1877,5 +1913,316 @@ describe('BookingStepConfirmation con el color de la tienda', () => {
 
     expect(botonReservar()).toBeDisabled()
     expect(botonReservar().getAttribute('style')).not.toContain('var(--brand-fill,')
+  })
+})
+
+// S5 (2026-10-21, aceptado por Mateo): arriba solo los tres datos; abajo, en la
+// misma pantalla, una tarjeta de pago con el turno en una linea, el importe,
+// la politica, los terminos y un solo boton (fijo abajo en el celular).
+describe('BookingStepConfirmation: confirmación compacta (S5)', () => {
+  const semipermanente = {
+    public_id: 'svc-1',
+    name: 'Semipermanente',
+    duration_minutes: 60,
+    price: 20000,
+    deposit_mode: 'required',
+    deposit_type: 'percent',
+    deposit_amount: 30,
+    addons: [{ id: 'deco', name: 'Decoración', unit_price: 1000, max_quantity: 10, position: 0 }]
+  }
+  const decoX3 = [{ addonId: 'deco', name: 'Decoración', unitPrice: 1000, quantity: 3 }]
+  const conSena = (patch: Record<string, unknown> = {}) => ({
+    isLoading: false,
+    refetch: jest.fn(),
+    data: {
+      amount: 6900,
+      base_amount: 6900,
+      extra_percent: 0,
+      reasons: [],
+      price: 23000,
+      addons_amount: 3000,
+      payments_enabled: true,
+      online_payment_mandatory: false,
+      ...patch
+    }
+  })
+  const completo = (patch: Partial<BookingWizardState> = {}) =>
+    estado({ client: cliente({ name: 'Lucia', phone: '1155550101' }), ...patch })
+  const botonesDeEnvio = () =>
+    screen.queryAllByRole('button', { name: /Confirmar reserva|Reservar y pagar|Pagar seña/ })
+
+  beforeEach(() => {
+    mockDepositPreview.mockReset()
+    mockServices.mockReset()
+    mockPreviewPromotion.mockReset()
+    mockDepositPreview.mockReturnValue(conSena())
+    mockServices.mockReturnValue({ data: [semipermanente], isLoading: false })
+  })
+
+  it('arriba solo nombre, teléfono y email; los datos extra y las notas siguen abajo', () => {
+    const onClientChange = jest.fn()
+    render(
+      <BookingStepConfirmation
+        {...props({
+          onClientChange,
+          customFields: [{ key: 'dni', label: 'DNI', type: 'text', required: true, options: [] }],
+          bookingState: completo()
+        })}
+      />
+    )
+
+    const datos = screen.getByRole('region', { name: 'Tus datos' })
+    expect(within(datos).getAllByRole('textbox')).toEqual([
+      screen.getByLabelText('Nombre Completo'),
+      screen.getByLabelText('Teléfono'),
+      screen.getByLabelText('Email (opcional)')
+    ])
+    // Los datos extra de la tienda no se pierden: van debajo de los tres.
+    const dni = screen.getByLabelText('DNI *')
+    expect(datos.contains(dni)).toBe(false)
+    expect(datos.compareDocumentPosition(dni) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    // Las notas van plegadas detras de un link, como el codigo.
+    expect(screen.queryByLabelText('Notas para la tienda (opcional)')).not.toBeInTheDocument()
+    const link = screen.getByRole('button', { name: 'Agregar una nota para la tienda' })
+    expect(link).toHaveAttribute('aria-expanded', 'false')
+    fireEvent.click(link)
+    const notas = screen.getByLabelText('Notas para la tienda (opcional)')
+    expect(notas).toHaveFocus()
+    fireEvent.change(notas, { target: { value: 'Llego 5 min tarde' } })
+    expect(onClientChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({ notes: 'Llego 5 min tarde' })
+    )
+  })
+
+  it('con notas ya escritas (volver al paso) arrancan abiertas', () => {
+    render(
+      <BookingStepConfirmation
+        {...props({ bookingState: completo({ client: cliente({ notes: 'Alergia' }) }) })}
+      />
+    )
+
+    expect(
+      (screen.getByLabelText('Notas para la tienda (opcional)') as HTMLTextAreaElement).value
+    ).toBe('Alergia')
+  })
+
+  it('la tarjeta resume el turno en una línea: servicios, adicionales, fecha, hora y profesional', () => {
+    render(<BookingStepConfirmation {...props({ bookingState: completo({ addons: decoX3 }) })} />)
+
+    const tarjeta = screen.getByRole('region', { name: 'Tu reserva' })
+    expect(within(tarjeta).getByTestId('booking-summary-line')).toHaveTextContent(
+      `Semipermanente + 3 Decoración · ${formatArgentinaDayHeading('2026-09-25')} · 09:00 hs · con Ana`
+    )
+  })
+
+  it('en el resumen una cancha o sala va con su nombre solo', () => {
+    render(
+      <BookingStepConfirmation
+        {...props({
+          bookingState: completo({ assignedStaff: { name: 'Cancha 1', isResource: true } })
+        })}
+      />
+    )
+
+    expect(screen.getByTestId('booking-summary-line')).toHaveTextContent(/09:00 hs · Cancha 1$/)
+  })
+
+  it('el total, la seña y el acceso a la política se ven antes de pagar', () => {
+    const larga = `Se cobra el 30% al reservar. ${'Con menos de 24 horas de aviso no se devuelve. '.repeat(8)}`
+    render(
+      <BookingStepConfirmation
+        {...props({ paymentsEnabled: true, depositPolicy: larga, bookingState: completo() })}
+      />
+    )
+
+    const tarjeta = screen.getByRole('region', { name: 'Tu reserva' })
+    expect(within(tarjeta).getByTestId('booking-price-summary')).toHaveTextContent(
+      `Total${formatCurrency(23000)}`
+    )
+    expect(within(tarjeta).getByTestId('deposit-preview')).toHaveTextContent(formatCurrency(6900))
+    const politica = within(tarjeta).getByRole('button', {
+      name: 'Ver política de seña de Tienda'
+    })
+    expect(politica).toHaveAttribute('aria-expanded', 'false')
+    fireEvent.click(politica)
+    expect(politica).toHaveAttribute('aria-expanded', 'true')
+    expect(within(tarjeta).getByText(/Se cobra el 30% al reservar\./)).toBeInTheDocument()
+    expect(
+      within(tarjeta).getByRole('button', { name: `Pagar seña ${formatCurrency(6900)}` })
+    ).toBeInTheDocument()
+  })
+
+  it('hay un solo botón para reservar o pagar y el medio se elige antes', async () => {
+    const base = props({ paymentsEnabled: true, bookingState: completo() })
+    render(<BookingStepConfirmation {...base} />)
+    aceptarTerminos()
+
+    expect(botonesDeEnvio()).toHaveLength(1)
+    const medio = screen.getByRole('radiogroup', { name: 'Cómo pagás la seña' })
+    expect(
+      (within(medio).getByRole('radio', { name: /Mercado Pago/ }) as HTMLInputElement).checked
+    ).toBe(true)
+    expect(botonesDeEnvio()[0]).toHaveTextContent(`Pagar seña ${formatCurrency(6900)}`)
+
+    fireEvent.click(within(medio).getByRole('radio', { name: /WhatsApp/ }))
+
+    expect(botonesDeEnvio()).toHaveLength(1)
+    fireEvent.click(screen.getByRole('button', { name: RESERVAR_CON_SENA }))
+    await waitFor(() => expect(base.onConfirm).toHaveBeenCalledWith('manual', true, []))
+  })
+
+  it('con un solo medio no pide elegir', () => {
+    render(<BookingStepConfirmation {...props({ bookingState: completo() })} />)
+
+    expect(screen.queryByRole('radiogroup')).not.toBeInTheDocument()
+    expect(botonesDeEnvio()).toHaveLength(1)
+    expect(botonesDeEnvio()[0]).toHaveTextContent(RESERVAR_CON_SENA)
+  })
+
+  it('en el celular el botón queda fijo abajo con el importe, sin tapar el formulario', () => {
+    const { container } = render(
+      <BookingStepConfirmation {...props({ paymentsEnabled: true, bookingState: completo() })} />
+    )
+
+    const barra = screen.getByTestId('booking-pay-bar')
+    expect(barra).toHaveClass('fixed', 'inset-x-0', 'bottom-0', 'sm:static')
+    expect(barra.getAttribute('style')).toContain('env(safe-area-inset-bottom)')
+    expect(within(barra).getByRole('button', { name: /Pagar seña/ })).toBeInTheDocument()
+    expect(barra).toHaveTextContent(formatCurrency(6900))
+    // Espacio al pie del paso para que la barra no tape el ultimo campo.
+    expect(container.firstElementChild).toHaveClass('pb-36', 'sm:pb-0')
+  })
+
+  it('el paso ya no tiene el selector de adicionales', () => {
+    render(<BookingStepConfirmation {...props({ bookingState: completo({ addons: decoX3 }) })} />)
+
+    expect(screen.queryByRole('button', { name: /Agregar uno de/ })).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Cantidad de Decoración')).not.toBeInTheDocument()
+    // Lo elegido igual se cobra y se ve en el detalle.
+    expect(screen.getByTestId('booking-price-summary')).toHaveTextContent('Decoración x3')
+  })
+
+  describe('si los adicionales cambiaron', () => {
+    const conBorrado = () =>
+      completo({
+        addons: [
+          { addonId: 'borrado', name: 'Esmalte', unitPrice: 900, quantity: 2 },
+          { addonId: 'deco', name: 'Decoración', unitPrice: 1000, quantity: 1 }
+        ]
+      })
+
+    it('"Revisar adicionales" guarda lo vigente y lleva a elegirlos', () => {
+      const onEditAddons = jest.fn()
+      const onAddonsChange = jest.fn()
+      const onBack = jest.fn()
+      render(
+        <BookingStepConfirmation
+          {...props({ onEditAddons, onAddonsChange, onBack, bookingState: conBorrado() })}
+        />
+      )
+      aceptarTerminos()
+
+      expect(
+        screen.getByText(
+          'Los adicionales del servicio cambiaron. Revisá tu selección en el primer paso.'
+        )
+      ).toBeInTheDocument()
+      expect(botonesDeEnvio()[0]).toBeDisabled()
+      fireEvent.click(screen.getByRole('button', { name: 'Revisar adicionales' }))
+
+      expect(onAddonsChange).toHaveBeenCalledWith([
+        expect.objectContaining({ addonId: 'deco', quantity: 1 })
+      ])
+      expect(onEditAddons).toHaveBeenCalledTimes(1)
+      expect(onBack).not.toHaveBeenCalled()
+    })
+
+    it('sin onEditAddons vuelve con onBack', () => {
+      const onBack = jest.fn()
+      render(<BookingStepConfirmation {...props({ onBack, bookingState: conBorrado() })} />)
+
+      fireEvent.click(screen.getByRole('button', { name: 'Revisar adicionales' }))
+
+      expect(onBack).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  describe('pagar con Mercado Pago desde el boton unico', () => {
+    afterEach(() => jest.restoreAllMocks())
+
+    it('reserva con Mercado Pago y redirige al link de pago, sin pantalla de exito', async () => {
+      const ir = jest.spyOn(safeUrl, 'navigateExternal').mockReturnValue(true)
+      const base = props({
+        paymentsEnabled: true,
+        bookingState: completo({ addons: decoX3 }),
+        onConfirm: jest
+          .fn()
+          .mockResolvedValue(confirmacion({ payment_link: 'https://mp.example/pagar' }))
+      })
+      render(<BookingStepConfirmation {...base} />)
+      aceptarTerminos()
+      fireEvent.click(screen.getByRole('button', { name: PAGAR_MP }))
+
+      await waitFor(() => expect(ir).toHaveBeenCalledWith('https://mp.example/pagar'))
+      expect(base.onConfirm).toHaveBeenCalledWith('mercadopago', true, [
+        { addon_id: 'deco', quantity: 3 }
+      ])
+      expect(screen.queryByText('Reserva Confirmada')).not.toBeInTheDocument()
+    })
+
+    it('sin un link valido de Mercado Pago vuelve al formulario con el aviso y sin pantalla de exito', async () => {
+      jest.spyOn(safeUrl, 'navigateExternal').mockReturnValue(false)
+      render(
+        <BookingStepConfirmation {...props({ paymentsEnabled: true, bookingState: completo() })} />
+      )
+      aceptarTerminos()
+      fireEvent.click(screen.getByRole('button', { name: PAGAR_MP }))
+
+      expect(
+        await screen.findByText('No pudimos procesar tu reserva. Probá de nuevo.')
+      ).toBeInTheDocument()
+      expect(screen.queryByText('Reserva Confirmada')).not.toBeInTheDocument()
+      expect(screen.getByRole('button', { name: PAGAR_MP })).not.toBeDisabled()
+    })
+  })
+
+  it('al volver con un código aplicado lo revalida con la selección actual', async () => {
+    mockPreviewPromotion.mockRejectedValue(
+      new ValidationError('La promocion no aplica a este servicio', { statusCode: 400 })
+    )
+    const onPromotionCodeChange = jest.fn()
+    render(
+      <BookingStepConfirmation
+        {...props({
+          onPromotionCodeChange,
+          bookingState: completo({
+            addons: decoX3,
+            promotionCode: 'MIN6000',
+            promotionPreview: {
+              code: 'MIN6000',
+              title: 'Desde 6.000',
+              promotion_type: 'percent',
+              base_amount: 6000,
+              discount_amount: 600,
+              final_amount: 5400
+            }
+          })
+        })}
+      />
+    )
+
+    await waitFor(() =>
+      expect(
+        screen.getByText('Quitamos el código MIN6000: La promocion no aplica a este servicio')
+      ).toBeInTheDocument()
+    )
+    expect(mockPreviewPromotion).toHaveBeenCalledWith({
+      storePublicId: 'store-1',
+      serviceId: 'svc-1',
+      code: 'MIN6000',
+      addons: ['deco:3'],
+      extraServiceIds: []
+    })
+    expect(onPromotionCodeChange).toHaveBeenLastCalledWith('', null)
   })
 })

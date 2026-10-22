@@ -222,11 +222,12 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
   }
 
   // La promo se mide contra el total (servicio y adicionales): con otros
-  // adicionales el codigo aplicado se vuelve a cargar en el ultimo paso.
+  // adicionales el descuento calculado ya no vale, pero el codigo se conserva
+  // y la confirmacion lo vuelve a validar al entrar (avisa si deja de aplicar).
+  // Borrarlo en silencio obligaba a la clienta a cargarlo de nuevo.
   const handleAddonChange = (serviceId: string, addonId: string, quantity: number) => {
     updateState({
       addons: withAddonQuantity(addonGroups, serviceId, addonId, quantity),
-      promotionCode: '',
       promotionPreview: null
     })
   }

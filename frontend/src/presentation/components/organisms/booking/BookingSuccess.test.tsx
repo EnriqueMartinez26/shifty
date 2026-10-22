@@ -1,6 +1,6 @@
 import React from 'react'
 
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 
 import type { BookingConfirmation } from '@application/services/PublicBookingService'
 
@@ -406,6 +406,73 @@ describe('BookingSuccess: adicionales', () => {
 
     expect(screen.getByText(/Strass x6:/)).toHaveTextContent('3.000')
     expect(screen.getByText(/Total final:/)).toHaveTextContent('30.000')
+  })
+})
+
+// S5 (2026-10-21): el detalle completo pasa del paso de confirmacion a esta
+// pantalla, con el profesional que antes faltaba.
+describe('BookingSuccess: detalle completo del turno', () => {
+  const detalle = () => screen.getByRole('region', { name: 'Detalles del Turno' })
+
+  it('muestra profesional, servicios, adicionales, total y la seña pendiente', () => {
+    render(
+      <BookingSuccess
+        {...props({
+          confirmation: confirmacion({
+            status: 'pending_payment',
+            staff_name: 'Natalia',
+            service_name: 'Semipermanente',
+            service_price: 20000,
+            final_price: 23000,
+            addons_amount: 3000,
+            addons: [
+              { addon_id: 'deco', name: 'Decoración', unit_price: 1000, quantity: 3, amount: 3000 }
+            ],
+            payment_required: true,
+            deposit_channel: 'whatsapp',
+            payment_amount: 6900,
+            payment_status: 'pending'
+          })
+        })}
+      />
+    )
+
+    expect(within(detalle()).getByText('Profesional')).toBeInTheDocument()
+    expect(within(detalle()).getByText('Natalia')).toBeInTheDocument()
+    expect(within(detalle()).getByText('Semipermanente')).toBeInTheDocument()
+    expect(within(detalle()).getByText(/Decoración x3:/)).toHaveTextContent('3.000')
+    expect(within(detalle()).getByText(/Total final:/)).toHaveTextContent('23.000')
+    expect(within(detalle()).getByText('Seña a pagar por WhatsApp')).toBeInTheDocument()
+    expect(within(detalle()).getByText(/6\.900/)).toBeInTheDocument()
+    expect(within(detalle()).getByText('Estado: pendiente')).toBeInTheDocument()
+  })
+
+  it('una cancha o sala no se presenta como profesional', () => {
+    render(
+      <BookingSuccess
+        {...props({
+          bookingState: estado({ assignedStaff: { name: 'Cancha 1', isResource: true } }),
+          confirmation: confirmacion({ staff_name: 'Cancha 1' })
+        })}
+      />
+    )
+
+    expect(within(detalle()).getByText('Cancha / sala')).toBeInTheDocument()
+    expect(within(detalle()).getByText('Cancha 1')).toBeInTheDocument()
+    expect(within(detalle()).queryByText('Profesional')).not.toBeInTheDocument()
+  })
+
+  it('sin el nombre de quien atiende no lo inventa', () => {
+    render(
+      <BookingSuccess
+        {...props({
+          bookingState: estado({ assignedStaff: null }),
+          confirmation: confirmacion({ staff_name: '  ' })
+        })}
+      />
+    )
+
+    expect(within(detalle()).queryByText('Profesional')).not.toBeInTheDocument()
   })
 })
 

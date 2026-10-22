@@ -162,7 +162,13 @@ const ConEstado: React.FC<{ base: Props }> = ({ base }) => {
   )
 }
 
-const resumen = () => screen.getByLabelText('Tu turno')
+// Adicionales ya elegidos en el primer paso (S4), uno por servicio.
+const conAdicionales: BookingWizardState['addons'] = [
+  { addonId: 'lavado', name: 'Lavado', unitPrice: 1000, quantity: 1 },
+  { addonId: 'toalla', name: 'Toalla caliente', unitPrice: 500, quantity: 1, serviceId: 'barba' }
+]
+// S5: el turno va en una linea de la tarjeta de pago.
+const resumen = () => screen.getByTestId('booking-summary-line')
 const precio = () => screen.getByTestId('booking-price-summary')
 
 describe('BookingStepConfirmation con varios servicios', () => {
@@ -215,7 +221,8 @@ describe('BookingStepConfirmation con varios servicios', () => {
     ).toBeDisabled()
   })
 
-  it('los adicionales se eligen por servicio y viajan juntos en el pedido', async () => {
+  // S5: se eligen por servicio en el primer paso; aca viajan juntos.
+  it('los adicionales de cada servicio viajan juntos en el pedido', async () => {
     const onConfirm = jest.fn().mockResolvedValue(confirmacion())
     render(
       <ConEstado
@@ -228,16 +235,14 @@ describe('BookingStepConfirmation con varios servicios', () => {
               phone: '1155550101',
               notes: '',
               customFields: {}
-            }
+            },
+            addons: conAdicionales
           })
         })}
       />
     )
 
-    expect(screen.getByRole('heading', { name: 'Adicionales de Corte' })).toBeInTheDocument()
-    expect(screen.getByRole('heading', { name: 'Adicionales de Barba' })).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Agregar uno de Lavado' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Agregar uno de Toalla caliente' }))
+    expect(screen.queryByRole('heading', { name: /Adicionales de/ })).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('checkbox'))
 
     await waitFor(() =>
@@ -257,15 +262,12 @@ describe('BookingStepConfirmation con varios servicios', () => {
     ])
   })
 
-  it('el adicional de un servicio sumado queda marcado con su servicio', () => {
-    const onAddonsChange = jest.fn()
-    render(<BookingStepConfirmation {...props({ onAddonsChange })} />)
+  it('el resumen nombra cada servicio con sus adicionales', () => {
+    render(
+      <BookingStepConfirmation {...props({ bookingState: estado({ addons: conAdicionales }) })} />
+    )
 
-    fireEvent.click(screen.getByRole('button', { name: 'Agregar uno de Toalla caliente' }))
-
-    expect(onAddonsChange).toHaveBeenLastCalledWith([
-      expect.objectContaining({ addonId: 'toalla', quantity: 1, serviceId: 'barba' })
-    ])
+    expect(resumen()).toHaveTextContent('Corte + Lavado + Barba + Toalla caliente · 45 min')
   })
 
   it('aplicar un codigo lo valida contra todos los servicios', async () => {

@@ -1,6 +1,6 @@
-import React from 'react'
+import React, { useId } from 'react'
 
-import { Briefcase, Calendar, Check, Clock, ExternalLink } from 'lucide-react'
+import { Briefcase, Calendar, Check, Clock, ExternalLink, UserRound } from 'lucide-react'
 
 import { formatAddonLabel } from '@domain/value-objects/AddonSelection'
 
@@ -104,6 +104,7 @@ export const BookingSuccess: React.FC<BookingSuccessProps> = ({
   storeName,
   whatsappNumber
 }) => {
+  const detailsHeadingId = useId()
   // Seña obligatoria que se paga por WhatsApp (decision de Mateo, 2026-10-03):
   // el canal viene explicito en la respuesta (antes se inferia de la falta de
   // link). La tienda la confirma a mano cuando le pagan, hasta el plazo.
@@ -121,6 +122,10 @@ export const BookingSuccess: React.FC<BookingSuccessProps> = ({
     whatsappNumber,
     `Hola ${storeName}, reservé el turno ${confirmation.public_id ?? ''} para el ${formatArgentinaDateDisplay(bookingState.date ?? '')} a las ${bookingState.startTime}. ${paymentRequest}`
   )
+  // Quien atiende (S5): el de la respuesta; si no vino, el del horario elegido.
+  // Una cancha o sala no es "un profesional".
+  const staffName = confirmation.staff_name?.trim() || bookingState.assignedStaff?.name.trim()
+  const staffLabel = bookingState.assignedStaff?.isResource ? 'Cancha / sala' : 'Profesional'
   const isPendingPayment = confirmation.status === 'pending_payment'
   const isPendingReview = confirmation.status === 'pending'
   // Sin email (propuesta por Mateo, 2026-10-16): no hay avisos ni "Mis
@@ -183,7 +188,10 @@ export const BookingSuccess: React.FC<BookingSuccessProps> = ({
       )}
       {subtitle && <p className="text-sm font-bold text-gray-500 mb-10">{subtitle}</p>}
 
-      <div
+      {/* El detalle completo del turno vive aca desde S5: el paso de
+          confirmacion lo resume en una linea. */}
+      <section
+        aria-labelledby={detailsHeadingId}
         className="w-full rounded-lg p-6 text-left border"
         style={{
           background: '#ffffff',
@@ -191,7 +199,10 @@ export const BookingSuccess: React.FC<BookingSuccessProps> = ({
           boxShadow: colors2000s.shadows.insetDark
         }}
       >
-        <h3 className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-4 ml-1">
+        <h3
+          id={detailsHeadingId}
+          className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-4 ml-1"
+        >
           Detalles del Turno
         </h3>
 
@@ -261,6 +272,29 @@ export const BookingSuccess: React.FC<BookingSuccessProps> = ({
             </div>
           )}
 
+          {staffName && (
+            <div className="flex items-center gap-3">
+              <div
+                className="p-2.5 rounded-md"
+                style={{
+                  background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
+                  color: brandColor.ink,
+                  boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`
+                }}
+              >
+                <UserRound size={18} className="stroke-[2.5px]" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-[9px] font-black uppercase tracking-wider text-gray-400">
+                  {staffLabel}
+                </p>
+                <p className="font-black text-gray-700 text-lg leading-tight break-words">
+                  {staffName}
+                </p>
+              </div>
+            </div>
+          )}
+
           {(confirmation.service_price || confirmation.final_price) && (
             <div
               className="rounded-md p-4 border"
@@ -317,7 +351,7 @@ export const BookingSuccess: React.FC<BookingSuccessProps> = ({
             </div>
           )}
         </div>
-      </div>
+      </section>
 
       {confirmation.payment_link && (
         <a
