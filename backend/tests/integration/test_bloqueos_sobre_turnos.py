@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import modules.notifications.tasks as tasks
@@ -208,14 +208,20 @@ async def test_un_turno_esperando_pago_no_se_cancela_solo(
     _, token, _, staff, turnos, base = await _tienda_con_turnos(
         client, "pend", cantidad=1
     )
-    # Simula que ese turno esta esperando la sena en Mercado Pago.
+    # Simula que ese turno esta esperando la sena en Mercado Pago. Escritura
+    # directa: el alta sin cobro nace confirmada (decision de Mateo,
+    # 2026-10-20) y el grafo no tiene ``confirmed -> pending_payment``.
+    await test_session.execute(
+        update(Appointment)
+        .where(Appointment.id == turnos[0])
+        .values(status="pending_payment")
+    )
+    await test_session.commit()
     turno = (
         await test_session.execute(
             select(Appointment).where(Appointment.id == turnos[0])
         )
     ).scalar_one()
-    turno.apply_status_transition("pending_payment")
-    await test_session.commit()
 
     preview = await client.post(
         "/appointment-blocks/preview",

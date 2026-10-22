@@ -37,6 +37,7 @@ from main import app
 from modules.legal.unsubscribe import make_unsubscribe_token
 from modules.auth.dependencies import get_current_user
 from modules.auth.router import REFRESH_COOKIE
+from tests.integration.pendiente_heredado import como_pendiente_heredado
 from tests.security.mundo import (
     ACCESS_TOKEN_MP,
     ADMIN_TIENDA,
@@ -158,9 +159,15 @@ async def _turno_publico_de(m: Mundo, t: Tienda, telefono: str) -> str:
 
 
 async def _turno_pendiente(m: Mundo, t: Tienda) -> str:
-    return await m.reserva_publica(
+    """Un ``pending`` del portal. Desde el 2026-10-20 (decision de Mateo) la
+    reserva sin cobro nace confirmada; los ``pending`` de antes siguen en
+    produccion y son los que se liberan o se confirman a mano."""
+    turno = await m.reserva_publica(
         t, telefono=m.telefono_nuevo(), nombre="Cliente Pendiente"
     )
+    async with m.sesiones() as s:
+        await como_pendiente_heredado(s, turno)
+    return turno
 
 
 # -- auth ---------------------------------------------------------------------

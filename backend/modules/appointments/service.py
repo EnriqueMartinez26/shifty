@@ -1176,9 +1176,11 @@ def _rescheduled_copy(
     # ``pending_payment`` no llega aca: su sena requerida no se pierde, se
     # rechaza antes con 409 ``DEPOSIT_PENDING_RESCHEDULE_DENIED``
     # (``reject_reschedule_with_pending_deposit``, decision de Mateo
-    # 2026-09-25: opcion A). Si el original tenia retencion, el nuevo NO la
-    # conserva: nace con ``expires_at = new_starts_at`` (vence al inicio si
-    # nadie lo confirma); el alta del panel no retiene y moverlo tampoco.
+    # 2026-09-25: opcion A). Si el original tenia retencion, el nuevo nace
+    # con ``expires_at = new_starts_at`` (vence al inicio si nadie lo
+    # confirma); el alta del panel no retiene y moverlo tampoco. Desde el
+    # 2026-10-20 el alta publica sin cobro nace confirmada (decision de
+    # Mateo): un ``pending`` retenido es uno del portal de antes.
     confirmado = estado_previo == AppointmentStatus.CONFIRMED.value
     retenido = not confirmado and original.expires_at is not None
     return Appointment(
