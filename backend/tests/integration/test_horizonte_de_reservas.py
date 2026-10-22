@@ -1,22 +1,20 @@
-"""Fechas lejanas en altas y reprogramaciones: 422 solo lo que desborda.
+"""Fechas lejanas en altas y reprogramaciones.
 
 2026-09-24/25, revision de perf/f4-back. Sintoma: un ``starts_at`` como
 9999-12-31T23:59Z hacia desbordar ``starts_at + duracion`` (``OverflowError``,
 500 por el handler generico) en la reserva publica, en la reprogramacion del
-panel y del cliente, y en la reserva desde la lista de espera.
+panel y del cliente, y en la reserva desde la lista de espera. Desde entonces
+toda reserva y reprogramacion corta lo absurdo con ``MAX_BOOKING_AHEAD`` (2
+anios hacia adelante; la lista de espera y el panel tambien 2 hacia atras).
 
-La primera correccion acoto con el horizonte de 120 dias y la revision la
-rechazo: el front actual manda fechas libres por esos caminos (el "Nuevo
-turno" del panel reserva por ``POST /public/appointments``; "Mis turnos"
-reprograma con fecha y hora libres), y cortar en 120 dias era un cambio de
-producto escondido en un arreglo de 500. Ahora las cotas son anchas y solo
-cortan lo absurdo:
-
-- Reservar y reprogramar (portal, panel, alta para un cliente): hasta 2
-  anios hacia adelante (``MAX_BOOKING_AHEAD``). Al cliente lo sigue acotando
-  la grilla de ``/public/availability`` (120 dias).
-- Reservar desde la lista de espera: entre hace 2 anios y dentro de 2 anios.
-  La tienda puede reservar en el pasado (decision de Mateo, 2026-09-25).
+2026-10-22, paquete antiabuso (D-20261022-01, propuesta por Mateo, pendiente
+de OK del dueno): el portal tiene ademas horizonte de producto. Una reserva
+publica no empieza despues de hoy + 120 dias locales
+(``BOOKING_HORIZON_DAYS``), y "Mis turnos" mueve un turno hasta hoy + 120
+dias, o hasta el dia de su inicio actual si es mas tarde (un turno que la
+tienda cargo mas alla se sigue pudiendo mover). Pasarse es 422
+``BOOKING_HORIZON_EXCEEDED``. El panel y la lista de espera del lado de la
+tienda conservan solo la cota de 2 anios.
 """
 
 from __future__ import annotations
@@ -48,9 +46,14 @@ from tests.integration.test_feature_flags_finance_and_public_privacy import (
 LEJANO = "9999-12-31T23:59:00+00:00"
 ANTIGUO = "0001-01-01T01:00:00+00:00"
 # Mismo dia de la semana y hora que el slot de la tienda (el horario del
-# profesional es de ese dia): 57 y 105 semanas.
+# profesional es de ese dia): 57 y 105 semanas. El slot esta a 5 dias, asi
+# que 16 semanas despues cae a 117 dias (adentro de los 120) y 17 semanas
+# despues a 124 (afuera).
 CASI_UN_ANIO_Y_MEDIO = timedelta(weeks=57)
 MAS_DE_DOS_ANIOS = timedelta(weeks=105)
+DENTRO_DEL_HORIZONTE = timedelta(weeks=16)
+FUERA_DEL_HORIZONTE = timedelta(weeks=17)
+MENSAJE_HORIZONTE = "Podés reservar hasta 120 días adelante."
 
 
 def _en(dias: int) -> str:
@@ -58,25 +61,92 @@ def _en(dias: int) -> str:
 
 
 @pytest.mark.asyncio
-async def test_reserva_publica_hasta_dos_anios(client: AsyncClient) -> None:
+async def test_reserva_publica_hasta_120_dias(
+    client: AsyncClient, test_session: AsyncSession
+) -> None:
     t = await _tienda(client, "horiz-publica")
 
-    lejos = await client.post(
+    adentro = await client.post(
         "/public/appointments",
         json=_reserva(
             t,
-            "horiz-publica-0400",
-            starts_at=(t.slot + CASI_UN_ANIO_Y_MEDIO).isoformat(),
+            "horiz-publica-0117",
+            starts_at=(t.slot + DENTRO_DEL_HORIZONTE).isoformat(),
         ),
     )
-    assert lejos.status_code == 201, lejos.text
+    assert adentro.status_code == 201, adentro.text
 
+    afuera = await client.post(
+        "/public/appointments",
+        json=_reserva(
+            t,
+            "horiz-publica-0124",
+            starts_at=(t.slot + FUERA_DEL_HORIZONTE).isoformat(),
+        ),
+    )
+    assert afuera.status_code == 422, afuera.text
+    assert afuera.json()["error_code"] == "BOOKING_HORIZON_EXCEEDED"
+    assert afuera.json()["message"] == MENSAJE_HORIZONTE
+    # Antes de escribir: el rechazo no deja turno.
+    test_session.expire_all()
+    turnos = (await test_session.execute(select(Appointment))).scalars().all()
+    assert len(turnos) == 1
+
+    # La cota contra el desborde sigue: 422 de validacion, nunca 500.
     for i, cuando in enumerate((LEJANO, (t.slot + MAS_DE_DOS_ANIOS).isoformat())):
         res = await client.post(
             "/public/appointments",
             json=_reserva(t, f"horiz-publica-{i:04d}", starts_at=cuando),
         )
         assert res.status_code == 422, (cuando, res.text)
+
+
+@pytest.mark.asyncio
+async def test_el_panel_reserva_mas_alla_de_los_120_dias(client: AsyncClient) -> None:
+    """El horizonte es del portal: el panel conserva solo los 2 anios."""
+    t = await _tienda(client, "horiz-panel-lejos")
+
+    alta = await client.post(
+        "/appointments/",
+        headers=auth_headers(t.token),
+        json={
+            "service_id": t.service,
+            "staff_id": t.staff,
+            "starts_at": (t.slot + CASI_UN_ANIO_Y_MEDIO).isoformat(),
+            "idempotency_key": "horiz-panel-lejos-alta",
+        },
+    )
+
+    assert alta.status_code == 201, alta.text
+
+
+@pytest.mark.asyncio
+async def test_reprogramar_desde_el_portal_hasta_120_dias(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    t, turno = await _con_turno(client, monkeypatch, "horiz-cliente-120")
+
+    afuera = await client.patch(
+        f"/public/client/appointments/{turno}/reschedule",
+        json={
+            "phone": TELEFONO,
+            "new_starts_at": (t.slot + FUERA_DEL_HORIZONTE).isoformat(),
+            "idempotency_key": "horiz-cliente-120-rs-1",
+        },
+    )
+    assert afuera.status_code == 422, afuera.text
+    assert afuera.json()["error_code"] == "BOOKING_HORIZON_EXCEEDED"
+    assert afuera.json()["message"] == MENSAJE_HORIZONTE
+
+    adentro = await client.patch(
+        f"/public/client/appointments/{turno}/reschedule",
+        json={
+            "phone": TELEFONO,
+            "new_starts_at": (t.slot + DENTRO_DEL_HORIZONTE).isoformat(),
+            "idempotency_key": "horiz-cliente-120-rs-2",
+        },
+    )
+    assert adentro.status_code == 200, adentro.text
 
 
 @pytest.mark.asyncio
@@ -150,9 +220,23 @@ async def test_un_turno_despues_de_los_120_dias_se_puede_mover(
     )
     test_session.add(lejano)
     await test_session.commit()
+    lejano_id = lejano.id
+
+    # Mas alla del dia de su inicio actual no: el tope es max(hoy + 120, ese
+    # dia), asi que una semana despues es 422 y el turno no se toca.
+    mas_lejos = await client.patch(
+        f"/public/client/appointments/{lejano_id}/reschedule",
+        json={
+            "phone": TELEFONO,
+            "new_starts_at": (inicio + timedelta(weeks=1)).isoformat(),
+            "idempotency_key": "horiz-cliente-lejos-0",
+        },
+    )
+    assert mas_lejos.status_code == 422, mas_lejos.text
+    assert mas_lejos.json()["error_code"] == "BOOKING_HORIZON_EXCEEDED"
 
     res = await client.patch(
-        f"/public/client/appointments/{lejano.id}/reschedule",
+        f"/public/client/appointments/{lejano_id}/reschedule",
         json={
             "phone": TELEFONO,
             "new_starts_at": (inicio + timedelta(hours=1)).isoformat(),
@@ -161,6 +245,17 @@ async def test_un_turno_despues_de_los_120_dias_se_puede_mover(
     )
 
     assert res.status_code == 200, res.text
+
+    # Y hacia antes, aunque siga fuera de los 120 dias, tambien se mueve.
+    antes = await client.patch(
+        f"/public/client/appointments/{res.json()['public_id']}/reschedule",
+        json={
+            "phone": TELEFONO,
+            "new_starts_at": (inicio - timedelta(weeks=1)).isoformat(),
+            "idempotency_key": "horiz-cliente-lejos-2",
+        },
+    )
+    assert antes.status_code == 200, antes.text
 
 
 async def _lista_de_espera(client: AsyncClient, slug: str) -> tuple[str, str]:

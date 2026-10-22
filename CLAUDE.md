@@ -658,13 +658,23 @@ Una instrucción en lenguaje natural no es una garantía.
   lock, bloqueos, choques y GiST igual que cualquier alta, pero no publica mail
   de reserva, confirmación ni reprogramación y no genera recordatorios. El cliente final nunca: la reserva pública, la reprogramación
   de "Mis turnos" y anotarse en la lista de espera rechazan todo inicio pasado,
-  aunque la tienda tenga `min_booking_notice_hours = 0`. Los topes de fecha de
-  reservar y reprogramar son solo contra el desborde
-  (`core/utils.MAX_BOOKING_AHEAD`, 2 años hacia adelante y hacia atrás en la
-  tienda): los 120 días del cliente los pone la grilla de `/public/availability`.
-  Un tope más estricto es una decisión de producto, no un arreglo.
+  aunque la tienda tenga `min_booking_notice_hours = 0`. Los caminos de la
+  tienda (panel, alta para un cliente, `POST /waitlist/{id}/book`) solo tienen
+  el tope contra el desborde (`core/utils.MAX_BOOKING_AHEAD`, 2 años hacia
+  adelante y hacia atrás en la tienda). El portal tiene además un horizonte
+  de producto (paquete antiabuso, propuesta por Mateo el 2026-10-22, pendiente
+  de OK del dueño): la reserva pública no empieza después de hoy + 120 días
+  locales (`BOOKING_HORIZON_DAYS`, `core/utils.within_booking_horizon`, la
+  misma cota de la grilla de `/public/availability`), y "Mis turnos" mueve un
+  turno hasta hoy + 120 días o hasta el día de su inicio actual si es más
+  tarde: uno que la tienda cargó más allá se sigue pudiendo mover. Pasarse es
+  422 `BOOKING_HORIZON_EXCEEDED` ("Podés reservar hasta 120 días adelante.")
+  antes de escribir; el tope de 2 años del schema corre antes y sigue
+  cortando el desborde. Cambiar los 120 días es una decisión de producto, no
+  un arreglo.
   (`test_cliente_final_sin_pasado.py`, `test_alta_del_panel_para_cliente.py`,
-  `test_horizonte_de_reservas.py`, `test_recordatorios_solo_turnos_futuros.py`)
+  `test_horizonte_de_reservas.py`, `test_horizonte_del_portal.py`,
+  `test_recordatorios_solo_turnos_futuros.py`)
 
 ### Lista de espera, suscripción y avisos (Fases 4-7, 2026-09-11)
 

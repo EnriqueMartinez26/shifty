@@ -9,17 +9,20 @@ from zoneinfo import ZoneInfo
 ARGENTINA_TZ = ZoneInfo("America/Argentina/Buenos_Aires")
 
 # Horizonte del portal en dias locales desde hoy (F1-11, decision 14 del
-# dueno). Acota SOLO la grilla de disponibilidad sin token
-# (``/public/availability`` y la rama anonima de ``/appointments/availability``)
-# y el inicio de la ventana al anotarse en la lista de espera. No acota
-# reservas ni reprogramaciones.
+# dueno). Acota la grilla de disponibilidad sin token (``/public/availability``
+# y la rama anonima de ``/appointments/availability``), el inicio de la
+# ventana al anotarse en la lista de espera y, desde el paquete antiabuso
+# (D-20261022-01, propuesta por Mateo, pendiente de OK del dueno), la reserva
+# publica y la reprogramacion de "Mis turnos" (``within_booking_horizon``).
+# El panel y la lista de espera del lado de la tienda no se acotan con esto.
 BOOKING_HORIZON_DAYS = 120
 
 # Tope contra el desborde de TODA reserva y reprogramacion (portal, panel,
 # alta para un cliente, lista de espera; revision de perf/f4-back,
 # 2026-09-25): corta 9999-12-31 sin tocar el producto. Hacia atras, los
 # caminos de la tienda (que puede cargar un horario que ya paso) usan el
-# mismo valor como piso.
+# mismo valor como piso. En el portal corre antes que el horizonte de 120
+# dias, que es la cota de producto.
 MAX_BOOKING_AHEAD = timedelta(days=730)
 
 
@@ -52,21 +55,37 @@ def local_day_start(day: _date) -> datetime:
     return local_to_utc(day, _time.min)
 
 
-def within_booking_horizon(value: datetime) -> bool:
+def _local_day(value: datetime) -> _date:
+    aware = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    return aware.astimezone(ARGENTINA_TZ).date()
+
+
+def within_booking_horizon(
+    value: datetime, *, keep_up_to: datetime | None = None
+) -> bool:
     """El dia LOCAL de ``value`` no pasa de hoy + ``BOOKING_HORIZON_DAYS``.
 
-    Hoy la usa solo el inicio de la ventana de la lista de espera; la grilla
-    publica aplica el mismo horizonte por dia (``require_public_availability_day``).
-    Reservar y reprogramar NO se acotan con esto sino con ``within_max_ahead``
-    y ``MAX_BOOKING_AHEAD``. Una fecha que ni se puede llevar a hora local
-    (anio 9999 con offset) queda afuera en vez de levantar ``OverflowError``
-    (500). Sin offset se toma UTC (regla 24).
+    La usan el inicio de la ventana de la lista de espera, la reserva publica
+    y la reprogramacion de "Mis turnos" (paquete antiabuso, D-20261022-01);
+    la grilla publica aplica el mismo horizonte por dia
+    (``require_public_availability_day``). El panel y la lista de espera del
+    lado de la tienda NO se acotan con esto sino con ``within_max_ahead`` y
+    ``MAX_BOOKING_AHEAD``.
+
+    ``keep_up_to``: el tope pasa a ser el mayor entre hoy + 120 y el dia local
+    de ese instante. Es el inicio actual del turno que se reprograma: uno que
+    la tienda cargo mas alla de los 120 dias se sigue pudiendo mover dentro
+    de su dia o hacia antes.
+
+    Una fecha que ni se puede llevar a hora local (anio 9999 con offset) queda
+    afuera en vez de levantar ``OverflowError`` (500). Sin offset se toma UTC
+    (regla 24).
     """
     try:
-        aware = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
-        return aware.astimezone(ARGENTINA_TZ).date() <= today_local() + timedelta(
-            days=BOOKING_HORIZON_DAYS
-        )
+        tope = today_local() + timedelta(days=BOOKING_HORIZON_DAYS)
+        if keep_up_to is not None:
+            tope = max(tope, _local_day(keep_up_to))
+        return _local_day(value) <= tope
     except OverflowError:
         return False
 
@@ -76,7 +95,7 @@ def within_max_ahead(value: datetime, max_ahead: timedelta) -> bool:
 
     La cota contra el desborde de toda reserva y reprogramacion, con
     ``MAX_BOOKING_AHEAD`` (2 anios). No es un horizonte de producto: al
-    cliente lo acota la grilla (``BOOKING_HORIZON_DAYS``)."""
+    portal lo acota ademas ``within_booking_horizon`` (120 dias)."""
     aware = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
     return aware <= now_utc() + max_ahead
 

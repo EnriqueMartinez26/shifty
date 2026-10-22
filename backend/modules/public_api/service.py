@@ -57,6 +57,7 @@ from core.utils import (
     ensure_utc_aware,
     local_day_start,
     today_local,
+    within_booking_horizon,
 )
 from modules.appointments.guards import (
     awaits_payment,
@@ -291,6 +292,19 @@ def require_public_availability_day(day: date) -> date:
             f"y los proximos {PUBLIC_AVAILABILITY_FUTURE_DAYS} dias"
         )
     return day
+
+
+def booking_horizon_exceeded() -> AppException:
+    """422 de una reserva o reprogramacion del portal mas alla de los 120
+    dias (paquete antiabuso, D-20261022-01, propuesta por Mateo, pendiente
+    de OK del dueno). Antes la unica cota era la de 2 anios contra el
+    desborde: un POST directo tomaba cupos de todo el anio que la grilla no
+    ofrece. El panel y la lista de espera de la tienda no pasan por aca."""
+    return AppException(
+        message=f"Podés reservar hasta {BOOKING_HORIZON_DAYS} días adelante.",
+        http_status=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        error_code="BOOKING_HORIZON_EXCEEDED",
+    )
 
 
 async def far_day_closed_by_deposit(
@@ -935,6 +949,8 @@ class PublicBookingService:
     ) -> _BookingRequest:
         """Antelacion, OTP, campos extra, precio y sena: todo antes de escribir."""
         starts_at_utc = self._require_notice(data, store)
+        if not within_booking_horizon(starts_at_utc):
+            raise booking_horizon_exceeded()
         contact_verified = await self._contact_verified(data, store, client_token)
         custom_fields = validate_custom_fields(store, data.custom_fields)
         base_price = Decimal(str(service.price or 0))
@@ -1502,6 +1518,12 @@ class PublicBookingService:
         )
         if denial is not None:
             raise denial
+        # Hasta hoy + 120 dias, o hasta el dia del inicio actual si es mas
+        # tarde: un turno que la tienda cargo mas alla se sigue moviendo.
+        if not within_booking_horizon(
+            data.new_starts_at, keep_up_to=original.starts_at
+        ):
+            raise booking_horizon_exceeded()
         if live_charge_provider == PAYMENT_PROVIDER_MANUAL and is_far_booking(
             data.new_starts_at
         ):
