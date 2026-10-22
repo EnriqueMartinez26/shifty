@@ -202,7 +202,9 @@ async def test_busqueda_de_turnos_items_y_paginado(
     item = cuerpo["results"][0]
     assert {k: v for k, v in item.items() if k not in {"starts_at", "ends_at"}} == {
         "public_id": reserva.json()["public_id"],
-        "status": "pending",
+        # La reserva publica sin cobro nace confirmada (decision de Mateo,
+        # 2026-10-20); antes "pending".
+        "status": "confirmed",
         "notes": "Primera vez",
         "notes_staff": None,
         "intake_answers": {},

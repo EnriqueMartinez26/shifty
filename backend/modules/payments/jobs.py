@@ -518,6 +518,7 @@ async def _plan_outbox_message(
         _replaced_link_notification(message)
         or _other_payment_reversal_notification(message)
         or _deposit_notification(message)
+        or _booked_online_notification(message)
         or _build_store_notification(message)
     )
     if notification is None:
@@ -1046,8 +1047,10 @@ def _pending_confirmation_notification(
 
     Sena obligatoria por WhatsApp (``channel = whatsapp``, decision de Mateo,
     2026-10-03): el turno esta retenido hasta ``expires_at`` y se confirma
-    desde Cobros cuando entra el pago. Sin canal en el payload (reserva sin
-    sena obligatoria, o un evento anterior a esta rama): el texto de siempre.
+    desde Cobros cuando entra el pago. Sin canal en el payload: el texto de
+    siempre, solo para un evento publicado antes del 2026-10-20. Desde ahi una
+    reserva sin cobro nace confirmada y publica ``appointment.booked_online``
+    (``_booked_online_notification``), que no pide confirmar nada.
     Aparte de ``_build_store_notification`` (deuda de la regla 29).
     """
     appointment_id = payload.get("appointment_id")
@@ -1074,6 +1077,36 @@ def _pending_confirmation_notification(
         type=NotificationType.APPOINTMENT_PENDING_CONFIRMATION.value,
         title=title,
         body=body,
+        appointment_id=str(appointment_id) if appointment_id else None,
+    )
+
+
+def _booked_online_notification(message: OutboxMessage) -> Notification | None:
+    """Reserva publica sin cobro (decision de Mateo, 2026-10-20): ya nacio
+    confirmada, asi que el aviso informa quien, que y cuando, sin pedirle a la
+    tienda que confirme ni que espere una transferencia.
+
+    Aparte de ``_build_store_notification`` (deuda de la regla 29).
+    """
+    if (
+        not message.store_id
+        or message.event_type != NotificationType.APPOINTMENT_BOOKED_ONLINE.value
+    ):
+        return None
+    payload = message.payload if isinstance(message.payload, dict) else {}
+    client_name = str(payload.get("client_name") or "Un cliente")
+    service_name = str(payload.get("service_name") or "un servicio")
+    fecha, hora = format_local_datetime(payload.get("starts_at") or "")
+    cuando = f" para el {fecha} a las {hora}" if hora else ""
+    appointment_id = payload.get("appointment_id")
+    return Notification(
+        store_id=message.store_id,
+        type=message.event_type,
+        title="Nueva reserva",
+        body=(
+            f"{client_name} reservó {service_name}{cuando}. El turno quedó "
+            "confirmado: no tenés que hacer nada."
+        ),
         appointment_id=str(appointment_id) if appointment_id else None,
     )
 
