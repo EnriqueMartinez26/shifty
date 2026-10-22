@@ -318,6 +318,8 @@ async def get_public_services(
                 else None,
                 color=service.color,
                 image_url=service.image_url,
+                requires_prior_design=service.requires_prior_design,
+                prior_design_message=service.prior_design_message,
                 addons=[ServiceAddonResponse.model_validate(a) for a in addons],
             )
             for service, addons in catalogo
