@@ -88,7 +88,7 @@ export const StoreHeader: React.FC<StoreHeaderProps> = ({
   misTurnosHref,
   brand
 }) => (
-  <header className="mx-auto flex max-w-2xl items-center gap-3">
+  <header className="mx-auto flex max-w-2xl items-center gap-2 sm:gap-3">
     {/* key: otro logo vuelve a intentar cargar aunque el anterior fallara. */}
     <StoreLogo key={logoUrl ?? ''} name={name} logoUrl={logoUrl} brand={brand} />
     <div className="min-w-0 flex-1">
@@ -105,9 +105,11 @@ export const StoreHeader: React.FC<StoreHeaderProps> = ({
         </div>
       )}
     </div>
+    {/* Debajo de sm, solo el icono (el texto queda para lectores de pantalla):
+        en 360 px la pastilla con texto le sacaba el lugar al nombre. */}
     <a
       href={misTurnosHref}
-      className="flex min-h-11 shrink-0 items-center gap-2 rounded-xl border px-3 py-2.5 text-xs font-black uppercase tracking-widest focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-orange-500"
+      className="flex min-h-11 min-w-11 shrink-0 items-center justify-center gap-2 rounded-xl border px-2 py-2.5 text-xs font-black uppercase tracking-widest sm:px-3 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-orange-500"
       style={{
         background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
         borderColor: colors2000s.border.default,
@@ -115,8 +117,12 @@ export const StoreHeader: React.FC<StoreHeaderProps> = ({
         color: colors2000s.text.primary
       }}
     >
-      <CalendarCheck size={14} className="stroke-[2.5px]" style={{ color: brand.ink }} />
-      <span>Mis turnos</span>
+      <CalendarCheck
+        aria-hidden="true"
+        className="h-5 w-5 stroke-[2.5px] sm:h-3.5 sm:w-3.5"
+        style={{ color: brand.ink }}
+      />
+      <span className="sr-only sm:not-sr-only">Mis turnos</span>
     </a>
   </header>
 )

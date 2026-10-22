@@ -54,7 +54,7 @@ export const BookingServicesBar: React.FC<BookingServicesBarProps> = ({
     <button
       type="button"
       onClick={onContinue}
-      className="inline-flex items-center gap-2 px-4 py-3 rounded-xl border text-xs font-black uppercase tracking-widest active:scale-95"
+      className="inline-flex min-h-11 items-center gap-2 px-4 py-3 rounded-xl border text-xs font-black uppercase tracking-widest active:scale-95"
       style={brandCtaStyle}
     >
       Continuar

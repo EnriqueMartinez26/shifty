@@ -698,6 +698,34 @@ describe('BookingWizardContainer', () => {
         expect(window.sessionStorage.getItem('shifty:booking-idem:tienda')).toBeNull()
       )
     })
+
+    // QA 2026-10-21: la pantalla de exito seguia mostrando "Paso 3 de 3" sin
+    // tildar. Con la reserva hecha ya no hay pasos: el indicador se oculta.
+    it('con la reserva hecha oculta el indicador de pasos y al volver a reservar reaparece', async () => {
+      mockCreateBooking.mockResolvedValue({
+        public_id: 'appt-1',
+        service_id: 'a',
+        service_name: 'Servicio a',
+        staff_id: 'st-1',
+        staff_name: 'Pro',
+        starts_at: slot.starts_at,
+        ends_at: slot.ends_at,
+        status: 'confirmed',
+        client_name: 'Lucia',
+        client_phone: '+5491155550101',
+        payment_required: false
+      })
+      render(<WizardEnRuta store={tienda(false)} />)
+      expect(screen.getByRole('list', { name: 'Pasos de la reserva' })).toBeInTheDocument()
+
+      await confirmarReserva()
+
+      expect(await screen.findByText('Reserva Confirmada')).toBeInTheDocument()
+      expect(screen.queryByRole('list', { name: 'Pasos de la reserva' })).not.toBeInTheDocument()
+
+      atrasDelNavegador()
+      expect(screen.getByRole('list', { name: 'Pasos de la reserva' })).toBeInTheDocument()
+    })
   })
 
   describe('pedir el codigo desde el celular (F4-11, J7)', () => {
@@ -922,6 +950,23 @@ describe('BookingWizardContainer', () => {
 
       const pedido = await completarYConfirmar()
       expect(pedido).toMatchObject({ service_id: 'a', extra_service_ids: ['b'] })
+    })
+
+    // QA 2026-10-21 (S4): la barra no quedaba fija abajo porque la raiz del
+    // wizard tenia overflow-hidden, que anula el sticky de los descendientes.
+    it('la barra queda fija abajo: ningun ancestro la encierra en un contenedor con scroll', () => {
+      render(<WizardEnRuta store={tiendaMulti(true)} />)
+      fireEvent.click(screen.getByText('Servicio a'))
+
+      const barra = screen.getByTestId('booking-services-bar')
+      expect(barra).toHaveClass('sticky', 'bottom-0')
+      const encierran: string[] = []
+      for (let node = barra.parentElement; node; node = node.parentElement) {
+        if (/\boverflow(-[xy])?-(hidden|auto|scroll)\b/.test(node.className)) {
+          encierran.push(node.className)
+        }
+      }
+      expect(encierran).toEqual([])
     })
 
     it('con el flag y un solo servicio elegido el pedido es el de siempre', async () => {
@@ -1261,12 +1306,12 @@ describe('BookingWizardContainer con adicionales en el paso del servicio', () =>
 describe('BookingWizardContainer con el color de la tienda', () => {
   const raiz = () =>
     screen.getByRole('region', { name: 'Paso 1 de 3: Servicio' }).parentElement as HTMLElement
+  // Todas las variables de marca que la raiz fija (sin color de tienda no hay --brand-glow).
   const variables = (element: HTMLElement) =>
     Object.fromEntries(
-      ['--brand-fill', '--brand-fill-bottom', '--brand-on-fill', '--brand-ink'].map((name) => [
-        name,
-        element.style.getPropertyValue(name)
-      ])
+      Array.from(element.style)
+        .filter((name) => name.startsWith('--brand-'))
+        .map((name) => [name, element.style.getPropertyValue(name)])
     )
 
   beforeEach(() => {

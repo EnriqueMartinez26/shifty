@@ -116,6 +116,23 @@ describe('BookingStepService', () => {
     expect(check?.classList.contains('flex-shrink-0')).toBe(true)
   })
 
+  // QA 2026-10-21: con un color de tienda claro (amarillo) el icono pintado
+  // con el relleno quedaba en 1.07:1 sobre el blanco de la tarjeta.
+  it.each([
+    ['sin color propio', null],
+    ['con color propio', '#ffff00']
+  ])('el icono del servicio %s usa la tinta de marca, legible sobre claro', (_caso, color) => {
+    mockUsePublicServices.mockReturnValue({
+      isLoading: false,
+      data: [{ ...servicio('corte', 'Corte', 30, 10000), color }]
+    })
+
+    render(<BookingStepService storePublicId="store-1" selectedId={null} onSelect={jest.fn()} />)
+
+    const avatar = screen.getByRole('button').querySelector('svg.lucide-briefcase')?.parentElement
+    expect(avatar?.getAttribute('style')).toContain('color: var(--brand-ink,')
+  })
+
   it('sin varios servicios tocar uno lo elige y no muestra la barra', () => {
     mockUsePublicServices.mockReturnValue({
       isLoading: false,
@@ -387,5 +404,20 @@ describe('BookingStepService con el color de la tienda', () => {
     expect(screen.getByText('Corte').getAttribute('style')).toContain('var(--brand-on-fill,')
     const otro = screen.getByRole('button', { name: /Barba/ })
     expect(otro.getAttribute('style')).not.toContain('var(--brand-fill,')
+  })
+
+  // QA visual 2026-10-21: la tarjeta elegida era la ultima con el brillo
+  // naranja fijo debajo del color de la tienda.
+  it('el servicio elegido brilla con el color de la tienda, no con el naranja fijo', () => {
+    mockUsePublicServices.mockReturnValue({
+      isLoading: false,
+      data: [servicio('svc-1', 'Corte', 30, 1000)]
+    })
+
+    render(<BookingStepService storePublicId="store-1" selectedId="svc-1" onSelect={jest.fn()} />)
+
+    const style = screen.getByRole('button', { name: /Corte/ }).getAttribute('style') ?? ''
+    // El naranja solo queda como respaldo dentro del var(), sin color de tienda.
+    expect(style).toContain('var(--brand-glow,')
   })
 })

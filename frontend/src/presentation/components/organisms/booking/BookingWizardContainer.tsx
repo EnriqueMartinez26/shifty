@@ -30,7 +30,12 @@ import {
   useVerifyPublicOtp
 } from '../../../hooks/usePublic'
 import { useResendCooldown } from '../../../hooks/useResendCooldown'
-import { brandColor, brandCssVariables, resolveBrandTheme } from '../../../lib/brandTheme'
+import {
+  brandColor,
+  brandCssVariables,
+  brandGlowShadow,
+  resolveBrandTheme
+} from '../../../lib/brandTheme'
 import { createBookingSurfaceStyle } from '../../../lib/surfaceStyles'
 
 interface BookingWizardContainerProps {
@@ -124,6 +129,15 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
   useEffect(() => {
     if (currentStep !== step) onStepChange({ to: currentStep, from: step, mode: 'replace' })
   }, [currentStep, step, onStepChange])
+
+  // Con la reserva hecha la pantalla de exito no es un paso: el indicador se
+  // oculta. Cambiar de paso (p. ej. "atras" del navegador) lo vuelve a mostrar.
+  const [booked, setBooked] = useState(false)
+  const [bookedOnStep, setBookedOnStep] = useState(currentStep)
+  if (bookedOnStep !== currentStep) {
+    setBookedOnStep(currentStep)
+    setBooked(false)
+  }
 
   const stepRegionRef = useRef<HTMLDivElement>(null)
   const previousStepRef = useRef(currentStep)
@@ -357,7 +371,7 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
                   boxShadow: isCompleted
                     ? `${colors2000s.shadows.insetLight}, 0 2px 4px rgba(16,185,129,0.3)`
                     : isActive
-                      ? `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerOrange}`
+                      ? `${colors2000s.shadows.insetLight}, ${brandGlowShadow}`
                       : `${colors2000s.shadows.insetLight}, 0 1px 2px rgba(0,0,0,0.05)`,
                   color: isCompleted
                     ? colors2000s.text.onOrange
@@ -404,7 +418,10 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
     <div
       // Menos relleno en el telefono: con p-8 + p-6 la tarjeta del servicio
       // quedaba de 227 px en 390 y cortaba los nombres (QA movil 2026-10-08).
-      className="max-w-2xl mx-auto rounded-lg p-4 sm:p-8 relative overflow-hidden duration-700"
+      // overflow-clip y no overflow-hidden: recorta igual las esquinas pero no
+      // crea un contenedor de scroll, asi la barra del servicio queda sticky
+      // contra la pantalla (QA 2026-10-21).
+      className="max-w-2xl mx-auto rounded-lg p-4 sm:p-8 relative overflow-clip duration-700"
       style={{
         // El color de la tienda (S3), una sola vez: los pasos leen var(--brand-*).
         ...brandCssVariables(resolveBrandTheme(store.primary_color)),
@@ -422,7 +439,7 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
         }}
       />
 
-      {renderStepIndicator()}
+      {!booked && renderStepIndicator()}
 
       <div
         ref={stepRegionRef}
@@ -557,6 +574,7 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
             // Los adicionales se eligen en el paso del servicio (S4): editarlos
             // vuelve ahi, con lo elegido.
             onEditAddons={() => onStepChange({ to: 0, from: currentStep, mode: 'push' })}
+            onBooked={() => setBooked(true)}
             onConfirm={async (paymentMethod, acceptsTerms, addons) => {
               const pedido = {
                 store_public_id: store.public_id,

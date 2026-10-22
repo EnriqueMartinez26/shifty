@@ -20,7 +20,7 @@ import { addonsTotalOf, type ServiceAddonsGroup } from './addonGroups'
 import { BookingAddonsPicker } from './BookingAddonsPicker'
 import { BookingServicesBar } from './BookingServicesBar'
 import { colors2000s } from '../../../../theme/colors'
-import { brandColor } from '../../../lib/brandTheme'
+import { brandColor, brandGlowShadow } from '../../../lib/brandTheme'
 import { createBookingChoiceCardStyle } from '../../../lib/surfaceStyles'
 
 /** Elegir varios servicios para un mismo turno (`multi_service_booking`). */
@@ -100,7 +100,8 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
           ? {
               ...createBookingChoiceCardStyle(true),
               background: brandColor.fillGradient,
-              borderColor: brandColor.ink
+              borderColor: brandColor.ink,
+              boxShadow: `${colors2000s.shadows.insetLight}, ${brandGlowShadow}`
             }
           : createBookingChoiceCardStyle(false)
       }
@@ -118,7 +119,8 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
           boxShadow: isSelected
             ? 'inset 0 1px 2px rgba(255,255,255,0.5)'
             : colors2000s.shadows.insetDark,
-          color: isSelected ? brandColor.onFill : serviceColor
+          // La tinta de marca, no el relleno: un color claro no se lee sobre blanco.
+          color: isSelected ? brandColor.onFill : brandColor.ink
         }}
       >
         {svc.image_url ? (

@@ -149,8 +149,34 @@ describe('BookingSuccess', () => {
       expect(screen.queryByText(COORDINAR)).not.toBeInTheDocument()
     })
 
-    it('sin link de pago ofrece coordinar por WhatsApp con el numero de la tienda', () => {
-      render(<BookingSuccess {...props({ whatsappNumber: '+54 9 11 5555-0000' })} />)
+    // QA 2026-10-21: un turno confirmado sin seña ofrecia "Coordinar el pago".
+    it.each([
+      ['confirmada', 'confirmed'],
+      ['pendiente de revision', 'pending']
+    ])('%s sin seña no ofrece coordinar un pago que no existe', (_caso, status) => {
+      render(
+        <BookingSuccess
+          {...props({
+            whatsappNumber: '+54 9 11 5555-0000',
+            confirmation: confirmacion({ status })
+          })}
+        />
+      )
+
+      expect(screen.queryByRole('link', { name: IR_A_PAGAR })).not.toBeInTheDocument()
+      expect(screen.queryByRole('link', { name: COORDINAR })).not.toBeInTheDocument()
+    })
+
+    it('con seña requerida y sin link de pago ofrece coordinar por WhatsApp con la tienda', () => {
+      render(
+        <BookingSuccess
+          {...props({
+            whatsappNumber: '+54 9 11 5555-0000',
+            // Una respuesta sin canal (backend anterior) con la seña pendiente.
+            confirmation: confirmacion({ status: 'pending_payment', payment_required: true })
+          })}
+        />
+      )
 
       expect(screen.queryByRole('link', { name: IR_A_PAGAR })).not.toBeInTheDocument()
       expect(screen.getByRole('link', { name: COORDINAR }).getAttribute('href')).toMatch(
