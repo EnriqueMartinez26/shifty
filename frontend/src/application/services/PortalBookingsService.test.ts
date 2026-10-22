@@ -31,7 +31,8 @@ describe('PortalBookingsService', () => {
   })
 
   it('listRecent pide las reservas del portal de la ventana en horas', async () => {
-    mockGet.mockResolvedValue({ data: [reserva] })
+    // El backend responde {items, truncated} (GET /appointments/recent-portal).
+    mockGet.mockResolvedValue({ data: { items: [reserva], truncated: false } })
 
     const result = await portalBookingsService.listRecent(72)
 

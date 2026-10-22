@@ -5,6 +5,7 @@ describe('bulkCancelSkipReason', () => {
     ['APPOINTMENT_ALREADY_CANCELLED', 'Ya estaba cancelada.'],
     ['APPOINTMENT_ALREADY_STARTED', 'El turno ya empezó.'],
     ['APPOINTMENT_NOT_ACTIVE', 'El turno ya no está activo.'],
+    ['INVALID_STATUS_TRANSITION', 'El turno ya no está activo.'],
     ['APPOINTMENT_NOT_FOUND', 'No la encontramos en esta tienda.'],
     ['NOT_FOUND', 'No la encontramos en esta tienda.']
   ])('%s tiene su mensaje', (code, esperado) => {

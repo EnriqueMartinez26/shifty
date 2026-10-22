@@ -36,11 +36,12 @@ export interface BulkCancelResult {
  */
 class PortalBookingsService {
   async listRecent(hours: PortalBookingsWindowHours): Promise<RecentPortalBooking[]> {
-    const { data } = await apiClient.get<RecentPortalBooking[] | null>(
+    // El backend responde {items, truncated}: hasta 200 filas, las mas nuevas.
+    const { data } = await apiClient.get<{ items?: RecentPortalBooking[] } | null>(
       '/appointments/recent-portal',
       { params: { hours } }
     )
-    return Array.isArray(data) ? data : []
+    return Array.isArray(data?.items) ? data.items : []
   }
 
   /**

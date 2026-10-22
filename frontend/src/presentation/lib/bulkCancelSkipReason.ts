@@ -7,6 +7,8 @@ const SKIP_REASONS: ReadonlyMap<string, string> = new Map([
   ['APPOINTMENT_ALREADY_CANCELLED', 'Ya estaba cancelada.'],
   ['APPOINTMENT_ALREADY_STARTED', 'El turno ya empezó.'],
   ['APPOINTMENT_NOT_ACTIVE', 'El turno ya no está activo.'],
+  // Un turno futuro que ya vencio no puede pasar a cancelado.
+  ['INVALID_STATUS_TRANSITION', 'El turno ya no está activo.'],
   ['APPOINTMENT_NOT_FOUND', 'No la encontramos en esta tienda.'],
   ['NOT_FOUND', 'No la encontramos en esta tienda.']
 ])
