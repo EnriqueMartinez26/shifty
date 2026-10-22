@@ -52,11 +52,13 @@ from core.exceptions import (
     ValidationException,
 )
 from core.feature_flags import is_store_feature_enabled
+from core.rate_limit import subject_quota_allows, subject_quota_exhausted
 from core.utils import (
     BOOKING_HORIZON_DAYS,
     ensure_utc_aware,
     local_day_start,
     today_local,
+    within_booking_horizon,
 )
 from modules.appointments.guards import (
     awaits_payment,
@@ -64,6 +66,7 @@ from modules.appointments.guards import (
     reject_already_cancelled,
     reject_inactive,
 )
+from infrastructure.persistence.models.appointment import BOOKED_VIA_PORTAL
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.billing.dependencies import reject_new_public_business_when_suspended
 from modules.notifications.model import NotificationType
@@ -291,6 +294,123 @@ def require_public_availability_day(day: date) -> date:
             f"y los proximos {PUBLIC_AVAILABILITY_FUTURE_DAYS} dias"
         )
     return day
+
+
+# Turnos futuros activos por telefono y tienda que el portal deja tomar
+# (paquete antiabuso, S2; mismo criterio que ``MAX_OPEN_ENTRIES_PER_PHONE`` de
+# la lista de espera). Cuentan todos los del cliente, los cargue quien los
+# cargue; el panel no se limita.
+MAX_FUTURE_BOOKINGS_PER_PHONE = 3
+
+
+def too_many_future_bookings() -> AppException:
+    """409 de la reserva publica de un telefono que ya tiene el tope."""
+    return AppException(
+        message=(
+            f"Ya tenés {MAX_FUTURE_BOOKINGS_PER_PHONE} turnos reservados en esta "
+            "tienda. Si necesitás otro, escribile a la tienda."
+        ),
+        http_status=status.HTTP_409_CONFLICT,
+        error_code="TOO_MANY_FUTURE_BOOKINGS",
+    )
+
+
+# Reservas publicas EXITOSAS por IP y tienda en el dia (paquete antiabuso,
+# S3). Cubetas fijas de 24 h alineadas a UTC (las del limitador). La IP no se
+# guarda: el limitador la hashea en la clave.
+PUBLIC_BOOKING_DAILY_ACTION = "public:booking:daily-per-ip-store"
+PUBLIC_BOOKINGS_PER_IP_PER_STORE_PER_DAY = 10
+PUBLIC_BOOKING_DAILY_WINDOW_SECONDS = 24 * 60 * 60
+
+
+def _daily_quota_subject(store_id: str, client_ip: str) -> str:
+    return f"{store_id}:{client_ip}"
+
+
+async def require_daily_booking_quota(store_id: str, client_ip: str) -> None:
+    """429 si esta IP ya hizo las reservas del dia en esta tienda.
+
+    Solo LEE (``subject_quota_exhausted``): el cupo se gasta despues de una
+    reserva hecha (``consume_daily_booking_quota``), asi un 409 o un 422 no
+    lo consumen. Redis caido: ``public-write`` falla cerrada (503) antes de
+    escribir.
+    """
+    retry_after = await subject_quota_exhausted(
+        PUBLIC_BOOKING_DAILY_ACTION,
+        _daily_quota_subject(store_id, client_ip),
+        limit=PUBLIC_BOOKINGS_PER_IP_PER_STORE_PER_DAY,
+        window_seconds=PUBLIC_BOOKING_DAILY_WINDOW_SECONDS,
+    )
+    if retry_after is None:
+        return
+    raise AppException(
+        message=(
+            "Alcanzaste el límite de reservas por hoy. Si necesitás otra, "
+            "escribile a la tienda."
+        ),
+        http_status=status.HTTP_429_TOO_MANY_REQUESTS,
+        error_code="BOOKING_DAILY_LIMIT",
+        headers={"Retry-After": str(retry_after)},
+    )
+
+
+async def consume_daily_booking_quota(store_id: str, client_ip: str) -> None:
+    """Gasta una unidad del cupo diario. Nunca levanta: la reserva ya esta
+    hecha, y un Redis caido aca (503 de la politica) la haria parecer
+    fallida. El limitador ya dejo el warning con la accion."""
+    try:
+        await subject_quota_allows(
+            PUBLIC_BOOKING_DAILY_ACTION,
+            _daily_quota_subject(store_id, client_ip),
+            limit=PUBLIC_BOOKINGS_PER_IP_PER_STORE_PER_DAY,
+            window_seconds=PUBLIC_BOOKING_DAILY_WINDOW_SECONDS,
+        )
+    except AppException:
+        logger.warning("public_booking_daily_quota_not_consumed", store_id=store_id)
+
+
+# Menos que esto entre que se abre el formulario y se manda no lo llena una
+# persona (S4): lo manda un script.
+MIN_FORM_ELAPSED_MS = 2500
+
+
+def reject_bot_submission(data: PublicBookingCreate) -> None:
+    """400 neutro si la reserva cayo en la trampa para bots (S4).
+
+    El campo oculto ``website`` con algo adentro, o un formulario mandado en
+    menos de ``MIN_FORM_ELAPSED_MS``. Corre antes de cualquier lectura o
+    escritura y antes de la cuota diaria: un bot no gasta el cupo de la IP ni
+    deja ficha. Sin los campos pasa (clientes viejos). El mensaje no dice por
+    que: un bot no aprende que corregir.
+    """
+    rapido = (
+        data.form_elapsed_ms is not None and data.form_elapsed_ms < MIN_FORM_ELAPSED_MS
+    )
+    if not data.website and not rapido:
+        return
+    logger.warning(
+        "public_booking_rejected_as_bot",
+        service_id=data.service_id,
+        reason="honeypot" if data.website else "too_fast",
+    )
+    raise AppException(
+        message="No pudimos registrar la reserva. Probá de nuevo.",
+        http_status=status.HTTP_400_BAD_REQUEST,
+        error_code="BOOKING_REJECTED",
+    )
+
+
+def booking_horizon_exceeded() -> AppException:
+    """422 de una reserva o reprogramacion del portal mas alla de los 120
+    dias (paquete antiabuso, D-20261022-01, propuesta por Mateo, pendiente
+    de OK del dueno). Antes la unica cota era la de 2 anios contra el
+    desborde: un POST directo tomaba cupos de todo el anio que la grilla no
+    ofrece. El panel y la lista de espera de la tienda no pasan por aca."""
+    return AppException(
+        message=f"Podés reservar hasta {BOOKING_HORIZON_DAYS} días adelante.",
+        http_status=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        error_code="BOOKING_HORIZON_EXCEEDED",
+    )
 
 
 async def far_day_closed_by_deposit(
@@ -843,16 +963,23 @@ class PublicBookingService:
         idempotency_key: str,
         *,
         client_token: str | None = None,
+        client_ip: str | None = None,
     ) -> PublicBookingResponse:
         """Reserva desde el portal. El llamador maneja la idempotencia.
 
         Commit del alta -> invalidacion -> link de MP (fuera de la
-        transaccion, con compensacion) -> encolado del mail -> respuesta ->
-        cierre de la entrada de lista de espera (best-effort).
+        transaccion, con compensacion) -> cupo diario de la IP -> encolado
+        del mail -> respuesta -> cierre de la entrada de lista de espera
+        (best-effort). ``client_ip`` (la del router, nunca persistida) activa
+        la cuota diaria por IP y tienda; sin ella no se aplica.
         """
-        # Antes de tocar la base: una version vieja no reserva (PV-09).
+        # Antes de tocar la base y la cuota: la trampa para bots (S4) y una
+        # version vieja de los terminos (PV-09).
+        reject_bot_submission(data)
         check_accepted_versions(data.terms_version, data.privacy_version)
         service, store = await self._resolve_store_and_service(data)
+        if client_ip is not None:
+            await require_daily_booking_quota(store.id, client_ip)
         # Varios servicios en un turno (2026-10-16): flag, tope, 404 neutro y
         # duracion, antes de cualquier otra lectura. Sin extras, nada.
         extra_services = await resolve_extra_services(
@@ -871,6 +998,10 @@ class PublicBookingService:
             self.cache, request.store_id, booking.appointment.starts_at
         )
         await self._attach_payment_link(request, booking)
+        # La reserva quedo hecha (con su link, si cobra): recien ahora gasta
+        # el cupo diario de la IP.
+        if client_ip is not None:
+            await consume_daily_booking_quota(request.store_id, client_ip)
         # El encolado del mail (F2-01: hasta 2 s de publish en un hilo; el
         # SMTP lo hace el worker) corre sin transaccion: el commit de
         # TenantSession deja otra abierta al reaplicar el contexto (F1-05,
@@ -935,6 +1066,8 @@ class PublicBookingService:
     ) -> _BookingRequest:
         """Antelacion, OTP, campos extra, precio y sena: todo antes de escribir."""
         starts_at_utc = self._require_notice(data, store)
+        if not within_booking_horizon(starts_at_utc):
+            raise booking_horizon_exceeded()
         contact_verified = await self._contact_verified(data, store, client_token)
         custom_fields = validate_custom_fields(store, data.custom_fields)
         base_price = Decimal(str(service.price or 0))
@@ -1144,17 +1277,30 @@ class PublicBookingService:
         idempotency_key: str,
     ) -> _Booking:
         store_id = request.store_id
-        client = await self.repo.get_or_create_client(
+        client, created = await self.repo.get_or_create_client_locked(
             store_id=store_id,
             phone=data.client_phone,
             name=data.client_name,
             email=data.client_email,
         )
+        # Tope por telefono (S2): la ficha se lockea ANTES que el profesional
+        # (orden cliente -> profesional, ver el repositorio) y el conteo corre
+        # bajo ese lock, asi dos altas simultaneas no pasan las dos. Una ficha
+        # recien creada no tiene turnos: no se cuenta.
+        if (
+            not created
+            and await self.repo.count_future_bookings(
+                store_id, client.id, datetime.now(timezone.utc)
+            )
+            >= MAX_FUTURE_BOOKINGS_PER_PHONE
+        ):
+            raise too_many_future_bookings()
         # Toma el FOR UPDATE del profesional antes de leer disponibilidad
         # (regla 4) y aplica el buffer de la tienda. El servicio ya resuelto
         # viaja (F3-03), y la retencion del slot y el consentimiento van en el
         # INSERT del turno.
         appointment, service, staff = await self.repo.create_appointment(
+            booked_via=BOOKED_VIA_PORTAL,
             store_id=store_id,
             service_public_id=data.service_id,
             service=request.service,
@@ -1502,6 +1648,12 @@ class PublicBookingService:
         )
         if denial is not None:
             raise denial
+        # Hasta hoy + 120 dias, o hasta el dia del inicio actual si es mas
+        # tarde: un turno que la tienda cargo mas alla se sigue moviendo.
+        if not within_booking_horizon(
+            data.new_starts_at, keep_up_to=original.starts_at
+        ):
+            raise booking_horizon_exceeded()
         if live_charge_provider == PAYMENT_PROVIDER_MANUAL and is_far_booking(
             data.new_starts_at
         ):
@@ -1806,6 +1958,8 @@ def _rescheduled_copy(
         idempotency_key=data.idempotency_key,
         status=estado,
         expires_at=vence,
+        # El turno movido sigue siendo del mismo origen (antiabuso, S5).
+        booked_via=original.booked_via,
     )
 
 

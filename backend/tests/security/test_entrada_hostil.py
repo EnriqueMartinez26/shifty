@@ -66,6 +66,10 @@ _OPACO = "no se publica: identificador opaco que solo usa el servidor"
 _PANEL = "no se publica: solo lo ve el personal de la tienda en el panel"
 _SOPORTE = "no se publica: lo carga el soporte global y lo ve el dueno en su panel"
 _TELEFONO = "no se publica: dato de contacto del usuario, no texto del portal"
+_TRAMPA = (
+    "no se publica: trampa para bots (S4); cualquier valor no vacio es 400 "
+    "BOOKING_REJECTED antes de escribir"
+)
 
 # (verbo, ruta, campo) -> por que ese campo queda fuera de la regla 19.
 NO_ES_TEXTO_PUBLICADO: dict[tuple[str, str, str], str] = {
@@ -77,6 +81,7 @@ NO_ES_TEXTO_PUBLICADO: dict[tuple[str, str, str], str] = {
     ("POST", "/appointments/", "idempotency_key"): _OPACO,
     ("PATCH", "/appointments/{public_id}/reschedule", "idempotency_key"): _OPACO,
     ("POST", "/public/appointments", "idempotency_key"): _OPACO,
+    ("POST", "/public/appointments", "website"): _TRAMPA,
     (
         "PATCH",
         "/public/client/appointments/{public_id}/reschedule",

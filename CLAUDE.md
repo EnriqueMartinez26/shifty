@@ -662,13 +662,23 @@ Una instrucción en lenguaje natural no es una garantía.
   lock, bloqueos, choques y GiST igual que cualquier alta, pero no publica mail
   de reserva, confirmación ni reprogramación y no genera recordatorios. El cliente final nunca: la reserva pública, la reprogramación
   de "Mis turnos" y anotarse en la lista de espera rechazan todo inicio pasado,
-  aunque la tienda tenga `min_booking_notice_hours = 0`. Los topes de fecha de
-  reservar y reprogramar son solo contra el desborde
-  (`core/utils.MAX_BOOKING_AHEAD`, 2 años hacia adelante y hacia atrás en la
-  tienda): los 120 días del cliente los pone la grilla de `/public/availability`.
-  Un tope más estricto es una decisión de producto, no un arreglo.
+  aunque la tienda tenga `min_booking_notice_hours = 0`. Los caminos de la
+  tienda (panel, alta para un cliente, `POST /waitlist/{id}/book`) solo tienen
+  el tope contra el desborde (`core/utils.MAX_BOOKING_AHEAD`, 2 años hacia
+  adelante y hacia atrás en la tienda). El portal tiene además un horizonte
+  de producto (paquete antiabuso, propuesta por Mateo, adoptada por el dueño el
+  2026-10-22, D-20261022-01): la reserva pública no empieza después de hoy + 120 días
+  locales (`BOOKING_HORIZON_DAYS`, `core/utils.within_booking_horizon`, la
+  misma cota de la grilla de `/public/availability`), y "Mis turnos" mueve un
+  turno hasta hoy + 120 días o hasta el día de su inicio actual si es más
+  tarde: uno que la tienda cargó más allá se sigue pudiendo mover. Pasarse es
+  422 `BOOKING_HORIZON_EXCEEDED` ("Podés reservar hasta 120 días adelante.")
+  antes de escribir; el tope de 2 años del schema corre antes y sigue
+  cortando el desborde. Cambiar los 120 días es una decisión de producto, no
+  un arreglo.
   (`test_cliente_final_sin_pasado.py`, `test_alta_del_panel_para_cliente.py`,
-  `test_horizonte_de_reservas.py`, `test_recordatorios_solo_turnos_futuros.py`)
+  `test_horizonte_de_reservas.py`, `test_horizonte_del_portal.py`,
+  `test_recordatorios_solo_turnos_futuros.py`)
 
 ### Lista de espera, suscripción y avisos (Fases 4-7, 2026-09-11)
 
@@ -858,7 +868,9 @@ Una instrucción en lenguaje natural no es una garantía.
 - **Reservas recientes del portal: origen y limpieza en bloque** (paquete
   antiabuso, propuesta por Mateo el 2026-10-22, pendiente de OK del dueño).
   `appointments.booked_via` dice de dónde vino el turno: `portal` | `panel`,
-  NOT NULL con default `panel` y `ck_appointments_booked_via`. Todo lo que
+  NOT NULL con default `panel` y `ck_appointments_booked_via`. La reserva
+  pública escribe `portal` (`public_api/service.py::_write_booking`) y "Mis
+  turnos" conserva el origen al reprogramar (`_rescheduled_copy`). Todo lo que
   carga o mueve la tienda escribe `panel`, también reprogramar desde el panel
   un turno del portal (lo movió la tienda). La migración `733220bbf66e` marca
   `portal` en lo histórico donde `terms_accepted_at IS NOT NULL` (solo el
@@ -888,6 +900,40 @@ Una instrucción en lenguaje natural no es una garantía.
   (`waitlist_entries.lapsed_offers`). Sin eso una cola de entradas que nunca
   reservan mataba cada cupo liberado en ofertas de 10 minutos a nadie.
   (`test_lista_de_espera_acaparamiento.py`)
+- **Reservar en el portal es anónimo, así que también tiene topes**
+  (paquete antiabuso, propuesta por Mateo el 2026-10-22, pendiente de OK del
+  dueño). Un teléfono tiene a lo sumo `MAX_FUTURE_BOOKINGS_PER_PHONE` (3)
+  turnos futuros activos (`pending`, `pending_payment`, `confirmed`) por
+  tienda al reservar desde el portal: el siguiente es 409
+  `TOO_MANY_FUTURE_BOOKINGS` antes de escribir. Cuentan todos los del
+  cliente, los cargue quien los cargue (panel y ofertas de la lista de espera
+  incluidos); el panel nunca se limita. El conteo corre bajo el lock de la
+  ficha del cliente (`FOR NO KEY UPDATE`: la ficha sale lockeada de
+  `PublicRepository.get_or_create_client_locked` y después cuenta
+  `count_future_bookings`) dentro del
+  savepoint del alta y ANTES del lock del profesional: orden cliente →
+  profesional. Es `NO KEY` y no `FOR UPDATE` porque el INSERT de un turno
+  toma `FOR KEY SHARE` sobre la ficha por la FK, y el panel (profesional →
+  FK del cliente) se trababa contra un `FOR UPDATE`.
+  Cada IP tiene además a lo sumo 10 reservas públicas EXITOSAS por tienda y
+  por día (`PUBLIC_BOOKINGS_PER_IP_PER_STORE_PER_DAY`, acción
+  `public:booking:daily-per-ip-store`, política `public-write`: falla cerrada
+  sin Redis). Cubetas fijas de 24 h alineadas a UTC, sujeto
+  `{store_id}:{ip}` hasheado en la clave: la IP no se guarda en ningún lado.
+  Se LEE antes de escribir (`core/rate_limit.subject_quota_exhausted`) y se
+  CONSUME solo con la reserva hecha (`subject_quota_allows`, que ahí nunca
+  levanta), así un 409 o un 422 no gastan cupo; pasarse es 429
+  `BOOKING_DAILY_LIMIT` con `Retry-After`. Entre la lectura y el consumo dos
+  pedidos simultáneos de la misma IP pueden pasar los dos: el tope es blando
+  por esa concurrencia, no por más. El replay de idempotencia no la mira.
+  Y una trampa para bots: `PublicBookingCreate` acepta `website` (campo
+  oculto del wizard, tiene que llegar vacío) y `form_elapsed_ms` (opcionales,
+  regla 9); un `website` no vacío o un `form_elapsed_ms` menor a 2500 es 400
+  `BOOKING_REJECTED` antes de leer la base, de escribir y de mirar la cuota
+  diaria (`public_api/service.py::reject_bot_submission`). Sin los campos
+  pasa, y ninguno entra en la clave de idempotencia.
+  (`test_portal_tope_por_telefono.py`, `test_pg_tope_por_telefono.py`,
+  `test_portal_cuota_diaria_por_ip.py`, `test_portal_trampa_de_bots.py`)
 - **Un teléfono identifica a UN cliente por tienda**: índice único parcial
   `uq_users_client_phone_per_store` (`role = 'client' AND phone IS NOT NULL`;
   el personal puede compartir el teléfono del local). La migración que lo crea

@@ -37,7 +37,7 @@ from core.exceptions import (
     ValidationException,
 )
 from core.idempotency import idempotency_guard, idempotency_release, idempotency_save
-from core.rate_limit import enforce_rate_limit
+from core.rate_limit import client_ip_from_request, enforce_rate_limit
 from core.redis import get_availability_cache, get_redis
 from core.validation import PUBLIC_ID_PATTERN
 from modules.appointments.availability import AvailabilityService, StoreRules
@@ -756,7 +756,11 @@ async def create_public_booking(
             return PublicBookingResponse.model_validate(cached)
         try:
             response = await PublicBookingService(db, availability_cache).book(
-                data, idempotency_key, client_token=client_token
+                data,
+                idempotency_key,
+                client_token=client_token,
+                # Para la cuota diaria por IP y tienda (S3); no se persiste.
+                client_ip=client_ip_from_request(request),
             )
         except Exception:
             await idempotency_release(cache_key, redis)

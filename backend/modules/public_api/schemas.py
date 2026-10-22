@@ -191,6 +191,14 @@ class PublicBookingCreate(BaseModel):
     extra_service_ids: list[ExtraServiceId] = Field(
         default_factory=list, max_length=EXTRA_SERVICES_INPUT_MAX
     )
+    # Trampa para bots (paquete antiabuso, S4). Opcionales: sin ellos la
+    # reserva es la de siempre. ``website`` es un campo oculto del wizard que
+    # una persona nunca ve (tiene que llegar vacio) y ``form_elapsed_ms`` lo
+    # que tardo en llenarse el formulario. El rechazo (400
+    # ``BOOKING_REJECTED``) lo decide el service; no entran en la clave de
+    # idempotencia (``router._public_booking_idempotency_key``).
+    website: str | None = Field(default=None, max_length=200)
+    form_elapsed_ms: int | None = Field(default=None, ge=0, le=86_400_000)
 
     @model_validator(mode="before")
     @classmethod
@@ -212,8 +220,9 @@ class PublicBookingCreate(BaseModel):
         if value <= now_utc():
             raise ValueError("No se puede agendar un turno en el pasado")
         # Tope ancho (2 anios): 9999-12-31 desbordaba ``starts_at + duracion``
-        # (500). No el horizonte de 120 dias: el "Nuevo turno" del panel
-        # reserva por aca con fecha libre; al cliente lo acota la grilla.
+        # (500). El horizonte de producto (120 dias, D-20261022-01) lo aplica
+        # el service con su propio 422 ``BOOKING_HORIZON_EXCEEDED``; esta
+        # cota solo corta lo absurdo antes de llegar ahi.
         if not within_max_ahead(value, MAX_BOOKING_AHEAD):
             raise ValueError("La fecha esta fuera del rango de reservas")
         return value
@@ -411,8 +420,9 @@ class ClientRescheduleRequest(BaseModel):
             value = value.replace(tzinfo=timezone.utc)
         if value <= now_utc():
             raise ValueError("La nueva fecha debe ser en el futuro")
-        # Mismo tope ancho: "Mis turnos" reprograma con fecha libre y un turno
-        # que ya esta mas alla de +120 dias se tiene que poder mover.
+        # Mismo tope ancho contra el desborde. Los 120 dias los aplica el
+        # service, que conoce el inicio actual: un turno que ya esta mas alla
+        # de +120 dias se tiene que poder mover (D-20261022-01).
         if not within_max_ahead(value, MAX_BOOKING_AHEAD):
             raise ValueError("La fecha esta fuera del rango de reservas")
         return value

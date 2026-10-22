@@ -653,4 +653,15 @@ async def test_sentencias_del_alta_con_otp_historial_y_cobro(
     # este carril: las dos cargas en cascada de store_schedules (F3-01 las
     # saca con lazy="raise": 24) y las lecturas de payments/service (el
     # Payment releido tras el commit, la tienda y la configuracion de MP).
-    assert len(sentencias) <= 26, "\n".join(sentencias)
+    # 26 -> 27 (paquete antiabuso, S2, 2026-10-22): el tope por telefono
+    # cuenta los turnos futuros de una ficha que ya existia. El lock de la
+    # ficha va en la MISMA lectura que la busca; el conteo no se puede juntar
+    # con ella: tiene que ser otra sentencia, con una foto tomada despues de
+    # esperar el lock, o dos altas simultaneas contarian lo mismo.
+    conteos = [
+        s
+        for s in sentencias
+        if s.startswith("select count(*) as count_1 from appointments")
+    ]
+    assert len(conteos) == 1, "el tope por telefono cuenta una sola vez"
+    assert len(sentencias) <= 27, "\n".join(sentencias)

@@ -16,6 +16,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from core.config import settings
+from modules.public_api.service import MAX_FUTURE_BOOKINGS_PER_PHONE
 from tests.integration.test_feature_flags_finance_and_public_privacy import (
     add_staff_schedule,
     create_service,
@@ -127,6 +128,7 @@ async def _turnos_originales(
     client: AsyncClient,
     *,
     store: str,
+    token: str,
     service: str,
     staff: str,
     dia: datetime,
@@ -134,25 +136,36 @@ async def _turnos_originales(
     prefijo: str,
     cantidad: int,
 ) -> list[str]:
-    """Reserva ``cantidad`` turnos del mismo cliente (09:00 UTC + i horas)."""
+    """Reserva ``cantidad`` turnos del mismo cliente (09:00 UTC + i horas).
+
+    Los primeros ``MAX_FUTURE_BOOKINGS_PER_PHONE`` por el portal y el resto por
+    el alta del panel para el MISMO cliente (mismo telefono): el portal no deja
+    a un telefono pasar ese tope de turnos futuros (paquete antiabuso, S2) y
+    el panel nunca se limita. La carrera que se prueba es la reprogramacion
+    contra el bloqueo, no el origen del turno.
+    """
     turnos: list[str] = []
     for i in range(cantidad):
-        reserva = await client.post(
-            "/public/appointments",
-            json={
-                "store_public_id": store,
-                "service_id": service,
-                "staff_id": staff,
-                "starts_at": dia.replace(
-                    hour=9 + i, minute=0, second=0, microsecond=0
-                ).isoformat(),
-                "client_name": "Reprogramar",
-                "client_phone": phone,
-                "client_email": f"c{phone.lstrip('+')}@example.com",
-                "accepts_terms": True,
-                "idempotency_key": f"{prefijo}-original-{i:03d}",
-            },
-        )
+        cuerpo = {
+            "service_id": service,
+            "staff_id": staff,
+            "starts_at": dia.replace(
+                hour=9 + i, minute=0, second=0, microsecond=0
+            ).isoformat(),
+            "client_name": "Reprogramar",
+            "client_phone": phone,
+            "client_email": f"c{phone.lstrip('+')}@example.com",
+            "idempotency_key": f"{prefijo}-original-{i:03d}",
+        }
+        if i < MAX_FUTURE_BOOKINGS_PER_PHONE:
+            reserva = await client.post(
+                "/public/appointments",
+                json={**cuerpo, "store_public_id": store, "accepts_terms": True},
+            )
+        else:
+            reserva = await client.post(
+                "/appointments/", headers=auth_headers(token), json=cuerpo
+            )
         assert reserva.status_code == 201, reserva.text
         turnos.append(reserva.json()["public_id"])
     return turnos
@@ -218,6 +231,7 @@ async def test_reprogramacion_del_panel_y_bloqueo_concurrentes_no_dejan_un_turno
     turnos = await _turnos_originales(
         client,
         store=store,
+        token=token,
         service=service,
         staff=staff,
         dia=dia,
@@ -273,6 +287,7 @@ async def test_reprogramacion_del_cliente_y_bloqueo_concurrentes_no_dejan_un_tur
     turnos = await _turnos_originales(
         client,
         store=store,
+        token=token,
         service=service,
         staff=staff,
         dia=dia,

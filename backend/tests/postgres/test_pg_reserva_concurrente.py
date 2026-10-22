@@ -19,6 +19,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from core.config import settings
+from modules.public_api.service import MAX_FUTURE_BOOKINGS_PER_PHONE
 from tests.integration.test_feature_flags_finance_and_public_privacy import (
     add_staff_schedule,
     create_service,
@@ -363,13 +364,34 @@ async def _originales(
     dia: datetime,
     cantidad: int,
 ) -> list[str]:
-    """``cantidad`` turnos del mismo cliente, desde las 09:00 UTC cada 30 minutos."""
+    """``cantidad`` turnos del mismo cliente, desde las 09:00 UTC cada 30 minutos.
+
+    Con ``via="cliente"`` los primeros ``MAX_FUTURE_BOOKINGS_PER_PHONE`` van
+    por el portal y el resto por el alta del panel para el MISMO cliente: el
+    portal no deja a un telefono pasar ese tope de turnos futuros (paquete
+    antiabuso, S2), el panel nunca se limita, y "Mis turnos" reprograma los de
+    ese cliente sin mirar el origen.
+    """
     turnos: list[str] = []
     for i in range(cantidad):
         inicio = dia.replace(hour=9, minute=0, second=0, microsecond=0) + timedelta(
             minutes=30 * i
         )
-        if via == "panel":
+        if via == "cliente" and i >= MAX_FUTURE_BOOKINGS_PER_PHONE:
+            res = await client.post(
+                "/appointments/",
+                headers=auth_headers(token),
+                json={
+                    "service_id": service,
+                    "staff_id": staff,
+                    "starts_at": inicio.isoformat(),
+                    "client_name": "Reprogramador",
+                    "client_email": "reprogramador@example.com",
+                    "client_phone": TELEFONO_CLIENTE,
+                    "idempotency_key": f"pg-orig-{via}-{i:03d}",
+                },
+            )
+        elif via == "panel":
             res = await client.post(
                 "/appointments/",
                 headers=auth_headers(token),
