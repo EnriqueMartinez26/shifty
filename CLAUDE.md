@@ -666,8 +666,8 @@ Una instrucción en lenguaje natural no es una garantía.
   tienda (panel, alta para un cliente, `POST /waitlist/{id}/book`) solo tienen
   el tope contra el desborde (`core/utils.MAX_BOOKING_AHEAD`, 2 años hacia
   adelante y hacia atrás en la tienda). El portal tiene además un horizonte
-  de producto (paquete antiabuso, propuesta por Mateo el 2026-10-22, pendiente
-  de OK del dueño): la reserva pública no empieza después de hoy + 120 días
+  de producto (paquete antiabuso, propuesta por Mateo, adoptada por el dueño el
+  2026-10-22, D-20261022-01): la reserva pública no empieza después de hoy + 120 días
   locales (`BOOKING_HORIZON_DAYS`, `core/utils.within_booking_horizon`, la
   misma cota de la grilla de `/public/availability`), y "Mis turnos" mueve un
   turno hasta hoy + 120 días o hasta el día de su inicio actual si es más
