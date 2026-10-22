@@ -45,6 +45,7 @@ from core.config import settings
 import modules.payments.service as payments_service
 from modules.notifications.model import NotificationType
 from modules.payments.service import EVENT_PREFERENCE_EXPIRE
+from modules.public_api.service import MAX_FUTURE_BOOKINGS_PER_PHONE
 from tests.integration.test_feature_flags_finance_and_public_privacy import (
     add_staff_schedule,
     create_service,
@@ -420,25 +421,35 @@ async def test_link_del_panel_contra_cancelar_nunca_deja_un_link_vivo_cancelado(
     dia = datetime.now(timezone.utc) + timedelta(days=4)
     await add_staff_schedule(client, admin, staff, target_date=dia)
 
+    # Todos del MISMO cliente (el que cancela por el portal). Los primeros
+    # ``MAX_FUTURE_BOOKINGS_PER_PHONE`` por el portal y el resto por el alta
+    # del panel para ese cliente: el portal no deja a un telefono pasar ese
+    # tope de turnos futuros (paquete antiabuso, S2) y el panel nunca se
+    # limita. Los dos nacen confirmados y sin cobro.
     turnos: list[str] = []
     for i in range(CARRERAS):
-        reserva = await client.post(
-            "/public/appointments",
-            json={
-                "store_public_id": store,
-                "service_id": service,
-                "staff_id": staff,
-                "starts_at": dia.replace(
-                    hour=10 + i, minute=0, second=0, microsecond=0
-                ).isoformat(),
-                "client_name": "Cliente Carrera",
-                "client_email": f"cliente-{slug}@example.com",
-                "client_phone": TELEFONO_CLIENTE,
-                "accepts_terms": True,
-                "idempotency_key": f"{slug}-{i:04d}",
-            },
-        )
+        cuerpo = {
+            "service_id": service,
+            "staff_id": staff,
+            "starts_at": dia.replace(
+                hour=10 + i, minute=0, second=0, microsecond=0
+            ).isoformat(),
+            "client_name": "Cliente Carrera",
+            "client_email": f"cliente-{slug}@example.com",
+            "client_phone": TELEFONO_CLIENTE,
+            "idempotency_key": f"{slug}-{i:04d}",
+        }
+        if i < MAX_FUTURE_BOOKINGS_PER_PHONE:
+            reserva = await client.post(
+                "/public/appointments",
+                json={**cuerpo, "store_public_id": store, "accepts_terms": True},
+            )
+        else:
+            reserva = await client.post(
+                "/appointments/", headers=auth_headers(admin), json=cuerpo
+            )
         assert reserva.status_code == 201, reserva.text
+        assert reserva.json()["status"] == "confirmed", reserva.text
         turnos.append(str(reserva.json()["public_id"]))
 
     if quien == "cliente":

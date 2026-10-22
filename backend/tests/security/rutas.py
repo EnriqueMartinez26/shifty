@@ -149,12 +149,28 @@ def _duenio(a: Actor, t: Tienda) -> str:
 
 async def _turno_publico_de(m: Mundo, t: Tienda, telefono: str) -> str:
     if telefono == t.tel_verificado:
-        return await m.reserva_publica(
+        # El cliente verificado autogestiona un turno NUEVO en cada pasada
+        # (matriz, IDOR, entrada hostil por campo): por el portal pasaba el
+        # tope de ``MAX_FUTURE_BOOKINGS_PER_PHONE`` turnos futuros por telefono
+        # (paquete antiabuso, S2) y respondia 409. Se carga por el alta del
+        # panel para ese cliente, que nunca se limita: "Mis turnos" opera
+        # sobre los turnos del cliente sin mirar el origen.
+        body = await m.ok(
+            "POST",
+            "/appointments/",
             t,
-            telefono=telefono,
-            nombre=t.nombre_verificado,
-            email=t.email_verificado,
+            201,
+            json={
+                "service_id": t.servicio,
+                "staff_id": t.staff,
+                "starts_at": m.slot(t).isoformat(),
+                "client_name": t.nombre_verificado,
+                "client_phone": telefono,
+                "client_email": t.email_verificado,
+                "idempotency_key": m.unico("clave-cliente-verificado"),
+            },
         )
+        return str(body["public_id"])
     return await m.reserva_publica(t, telefono=telefono, nombre="Cliente Anonimo")
 
 
