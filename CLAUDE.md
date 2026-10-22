@@ -250,8 +250,12 @@ Una instrucción en lenguaje natural no es una garantía.
    el turno nuevo nace `pending_payment` con un cobro `manual` del mismo
    importe y snapshot, y el plazo recalculado contra el horario nuevo
    (`payments/service.py::carry_manual_deposit`; el dueño recibe el aviso
-   con el plazo nuevo). Un turno terminal no se reprograma desde ningún lado
-   (409 `APPOINTMENT_NOT_ACTIVE`). El link del panel y la confirmación manual
+   con el plazo nuevo). A un día a más de 30 no se muda: 422
+   `FAR_BOOKING_REQUIRES_MERCADOPAGO` antes de escribir (ahí solo se cobra
+   por MP y la autogestión no cambia el canal; propuesta por Mateo,
+   adoptada por el dueño el 2026-10-21, D-20261020-02). Un turno
+   terminal no se reprograma desde ningún lado (409
+   `APPOINTMENT_NOT_ACTIVE`). El link del panel y la confirmación manual
    lockean el turno y rechazan uno soltado (`RELEASED_APPOINTMENT_STATUSES`:
    `cancelled` es 409 `APPOINTMENT_NOT_PAYABLE`; en la confirmación manual
    un `expired` es 409 `APPOINTMENT_HOLD_EXPIRED`, que le dice al personal
@@ -546,8 +550,10 @@ Una instrucción en lenguaje natural no es una garantía.
   slot tal cual, nunca recompone fecha + hora
   (`frontend/src/shared/utils/argentinaTime.ts`). La validación del horario
   del profesional compara en hora local. (`test_hora_local_reserva_publica.py`)
-- **Mails al cliente**: "reserva registrada" al crear, "turno confirmado"
-  desde `confirm()` y desde el pago acreditado; siempre best-effort tras el
+- **Mails al cliente**: "reserva registrada" al crear, salvo la reserva
+  pública sin cobro, que nace confirmada y recibe "turno confirmado" (ver
+  abajo); "turno confirmado" desde `confirm()` y desde el pago acreditado;
+  siempre best-effort tras el
   commit, nunca a un email técnico `.noreply` (`is_deliverable_email`).
   La reserva pública no espera al SMTP (F2-01, 2026-09-24): encola
   `send_booking_email` (cola `interactive`, la del OTP, `max_retries=0`) con
@@ -563,6 +569,22 @@ Una instrucción en lenguaje natural no es una garantía.
   `test_mails_del_panel_sin_transaccion.py`) Los helpers de `notifications/tasks.py` que
   mandan SMTP en línea se llaman `send_*`; una función `enqueue_*` tiene que
   encolar de verdad (`test_enqueue_encola_de_verdad.py`).
+- **Una reserva pública sin cobro nace confirmada** (propuesta por Mateo,
+  adoptada por el dueño el 2026-10-21, D-20261020-01). Sin cobro es
+  `payment_required` falso: sin seña, seña opcional sin MP elegido o seña
+  obligatoria de importe cero. Nace `confirmed` y sin `expires_at` (como el
+  alta del panel), en vez de `pending` retenido hasta su inicio, que el job
+  de expiración levantaba si nadie lo confirmaba. El cliente recibe "turno
+  confirmado" (no "reserva registrada") y el dueño un aviso informativo,
+  `appointment.booked_online` ("Nueva reserva",
+  `jobs._booked_online_notification`), en lugar de "Confirmalo cuando
+  recibas la transferencia". La seña por
+  WhatsApp sigue igual (`pending_payment` y su aviso con plazo), y la de MP la
+  confirma el webhook. Los `pending` que ya existen no se migran: siguen
+  esperando la confirmación de la tienda o su vencimiento, y las dos
+  reprogramaciones les conservan el estado.
+  (`test_reservas_confirmadas_y_lejanas.py`,
+  `test_pg_reservas_confirmadas_y_lejanas.py`)
 - **El email de la reserva pública es opcional, salvo con `otp_booking`**
   (propuesta por Mateo el 2026-10-16, adoptada por el dueño el 2026-10-17,
   D-20261016-01; reemplaza el email obligatorio de #181). Sin email la reserva entra: un teléfono nuevo
@@ -780,9 +802,34 @@ Una instrucción en lenguaje natural no es una garantía.
   duplicado (aviso una vez por pago de MP, antes de validar el importe) y su
   `refunded` o contracargo no se aplica: sin esto, devolver el duplicado en
   MP dejaba devuelta la seña que la tienda se quedó. Cancelar y reprogramar:
-  regla 3. (`test_sena_por_mp_o_whatsapp.py`,
+  regla 3. **Una reserva lejana con seña obligatoria se cobra solo por MP**
+  (propuesta por Mateo, adoptada por el dueño el 2026-10-21, D-20261020-02;
+  `deposit_channels.py::FAR_BOOKING_DAYS`, 30): un turno cuyo día argentino
+  pasa de hoy + 30 (`is_far_booking`, por calendario local, no por horas) y
+  pide una seña obligatoria mayor a cero no se cobra por WhatsApp. Elegirlo
+  es 422 `FAR_BOOKING_REQUIRES_MERCADOPAGO`; sin MP usable
+  (`gateway_has_usable_token`) es 422 `FAR_BOOKING_UNAVAILABLE`, pague como
+  pague, con un mensaje neutro (regla 20). Los dos salen de
+  `resolve_deposit_channel`, antes de escribir nada; un servicio sin seña
+  obligatoria y el panel no cambian. El 422 `FAR_BOOKING_UNAVAILABLE` deja
+  un warning `far_booking_unavailable` y un evento a Sentry, a lo sumo uno
+  por tienda y hora (`report_far_booking_unavailable`, `OncePer`). La lista
+  de espera pública no toma una ventana que llegue a un día lejano con la
+  misma regla y el mismo código (`WaitlistService._reject_far_window`). Lo
+  anticipan al cliente: la vitrina (`/public/stores/{slug}`,
+  `deposit_far_limit_days`: 30 sin MP usable, `null` con MP; sale de la
+  config de MP leída en la MISMA sentencia que la tienda), el preview de la
+  seña (`far_booking`, `booking_blocked_code`, y `online_payment_mandatory`
+  en verdadero) y la grilla pública, que no ofrece el día lejano que el alta
+  rechazaría (`far_day_closed_by_deposit`: para un día lejano UNA sentencia
+  más, servicios + tienda + config de MP en un JOIN; un día cercano no paga
+  nada; estima la seña con el precio de lista, sin promo; las dos usan
+  `deposit_channels.far_booking_blocked`, que decide con
+  `resolve_deposit_channel`). (`test_sena_por_mp_o_whatsapp.py`,
   `test_sena_por_whatsapp_regla_3.py`, `test_pg_sena_por_whatsapp.py`,
-  `test_pg_reprogramar_sena_por_whatsapp.py`)
+  `test_pg_reprogramar_sena_por_whatsapp.py`, `test_reserva_lejana_regla.py`,
+  `test_reservas_confirmadas_y_lejanas.py`,
+  `test_pg_reservas_confirmadas_y_lejanas.py`, `test_disponibilidad_sentencias.py`)
 - **Los recordatorios tienen etapas separadas de verdad**: el piso del de 24
   horas está por encima del lead del de 2 horas, y ningún aviso al cliente
   sale sin pasar por `is_deliverable_email`. El lote reutiliza una sesión
