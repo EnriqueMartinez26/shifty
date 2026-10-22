@@ -38,6 +38,7 @@ from tests.integration.test_feature_flags_finance_and_public_privacy import (
     auth_headers,
 )
 from tests.integration.test_mails_al_cliente import Buzon
+from tests.integration.pendiente_heredado import como_pendiente_heredado
 
 
 @pytest.mark.asyncio
@@ -74,8 +75,12 @@ async def test_un_turno_confirmado_sigue_confirmado_despues_de_moverlo(
 async def test_un_turno_pendiente_sigue_pendiente_y_conserva_su_retencion(
     client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """La guarda del otro lado: mover un pendiente no lo confirma solo."""
+    """La guarda del otro lado: mover un pendiente no lo confirma solo.
+
+    El pendiente es uno de antes del 2026-10-20: desde ahi la reserva sin cobro
+    nace confirmada (decision de Mateo), pero los que ya existian siguen."""
     t, turno = await _con_turno(client, monkeypatch, "estado-pendiente")
+    await como_pendiente_heredado(test_session, turno)
     nuevo_inicio = t.slot + timedelta(hours=2)
 
     res = await client.patch(
@@ -139,8 +144,12 @@ async def test_el_panel_tampoco_devuelve_a_pendiente_un_turno_confirmado(
 async def test_el_panel_conserva_la_retencion_de_un_pendiente_del_portal(
     client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Un pendiente del portal retiene hasta su inicio; movido, hasta el nuevo."""
+    """Un pendiente del portal retiene hasta su inicio; movido, hasta el nuevo.
+
+    Un pendiente de antes del 2026-10-20 (el alta sin cobro ya nace
+    confirmada, decision de Mateo)."""
     t, turno = await _con_turno(client, monkeypatch, "panel-pendiente", otp=False)
+    await como_pendiente_heredado(test_session, turno)
     assert (await _turno(test_session, turno)).expires_at is not None
     nuevo_inicio = t.slot + timedelta(hours=2)
 

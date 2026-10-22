@@ -246,8 +246,10 @@ async def test_reprogramar_del_panel_cuerpo_filas_auditoria_outbox_y_orden(
     assert res.status_code == 200, res.text
     cuerpo = res.json()
     assert cuerpo["public_id"] != turno
+    # El alta publica sin cobro nace confirmada (decision de Mateo,
+    # 2026-10-20) y la copia conserva el estado; antes era "pending".
     assert (cuerpo["status"], cuerpo["notes"], cuerpo["staff_id"]) == (
-        "pending",
+        "confirmed",
         "Traer estudios",
         t.staff,
     )
