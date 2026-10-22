@@ -30,7 +30,8 @@
     "format:check": "prettier --check .",
     "check": "npm run format:check && npm run lint:strict && npm run typecheck && npm run dead-code && npm run test:csp",
     "test:csp": "node --test configure-analytics-csp.test.mjs",
-    "e2e": "playwright test"
+    "e2e": "node e2e/run-isolated.mjs",
+    "e2e:isolated": "node e2e/run-isolated.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.4",
