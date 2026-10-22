@@ -65,6 +65,16 @@ describe('NotificationsBell', () => {
     expect(mockMarkOne).toHaveBeenCalledWith('ntf-1')
   })
 
+  // El "hace X" se extrajo a lib/relativeTime para reusarlo en la limpieza de
+  // reservas del portal (2026-10-22): la campana sigue mostrandolo igual.
+  it('muestra cuanto paso desde cada aviso', () => {
+    jest.spyOn(Date, 'now').mockReturnValue(new Date('2026-09-28T15:00:00Z').getTime())
+    abrir()
+
+    expect(screen.getByText('hace 3 h')).toBeInTheDocument()
+    jest.restoreAllMocks()
+  })
+
   // QA movil 2026-10-08 (390 px): la campana queda a la izquierda del
   // encabezado y el panel, anclado a su borde derecho con w-80, abria en
   // left=-262px. En el telefono se ancla al ancho del encabezado.
