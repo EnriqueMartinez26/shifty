@@ -536,3 +536,29 @@ describe('PublicBooking: titulo de la pestaña', () => {
     expect(document.title).toBe('Negocio no encontrado · Shifty')
   })
 })
+
+// Review de PR #250 (2026-10-22): el portal cierra con una sola fuente de
+// color. El acento Shifty (`brand-accent`, colors2000s.orange.accent) pinta el
+// texto chico y los anillos de foco; nada de utilidades orange-* de Tailwind.
+describe('PublicBooking: acento Shifty', () => {
+  afterEach(() => {
+    mockTienda = TIENDA_SOL
+  })
+
+  it('"POWERED BY SHIFTY" usa el acento Shifty para texto chico', () => {
+    renderEn('/booking/sol')
+
+    const marca = screen.getByText('SHIFTY')
+    expect(marca).toHaveClass('text-brand-accent')
+    expect(marca.className).not.toMatch(/orange-\d+/)
+  })
+
+  it('el foco del WhatsApp del encabezado usa el acento Shifty', () => {
+    mockTienda = { ...TIENDA_SOL, data: { ...TIENDA_SOL.data, whatsapp_number: '351 555-1234' } }
+    renderEn('/booking/sol')
+
+    const link = screen.getByRole('link', { name: '351 555-1234' })
+    expect(link).toHaveClass('focus-visible:outline-brand-accent')
+    expect(link.className).not.toMatch(/orange-\d+/)
+  })
+})

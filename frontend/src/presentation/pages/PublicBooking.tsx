@@ -268,7 +268,7 @@ const PublicBooking: React.FC = () => {
             className="text-[10px] font-black uppercase tracking-widest"
             style={{ color: colors2000s.text.secondary }}
           >
-            POWERED BY <span className="text-orange-500 font-extrabold">SHIFTY</span>
+            POWERED BY <span className="text-brand-accent font-extrabold">SHIFTY</span>
           </p>
         </div>
       </div>

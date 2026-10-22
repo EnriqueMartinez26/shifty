@@ -367,7 +367,7 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
               aria-label="Anterior: mostrar los 14 días anteriores"
               onClick={() => changeDatePage(-1)}
               disabled={datePage === 0}
-              className="inline-flex min-h-11 items-center justify-center gap-1 rounded-md border px-3 py-2 text-[10px] font-black uppercase tracking-wider transition-opacity hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-500 focus-visible:ring-offset-2"
+              className="inline-flex min-h-11 items-center justify-center gap-1 rounded-md border px-3 py-2 text-[10px] font-black uppercase tracking-wider transition-opacity hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent focus-visible:ring-offset-2"
               style={{
                 background: colors2000s.bg.button,
                 borderColor: colors2000s.border.default,
@@ -387,7 +387,7 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
               }
               onClick={() => changeDatePage(1)}
               disabled={datePage === DATE_PAGE_COUNT - 1}
-              className="inline-flex min-h-11 items-center justify-center gap-1 rounded-md border px-3 py-2 text-[10px] font-black uppercase tracking-wider transition-opacity hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-500 focus-visible:ring-offset-2"
+              className="inline-flex min-h-11 items-center justify-center gap-1 rounded-md border px-3 py-2 text-[10px] font-black uppercase tracking-wider transition-opacity hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent focus-visible:ring-offset-2"
               style={{
                 background: colors2000s.bg.button,
                 borderColor: colors2000s.border.default,
@@ -460,7 +460,7 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
             role="switch"
             aria-checked={forceAll}
             onClick={() => setForceAll(!forceAll)}
-            className="min-h-11 min-w-11 px-2 flex items-center gap-2 cursor-pointer opacity-80 hover:opacity-100 transition-opacity rounded-full bg-transparent border-0 p-1 focus:outline-none focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-orange-500 focus-visible:ring-offset-2"
+            className="min-h-11 min-w-11 px-2 flex items-center gap-2 cursor-pointer opacity-80 hover:opacity-100 transition-opacity rounded-full bg-transparent border-0 p-1 focus:outline-none focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-brand-accent focus-visible:ring-offset-2"
           >
             <span className="text-[9px] font-black uppercase text-gray-500 tracking-wider">
               Ver todos
