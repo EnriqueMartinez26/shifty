@@ -330,6 +330,15 @@ test.describe('reserva pública aislada desde el celular', () => {
     expect(attempts).toBe(2)
     expect(requestBodies).toHaveLength(2)
     expect(requestBodies[0]?.idempotency_key).toBeTruthy()
-    expect(requestBodies[1]).toEqual(requestBodies[0])
+    // El reintento manda el mismo pedido y la misma clave; solo cambia el
+    // tiempo de llenado del formulario (trampa para bots, #256), que no entra
+    // en la clave de idempotencia y crece entre un intento y el otro.
+    const sinTiempo = (body: Record<string, unknown> | undefined) =>
+      Object.fromEntries(Object.entries(body ?? {}).filter(([key]) => key !== 'form_elapsed_ms'))
+    expect(sinTiempo(requestBodies[1])).toEqual(sinTiempo(requestBodies[0]))
+    expect(requestBodies[0]?.website).toBe('')
+    const [primero, segundo] = requestBodies.map((body) => Number(body.form_elapsed_ms))
+    expect(Number.isInteger(primero)).toBe(true)
+    expect(segundo).toBeGreaterThanOrEqual(primero ?? 0)
   })
 })

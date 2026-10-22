@@ -575,7 +575,7 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
             // vuelve ahi, con lo elegido.
             onEditAddons={() => onStepChange({ to: 0, from: currentStep, mode: 'push' })}
             onBooked={() => setBooked(true)}
-            onConfirm={async (paymentMethod, acceptsTerms, addons) => {
+            onConfirm={async (paymentMethod, acceptsTerms, addons, botTrap) => {
               const pedido = {
                 store_public_id: store.public_id,
                 service_id: selectedServiceId,
@@ -608,7 +608,12 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
               try {
                 confirmation = await createBooking.mutateAsync({
                   ...pedido,
-                  idempotency_key: idempotencyKey
+                  idempotency_key: idempotencyKey,
+                  // La trampa para bots (S4) va solo en el cuerpo, nunca en la
+                  // huella: el reintento tras una respuesta perdida tarda otro
+                  // tiempo y, con otra clave, crearia una segunda reserva.
+                  website: botTrap.website,
+                  form_elapsed_ms: botTrap.formElapsedMs
                 })
               } catch (error) {
                 trackBookingEvent('booking_error')
