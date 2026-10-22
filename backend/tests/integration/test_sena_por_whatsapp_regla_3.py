@@ -47,6 +47,7 @@ from tests.integration.test_feature_flags_finance_and_public_privacy import (
     auth_headers,
     webhook_signature_headers,
 )
+from tests.integration.pendiente_heredado import como_pendiente_heredado
 from tests.integration.test_mails_al_cliente import Buzon
 from tests.integration.test_payments_hardening_and_legal import _stub_preference
 from tests.integration.test_sena_por_mp_o_whatsapp import (
@@ -335,7 +336,10 @@ async def test_registrar_el_pago_de_un_turno_pasado_no_le_escribe_al_cliente(
     await test_session.commit()
     reserva = await _reservar(client, t)
     turno = reserva.json()["public_id"]
-    assert reserva.json()["status"] == "pending"
+    # Sin cobro nace confirmada (decision de Mateo, 2026-10-20): el caso es un
+    # ``pending`` de antes, que la tienda sigue registrando a mano.
+    assert reserva.json()["status"] == "confirmed"
+    await como_pendiente_heredado(test_session, turno)
     inicio = datetime.now(timezone.utc) - timedelta(hours=3)
     await test_session.execute(
         update(Appointment)

@@ -66,6 +66,7 @@ from tests.integration.test_feature_flags_finance_and_public_privacy import (
     create_staff,
     register_and_login,
 )
+from tests.integration.pendiente_heredado import como_pendiente_heredado
 from tests.integration.test_mails_al_cliente import Buzon, usar_cola_de_reservas
 from tests.integration.test_payments_hardening_and_legal import (
     _configure_gateway,
@@ -607,7 +608,7 @@ async def test_el_mail_de_reserva_registrada_dice_hasta_cuando_pagar_la_sena(
 
 
 @pytest.mark.asyncio
-async def test_sin_sena_el_mail_de_reserva_registrada_no_habla_de_plazos(
+async def test_sin_sena_el_mail_de_la_reserva_no_habla_de_plazos(
     client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     buzon = Buzon()
@@ -622,9 +623,12 @@ async def test_sin_sena_el_mail_de_reserva_registrada_no_habla_de_plazos(
     assert reserva.json()["deposit_deadline"] is None
     await cola.entregar()
 
-    cuerpo = buzon.enviados[0][2]
+    # Sin cobro nace confirmada (decision de Mateo, 2026-10-20): el mail es
+    # "turno confirmado" (antes "reserva registrada" con "Te vamos a avisar
+    # cuando esté confirmada.").
+    asunto, cuerpo = buzon.enviados[0][1], buzon.enviados[0][2]
+    assert asunto.startswith("Turno confirmado"), asunto
     assert "Tenés hasta" not in cuerpo, cuerpo
-    assert "Te vamos a avisar cuando esté confirmada." in cuerpo, cuerpo
 
 
 async def _sin_sena(session: AsyncSession, t: _Tienda) -> None:
@@ -689,6 +693,9 @@ async def test_una_retencion_vencida_sin_sena_no_avisa_como_sena(
     t = await _tienda(client, "sena-whatsapp-vence-sin-sena")
     await _sin_sena(test_session, t)
     reserva = await _reservar(client, t)
+    # Un ``pending`` de antes del 2026-10-20: el alta sin cobro ya nace
+    # confirmada (decision de Mateo) y no tiene retencion que vencer.
+    await como_pendiente_heredado(test_session, reserva.json()["public_id"])
     await _vencer(test_session, reserva.json()["public_id"])
 
     assert (await expire_unpaid_appointments(test_session))["expired"] == 1

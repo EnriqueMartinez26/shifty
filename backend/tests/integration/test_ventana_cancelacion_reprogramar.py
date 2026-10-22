@@ -85,7 +85,8 @@ async def test_reprogramar_dentro_de_la_ventana_se_rechaza(
     assert res.json()["error_code"] == "CANCELLATION_WINDOW_EXPIRED"
     # El turno original sigue vivo y no se libero el horario: sin esto el
     # cliente esquivaba la politica moviendo el turno en vez de cancelarlo.
-    assert (await _turno(test_session, turno)).status == "pending"
+    # El alta sin cobro nace confirmada (decision de Mateo, 2026-10-20).
+    assert (await _turno(test_session, turno)).status == "confirmed"
     assert await _eventos(test_session) == eventos_antes
     assert await _contar(test_session, Appointment) == turnos_antes
     # El rechazo libero la clave que ESTA peticion adquirio: un reintento del
@@ -113,7 +114,9 @@ async def test_reprogramar_fuera_de_la_ventana_sigue_andando(
 
     assert res.status_code == 200, res.text
     assert (await _turno(test_session, turno)).status == "cancelled"
-    assert (await _turno(test_session, res.json()["public_id"])).status == "pending"
+    # Conserva el estado del alta, que sin cobro nace confirmada (2026-10-20).
+    nuevo = await _turno(test_session, res.json()["public_id"])
+    assert nuevo.status == "confirmed"
     # Con exito, la MISMA clave derivada queda guardada con la respuesta: es
     # la prueba de que ``_clave_redis`` apunta a lo que el router escribe y
     # de que el ``None`` del test de rechazo significa "liberada", no
@@ -152,5 +155,5 @@ async def test_mis_turnos_y_la_api_dicen_lo_mismo(
         await test_session.scalar(
             select(Appointment.status).where(Appointment.id == turno)
         )
-        == "pending"
+        == "confirmed"  # el alta sin cobro nace confirmada (2026-10-20)
     )
