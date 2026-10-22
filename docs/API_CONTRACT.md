@@ -4124,6 +4124,7 @@ Type: `enum("efectivo", "transferencia", "mercadopago", "otro")`
 | `cancellation_hours` | integer | yes |  |
 | `description` | string \| null | no |  |
 | `cover_url` | string \| null | no |  |
+| `cover_position` | enum("top", "center", "bottom") \| null | no |  |
 | `whatsapp_number` | string \| null | no |  |
 | `website_url` | string \| null | no |  |
 | `allow_manual_coordination` | boolean | no | default=true |
@@ -4634,6 +4635,7 @@ Type: `enum("efectivo", "transferencia", "mercadopago", "otro")`
 | `logo_url` | string \| null | yes |  |
 | `primary_color` | string | yes |  |
 | `cover_url` | string \| null | no |  |
+| `cover_position` | enum("top", "center", "bottom") \| null | no |  |
 | `description` | string \| null | no |  |
 | `whatsapp_number` | string \| null | no |  |
 | `instagram_url` | string \| null | no |  |
@@ -4773,6 +4775,7 @@ Type: `enum("efectivo", "transferencia", "mercadopago", "otro")`
 | `logo_url` | string \| null | no | maxLength=500 |
 | `primary_color` | string \| null | no | pattern="^#([A-Fa-f0-9]{6}\|[A-Fa-f0-9]{3})$" |
 | `cover_url` | string \| null | no | maxLength=500 |
+| `cover_position` | enum("top", "center", "bottom") \| null | no |  |
 | `description` | string \| null | no | maxLength=2000 |
 | `whatsapp_number` | string \| null | no | maxLength=50 |
 | `instagram_url` | string \| null | no | maxLength=500 |
@@ -4981,4 +4984,4 @@ Type: `enum("admin", "staff", "receptionist", "client")`
 | `terms_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 | `privacy_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 
-Generado desde app.openapi() el 2026-10-20, commit 0dd1091a
+Generado desde app.openapi() el 2026-10-21, commit 8b15bdf8

@@ -16,6 +16,7 @@ def to_store_response(store: Store) -> StoreResponse:
         logo_url=store.logo_url,
         primary_color=store.primary_color,
         cover_url=store.cover_url,
+        cover_position=store.cover_position,
         description=store.description,
         whatsapp_number=store.whatsapp_number,
         instagram_url=store.instagram_url,
