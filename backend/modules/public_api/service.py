@@ -294,6 +294,25 @@ def require_public_availability_day(day: date) -> date:
     return day
 
 
+# Turnos futuros activos por telefono y tienda que el portal deja tomar
+# (paquete antiabuso, S2; mismo criterio que ``MAX_OPEN_ENTRIES_PER_PHONE`` de
+# la lista de espera). Cuentan todos los del cliente, los cargue quien los
+# cargue; el panel no se limita.
+MAX_FUTURE_BOOKINGS_PER_PHONE = 3
+
+
+def too_many_future_bookings() -> AppException:
+    """409 de la reserva publica de un telefono que ya tiene el tope."""
+    return AppException(
+        message=(
+            f"Ya tenés {MAX_FUTURE_BOOKINGS_PER_PHONE} turnos reservados en esta "
+            "tienda. Si necesitás otro, escribile a la tienda."
+        ),
+        http_status=status.HTTP_409_CONFLICT,
+        error_code="TOO_MANY_FUTURE_BOOKINGS",
+    )
+
+
 def booking_horizon_exceeded() -> AppException:
     """422 de una reserva o reprogramacion del portal mas alla de los 120
     dias (paquete antiabuso, D-20261022-01, propuesta por Mateo, pendiente
@@ -1160,12 +1179,24 @@ class PublicBookingService:
         idempotency_key: str,
     ) -> _Booking:
         store_id = request.store_id
-        client = await self.repo.get_or_create_client(
+        client, created = await self.repo.get_or_create_client_locked(
             store_id=store_id,
             phone=data.client_phone,
             name=data.client_name,
             email=data.client_email,
         )
+        # Tope por telefono (S2): la ficha se lockea ANTES que el profesional
+        # (orden cliente -> profesional, ver el repositorio) y el conteo corre
+        # bajo ese lock, asi dos altas simultaneas no pasan las dos. Una ficha
+        # recien creada no tiene turnos: no se cuenta.
+        if (
+            not created
+            and await self.repo.count_future_bookings(
+                store_id, client.id, datetime.now(timezone.utc)
+            )
+            >= MAX_FUTURE_BOOKINGS_PER_PHONE
+        ):
+            raise too_many_future_bookings()
         # Toma el FOR UPDATE del profesional antes de leer disponibilidad
         # (regla 4) y aplica el buffer de la tienda. El servicio ya resuelto
         # viaja (F3-03), y la retencion del slot y el consentimiento van en el

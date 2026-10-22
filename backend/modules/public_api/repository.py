@@ -33,6 +33,7 @@ from modules.legal.versions import AcceptedVersions
 from modules.payments.model import PAYMENT_PROVIDER_MERCADOPAGO, PaymentGatewayConfig
 from modules.payments.deposit_rules import ClientHistory
 from modules.payments.repository import live_charge_provider_of, paid_appointment_of
+from modules.payments.service import ACTIVE_APPOINTMENT_STATUSES
 from modules.services.model import Service, ServiceAddon
 from modules.services.selection import NO_EXTRA_SERVICES, ExtraServices
 from modules.staff.model import Staff, StaffBlock, StaffServiceModel
@@ -357,10 +358,59 @@ class PublicRepository:
         Shifty. Dentro de la tienda, un telefono nuevo con el email de otro
         cliente sigue siendo 409 neutro: no se adopta la ficha por email.
         """
+        client, _created = await self._get_or_create_client(
+            store_id, phone, name, email, lock_existing=False
+        )
+        return client
+
+    async def get_or_create_client_locked(
+        self,
+        store_id: str,
+        phone: str,
+        name: str,
+        email: str | None,
+    ) -> tuple[User, bool]:
+        """``get_or_create_client`` de la reserva publica, con la ficha que ya
+        existia LOCKEADA en la misma lectura; devuelve ``(cliente, creado)``.
+
+        Tope por telefono del portal (paquete antiabuso, S2): sin el lock, N
+        reservas simultaneas del mismo telefono contaban todas los mismos
+        turnos previos y entraban todas. Con el lock, el conteo
+        (``count_future_bookings``, otra sentencia y por eso con una foto
+        nueva de la base) y el INSERT del turno quedan serializados por
+        cliente hasta el commit del alta. Una ficha recien creada no se
+        lockea: nadie mas la ve hasta el commit, y dos altas del mismo
+        telefono nuevo las serializa ``uq_users_client_phone_per_store``.
+
+        ``FOR NO KEY UPDATE`` (``key_share=True``) y no ``FOR UPDATE``: el
+        INSERT de un turno toma ``FOR KEY SHARE`` sobre la ficha por la FK
+        ``client_id``, y ``FOR UPDATE`` lo bloquearia. El panel lockea al
+        profesional y despues inserta un turno de este cliente; con
+        ``FOR UPDATE`` aca (cliente -> profesional) y el panel (profesional ->
+        FK del cliente) se podian trabar. ``FOR NO KEY UPDATE`` no choca con
+        ``FOR KEY SHARE``, asi que el orden que vale es cliente ->
+        profesional, y ningun camino toma un profesional y despues un lock que
+        choque sobre la ficha de un cliente (la anonimizacion lockea la ficha
+        primero, como esto). En SQLite se ignora; la rafaga real vive en
+        ``tests/postgres/test_pg_tope_por_telefono.py``.
+        """
+        return await self._get_or_create_client(
+            store_id, phone, name, email, lock_existing=True
+        )
+
+    async def _get_or_create_client(
+        self,
+        store_id: str,
+        phone: str,
+        name: str,
+        email: str | None,
+        *,
+        lock_existing: bool,
+    ) -> tuple[User, bool]:
         email = normalize_email(email) if email else None
         # Dos clientes con el mismo telefono (alta vieja sin unicidad) rompian
         # con MultipleResultsFound -> 500. Se toma el mas reciente.
-        result = await self.db.execute(
+        consulta = (
             select(User)
             .where(
                 User.phone == phone,
@@ -370,10 +420,13 @@ class PublicRepository:
             .order_by(User.created_at.desc())
             .limit(1)
         )
+        if lock_existing:
+            consulta = consulta.with_for_update(key_share=True)
+        result = await self.db.execute(consulta)
         existing = result.scalars().first()
 
         if existing:
-            return existing
+            return existing, False
 
         technical_email = email or technical_client_email(phone, store_id)
         new_client = User(
@@ -386,7 +439,28 @@ class PublicRepository:
         )
         self.db.add(new_client)
         await self.db.flush()
-        return new_client
+        return new_client, True
+
+    async def count_future_bookings(
+        self, store_id: str, client_id: str, now: datetime
+    ) -> int:
+        """Turnos futuros activos del cliente en la tienda (tope del portal).
+
+        Todos, los cargue quien los cargue (portal, panel, lista de espera),
+        en un estado activo y con inicio despues de ``now``. Se llama con la
+        ficha ya lockeada (``get_or_create_client_locked``).
+        """
+        total = await self.db.scalar(
+            select(func.count())
+            .select_from(Appointment)
+            .where(
+                Appointment.store_id == store_id,
+                Appointment.client_id == client_id,
+                Appointment.status.in_(list(ACTIVE_APPOINTMENT_STATUSES)),
+                Appointment.starts_at > now,
+            )
+        )
+        return int(total or 0)
 
     async def staff_can_take_range(
         self,

@@ -867,6 +867,21 @@ Una instrucción en lenguaje natural no es una garantía.
   (`waitlist_entries.lapsed_offers`). Sin eso una cola de entradas que nunca
   reservan mataba cada cupo liberado en ofertas de 10 minutos a nadie.
   (`test_lista_de_espera_acaparamiento.py`)
+- **Reservar en el portal es anónimo, así que también tiene topes**
+  (paquete antiabuso, propuesta por Mateo el 2026-10-22, pendiente de OK del
+  dueño). Un teléfono tiene a lo sumo `MAX_FUTURE_BOOKINGS_PER_PHONE` (3)
+  turnos futuros activos (`pending`, `pending_payment`, `confirmed`) por
+  tienda al reservar desde el portal: el siguiente es 409
+  `TOO_MANY_FUTURE_BOOKINGS` antes de escribir. Cuentan todos los del
+  cliente, los cargue quien los cargue (panel y ofertas de la lista de espera
+  incluidos); el panel nunca se limita. El conteo corre bajo el lock de la
+  ficha del cliente (`FOR NO KEY UPDATE`,
+  `PublicRepository.lock_client_and_count_future_bookings`) dentro del
+  savepoint del alta y ANTES del lock del profesional: orden cliente →
+  profesional. Es `NO KEY` y no `FOR UPDATE` porque el INSERT de un turno
+  toma `FOR KEY SHARE` sobre la ficha por la FK, y el panel (profesional →
+  FK del cliente) se trababa contra un `FOR UPDATE`.
+  (`test_portal_tope_por_telefono.py`, `test_pg_tope_por_telefono.py`)
 - **Un teléfono identifica a UN cliente por tienda**: índice único parcial
   `uq_users_client_phone_per_store` (`role = 'client' AND phone IS NOT NULL`;
   el personal puede compartir el teléfono del local). La migración que lo crea
