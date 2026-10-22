@@ -9,6 +9,7 @@ Responsabilidades:
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import TYPE_CHECKING, TypedDict
@@ -32,6 +33,7 @@ from core.exceptions import (
 )
 from http import HTTPStatus
 
+from infrastructure.persistence.models.appointment import BOOKED_VIA_PANEL
 from modules.appointments.domain_service import SchedulingDomainService
 from modules.appointments.guards import (
     reject_already_cancelled,
@@ -46,11 +48,15 @@ from modules.appointments.working_hours import staff_ids_working_range
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.audit.model import AuditAction
 from modules.auth.service import normalize_email
+from modules.appointment_blocks.service import EVENT_CANCELLED_BY_BLOCK
+from modules.appointments.repository import RecentPortalRow
+from modules.appointments.schemas import RECENT_PORTAL_LIMIT
 from modules.notifications.tasks import (
     EVENT_APPOINTMENT_BOOKED_BY_PANEL,
     EVENT_APPOINTMENT_COMPLETED,
     EVENT_APPOINTMENT_CONFIRMED,
     EVENT_APPOINTMENT_RESCHEDULED,
+    build_client_details,
     is_deliverable_email,
 )
 from modules.payments.model import JsonValue, Payment, PaymentStatus
@@ -59,6 +65,7 @@ from modules.public_api.repository import PublicRepository, RangeRejection
 from modules.services.model import Service
 from modules.services.selection import rescheduled_duration
 from modules.staff.model import Staff, StaffBlock
+from modules.stores.model import Store
 from modules.users.model import User
 from modules.waitlist.events import EVENT_SLOT_RELEASED, slot_released_payload
 
@@ -87,6 +94,15 @@ class ClientBookingPayload(TypedDict, total=False):
     client_phone: str
     client_email: str | None
     allow_outside_schedule: bool
+
+
+@dataclass
+class BulkCancelResult:
+    """Lo que hizo una cancelacion en bloque: ids cancelados y salteados."""
+
+    cancelled: list[str] = field(default_factory=list)
+    # ``(id, codigo)``: el ``error_code`` de la cancelacion de a uno.
+    skipped: list[tuple[str, str]] = field(default_factory=list)
 
 
 class AppointmentService:
@@ -401,6 +417,86 @@ class AppointmentService:
         se cancela, se completa o se marca ausente (D-20260929-05, 409
         ``APPOINTMENT_ALREADY_STARTED``).
         """
+        appointment = await self._cancel_locked(
+            public_id=public_id, actor=actor, charge_reason="staff_cancel"
+        )
+        await self.uow.commit()
+
+        await invalidate_availability(
+            self.cache, appointment.store_id, appointment.starts_at
+        )
+
+        return appointment
+
+    async def bulk_cancel(
+        self, *, public_ids: list[str], reason: str | None, actor: User
+    ) -> BulkCancelResult:
+        """Cancela varios turnos de la tienda (S6, paquete antiabuso, 2026-10-22).
+
+        Cada turno pasa por el MISMO nucleo que ``cancel`` (``_cancel_locked``:
+        lock del turno, guardas, transicion por la entidad, vencimiento del
+        cobro vivo con orden turno -> pago, auditoria y cupo liberado a la
+        lista de espera) y ademas deja el aviso al cliente en el outbox, en
+        su transaccion. Solo administradores (lo exige el router).
+
+        Una transaccion por turno, con su commit (el de ``cancel``): un turno
+        que no se puede cancelar no deshace los demas. Lo que no se cancela se
+        saltea con el ``error_code`` de la cancelacion de a uno (``NOT_FOUND``
+        si no existe o es de otra tienda); las guardas levantan antes de
+        escribir nada, asi que un salteado no deja cambios pendientes. Los ids
+        se recorren ordenados: el lock de un salteado vive hasta el commit
+        siguiente, y con un orden total dos limpiezas a la vez sobre los
+        mismos turnos no se cruzan en deadlock. La disponibilidad se invalida
+        una vez al final, con todos los horarios liberados (cada dia se toca
+        una sola vez).
+        """
+        store_id = actor.store_id
+        store = await self.uow.appointments.get_store_by_id(store_id)
+        result = BulkCancelResult()
+        liberados: list[datetime] = []
+        lock_suelto = False
+        for public_id in sorted(set(public_ids)):
+            try:
+                appointment = await self._cancel_locked(
+                    public_id=public_id,
+                    actor=actor,
+                    charge_reason="bulk_cancel",
+                    audit_extra={"reason": "bulk_cancel", "cancel_reason": reason},
+                )
+            except AppointmentNotFoundException:
+                result.skipped.append((public_id, "NOT_FOUND"))
+                lock_suelto = True
+                continue
+            except AppException as exc:
+                result.skipped.append((public_id, exc.error_code))
+                lock_suelto = True
+                continue
+            self._publish_cancellation_mail(appointment, store, reason)
+            await self.uow.commit()
+            lock_suelto = False
+            result.cancelled.append(appointment.public_id)
+            liberados.append(appointment.starts_at)
+        if lock_suelto:
+            # El ultimo salteado tomo su lock: se suelta ya, no al cerrar la
+            # sesion.
+            await self.uow.rollback()
+        if liberados:
+            await invalidate_availability(self.cache, store_id, *liberados)
+        return result
+
+    async def _cancel_locked(
+        self,
+        *,
+        public_id: str,
+        actor: User,
+        charge_reason: str,
+        audit_extra: dict[str, JsonValue] | None = None,
+    ) -> Appointment:
+        """Nucleo de la cancelacion del panel, SIN commit (lo hace el llamador).
+
+        Toda guarda levanta antes de escribir: un rechazo no deja cambios
+        pendientes en la sesion (solo el lock de la fila).
+        """
         # Lock pesimista antes de leer: sin esto, dos transiciones validas
         # y distintas pueden partir del mismo estado origen (TOCTOU).
         await self.uow.appointments.lock_by_public_id(public_id, actor.store_id)
@@ -421,14 +517,17 @@ class AppointmentService:
         # El modelo valida internamente la transición (lanza excepción si
         # inválida) ANTES de tocar el cobro: un turno terminal no vence nada.
         appointment.apply_status_transition(AppointmentStatus.CANCELLED)
-        payload_after: dict[str, JsonValue] = {"status": appointment.status}
+        payload_after: dict[str, JsonValue] = {
+            "status": appointment.status,
+            **(audit_extra or {}),
+        }
         payment = await self.uow.payments.get_by_appointment_locked(
             appointment.id, actor.store_id
         )
         vencido = expire_live_charge(
             self.uow.session,
             payment,
-            reason="staff_cancel",
+            reason=charge_reason,
             released_by=actor.public_id,
         )
         if vencido is not None:
@@ -444,14 +543,47 @@ class AppointmentService:
             payload_after=payload_after,
         )
         self._publish_slot_released(appointment, reason="cancelled")
+        return appointment
 
-        await self.uow.commit()
+    def _publish_cancellation_mail(
+        self, appointment: Appointment, store: Store | None, reason: str | None
+    ) -> None:
+        """Aviso "turno cancelado por la tienda" al cliente, por el outbox.
 
-        await invalidate_availability(
-            self.cache, appointment.store_id, appointment.starts_at
+        Reusa el evento y la plantilla de la cancelacion por bloqueo
+        (``appointment.cancelled_by_block`` -> mail ``cancellation``, con
+        ``block_reason`` como "Motivo"): el lote del outbox lo despacha
+        despues de su commit (ningun mail dentro de una transaccion). Sin
+        email entregable no hay aviso.
+        """
+        if not is_deliverable_email(appointment.client_email):
+            return
+        details = build_client_details(
+            appointment, appointment.service, appointment.staff, store
+        )
+        details["client_email"] = appointment.client_email
+        details["block_reason"] = reason or ""
+        self.uow.outbox.publish(
+            store_id=appointment.store_id,
+            event_type=EVENT_CANCELLED_BY_BLOCK,
+            payload=details,
         )
 
-        return appointment
+    async def recent_portal(
+        self, *, actor: User, hours: int
+    ) -> tuple[list[RecentPortalRow], bool]:
+        """Turnos futuros activos del portal de las ultimas ``hours`` horas.
+
+        Devuelve hasta ``RECENT_PORTAL_LIMIT`` filas y si habia mas.
+        """
+        now = now_utc()
+        filas = await self.uow.appointments.list_recent_portal(
+            actor.store_id,
+            created_since=now - timedelta(hours=hours),
+            now=now,
+            limit=RECENT_PORTAL_LIMIT + 1,
+        )
+        return filas[:RECENT_PORTAL_LIMIT], len(filas) > RECENT_PORTAL_LIMIT
 
     async def confirm(self, *, public_id: str, actor: User) -> Appointment:
         """Confirma un turno (solo ADMIN o STAFF).
@@ -1064,6 +1196,7 @@ def _self_booking(
         notes=data.get("notes"),
         intake_answers=data.get("intake_answers") or {},
         idempotency_key=data.get("idempotency_key"),
+        booked_via=BOOKED_VIA_PANEL,
     )
 
 
@@ -1155,6 +1288,7 @@ def _client_booking(
         # El personal no es el cliente dando su consentimiento: el alta del
         # panel no pide ``accepts_terms`` y no inventa uno (PV-09 es del portal).
         terms_accepted_at=None,
+        booked_via=BOOKED_VIA_PANEL,
     )
 
 
@@ -1217,4 +1351,8 @@ def _rescheduled_copy(
         notes=original.notes,
         intake_answers=original.intake_answers or {},
         idempotency_key=idempotency_key,
+        # Lo movio la tienda: el turno nuevo es del panel aunque el original
+        # haya entrado por el portal (S5). "Mis turnos" conserva el origen
+        # (``public_api.service._rescheduled_copy``).
+        booked_via=BOOKED_VIA_PANEL,
     )

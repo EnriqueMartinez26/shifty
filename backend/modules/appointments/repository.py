@@ -20,7 +20,10 @@ from sqlalchemy.sql.elements import ColumnElement
 from core.database import _apply_tenant_context
 from core.keyset import before_key
 from core.utils import local_to_utc
-from infrastructure.persistence.models.appointment import MAX_APPOINTMENT_SPAN
+from infrastructure.persistence.models.appointment import (
+    BOOKED_VIA_PORTAL,
+    MAX_APPOINTMENT_SPAN,
+)
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.payments.service import ACTIVE_APPOINTMENT_STATUSES
 from modules.appointments.schemas import AppointmentFilterParams
@@ -139,6 +142,20 @@ def block_overlap(
         StaffBlock.starts_at < ends_at,
         StaffBlock.ends_at > starts_at,
     )
+
+
+class RecentPortalRow(NamedTuple):
+    """Fila de "Reservas recientes del portal" (S6, 2026-10-22)."""
+
+    id: str
+    client_name: str
+    client_phone: str | None
+    starts_at: datetime
+    created_at: datetime
+    status: str
+    extra_services_snapshot: Any
+    service_name: str
+    staff_name: str
 
 
 class AppointmentRepository:
@@ -550,6 +567,48 @@ class AppointmentRepository:
             .order_by(Appointment.starts_at.asc())
         )
         return [(row[0], row[1], row[2], row[3]) for row in result.all()]
+
+    async def list_recent_portal(
+        self,
+        store_id: str,
+        *,
+        created_since: datetime,
+        now: datetime,
+        limit: int,
+    ) -> list[RecentPortalRow]:
+        """Turnos futuros activos del portal creados desde ``created_since``.
+
+        El mas nuevo primero (desempata por id). ``store_id`` explicito ademas
+        de RLS (CLAUDE.md §2): con la cota ``starts_at > now`` lo recorre
+        ``ix_appointments_store_starts_at`` sobre la agenda futura de la
+        tienda, que el portal acota a 120 dias. Sin indice propio: lo pide un
+        administrador a mano, no es una consulta caliente.
+        """
+        res = await self.db.execute(
+            select(
+                Appointment.id,
+                Appointment.client_name,
+                Appointment.client_phone,
+                Appointment.starts_at,
+                Appointment.created_at,
+                Appointment.status,
+                Appointment.extra_services_snapshot,
+                Service.name,
+                Staff.display_name,
+            )
+            .join(Service, Appointment.service_id == Service.id)
+            .join(Staff, Appointment.staff_id == Staff.id)
+            .where(
+                Appointment.store_id == store_id,
+                Appointment.booked_via == BOOKED_VIA_PORTAL,
+                Appointment.status.in_(sorted(ACTIVE_APPOINTMENT_STATUSES)),
+                Appointment.starts_at > now,
+                Appointment.created_at >= created_since,
+            )
+            .order_by(Appointment.created_at.desc(), Appointment.id.desc())
+            .limit(limit)
+        )
+        return [RecentPortalRow(*row) for row in res.all()]
 
     # ------------------------------------------------------------------
     # Búsqueda avanzada con filtros dinámicos
