@@ -167,10 +167,11 @@ describe('campos de los modales SuperAdmin', () => {
       'Slug',
       'Color principal',
       'Código hexadecimal del color principal',
-      'Logo URL',
       'Horas de cancelación',
       'Buffer (minutos)'
     ])
+    // 2026-10-21 (S2b): el logo lo sube la tienda; la CSP no carga URLs externas.
+    expect(screen.queryByLabelText('Logo URL')).not.toBeInTheDocument()
 
     rerender(
       <StoreModals

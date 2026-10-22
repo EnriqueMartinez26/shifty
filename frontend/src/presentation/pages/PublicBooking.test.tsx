@@ -17,7 +17,10 @@ const TIENDA_SOL = {
     public_id: 'store-1',
     name: 'Peluqueria Sol',
     slug: 'sol',
-    description: null,
+    description: null as string | null,
+    logo_url: null as string | null,
+    cover_url: null as string | null,
+    primary_color: '#000000',
     whatsapp_number: null as string | null,
     deposit_policy: null as string | null
   },
@@ -168,6 +171,58 @@ describe('PublicBooking: WhatsApp de la tienda', () => {
   })
 })
 
+// 2026-10-21 (S1, S2): el encabezado decia "Reservar turno" sobre un icono
+// generico; ahora es la tienda (logo, nombre, WhatsApp) con su portada.
+describe('PublicBooking: encabezado y portada de la tienda', () => {
+  const conTienda = (data: Partial<typeof TIENDA_SOL.data>) => {
+    mockTienda = { ...TIENDA_SOL, data: { ...TIENDA_SOL.data, ...data } }
+  }
+
+  afterEach(() => {
+    mockTienda = TIENDA_SOL
+  })
+
+  it('el titulo principal es el nombre de la tienda, no "Reservar turno"', () => {
+    renderEn('/booking/sol')
+
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Peluqueria Sol')
+    expect(screen.queryByText('Reservar turno')).not.toBeInTheDocument()
+  })
+
+  it('muestra el logo y la portada que subio la tienda', () => {
+    conTienda({ logo_url: '/media/logo.png', cover_url: '/media/cover.webp' })
+    const { container } = renderEn('/booking/sol')
+
+    expect(screen.getByRole('img', { name: 'Logo de Peluqueria Sol' })).toHaveAttribute(
+      'src',
+      '/media/logo.png'
+    )
+    expect(container.querySelector('img[src="/media/cover.webp"]')).toHaveAttribute('alt', '')
+  })
+
+  it('sin logo ni portada usa la inicial y la franja con el color de la tienda', () => {
+    conTienda({ primary_color: '#123456' })
+    renderEn('/booking/sol')
+
+    expect(screen.getByText('P').style.background).toBe('rgb(18, 52, 86)')
+    expect(screen.getByTestId('store-cover-band').style.background).toBe('rgb(18, 52, 86)')
+  })
+
+  it('sin WhatsApp no dice "Reserva por web disponible"', () => {
+    renderEn('/booking/sol')
+
+    expect(screen.queryByText('Reserva por web disponible')).not.toBeInTheDocument()
+  })
+
+  it('la descripcion y el wizard siguen debajo', () => {
+    conTienda({ description: 'Cortes y color en el centro.' })
+    renderEn('/booking/sol')
+
+    expect(screen.getByText('Cortes y color en el centro.')).toBeInTheDocument()
+    expect(screen.getByText('Wizard de reserva')).toBeInTheDocument()
+  })
+})
+
 describe('PublicBooking: objetivos táctiles', () => {
   it('expone el contenido de la reserva dentro de un landmark principal', () => {
     renderEn('/booking/sol')
@@ -178,7 +233,9 @@ describe('PublicBooking: objetivos táctiles', () => {
   it('mantiene Mis turnos y los enlaces legales con altura mínima de 44 px', () => {
     renderEn('/booking/sol')
 
-    expect(screen.getByRole('link', { name: 'Mis turnos' })).toHaveClass('min-h-11')
+    const misTurnos = screen.getByRole('link', { name: 'Mis turnos' })
+    expect(misTurnos).toHaveClass('min-h-11')
+    expect(misTurnos).toHaveAttribute('href', '/b/sol/mis-turnos')
     expect(screen.getByRole('link', { name: 'Términos y condiciones' })).toHaveClass('min-h-11')
     expect(screen.getByRole('link', { name: 'Privacidad' })).toHaveClass('min-h-11')
   })

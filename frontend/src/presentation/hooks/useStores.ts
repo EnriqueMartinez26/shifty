@@ -58,12 +58,18 @@ export const useUpdateStoreFeatureFlags = () => {
   })
 }
 
-export const useUploadStoreLogo = () => {
+const useUploadStoreImage = (upload: (file: File) => Promise<StoreMediaUploadResult>) => {
   const queryClient = useQueryClient()
   return useMutation<StoreMediaUploadResult, Error, File>({
-    mutationFn: (file) => storeSettingsService.uploadLogo(file),
+    mutationFn: upload,
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['store-settings'] })
     }
   })
 }
+
+export const useUploadStoreLogo = () =>
+  useUploadStoreImage((file) => storeSettingsService.uploadLogo(file))
+
+export const useUploadStoreCover = () =>
+  useUploadStoreImage((file) => storeSettingsService.uploadCover(file))

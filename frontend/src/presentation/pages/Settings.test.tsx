@@ -52,13 +52,15 @@ let storeQuery: { data?: StoreSettings; isLoading: boolean; error: unknown } = {
   error: null
 }
 const idleMutation = { mutateAsync: jest.fn(), isPending: false }
+const coverMutation = { mutateAsync: jest.fn(), isPending: false }
 
 jest.mock('../hooks/useStores', () => ({
   useStoreSettings: () => storeQuery,
   useStoreFeatureFlags: () => ({ data: undefined }),
   useUpdateStoreSettings: () => ({ mutateAsync: updateStore, isPending: false }),
   useUpdateStoreFeatureFlags: () => ({ mutateAsync: updateFeatureFlags, isPending: false }),
-  useUploadStoreLogo: () => idleMutation
+  useUploadStoreLogo: () => idleMutation,
+  useUploadStoreCover: () => coverMutation
 }))
 
 jest.mock('../hooks/usePayments', () => ({
@@ -202,6 +204,90 @@ describe('SettingsPage - logo', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('La imagen supera el máximo de 1 MB.')
     expect(idleMutation.mutateAsync).not.toHaveBeenCalled()
   })
+
+  it('un logo valido se sube y Guardar manda su URL', async () => {
+    storeQuery = { data: store, isLoading: false, error: null }
+    idleMutation.mutateAsync.mockReset().mockResolvedValue({ url: '/media/logo.png' })
+    coverMutation.mutateAsync.mockReset()
+    updateStore.mockReset().mockResolvedValue(store)
+    renderSettings()
+    const png = new File([new Uint8Array(512 * 1024)], 'logo.png', { type: 'image/png' })
+
+    fireEvent.change(screen.getByLabelText('Subir logo'), { target: { files: [png] } })
+
+    expect(await screen.findByRole('img', { name: 'Logo' })).toHaveAttribute(
+      'src',
+      '/media/logo.png'
+    )
+    expect(idleMutation.mutateAsync).toHaveBeenCalledWith(png)
+    expect(coverMutation.mutateAsync).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Guardar Cambios' }))
+    expect(updateStore).toHaveBeenCalledWith({ logo_url: '/media/logo.png' })
+  })
+})
+
+// 2026-10-21 (S2): la portada era un campo de URL que la CSP de produccion no
+// deja cargar; ahora se sube como el logo, con el tope de IMAGE_CAPS["cover"].
+describe('SettingsPage - portada', () => {
+  beforeEach(() => {
+    storeQuery = { data: store, isLoading: false, error: null }
+    idleMutation.mutateAsync.mockReset()
+    coverMutation.mutateAsync.mockReset().mockResolvedValue({ url: '/media/cover.webp' })
+    updateStore.mockReset().mockResolvedValue(store)
+  })
+
+  const elegirPortada = (file: File) =>
+    fireEvent.change(screen.getByLabelText('Subir portada'), { target: { files: [file] } })
+
+  it('rechaza en el cliente una portada de 2,5 MB (el backend admite 2 MB)', () => {
+    renderSettings()
+
+    elegirPortada(
+      new File([new Uint8Array(2.5 * 1024 * 1024)], 'portada.png', { type: 'image/png' })
+    )
+
+    expect(screen.getByRole('alert')).toHaveTextContent('La imagen supera el máximo de 2 MB.')
+    expect(coverMutation.mutateAsync).not.toHaveBeenCalled()
+  })
+
+  it('rechaza un formato que no es PNG, JPEG ni WebP', () => {
+    renderSettings()
+
+    elegirPortada(new File(['gif'], 'portada.gif', { type: 'image/gif' }))
+
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Formato no permitido. Usá PNG, JPEG o WebP.'
+    )
+    expect(coverMutation.mutateAsync).not.toHaveBeenCalled()
+  })
+
+  it('una portada de 1,5 MB se sube, se ve y Guardar manda su URL', async () => {
+    renderSettings()
+    const webp = new File([new Uint8Array(1.5 * 1024 * 1024)], 'portada.webp', {
+      type: 'image/webp'
+    })
+
+    elegirPortada(webp)
+
+    expect(await screen.findByRole('img', { name: 'Portada' })).toHaveAttribute(
+      'src',
+      '/media/cover.webp'
+    )
+    expect(coverMutation.mutateAsync).toHaveBeenCalledWith(webp)
+    expect(idleMutation.mutateAsync).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Guardar Cambios' }))
+    expect(updateStore).toHaveBeenCalledWith({ cover_url: '/media/cover.webp' })
+  })
+
+  it('si la subida falla lo dice debajo de la portada', async () => {
+    coverMutation.mutateAsync.mockReset().mockRejectedValue(new Error('500'))
+    renderSettings()
+
+    elegirPortada(new File(['png'], 'portada.png', { type: 'image/png' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('No se pudo subir la imagen')
+    expect(screen.getByRole('button', { name: 'Guardar Cambios' })).toBeDisabled()
+  })
 })
 
 describe('SettingsPage - slug repetido (409)', () => {
@@ -331,6 +417,9 @@ describe('SettingsPage - tienda suspendida (FF-15)', () => {
     const logo = container.querySelector<HTMLInputElement>('input[type="file"]')
     expect(logo).toBeDisabled()
     expectBlocked(logo?.closest('label') ?? null)
+    const portada = screen.getByLabelText('Subir portada')
+    expect(portada).toBeDisabled()
+    expectBlocked(portada.closest('label'))
 
     fireEvent.click(screen.getByRole('button', { name: 'Funciones' }))
     const switches = screen.getAllByRole('switch')
