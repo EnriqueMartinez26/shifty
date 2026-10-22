@@ -248,6 +248,7 @@ async def update_my_store(
     theme_keys = (
         "business_type",
         "cover_url",
+        "cover_position",
         "description",
         "whatsapp_number",
         "instagram_url",
