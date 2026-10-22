@@ -88,4 +88,16 @@ describe('Manual', () => {
       expect(control).toHaveClass('focus-visible:outline-[#9a4507]')
     })
   })
+
+  // S6 antiabuso (2026-10-22): la limpieza de reservas del portal se explica
+  // junto a la agenda, donde vive el resto del trabajo sobre turnos.
+  it('explica como cancelar reservas sospechosas del portal', () => {
+    renderManual()
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Tu agenda día a día' }))
+
+    const panel = screen.getByRole('tabpanel')
+    within(panel).getByRole('heading', { name: 'Limpiar reservas sospechosas del portal' })
+    expect(panel).toHaveTextContent('Reservas del portal')
+  })
 })

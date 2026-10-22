@@ -85,6 +85,7 @@ jest.mock('./presentation/pages/Ledger', () => mockPage('Ledger'))
 jest.mock('./presentation/pages/Services', () => mockPage('Services'))
 jest.mock('./presentation/pages/Staff', () => mockPage('Staff'))
 jest.mock('./presentation/pages/Waitlist', () => mockPage('Waitlist'))
+jest.mock('./presentation/pages/PortalBookings', () => mockPage('PortalBookings'))
 jest.mock('./presentation/pages/SuperAdmin', () => mockPage('SuperAdmin'))
 jest.mock('./presentation/pages/Users', () => mockPage('Users'))
 jest.mock('./presentation/pages/PublicBooking', () => mockPage('PublicBooking'))
@@ -134,6 +135,12 @@ const RUTAS_PANEL: RutaPanel[] = [
   { ruta: '/dashboard/manual', permitidos: TODOS, marcadores: [...PANEL_ADMIN, 'page:Manual'] },
   { ruta: '/dashboard/calendar', permitidos: TODOS, marcadores: [...PANEL_ADMIN, 'page:Calendar'] },
   { ruta: '/dashboard/waitlist', permitidos: TODOS, marcadores: [...PANEL_ADMIN, 'page:Waitlist'] },
+  {
+    // Limpieza de reservas del portal: solo el dueño o un administrador.
+    ruta: '/dashboard/portal-bookings',
+    permitidos: ADMIN_SUPER,
+    marcadores: [...PANEL_ADMIN, 'page:PortalBookings']
+  },
   {
     ruta: '/dashboard/reports',
     permitidos: ADMIN_SUPER_PRO,

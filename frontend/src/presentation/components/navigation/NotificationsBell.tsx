@@ -9,17 +9,7 @@ import {
   useNotifications
 } from '../../hooks/useNotifications'
 import { notifyError } from '../../lib/notify'
-
-const formatRelative = (isoDate: string): string => {
-  const created = new Date(isoDate).getTime()
-  if (Number.isNaN(created)) return ''
-  const minutes = Math.floor((Date.now() - created) / 60000)
-  if (minutes < 1) return 'recién'
-  if (minutes < 60) return `hace ${minutes} min`
-  const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `hace ${hours} h`
-  return `hace ${Math.floor(hours / 24)} d`
-}
+import { formatRelative } from '../../lib/relativeTime'
 
 const NotificationsBell: React.FC = () => {
   const [isOpen, setIsOpen] = React.useState(false)

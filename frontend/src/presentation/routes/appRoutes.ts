@@ -41,6 +41,7 @@ const LedgerPage = lazy(() => import('../pages/Ledger'))
 const ServicesPage = lazy(() => import('../pages/Services'))
 const StaffPage = lazy(() => import('../pages/Staff'))
 const WaitlistPage = lazy(() => import('../pages/Waitlist'))
+const PortalBookingsPage = lazy(() => import('../pages/PortalBookings'))
 const SuperAdminPage = lazy(() => import('../pages/SuperAdmin'))
 const UsersPage = lazy(() => import('../pages/Users'))
 const PublicBookingPage = lazy(() => import('../pages/PublicBooking'))
@@ -66,6 +67,7 @@ export const SESSION_ROUTES: AppRoute[] = [
       { path: 'manual', page: ManualPage },
       { path: 'calendar', page: CalendarPage },
       { path: 'waitlist', page: WaitlistPage },
+      { path: 'portal-bookings', page: PortalBookingsPage, access: ROLES_ADMIN_SUPER },
       { path: 'reports', page: ReportsPage, access: ROLES_ADMIN_SUPER_PRO },
       {
         path: 'payments',
