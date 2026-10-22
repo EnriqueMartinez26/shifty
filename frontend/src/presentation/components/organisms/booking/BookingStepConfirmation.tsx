@@ -1085,6 +1085,8 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
         storeSlug={storeSlug}
         storeName={storeName}
         whatsappNumber={whatsappNumber}
+        // Diseño previo (S7): los servicios del turno, del catalogo ya cargado.
+        bookedServices={selectedServices}
       />
     )
   }

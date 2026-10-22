@@ -2226,3 +2226,69 @@ describe('BookingStepConfirmation: confirmación compacta (S5)', () => {
     expect(onPromotionCodeChange).toHaveBeenLastCalledWith('', null)
   })
 })
+
+describe('BookingStepConfirmation: diseño previo (S7)', () => {
+  beforeEach(() => {
+    mockDepositPreview.mockReset()
+    mockServices.mockReset()
+    mockDepositPreview.mockReturnValue({
+      isLoading: false,
+      data: {
+        amount: 0,
+        base_amount: 0,
+        extra_percent: 0,
+        reasons: [],
+        price: 5000,
+        addons_amount: 0,
+        payments_enabled: false,
+        online_payment_mandatory: false
+      }
+    })
+  })
+
+  const servicio = (patch: Record<string, unknown> = {}) => ({
+    public_id: 'svc-1',
+    name: 'Uñas esculpidas',
+    price: 5000,
+    duration_minutes: 60,
+    deposit_mode: 'none',
+    deposit_type: 'percent',
+    deposit_amount: null,
+    addons: [],
+    ...patch
+  })
+
+  const reservar = async (catalogo: unknown[]) => {
+    mockServices.mockReturnValue({ data: catalogo, isLoading: false })
+    render(
+      <BookingStepConfirmation
+        {...props({
+          whatsappNumber: '11 5555 0303',
+          bookingState: estado({
+            client: cliente({ name: 'Lucia', phone: '1155550101', email: 'lucia@example.com' })
+          })
+        })}
+      />
+    )
+    aceptarTerminos()
+    fireEvent.click(botonReservar())
+    await waitFor(() => expect(screen.getByText('Reserva Confirmada')).toBeInTheDocument())
+  }
+
+  it('un servicio reservado con la opcion lleva el boton del diseño a la pantalla de exito', async () => {
+    await reservar([
+      servicio({ requires_prior_design: true, prior_design_message: 'Mandame una foto' })
+    ])
+
+    expect(screen.getByText('Mandame una foto')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Enviar mi diseño por WhatsApp' })).toBeInTheDocument()
+  })
+
+  it('un servicio sin la opcion no muestra el boton del diseño', async () => {
+    await reservar([servicio()])
+
+    expect(
+      screen.queryByRole('link', { name: 'Enviar mi diseño por WhatsApp' })
+    ).not.toBeInTheDocument()
+  })
+})

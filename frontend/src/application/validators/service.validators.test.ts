@@ -329,3 +329,30 @@ describe('adicionales en el alta y la edicion', () => {
     ])
   })
 })
+
+describe('diseño previo en el alta y la edicion (S7)', () => {
+  it('el alta sin la opcion no pide diseño previo', () => {
+    const parsed = createServiceSchema.parse(minimo)
+    expect(parsed.requires_prior_design).toBe(false)
+    expect(parsed.prior_design_message).toBeUndefined()
+  })
+
+  it('un mensaje de 500 caracteres pasa en el alta y en el PATCH', () => {
+    const prior_design_message = 'a'.repeat(500)
+    expect(issuesDe({ ...minimo, requires_prior_design: true, prior_design_message })).toEqual([])
+    expect(updateServiceSchema.safeParse({ prior_design_message }).success).toBe(true)
+  })
+
+  it('un mensaje de 501 caracteres se rechaza con el motivo', () => {
+    const prior_design_message = 'a'.repeat(501)
+    expect(issuesDe({ ...minimo, prior_design_message })).toEqual([
+      ['prior_design_message', 'El mensaje del diseño previo no puede superar los 500 caracteres']
+    ])
+    expect(updateServiceSchema.safeParse({ prior_design_message }).success).toBe(false)
+  })
+
+  it('el PATCH acepta null para borrar el mensaje pero no para la opcion', () => {
+    expect(updateServiceSchema.safeParse({ prior_design_message: null }).success).toBe(true)
+    expect(updateServiceSchema.safeParse({ requires_prior_design: null }).success).toBe(false)
+  })
+})

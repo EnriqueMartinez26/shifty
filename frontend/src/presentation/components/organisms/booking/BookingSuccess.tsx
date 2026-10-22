@@ -4,7 +4,7 @@ import { Briefcase, Calendar, Check, Clock, ExternalLink, UserRound } from 'luci
 
 import { formatAddonLabel } from '@domain/value-objects/AddonSelection'
 
-import type { BookingConfirmation } from '@application/services/PublicBookingService'
+import type { BookingConfirmation, PublicService } from '@application/services/PublicBookingService'
 
 import {
   formatArgentinaDateDisplay,
@@ -16,6 +16,7 @@ import { asSafeHttpsUrl } from '@shared/utils/safeUrl'
 import { buildWaMeUrl } from '@shared/utils/whatsAppPhone'
 
 import { BookingNoEmailActions, bookedSummary } from './BookingNoEmailActions'
+import { BookingPriorDesign, WhatsAppLinkButton } from './BookingPriorDesign'
 import type { BookingWizardState } from './types'
 import { colors2000s } from '../../../../theme/colors'
 import { brandColor, brandCtaStyle } from '../../../lib/brandTheme'
@@ -33,11 +34,11 @@ const PAYMENT_STATUS_LABELS: Record<string, string> = {
 const paymentStatusLabel = (status: string | null | undefined): string =>
   status ? (PAYMENT_STATUS_LABELS[status] ?? status) : 'pendiente'
 
-/** "sábado 12/10 a las 15:00" en hora argentina, o null si no hay plazo. */
-const deadlineLabel = (deadline: string | null | undefined): string | null => {
-  if (!deadline) return null
-  const day = formatArgentinaDayHeading(deadline)
-  const time = formatArgentinaTime(deadline)
+/** "sábado 12/10 a las 15:00" en hora argentina, o null si no hay instante. */
+const whenLabel = (instant: string | null | undefined): string | null => {
+  if (!instant) return null
+  const day = formatArgentinaDayHeading(instant)
+  const time = formatArgentinaTime(instant)
   return day && time ? `${day} a las ${time}` : null
 }
 
@@ -94,6 +95,11 @@ interface BookingSuccessProps {
   storeSlug?: string
   storeName: string
   whatsappNumber?: string | null
+  /**
+   * Servicios del turno (principal y sumados) segun el catalogo publico: de
+   * aca sale si alguno pide diseño previo (S7). Sin ellos no se muestra.
+   */
+  bookedServices?: readonly Pick<PublicService, 'requires_prior_design' | 'prior_design_message'>[]
 }
 
 /** Pantalla de exito de la reserva; BookingStepConfirmation decide cuando se muestra. */
@@ -102,14 +108,15 @@ export const BookingSuccess: React.FC<BookingSuccessProps> = ({
   bookingState,
   storeSlug,
   storeName,
-  whatsappNumber
+  whatsappNumber,
+  bookedServices = []
 }) => {
   const detailsHeadingId = useId()
   // Seña obligatoria que se paga por WhatsApp (decision de Mateo, 2026-10-03):
   // el canal viene explicito en la respuesta (antes se inferia de la falta de
   // link). La tienda la confirma a mano cuando le pagan, hasta el plazo.
   const isWhatsappDeposit = confirmation.deposit_channel === 'whatsapp'
-  const whatsappDeadline = isWhatsappDeposit ? deadlineLabel(confirmation.deposit_deadline) : null
+  const whatsappDeadline = isWhatsappDeposit ? whenLabel(confirmation.deposit_deadline) : null
   const depositLabel = confirmation.payment_amount
     ? formatCurrency(Number(confirmation.payment_amount))
     : null
@@ -367,21 +374,7 @@ export const BookingSuccess: React.FC<BookingSuccessProps> = ({
       )}
 
       {whatsappHref && !confirmation.payment_link && (
-        <a
-          href={whatsappHref}
-          target="_blank"
-          rel="noreferrer"
-          className="w-full mt-6 font-black py-4 rounded-xl transition-all uppercase tracking-widest text-xs border cursor-pointer select-none inline-flex items-center justify-center gap-2"
-          style={{
-            background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
-            borderColor: colors2000s.border.default,
-            color: brandColor.ink,
-            boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`
-          }}
-        >
-          Coordinar el pago por WhatsApp
-          <ExternalLink className="w-4 h-4" />
-        </a>
+        <WhatsAppLinkButton href={whatsappHref}>Coordinar el pago por WhatsApp</WhatsAppLinkButton>
       )}
 
       {isWhatsappDeposit && !whatsappHref && (
@@ -389,6 +382,16 @@ export const BookingSuccess: React.FC<BookingSuccessProps> = ({
           Comunicate con {storeName} para pagar la seña.
         </p>
       )}
+
+      {/* S7: el diseño va por WhatsApp en cualquier rama; el pago no cambia. */}
+      <BookingPriorDesign
+        services={bookedServices}
+        confirmation={confirmation}
+        clientName={confirmation.client_name?.trim() || bookingState.client.name}
+        when={whenLabel(confirmation.starts_at)}
+        storeName={storeName}
+        whatsappNumber={whatsappNumber}
+      />
 
       {withoutEmail && (
         <BookingNoEmailActions
