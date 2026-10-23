@@ -11,7 +11,7 @@ import { useManagedServices } from '@presentation/hooks/useManagedServices'
 
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
 
-import { colors2000s, buttonStyles2000s, orangeCtaGradient } from '../../../theme/colors'
+import { colors2000s, buttonStyles2000s } from '../../../theme/colors'
 import { create2000sModalInputStyle, create2000sModalSurfaceStyle } from '../../lib/surfaceStyles'
 import type { StaffFormValues } from '../../types/forms'
 
@@ -201,8 +201,8 @@ export const StaffFormModal: React.FC<StaffFormModalProps> = ({
                 <div
                   className="w-8 h-8 rounded-md flex items-center justify-center shadow-md"
                   style={{
-                    background: 'linear-gradient(180deg, #3b82f6 0%, #2563eb 100%)',
-                    color: 'white'
+                    background: `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`,
+                    color: colors2000s.text.onOrangeSelection
                   }}
                 >
                   <User size={16} />
@@ -246,7 +246,9 @@ export const StaffFormModal: React.FC<StaffFormModalProps> = ({
                             ? colors2000s.orange.dark
                             : colors2000s.border.default,
                         background:
-                          formData.kind === kind ? orangeCtaGradient : colors2000s.bg.button,
+                          formData.kind === kind
+                            ? `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`
+                            : colors2000s.bg.button,
                         color:
                           formData.kind === kind
                             ? colors2000s.text.onOrangeSelection
@@ -357,7 +359,7 @@ export const StaffFormModal: React.FC<StaffFormModalProps> = ({
                   className="w-8 h-8 rounded-md flex items-center justify-center shadow-md"
                   style={{
                     background: `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`,
-                    color: 'white'
+                    color: colors2000s.text.onOrangeSelection
                   }}
                 >
                   <Briefcase size={16} />

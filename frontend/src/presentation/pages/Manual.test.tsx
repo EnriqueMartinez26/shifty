@@ -85,7 +85,7 @@ describe('Manual', () => {
 
     controls.forEach((control) => {
       expect(control).toHaveClass('min-h-11')
-      expect(control).toHaveClass('focus-visible:outline-[#9a4507]')
+      expect(control).toHaveClass('focus-visible:outline-[#c65300]')
     })
   })
 

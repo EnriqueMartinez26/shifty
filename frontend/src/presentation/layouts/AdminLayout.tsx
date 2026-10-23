@@ -157,7 +157,7 @@ const AdminLayout: React.FC = () => {
             <div>
               <h1
                 className="text-xl sm:text-2xl font-bold tracking-tight mb-1"
-                style={{ color: colors2000s.orange.accent }}
+                style={{ color: colors2000s.orange.dark }}
               >
                 Bienvenido de nuevo
               </h1>

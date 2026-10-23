@@ -160,7 +160,7 @@ export const StaffManagementContainer: React.FC = () => {
           type="search"
           aria-label="Buscar profesional o recurso"
           placeholder="BUSCAR PROFESIONAL..."
-          className="w-full pl-12 pr-4 py-3.5 rounded-2xl font-black uppercase tracking-widest text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#9a4507]"
+          className="w-full pl-12 pr-4 py-3.5 rounded-2xl font-black uppercase tracking-widest text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#c65300]"
           style={{
             background: 'white',
             border: `1px solid ${colors2000s.border.default}`,

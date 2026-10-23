@@ -20,7 +20,7 @@ import { addonsTotalOf, type ServiceAddonsGroup } from './addonGroups'
 import { BookingAddonsPicker } from './BookingAddonsPicker'
 import { BookingServicesBar } from './BookingServicesBar'
 import { colors2000s } from '../../../../theme/colors'
-import { brandColor, brandGlowShadow } from '../../../lib/brandTheme'
+import { brandCtaStyle, brandColor, brandGlowShadow } from '../../../lib/brandTheme'
 import { createBookingChoiceCardStyle } from '../../../lib/surfaceStyles'
 
 /** Elegir varios servicios para un mismo turno (`multi_service_booking`). */
@@ -207,20 +207,45 @@ export const BookingStepService: React.FC<BookingStepServiceProps> = ({
   multiService,
   addons
 }) => {
-  const { data: services, isLoading } = usePublicServices(storePublicId)
+  const {
+    data: services,
+    isError,
+    isFetching,
+    isLoading,
+    refetch
+  } = usePublicServices(storePublicId)
   // Base de los ids de cada contador, para asociarlo a su tarjeta.
   const addonsIdBase = useId()
 
   if (isLoading) {
     return (
-      <div className="flex flex-col items-center justify-center h-48">
-        <Loader2
-          className="w-8 h-8 animate-spin mb-4"
-          style={{ color: colors2000s.text.secondary }}
-        />
-        <p className="text-sm font-black text-gray-500 uppercase tracking-widest">
-          Cargando servicios...
-        </p>
+      <div className="space-y-4">
+        <div className="mb-6">
+          <h2
+            className="text-2xl font-black uppercase tracking-tight"
+            style={{ color: colors2000s.text.primary }}
+          >
+            ¿Qué servicio necesitás?
+          </h2>
+          <p className="text-sm font-bold text-gray-500">
+            Estamos cargando las opciones del negocio.
+          </p>
+        </div>
+        <div
+          role="status"
+          aria-live="polite"
+          aria-busy="true"
+          className="flex h-40 flex-col items-center justify-center"
+        >
+          <Loader2
+            aria-hidden="true"
+            className="w-8 h-8 animate-spin mb-4"
+            style={{ color: colors2000s.text.secondary }}
+          />
+          <p className="text-sm font-black text-gray-500 uppercase tracking-widest">
+            Cargando servicios...
+          </p>
+        </div>
       </div>
     )
   }
@@ -254,11 +279,81 @@ export const BookingStepService: React.FC<BookingStepServiceProps> = ({
         <p className="text-sm font-bold text-gray-500">
           {multiService
             ? 'Elegí uno o más servicios para el mismo turno y tocá Continuar.'
-            : 'Elegí una opción para continuar.'}
+            : addons && services?.some((service) => (service.addons?.length ?? 0) > 0)
+              ? 'Elegí un servicio; si ofrece adicionales, podés sumarlos antes de continuar.'
+              : 'Elegí un servicio y avanzás automáticamente.'}
         </p>
       </div>
 
       <div className="grid gap-4">
+        {isError && services === undefined && (
+          <div
+            role="alert"
+            className="flex flex-col items-start gap-3 rounded-md border-2 p-4 sm:flex-row sm:items-center sm:justify-between"
+            style={{
+              background: colors2000s.status.danger.bg,
+              borderColor: colors2000s.status.danger.border,
+              color: colors2000s.status.danger.text
+            }}
+          >
+            <p className="text-sm font-bold">
+              No pudimos cargar los servicios. Revisá tu conexión e intentá nuevamente.
+            </p>
+            <button
+              type="button"
+              onClick={() => void refetch()}
+              disabled={isFetching}
+              className="min-h-11 shrink-0 rounded-md px-4 py-2 text-xs font-black uppercase tracking-widest disabled:opacity-50"
+              style={brandCtaStyle}
+            >
+              {isFetching ? 'Reintentando…' : 'Reintentar'}
+            </button>
+          </div>
+        )}
+
+        {isError && services !== undefined && (
+          <div
+            role="status"
+            aria-live="polite"
+            className="flex flex-col items-start gap-3 rounded-md border p-3 sm:flex-row sm:items-center sm:justify-between"
+            style={{
+              background: colors2000s.status.warning.bg,
+              borderColor: colors2000s.status.warning.border,
+              color: colors2000s.status.warning.text
+            }}
+          >
+            <p className="text-sm font-bold">
+              {services.length > 0
+                ? 'No pudimos actualizar el catálogo. Podés seguir con los servicios cargados.'
+                : 'No pudimos actualizar el catálogo y no hay servicios disponibles para reservar.'}
+            </p>
+            <button
+              type="button"
+              onClick={() => void refetch()}
+              disabled={isFetching}
+              className="min-h-11 shrink-0 rounded-md px-4 py-2 text-xs font-black uppercase tracking-widest disabled:opacity-50"
+              style={brandCtaStyle}
+            >
+              {isFetching ? 'Actualizando…' : 'Reintentar'}
+            </button>
+          </div>
+        )}
+
+        {!isError && services !== undefined && catalog.length === 0 && (
+          <div
+            role="status"
+            aria-live="polite"
+            className="rounded-md border p-4 text-sm font-bold"
+            style={{
+              background: colors2000s.bg.button,
+              borderColor: colors2000s.border.default,
+              color: colors2000s.text.secondary
+            }}
+          >
+            No hay servicios disponibles para reservar en este momento.
+          </div>
+        )}
+
         {services?.map((svc) => {
           const option = multiService
             ? catalog.find((candidate) => candidate.id === svc.public_id)

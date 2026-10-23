@@ -87,7 +87,7 @@ export const AgendaToolbar: React.FC<AgendaToolbarProps> = ({
       <div className="px-4 sm:px-6 text-center min-w-[140px] sm:min-w-[200px]">
         <p
           className="text-[9px] font-black uppercase tracking-widest mb-0.5"
-          style={{ color: colors2000s.orange.accent }}
+          style={{ color: colors2000s.orange.dark }}
         >
           {VIEW_LABELS[view]}
         </p>

@@ -240,6 +240,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
     bookingState.addons
   )
   const selectedServices = addonGroups.flatMap((group) => (group.service ? [group.service] : []))
+  const allServicesLoaded = selectedServices.length === serviceIds.length
   const hasAddonOptions = addonGroups.some((group) => group.options.length > 0)
   const addonsChanged = addonGroups.some((group) => group.changed)
   // Sin el servicio en el catalogo lo elegido no se puede cobrar: mientras
@@ -248,7 +249,6 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
     addonsChanged || addonGroups.some((group) => !group.service && group.hasChosen)
   const addonLines = addonGroups.flatMap((group) => group.selection.lines())
   const addonQueryParams = addonGroups.flatMap((group) => group.selection.toQueryParams())
-  const addonsEmpty = addonLines.length === 0
   const addonsTotal = addonGroups.reduce(
     (sum, group) => sumAmounts(sum, group.selection.total()),
     0
@@ -290,30 +290,17 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
     eligibleDepositPhone !== debouncedDepositPhone ||
     Boolean(depositQuery.isPlaceholderData) ||
     Boolean(depositQuery.isFetching)
-  // El total lo dice el backend: la promo descuenta el TOTAL (servicio y
-  // adicionales; decision de Mateo, 2026-10-14) y `price` del preview de la
-  // seña es ese total ya descontado, el mismo que se cobra. El preview de la
-  // promo cotiza solo el servicio, asi que no se usa para el total cuando hay
-  // adicionales. Sin el preview vigente solo se muestra lo que es exacto sin
-  // la red: sin codigo, la suma; con codigo y sin adicionales, el total de la
-  // promo. Lo demas espera al backend ("Calculando…"). Con varios servicios
-  // el total sale SOLO del preview (decision de Mateo, 2026-10-16).
+  // El total sale siempre del preview del backend: usa el catalogo vigente y
+  // aplica servicios, adicionales y promociones con las mismas reglas del alta.
+  // Sin preview vigente no se presenta un total local como importe confirmado.
   const promotionApplied = Boolean(bookingState.promotionCode) && promotionPreview !== null
   const serverTotal =
     depositQuery.data && !depositUpdating && !depositQuery.error
       ? Number(depositQuery.data.price)
       : null
-  const totalPrice =
-    serverTotal ??
-    (hasExtraServices
-      ? null
-      : !promotionApplied
-        ? subtotal
-        : addonsEmpty && promotionPreview
-          ? Number(promotionPreview.final_amount)
-          : null)
+  const totalPrice = serverTotal
   const discount =
-    promotionApplied && totalPrice !== null
+    promotionApplied && allServicesLoaded && totalPrice !== null
       ? Math.max(0, Math.round((subtotal - totalPrice) * 100) / 100)
       : null
 
@@ -404,7 +391,8 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
   // Solo una seña OBLIGATORIA queda debiendose al reservar sin Mercado Pago:
   // con una opcional el backend no genera cobro manual
   // (deposit_channels.resolve_deposit_channel), asi que no hay nada que pagar
-  // por WhatsApp. Sin el servicio cargado no se sabe y se cae a confirmar.
+  // por WhatsApp. Mientras carga el catalogo se conserva una inferencia
+  // provisional; el envio queda bloqueado hasta confirmar el preview vigente.
   const owesDepositByWhatsApp = hasDeposit && depositRequired
   // Con seña obligatoria y coordinación manual deshabilitada por la tienda, la
   // única vía válida es pagar online. El backend lo rechaza igual, pero no tiene
@@ -440,22 +428,17 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
   // telefono no quedo verificado (create_public_booking, public_api/router.py).
   // No se debilita: el boton final queda deshabilitado hasta otpState.verified.
   const otpVerifiedGate = !requiresOtp || otpState.verified
-  // Un solo criterio, derivado en el render, para ofrecer reservar o pagar
-  // (pedido de Enrique en la revision de #186): si el importe depende del
-  // backend (codigo aplicado, adicionales o una seña) tiene que estar
-  // confirmado por el preview de la seña para los datos ACTUALES (codigo,
-  // adicionales y telefono: misma clave, sin espera pendiente ni dato viejo)
-  // y, con codigo, por la ultima revalidacion de la promo. Un error no
-  // confirma nada: se ofrece reintentar.
+  // El importe y la reserva esperan el catálogo completo, el preview vigente
+  // para estos datos y la última revalidación de la promo. Un error no confirma
+  // nada: se conserva el formulario y se ofrece reintentar.
   const depositPreviewConfirmed =
     Boolean(depositQuery.data) && !depositUpdating && !depositQuery.error
   const promotionConfirmed =
     !bookingState.promotionCode || (!promotionChecking && !promotionCheckFailed)
-  const amountDependsOnServer =
-    Boolean(bookingState.promotionCode) || !addonsEmpty || hasDeposit || hasExtraServices
-  const amountConfirmed = !amountDependsOnServer || (depositPreviewConfirmed && promotionConfirmed)
+  const amountConfirmed = allServicesLoaded && depositPreviewConfirmed && promotionConfirmed
   // El 422 ADDON_UNAVAILABLE tiene su propio aviso (actualizar el catalogo).
-  const amountFailed = amountDependsOnServer && Boolean(depositQuery.error) && !addonsOutdated
+  const amountFailed =
+    Boolean(depositQuery.error) && !addonsOutdated && (allServicesLoaded || !servicesQuery.isError)
   // La combinacion de servicios ya no se puede reservar: se dice por que.
   const serviceComboMessage = SERVICE_COMBO_MESSAGES[getErrorCode(depositQuery.error) ?? '']
   const canSubmit =
@@ -478,7 +461,6 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
   // que asigno el horario elegido; si no se conoce, no se muestra. Los
   // servicios y la duracion del turno entero, solo con todo el catalogo.
   const { assignedStaff } = bookingState
-  const allServicesLoaded = selectedServices.length === serviceIds.length
   const servicesLabel = addonGroups
     .flatMap((group) =>
       group.service
@@ -516,7 +498,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
       : 'manual'
   // El importe en el boton solo si el backend ya lo confirmo para estos datos.
   const confirmedDepositLabel =
-    depositPreview && depositPreviewConfirmed ? formatCurrency(depositPreview.amount) : null
+    depositPreview && amountConfirmed ? formatCurrency(depositPreview.amount) : null
   const submitAction: BookingSubmitAction | null = submitMethod && {
     method: submitMethod,
     label:
@@ -530,8 +512,8 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
     owesDepositByWhatsApp,
     disabled: !canSubmit
   }
-  // Sin el catalogo ni el total del backend no se muestra un importe inventado.
-  const shownTotal = allServicesLoaded || serverTotal !== null ? totalPrice : null
+  // El importe visible y el envio esperan el catalogo y el preview vigentes.
+  const shownTotal = amountConfirmed ? totalPrice : null
   const totalLabel = shownTotal === null ? null : `Total ${formatCurrency(shownTotal)}`
 
   const handleApplyPromotion = async () => {
@@ -635,6 +617,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
   const renderCustomField = (field: StoreCustomField) => {
     const commonProps = {
       id: `${fieldId}-custom-${field.key}`,
+      'aria-describedby': field.help_text ? `${fieldId}-custom-${field.key}-help` : undefined,
       required: field.required,
       value: client.customFields[field.key] || '',
       onChange: (
@@ -768,18 +751,18 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
             style={clientInputStyle}
             placeholder="juan@email.com"
             aria-invalid={emailTyped && !emailFormatValid}
-            aria-describedby="booking-email-hint"
+            aria-describedby={`${fieldId}-email-hint`}
           />
         </div>
         {emailTyped && !emailFormatValid ? (
-          <p id="booking-email-hint" className="mt-1 ml-1 text-[11px] font-bold text-red-600">
+          <p id={`${fieldId}-email-hint`} className="mt-1 ml-1 text-[11px] font-bold text-red-600">
             {BOOKING_FIELD_MESSAGES.client_email}
           </p>
         ) : (
-          <p id="booking-email-hint" className="mt-1 ml-1 text-[11px] font-bold text-gray-500">
+          <p id={`${fieldId}-email-hint`} className="mt-1 ml-1 text-[11px] font-bold text-gray-500">
             {emailRequired
               ? 'Te enviamos la confirmación y el acceso a tus turnos.'
-              : 'Opcional. Si no lo dejás, no vas a poder gestionar tu turno desde acá ni recibir avisos; para cambiarlo o cancelarlo escribile a la tienda por WhatsApp.'}
+              : 'Permite gestionar turnos y recibir avisos'}
           </p>
         )}
       </div>
@@ -838,7 +821,12 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
               </label>
               {renderCustomField(field)}
               {field.help_text && (
-                <p className="text-[11px] font-bold text-gray-400 ml-1">{field.help_text}</p>
+                <p
+                  id={`${fieldId}-custom-${field.key}-help`}
+                  className="text-[11px] font-bold text-gray-400 ml-1"
+                >
+                  {field.help_text}
+                </p>
               )}
             </div>
           ))}
@@ -878,7 +866,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
           style={{ color: colors2000s.text.primary }}
         >
           <FileText className="w-4 h-4" />
-          Agregar una nota para la tienda
+          Agregar un mensaje para la tienda
         </button>
       )}
     </div>
@@ -1096,8 +1084,14 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
 
   if (submission.phase === 'submitting') {
     return (
-      <div className="flex flex-col items-center justify-center py-20 duration-500">
+      <div
+        role="status"
+        aria-live="polite"
+        aria-busy="true"
+        className="flex flex-col items-center justify-center py-20 duration-500"
+      >
         <Loader2
+          aria-hidden="true"
           className="w-16 h-16 animate-spin mb-6"
           style={{ color: colors2000s.text.secondary }}
         />
@@ -1170,11 +1164,39 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
           void handleConfirm(method)
         }}
       >
+        {!allServicesLoaded && servicesQuery.isLoading && (
+          <p role="status" aria-live="polite" className="text-xs font-bold text-gray-500">
+            Revisando el precio de los servicios…
+          </p>
+        )}
+
+        {!allServicesLoaded && servicesQuery.isError && (
+          <div
+            role="alert"
+            className="p-3 text-xs font-bold flex flex-wrap items-center gap-2"
+            style={dangerBoxStyle}
+          >
+            <TriangleAlert className="w-4 h-4 flex-shrink-0" />
+            <span className="flex-1">
+              No pudimos cargar el detalle de todos los servicios. Reintentá para revisar tu
+              selección antes de confirmar.
+            </span>
+            <button
+              type="button"
+              onClick={() => void refreshServices()}
+              disabled={servicesQuery.isFetching}
+              className="min-h-11 underline font-black disabled:opacity-50"
+            >
+              {servicesQuery.isFetching ? 'Actualizando…' : 'Reintentar'}
+            </button>
+          </div>
+        )}
+
         <BookingPriceSummary
-          basePrice={listPrice}
-          addons={addonLines}
+          basePrice={allServicesLoaded ? listPrice : 0}
+          addons={allServicesLoaded ? addonLines : []}
           serviceLines={
-            hasExtraServices
+            hasExtraServices && allServicesLoaded
               ? addonGroups.map((group) => ({
                   serviceId: group.serviceId,
                   name: group.service?.name ?? 'Servicio',
@@ -1183,10 +1205,16 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
                 }))
               : undefined
           }
-          discount={discount}
-          promotionCode={promotionApplied ? bookingState.promotionCode : undefined}
+          discount={amountConfirmed ? discount : null}
+          promotionCode={
+            amountConfirmed && promotionApplied ? bookingState.promotionCode : undefined
+          }
           total={shownTotal}
-          pendingLabel={amountFailed ? 'Sin confirmar' : undefined}
+          pendingLabel={
+            amountFailed || (!allServicesLoaded && servicesQuery.isError)
+              ? 'Sin confirmar'
+              : undefined
+          }
         />
 
         {depositPreview && depositPreview.amount > 0 && (

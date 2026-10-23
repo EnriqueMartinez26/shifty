@@ -55,7 +55,7 @@ const iconBadgeStyle: CSSProperties = {
   alignItems: 'center',
   justifyContent: 'center',
   background: 'rgba(255, 140, 66, 0.12)',
-  border: '1px solid rgba(200, 90, 15, 0.25)',
+  border: '1px solid rgba(198, 83, 0, 0.25)',
   color: colors2000s.orange.accent,
   boxShadow: colors2000s.shadows.insetLight,
   flexShrink: 0

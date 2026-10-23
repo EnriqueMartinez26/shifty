@@ -45,7 +45,7 @@ const dangerActionStyle = {
 }
 
 export const buttonFocusVisibleClassName =
-  'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-solid focus-visible:outline-[#9a4507]'
+  'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-solid focus-visible:outline-[#c65300]'
 
 export const FieldLabel: React.FC<{ children: React.ReactNode; htmlFor: string }> = ({
   children,

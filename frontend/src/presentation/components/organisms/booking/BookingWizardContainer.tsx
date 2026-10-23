@@ -363,28 +363,16 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
                 aria-hidden="true"
                 className="z-10 w-9 h-9 rounded-full flex items-center justify-center text-xs font-black transition-all cursor-default select-none"
                 style={{
-                  background: isCompleted
-                    ? `linear-gradient(180deg, ${colors2000s.status.success.light} 0%, ${colors2000s.status.success.dark} 100%)`
-                    : isActive
-                      ? brandColor.fillGradient
-                      : `linear-gradient(180deg, ${colors2000s.bg.disabled} 0%, ${colors2000s.bg.disabledBottom} 100%)`,
-                  boxShadow: isCompleted
-                    ? `${colors2000s.shadows.insetLight}, 0 2px 4px rgba(16,185,129,0.3)`
-                    : isActive
-                      ? `${colors2000s.shadows.insetLight}, ${brandGlowShadow}`
-                      : `${colors2000s.shadows.insetLight}, 0 1px 2px rgba(0,0,0,0.05)`,
-                  color: isCompleted
-                    ? colors2000s.text.onOrange
-                    : isActive
-                      ? brandColor.onFill
-                      : colors2000s.text.secondary
+                  background: brandColor.fillGradient,
+                  boxShadow: `${colors2000s.shadows.insetLight}, ${brandGlowShadow}`,
+                  color: brandColor.onFill
                 }}
               >
                 {isCompleted ? <Check className="w-4 h-4 font-black" /> : i + 1}
               </div>
               <span
-                className={`text-[9px] uppercase tracking-wider hidden md:block mt-1 font-black text-center ${isActive ? '' : isCompleted ? 'text-green-600' : 'text-gray-400'}`}
-                style={isActive ? { color: colors2000s.text.primary } : undefined}
+                className="text-[9px] uppercase tracking-wider hidden md:block mt-1 font-black text-center"
+                style={{ color: brandColor.fill }}
               >
                 {label}
               </span>
@@ -395,10 +383,8 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
                   style={{
                     left: 'calc(50% + 18px)',
                     right: 'calc(-50% + 18px)',
-                    background: isCompleted
-                      ? `linear-gradient(90deg, ${colors2000s.status.success.dark} 0%, ${colors2000s.status.success.light} 100%)`
-                      : colors2000s.bg.disabled,
-                    boxShadow: isCompleted ? 'none' : 'inset 0 1px 1px rgba(0,0,0,0.1)'
+                    background: brandColor.fill,
+                    boxShadow: 'none'
                   }}
                 />
               )}

@@ -267,7 +267,7 @@ const Manual: React.FC = () => {
               tabIndex={active ? 0 : -1}
               onClick={() => setOpenSection(section.id)}
               onKeyDown={(event) => handleSectionTabKeyDown(event, index)}
-              className="min-h-11 px-4 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest inline-flex items-center gap-2 transition-all active:scale-95 cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#9a4507]"
+              className="min-h-11 px-4 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest inline-flex items-center gap-2 transition-all active:scale-95 cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#c65300]"
               style={active ? buttonStyles2000s.selected : buttonStyles2000s.default}
             >
               {section.icon}
@@ -285,7 +285,7 @@ const Manual: React.FC = () => {
           aria-labelledby={`manual-tab-${section.id}`}
           tabIndex={0}
           hidden={section.id !== openSection}
-          className="rounded-[2rem] p-8 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#9a4507]"
+          className="rounded-[2rem] p-8 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#c65300]"
           style={create2000sPanelStyle()}
         >
           <h2
@@ -350,7 +350,7 @@ const Manual: React.FC = () => {
           <Link
             to="/legal/terminos"
             target="_blank"
-            className="min-h-11 px-4 py-2.5 text-[10px] font-black uppercase tracking-widest inline-flex items-center gap-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#9a4507]"
+            className="min-h-11 px-4 py-2.5 text-[10px] font-black uppercase tracking-widest inline-flex items-center gap-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#c65300]"
             style={buttonStyles2000s.default}
           >
             <FileText className="w-3.5 h-3.5" />
@@ -359,7 +359,7 @@ const Manual: React.FC = () => {
           <Link
             to="/legal/privacidad"
             target="_blank"
-            className="min-h-11 px-4 py-2.5 text-[10px] font-black uppercase tracking-widest inline-flex items-center gap-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#9a4507]"
+            className="min-h-11 px-4 py-2.5 text-[10px] font-black uppercase tracking-widest inline-flex items-center gap-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#c65300]"
             style={buttonStyles2000s.default}
           >
             <FileText className="w-3.5 h-3.5" />

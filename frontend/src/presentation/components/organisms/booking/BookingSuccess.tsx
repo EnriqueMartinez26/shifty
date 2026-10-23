@@ -1,4 +1,4 @@
-import React, { useId } from 'react'
+import React, { useEffect, useId, useRef } from 'react'
 
 import { Briefcase, Calendar, Check, Clock, ExternalLink, UserRound } from 'lucide-react'
 
@@ -100,6 +100,11 @@ export const BookingSuccess: React.FC<BookingSuccessProps> = ({
   bookedServices = []
 }) => {
   const detailsHeadingId = useId()
+  const headingRef = useRef<HTMLHeadingElement>(null)
+  useEffect(() => {
+    headingRef.current?.focus()
+  }, [])
+
   // Seña obligatoria que se paga por WhatsApp (decision de Mateo, 2026-10-03):
   // el canal viene explicito en la respuesta (antes se inferia de la falta de
   // link). La tienda la confirma a mano cuando le pagan, hasta el plazo.
@@ -171,7 +176,9 @@ export const BookingSuccess: React.FC<BookingSuccessProps> = ({
       </div>
 
       <h2
-        className="text-3xl font-black uppercase tracking-tight leading-none mb-2"
+        ref={headingRef}
+        tabIndex={-1}
+        className="text-3xl font-black uppercase tracking-tight leading-none mb-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent focus-visible:ring-offset-4"
         style={{ color: colors2000s.text.primary }}
       >
         {title}

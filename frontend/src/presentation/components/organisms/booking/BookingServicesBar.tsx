@@ -48,7 +48,7 @@ export const BookingServicesBar: React.FC<BookingServicesBarProps> = ({
       className="text-sm font-black min-w-0"
       style={{ color: colors2000s.text.primary }}
     >
-      {count === 1 ? '1 servicio' : `${count} servicios`} · {durationMinutes} min ·{' '}
+      {count === 1 ? '1 servicio' : `${count} servicios`} · {durationMinutes} min · Subtotal{' '}
       {formatCurrency(sumAmounts(listPrice, addonsTotal))}
     </p>
     <button

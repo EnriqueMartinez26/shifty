@@ -18,15 +18,15 @@ export const colors2000s = {
     white: '#ffffff' // Tarjetas y superficies blancas
   },
 
-  // La marca conserva sus naranjas vivos; CTA y selección usan una rampa
-  // saturada más oscura para que el texto blanco alcance WCAG AA.
+  // Los acentos admin usan un naranja más vivo que conserva contraste AA con
+  // texto blanco. El naranja del logo queda disponible para decoración.
   orange: {
     light: '#ff8c42', // Marca - top
     dark: '#e67e22', // Marca - bottom (theme-color)
-    heading: '#c75a00', // Alias legacy para títulos existentes
-    accent: '#9a4507', // Titulos, labels y links sobre claro; borde del CTA
-    cta: '#c04f00', // Fondo de CTA y selección - top
-    ctaEnd: '#b84d00' // Fondo de CTA y selección - bottom
+    heading: '#c65300', // Titulos sobre fondo claro
+    accent: '#c65300', // Titulos, labels, links y borde del CTA
+    cta: '#c65300', // Fondo naranja de CTA y selección - top
+    ctaEnd: '#bd4f00' // Fondo naranja de CTA y selección - bottom
   },
 
   // Textos
@@ -42,7 +42,7 @@ export const colors2000s = {
   border: {
     default: 'rgba(0, 0, 0, 0.15)',
     light: 'rgba(0, 0, 0, 0.12)',
-    hover: 'rgba(200, 90, 15, 0.3)'
+    hover: 'rgba(198, 83, 0, 0.3)'
   },
 
   // Sombras 2000s (inset + exterior)
@@ -52,7 +52,7 @@ export const colors2000s = {
     insetPressed: 'inset 0 1px 2px rgba(0, 0, 0, 0.2), inset 0 -1px 0 rgba(0, 0, 0, 0.1)',
     outer: '0 1px 2px rgba(0, 0, 0, 0.08)',
     outerMedium: '0 2px 4px rgba(0, 0, 0, 0.1)',
-    outerOrange: '0 2px 4px rgba(200, 90, 15, 0.25)'
+    outerOrange: '0 2px 4px rgba(198, 83, 0, 0.25)'
   },
 
   // Estados específicos
@@ -99,9 +99,9 @@ export const colors2000s = {
   }
 } as const
 
-// El naranja vivo sigue como color de marca; la rampa de CTA/selección
-// conserva identidad naranja y contraste AA para texto blanco (4.82:1-5.12:1).
-export const orangeCtaGradient = `linear-gradient(180deg, ${colors2000s.orange.cta} 0%, ${colors2000s.orange.ctaEnd} 100%)`
+const orangeBrandGradient = `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`
+// Botones y estados seleccionados siguen el degradado del logo Shifty.
+export const orangeCtaGradient = orangeBrandGradient
 
 // Estilos CSS reutilizables
 export const buttonStyles2000s = {
@@ -129,8 +129,8 @@ export const buttonStyles2000s = {
     color: colors2000s.orange.accent
   },
   selected: {
-    background: orangeCtaGradient,
-    border: `1px solid ${colors2000s.orange.accent}`,
+    background: orangeBrandGradient,
+    border: `1px solid ${colors2000s.orange.dark}`,
     color: colors2000s.text.onOrangeSelection,
     boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerOrange}`
   },

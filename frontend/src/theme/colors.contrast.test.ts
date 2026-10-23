@@ -60,8 +60,9 @@ const lightPairs = Object.entries(TEXT_ON_LIGHT).flatMap(([text, fg]) =>
   Object.entries(LIGHT_SURFACES).map(([surface, bg]) => [text, fg, surface, bg] as const)
 )
 
-// El CTA y todo lo "seleccionado": texto blanco sobre la rampa naranja
-// orange.cta -> orange.ctaEnd (buttonStyles2000s.selected, orangeCtaGradient).
+// Tokens sólidos usados por las utilidades Tailwind primary: texto blanco
+// sobre orange.cta y orange.ctaEnd. Los controles de marca usan el degradado
+// del logo; su contraste no queda cubierto por este contrato.
 const ctaPairs = [
   [
     'text.onOrangeSelection',

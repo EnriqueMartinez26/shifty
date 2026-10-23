@@ -20,7 +20,7 @@ describe('UserSearchForm', () => {
       expect(control).toHaveClass('focus-visible:outline')
       expect(control).toHaveClass('focus-visible:outline-2')
       expect(control).toHaveClass('focus-visible:outline-offset-2')
-      expect(control).toHaveClass('focus-visible:outline-[#9a4507]')
+      expect(control).toHaveClass('focus-visible:outline-[#c65300]')
     }
     expect(submit).toHaveClass('min-h-11')
   })

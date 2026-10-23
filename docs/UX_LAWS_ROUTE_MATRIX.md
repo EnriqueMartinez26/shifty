@@ -1,26 +1,41 @@
-# Matriz UX por ruta
+# Matriz de criterios UX/UI por ruta
 
-Esta matriz organiza la aplicación gradual de 25 leyes de UX como criterios de revisión. Son heurísticas, no reglas universales: cada decisión depende de la tarea, la evidencia y los contratos del sistema. Las pruebas automatizadas no certifican por sí solas la experiencia visual ni la accesibilidad.
+La matriz usa criterios observables en lugar de un catálogo fijo de leyes. Cada revisión parte de una tarea, una fricción y un estado concretos; los conceptos de percepción y cognición sirven como preguntas de diseño, no como garantías de usabilidad. La evidencia histórica que sigue conserva su fecha y alcance: no se reinterpreta como validación retroactiva de este marco.
 
 ## Criterios de revisión
 
-| Grupo | Leyes y pregunta práctica |
+| Criterio | Qué debe comprobarse en la tarea y sus estados relevantes |
 | --- | --- |
-| Comprensión | **Chunking**, **Cognitive Load**, **Prägnanz**, **Mental Model**, **Miller**, **Occam**, **Active User**. ¿La persona entiende qué hacer sin memorizar detalles ni consultar el manual? |
-| Jerarquía visual | **Aesthetic-Usability**, **Common Region**, **Proximity**, **Similarity**, **Uniform Connectedness**, **Von Restorff**, **Selective Attention**. ¿Relaciones, prioridades y avisos críticos se distinguen cerca de la tarea? |
-| Interacción | **Doherty Threshold**, **Fitts**, **Flow**, **Hick**, **Jakob**, **Postel**. ¿La respuesta es clara y oportuna, los controles son alcanzables y las entradas se normalizan de forma segura? |
-| Progreso y experiencia | **Goal-Gradient**, **Peak-End**. ¿Se ve cuánto falta y termina el flujo con un resultado comprensible? |
-| Decisiones de producto | **Cognitive Bias**, **Pareto**, **Tesler**. ¿Las decisiones son transparentes, priorizamos tareas frecuentes y el sistema absorbe la complejidad que puede resolver? |
+| **1. Tarea y control** | La persona puede identificar qué puede hacer, qué necesita, cuál es el siguiente paso y qué consecuencia tendrá una acción importante. Se explican las consecuencias de reservas, cobros y acciones difíciles de revertir. |
+| **2. Esfuerzo justificado** | Cada paso, campo y elección aporta a completar la tarea o a proteger una decisión necesaria. Se reduce trabajo evitable sin ocultar opciones, condiciones ni consecuencias. El número de clics o la velocidad por sí solos no prueban simplicidad. |
+| **3. Jerarquía y encontrabilidad** | Se distinguen las acciones prioritarias, la información crítica y los grupos relacionados. El significado no depende solo del color, la cercanía o una composición visual. Espacio, grillas, ritmo y foco visual son herramientas para comprobar, no reglas fijas. |
+| **4. Previsibilidad y feedback** | Los patrones, nombres y controles se comportan de forma coherente con su función; consistencia no significa que controles con funciones distintas deban ser idénticos. Las acciones comunican el resultado y los estados de selección, carga, deshabilitado, éxito y error cuando correspondan; el foco acompaña la interacción de forma perceptible. |
+| **5. Flujo recuperable y espera honesta** | La persona entiende el avance y puede volver o corregir cuando hacerlo es seguro. Ante un error recuperable, conserva el trabajo válido y entiende cómo seguir. Si una operación tarda, se indica que sigue pendiente y se comunica el resultado real; no se inventa progreso ni se promete una cancelación o reintento que el sistema no admite. |
+| **6. Operación inclusiva** | Las tareas relevantes se pueden operar con teclado y sus nombres, estados, foco y errores se perciben con tecnologías de asistencia cuando corresponda. Se revisan contraste, ampliación/reflujo y objetivos táctiles según el contexto. Los 44 px aprobados para controles concretos de esta matriz son una decisión local, no una ley universal para toda la interfaz. |
+| **7. Decisiones y datos seguros** | La interfaz no adivina entradas ambiguas ni reemplaza la autoridad del backend sobre permisos, tienda, importes, estados, horarios o idempotencia. La validación ayuda a corregir sin relajar contratos. No se ocultan opciones relevantes ni se usan presión o patrones manipulativos. |
 
-Las agrupaciones son prácticas para la revisión, no se imponen cuando entran en conflicto. Por ejemplo, Hick no justifica quitar opciones necesarias y Postel no flexibiliza validaciones de seguridad.
+## Tratamiento de las dos listas de origen
+
+- **Se convierten en criterios:** comprensión de la tarea, reducción de esfuerzo innecesario, descubribilidad, jerarquía, agrupación, consistencia, feedback, continuidad y operación inclusiva. La empatía se concreta al investigar necesidades, restricciones y fricciones de personas en una tarea real. Las nociones de carga cognitiva, modelos mentales, agrupación perceptiva y elección se integran donde producen una comprobación concreta; no generan casilleros separados por nombre.
+- **Se mantienen como tácticas condicionales:** espacio negativo, grillas, proporción áurea, regla de tercios, foco visual, ritmo, diseño plano y la proporción de color 60-20-10. Se aplican solo si ayudan a la tarea y conservan legibilidad y accesibilidad. El 60-20-10 queda sin completar: el texto de origen no define qué representa cada porcentaje.
+- **Se mantienen como hipótesis de producto, no como leyes:** gamificación, personalización, integración social, ayuda contextual y analítica. Se evalúan solo ante una necesidad concreta y requieren beneficio para la persona, control comprensible, revisión de privacidad y evidencia. La analítica y el consentimiento siguen fuera del alcance de #163 sin issue aprobado.
+- **Se descartan como reglas universales:** el límite de siete elementos de Miller, el umbral de menos de 400 ms de Doherty, la proporción 80/20 de Pareto, la idea de que la estética demuestra usabilidad, asumir que nadie consulta documentación y la aceptación indiscriminada de Postel. No se usan para fijar máximos, SLA, prioridades, pruebas de usabilidad ni validaciones de seguridad. El feedback debe ser oportuno y veraz; las entradas sensibles o ambiguas se validan estrictamente y con errores útiles.
+- **Se descartan duplicados y fragmentos incompletos o dañados** de “ELEGANCE FORMULA” (por ejemplo, “Create great user experiences as though/through”, “Contextual hires and tips”, “Be modal advanced not-medal reliant”, “Preference Disclosures” y “Enroll or retire users”). No se reconstruye su significado por intuición. La frase “tried and rested design patterns” tampoco se normaliza como instrucción. Un sistema de diseño y las pautas de microexperiencia son prácticas de implementación para sostener consistencia, no resultados UX por sí mismas.
 
 ## Cómo usarla
 
-1. Elegí una ruta y anotá la tarea principal de la persona.
-2. Registrá la fricción observada y el criterio UX antes de cambiar la interfaz.
-3. Anotá por separado evidencia automatizada, revisión manual y E2E; son controles distintos.
-4. Si hace falta cambiar API o BD, abrí una línea backend independiente.
-5. Mantené la ruta en progreso hasta completar los controles que le correspondan; una PR abierta o CI verde no la cierra.
+1. Elegí la ruta, el tipo de usuario, el estado inicial y la tarea que se va a revisar.
+2. Registrá la fricción observada y cómo se obtuvo esa observación antes de proponer un cambio.
+3. Elegí los criterios aplicables y expresá cada uno como una comprobación observable. Si un criterio no aplica, anotá por qué.
+4. Registrá por separado el cambio, el resultado esperado y la evidencia: automatizada, manual/visual, teclado/tecnologías de asistencia, dispositivo o E2E. No son controles intercambiables.
+5. Si la solución exige cambiar API o BD, abrí una línea backend independiente; la UI no sustituye los contratos ni la autoridad del servidor.
+6. Conservá fecha, alcance, limitaciones y pendientes de la revisión. Una PR abierta o CI verde no cierra por sí sola una ruta.
+
+Para nuevas revisiones, usá este registro mínimo:
+
+| Ruta | Usuario / estado / tarea | Fricción y fuente | Criterio observable | Evidencia y método | Resultado / pendiente / excepción |
+| --- | --- | --- | --- | --- | --- |
+| `<ruta>` | `<rol, estado inicial y tarea>` | `<qué ocurre y cómo se observó>` | `<qué debe poder comprobarse>` | `<automatizada, manual, accesibilidad, dispositivo o E2E>` | `<resultado, limitación o motivo de N/A>` |
 
 ## Estado por ruta — 21 de octubre de 2026
 
@@ -48,6 +63,20 @@ El [issue #163](https://github.com/EnriqueMartinez26/shifty/issues/163) sigue ab
 | Usuarios | Usar la búsqueda con teclado manteniendo la consulta explícita del servidor. | [#218](https://github.com/EnriqueMartinez26/shifty/pull/218) está integrada. |
 | Manual | Cambiar entre seis secciones con pestañas y teclado; conservar foco visible, asociar cada pestaña a su panel y alcanzar enlaces legales con 44 px. | [#219](https://github.com/EnriqueMartinez26/shifty/pull/219) está integrada. Prueba focalizada 4/4 y gates locales verdes; QA móvil confirmó navegación con flechas, Home y End, sin desborde. |
 | SuperAdmin (`/control-global`) | Identificar los controles de formularios y usar diálogos con foco predecible. | Las PR [#220](https://github.com/EnriqueMartinez26/shifty/pull/220), [#221](https://github.com/EnriqueMartinez26/shifty/pull/221) y [#222](https://github.com/EnriqueMartinez26/shifty/pull/222) están integradas. Añaden etiquetas a 40 controles, gestionan foco/Escape/restauración, nombran filtros, exponen `aria-pressed` y llevan controles a 44 px. La QA aislada confirmó etiquetas, foco contenido/restaurado y filtros. |
+
+### Aplicación de criterios — reserva pública (23 de octubre de 2026)
+
+Lectura estática del flujo `/b/:slug` y `/booking/:slug`, para convertir los siete criterios en comprobaciones de esta tarea. Las modificaciones de código que siguen todavía requieren QA: esta tabla no amplía ni reemplaza la evidencia histórica de abajo.
+
+| Criterio | Comprobación para reservar | Estado del código y evidencia pendiente |
+| --- | --- | --- |
+| **1. Tarea y control** | La persona entiende si elegir un servicio avanza automáticamente y ve el total aplicable, la seña y el canal de pago antes de comprometerse. | El copy singular aclara cuándo avanza automáticamente y cuándo puede elegir adicionales; la confirmación presenta el total del backend y bloquea el envío si falta revisar el precio. Falta QA de cada rama de precio y pago. |
+| **2. Esfuerzo justificado** | El servicio único conserva el camino de un toque; las fechas que admite la reserva se recorren sin enlaces profundos; el resumen de varios servicios identifica el importe como subtotal. | Fechas en páginas de 14 hasta hoy +120 días; el resumen múltiple etiqueta el subtotal. Falta recorrer el horizonte y sus límites en móvil y escritorio. |
+| **3. Jerarquía y encontrabilidad** | Fecha, horario, total y acción final se distinguen sin depender solo del color. | El encabezado conserva la portada o franja de marca de la tienda; fecha, profesional/recurso y horario exponen selección además del estilo visual; el total aparece antes de las acciones. La jerarquía visual aún necesita revisión de tarea y capturas. |
+| **4. Previsibilidad y feedback** | Carga, vacío, error, selección, reintento, envío y resultado expresan lo que ocurre y qué puede hacer la persona. | Catálogo separa carga, error recuperable y catálogo vacío; disponibilidad y precios tienen estados de carga/reintento; el envío y el resultado anuncian o reciben el foco. Falta comprobarlo con tecnologías de asistencia. |
+| **5. Flujo recuperable y espera honesta** | Un fallo recuperable conserva las elecciones válidas; un conflicto de horario guía a elegir otro; no se comunica éxito antes de recibirlo. | Se conserva la idempotencia existente, los datos ante errores de reserva y la autoridad del servidor; el nuevo error de catálogo permite reintentar. Falta repetir QA del flujo completo tras los cambios. |
+| **6. Operación inclusiva** | Teclado y tecnologías de asistencia perciben nombres, selección, foco, carga y errores; la interfaz refluye en pantallas pequeñas. | Se asociaron etiquetas de OTP y campos personalizados, y se agregaron estados accesibles a fecha, horario, OTP, envío y éxito. Lector de pantalla, dispositivos físicos, contraste y reflujo siguen pendientes. |
+| **7. Decisiones y datos seguros** | El total nunca se sustituye por un valor incompleto; importe, disponibilidad y `starts_at` continúan bajo autoridad del backend. | Si falta el catálogo, el total queda sin confirmar y no se habilita el envío; se conserva el `starts_at` devuelto por disponibilidad y la clave idempotente. No hubo pago real ni verificación de webhooks. |
 
 ### Revisión manual: parcial
 
@@ -78,10 +107,12 @@ La UI representa permisos, disponibilidad, estados y montos; el backend mantiene
 
 ## Criterios para cerrar una ruta
 
-- [ ] Tarea principal y fricción observada documentadas.
-- [ ] Criterio UX aplicado con justificación contextual.
-- [ ] Carga, vacío, error y reintento revisados cuando correspondan.
-- [ ] Permisos, montos, estados, idempotencia, tienda y horario conservan la autoridad del backend.
-- [ ] Pruebas automatizadas de comportamiento pasan.
-- [ ] Revisión manual en escritorio, móvil y teclado: foco, contraste, diálogos, anuncios y objetivos táctiles.
+- [ ] Ruta, usuario, tarea, estado inicial y fricción observada están documentados con su fuente.
+- [ ] Cada criterio aplicable tiene una comprobación observable; todo N/A tiene motivo.
+- [ ] Los estados de carga, vacío, error, reintento y éxito están revisados cuando correspondan.
+- [ ] Permisos, importes, estados, idempotencia, tienda y horario conservan la autoridad del backend.
+- [ ] La evidencia automatizada de comportamiento está identificada y su resultado registrado.
+- [ ] La revisión manual cubre los contextos que correspondan: escritorio, móvil, teclado, foco, contraste, diálogos, anuncios y objetivos táctiles.
+- [ ] La validación con tecnologías de asistencia y dispositivos físicos queda registrada como evidencia aparte cuando forme parte del alcance; no se infiere de CI.
 - [ ] E2E local o de staging pasa si la ruta completa un flujo autenticado o transaccional.
+- [ ] Pendientes, limitaciones y evidencia faltante quedan visibles; no se confunden checks verdes con QA completa, integración o despliegue.

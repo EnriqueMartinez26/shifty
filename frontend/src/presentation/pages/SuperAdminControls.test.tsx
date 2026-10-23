@@ -16,7 +16,7 @@ describe('botones de accion del superadmin', () => {
       expect(screen.getByRole('button', { name: label })).toHaveClass(
         'min-h-11',
         'focus-visible:outline-2',
-        'focus-visible:outline-[#9a4507]'
+        'focus-visible:outline-[#c65300]'
       )
     }
   })
@@ -78,7 +78,7 @@ describe('filtros de tiendas del superadmin', () => {
       expect(button).toHaveClass(
         'min-h-11',
         'focus-visible:outline-2',
-        'focus-visible:outline-[#9a4507]'
+        'focus-visible:outline-[#c65300]'
       )
     }
 

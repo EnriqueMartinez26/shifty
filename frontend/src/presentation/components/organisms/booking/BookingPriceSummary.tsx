@@ -90,7 +90,9 @@ export const BookingPriceSummary: React.FC<BookingPriceSummaryProps> = ({
         style={showBreakdown ? { borderColor: '#cbd5e1' } : undefined}
       >
         <span>Total</span>
-        <span>{total === null ? pendingLabel : formatCurrency(total)}</span>
+        <span aria-live="polite" aria-atomic="true">
+          {total === null ? pendingLabel : formatCurrency(total)}
+        </span>
       </div>
     </div>
   )

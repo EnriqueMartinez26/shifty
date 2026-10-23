@@ -1,13 +1,12 @@
 import type React from 'react'
 
-import { getContrastingForeground } from './getContrastingForeground'
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
 
 /**
- * Colors of a store's public portal, derived from its `primary_color`.
+ * Store brand color used by the booking flow, cover, and logo fallback.
  *
- * - `fill` / `fillBottom`: background of primary actions and selected states.
- * - `onFill`: text and icons on the fill; AA (>= 4.5:1) against both ends.
+ * - `fill` / `fillBottom`: the store's configured `primary_color`.
+ * - `onFill`: white text and icons on colored controls.
  *
  * Text and icons on white or gray use the neutral text tokens, never a brand
  * tint (S9, 2026-10-22): the store color only appears as itself, as a fill.
@@ -21,19 +20,14 @@ interface BrandTheme {
 }
 
 const HEX_COLOR = /^#([\da-f]{3}|[\da-f]{6})$/i
-const AA_MIN_CONTRAST = 4.5
 // The backend stores #000000 when a store never picked a color
 // (`modules/stores/model.py`). It means "not chosen", not "black on purpose".
 const UNSET_STORE_COLOR = '#000000'
-const GRADIENT_DARKEN = 0.1
-// Stores without a color get the logo orange (`orange.light` -> `orange.dark`),
-// not the darker CTA ramp of the panel (`orange.cta`). White text misses AA on
-// the logo orange, so the text is picked against the darker bottom end, which
-// is the harder one for a dark foreground.
+const WHITE = colors2000s.text.onOrangeSelection
 export const DEFAULT_BRAND_THEME: BrandTheme = {
   fill: colors2000s.orange.light,
   fillBottom: colors2000s.orange.dark,
-  onFill: getContrastingForeground(colors2000s.orange.dark),
+  onFill: WHITE,
   isDefault: true
 }
 
@@ -53,9 +47,6 @@ const toRgb = (hex: string): [number, number, number] => {
 // Enrique, 2026-10-22): una sola fuente de color para el portal.
 const DEFAULT_GLOW_COLOR = `rgba(${toRgb(colors2000s.orange.dark).join(', ')}, 0.25)`
 
-const toHex = (rgb: [number, number, number]): string =>
-  `#${rgb.map((value) => Math.round(value).toString(16).padStart(2, '0')).join('')}`
-
 const relativeLuminance = (hex: string): number => {
   const linear = (value: number) => {
     const channel = value / 255
@@ -71,33 +62,21 @@ export const contrastRatio = (foreground: string, background: string): number =>
   return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05)
 }
 
-/** Mixes the color with black; `amount` 0 keeps it, 1 is black. */
-const darken = (hex: string, amount: number): string =>
-  toHex(toRgb(hex).map((value) => value * (1 - amount)) as [number, number, number])
-
 export const resolveBrandTheme = (primaryColor: string | null | undefined): BrandTheme => {
   const color = (primaryColor ?? '').trim()
   if (!HEX_COLOR.test(color) || expandHex(color).toLowerCase() === UNSET_STORE_COLOR) {
     return DEFAULT_BRAND_THEME
   }
   const fill = expandHex(color).toLowerCase()
-  const onFill = getContrastingForeground(fill)
-  const darker = darken(fill, GRADIENT_DARKEN)
-  // A darker bottom lowers the contrast of black text: keep the gradient only
-  // when the text still passes AA on both ends.
-  const fillBottom = contrastRatio(onFill, darker) >= AA_MIN_CONTRAST ? darker : fill
-  return { fill, fillBottom, onFill, isDefault: false }
+  return { fill, fillBottom: fill, onFill: WHITE, isDefault: false }
 }
 
-/** CSS custom properties for the portal root; components read `var(--brand-*)`. */
+/** CSS variables keep booking actions aligned with the store's chosen color. */
 export const brandCssVariables = (theme: BrandTheme): React.CSSProperties =>
   ({
     '--brand-fill': theme.fill,
     '--brand-fill-bottom': theme.fillBottom,
     '--brand-on-fill': theme.onFill,
-    // El resplandor sale del color de la tienda; sin color queda el naranja.
-    // rgba precalculado y no color-mix(): Safari < 16.2 lo ignora y anulaba
-    // toda la sombra (QA visual 2026-10-21).
     ...(theme.isDefault ? {} : { '--brand-glow': `rgba(${toRgb(theme.fill).join(', ')}, 0.25)` })
   }) as React.CSSProperties
 
@@ -112,10 +91,9 @@ export const brandCoverWash = (theme: BrandTheme): string => {
 
 /**
  * `var()` references to the variables `brandCssVariables` sets at the portal
- * root. Components paint with these and never compute colors themselves: the
- * contrast is already resolved by `resolveBrandTheme`.
+ * root. Components paint with these and never compute colors themselves.
  *
- * Each one falls back to the Shifty orange: some booking pieces also render
+ * Each one falls back to the Shifty logo orange: some booking pieces also render
  * outside the wizard root (the date and time grid in "Mis turnos"), where the
  * variables are not set and a bare `var()` would paint nothing.
  */
