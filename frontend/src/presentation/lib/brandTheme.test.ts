@@ -26,9 +26,17 @@ describe('resolveBrandTheme', () => {
       expect(theme.isDefault).toBe(false)
       expect(theme.fill).toBe(value.length === 4 ? '#ffffff' : value)
       expect(theme.fillBottom).toBe(theme.fill)
-      expect(theme.onFill).toBe('#ffffff')
+      expect(contrastRatio(theme.onFill, theme.fill)).toBeGreaterThanOrEqual(4.5)
     }
   )
+
+  // 2026-10-23: la rama del naranja ponia texto blanco fijo sobre cualquier
+  // color de tienda; sobre el rosa de jaziz-nails quedaba en 2.35:1.
+  it('keeps dark text on a light store color', () => {
+    const theme = resolveBrandTheme('#ff70fa')
+    expect(theme.onFill).toBe('#000000')
+    expect(contrastRatio(theme.onFill, theme.fill)).toBeGreaterThanOrEqual(4.5)
+  })
 
   // S9 (2026-10-22): sin tinta de marca. El texto sobre blanco o gris es
   // neutro, asi que el tema solo trae el relleno y su texto.
@@ -60,7 +68,7 @@ describe('resolveBrandTheme', () => {
     expect(brandCssVariables(resolveBrandTheme('#3b82f6'))).toEqual({
       '--brand-fill': '#3b82f6',
       '--brand-fill-bottom': '#3b82f6',
-      '--brand-on-fill': '#ffffff',
+      '--brand-on-fill': '#000000',
       '--brand-glow': 'rgba(59, 130, 246, 0.25)'
     })
   })

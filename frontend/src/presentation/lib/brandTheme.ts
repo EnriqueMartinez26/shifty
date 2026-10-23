@@ -1,12 +1,14 @@
 import type React from 'react'
 
+import { getContrastingForeground } from './getContrastingForeground'
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
 
 /**
  * Store brand color used by the booking flow, cover, and logo fallback.
  *
  * - `fill` / `fillBottom`: the store's configured `primary_color`.
- * - `onFill`: white text and icons on colored controls.
+ * - `onFill`: text and icons on colored controls. White on the Shifty orange;
+ *   on a store color, black or white, whichever contrasts more.
  *
  * Text and icons on white or gray use the neutral text tokens, never a brand
  * tint (S9, 2026-10-22): the store color only appears as itself, as a fill.
@@ -68,7 +70,11 @@ export const resolveBrandTheme = (primaryColor: string | null | undefined): Bran
     return DEFAULT_BRAND_THEME
   }
   const fill = expandHex(color).toLowerCase()
-  return { fill, fillBottom: fill, onFill: WHITE, isDefault: false }
+  // A store can pick any color, light ones included: white text on the pink of
+  // jaziz-nails reads at 2.35:1. Until stores pick from a fixed palette checked
+  // for white text (planned by Enrique, 2026-10-23), the text color is chosen
+  // against the fill.
+  return { fill, fillBottom: fill, onFill: getContrastingForeground(fill), isDefault: false }
 }
 
 /** CSS variables keep booking actions aligned with the store's chosen color. */
