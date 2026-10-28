@@ -39,12 +39,14 @@ Output next to the `--csv` prefix:
 
 | Criterion | Threshold |
 | --- | --- |
+| Complete run | Locust exit code 0 (`--locust-exit-code`); at least 40 SLO samples with distinct timestamps spanning ≥ 24 minutes; at least 4 recorded bursts. A shorter or interrupted run cannot pass, even if its partial latency data looks good |
 | p95 per route with ≥ 20 samples | < 500 ms (`--p95-ms`) |
 | p95 global (Aggregated row) | < 500 ms |
 | Login p95 (bcrypt, 12 rounds) | < 1 s (`--login-p95-ms`): a deliberate deviation from plan §9's "p95 < 500 ms per route", taken from plan-capacidad §5.2. Login is bound by bcrypt's CPU cost and happens once per session, not per page |
 | Excluded from p95 | `/reports/export` and the burst requests |
 | 5xx, 429, connection errors | 0 over the WHOLE run, ramp included (the status-code tally is not reset when the plateau starts, unlike the latency stats). A 409 outside the burst is legitimate: the slot was taken between availability and booking |
-| Each burst | exactly 1 × 201, the rest 409, at least one burst recorded |
+| Each burst | exactly 1 × 201, the rest 409; all 4 bursts from the 20-minute plateau must be recorded |
+| Measured network offset | 0–150 ms (`--network-offset-ms`); a value outside that range is an input error (exit 2) |
 | Every SLO sample | `oldest_pending_outbox_seconds` and `oldest_pending_email_send_seconds` present and ≤ 120 s (a sample without them fails: a missing value is not a zero); `outbox_budget_drops` = 0 if the metric exists. A malformed line in `<prefix>_slo.jsonl` is an input error (exit 2) |
 | Memory (optional `--docker-stats` log) | every container < 70 % of its limit |
 
@@ -99,11 +101,17 @@ From a machine that is NOT the VPS, in `backend/`:
 python loadtests/aceptacion.py --host https://staging.example.com/api --out manifiesto.json
 export SHIFTY_MANIFEST=manifiesto.json SEED_OWNER_PASSWORD=... \
        SHIFTY_SUPERADMIN_EMAIL=... SHIFTY_SUPERADMIN_PASSWORD=...
+set +e
 uv run locust -f loadtests/locust_aceptacion.py --headless \
   --host https://staging.example.com/api --csv run/aceptacion --only-summary
+locust_exit_code=$?
+set -e
 uv run python scripts/perf_acceptance_check.py --csv-prefix run/aceptacion \
+  --locust-exit-code "$locust_exit_code" \
   --docker-stats stats.log
 ```
+
+If the shell uses `set -e`, disable it around Locust, capture its exit code, then restore it before running the checker. The checker requires a zero exit code as well as evidence that the run lasted its full duration.
 
 `--host` carries the `/api` prefix. Use a single Locust process (no `--processes`): the burst and the SLO sampler run in the local runner.
 
@@ -131,9 +139,9 @@ GitHub Actions rejects loopback even if that flag is set.
    docker compose cp backend:/tmp/capacidad.json manifiesto.json
    ```
 3. Set `PERF_ALLOW_LOCAL_TARGET=true` for the local rehearsal, then point the manifest builder and Locust at `http://localhost/api` to go through nginx (the dev `nginx.conf` allows 200 r/s per IP, ten times production, so a single IP fits) or at the backend directly (`--host http://127.0.0.1:8000`) to leave the edge out. Clear the variable before running against staging.
-4. Shorten the run with `SHIFTY_USUARIOS=20 SHIFTY_RAMPA_S=20 SHIFTY_MESETA_S=90 SHIFTY_RAFAGA_CADA_S=40 SHIFTY_THINK_SCALE=0.3`. These overrides exist only for rehearsals; the acceptance is judged with the plan's values.
+4. Shorten the run with `SHIFTY_USUARIOS=20 SHIFTY_RAMPA_S=20 SHIFTY_MESETA_S=90 SHIFTY_RAFAGA_CADA_S=40 SHIFTY_THINK_SCALE=0.3`. These overrides exist only for rehearsals; the checker deliberately rejects a shortened run, and the acceptance is judged with the plan's values.
 
-Rehearsal on 2026-09-24 (3 stores, 20 users, 90 s plateau, local uvicorn): 1336 requests, 0 errors, two bursts of 1 × 201 + 9 × 409, 4 SLO samples, verdict `APROBADA`.
+Historical rehearsal on 2026-09-24 (3 stores, 20 users, 90 s plateau, local uvicorn): 1336 requests, 0 errors, two bursts of 1 × 201 + 9 × 409, 4 SLO samples. The checker then printed `APROBADA`; under the completeness criteria added later, this run is explicitly not a capacity acceptance.
 
 ### From CI
 
@@ -158,7 +166,7 @@ Each step gets only the secrets it uses: the configuration check and Locust get 
 | `PERF_ALLOWED_ORIGIN` | Environment variable | exact HTTPS staging origin; production apex and `www` are rejected |
 | `PERF_STAGING_ISOLATED` | Environment variable | `true` only with recorded evidence that staging services and data are isolated from production |
 | `PERF_RUNNER_EGRESS_RESTRICTED` | Environment variable | `true` only after the dedicated runner passes allow/deny network checks |
-| `PERF_NETWORK_OFFSET_MS` | Environment variable | measured ms added to p95 thresholds |
+| `PERF_NETWORK_OFFSET_MS` | Environment variable | measured ms added to p95 thresholds; the checker rejects values outside 0–150 ms |
 | `PERF_NIGHTLY` | Repository variable | `true` to enable the nightly run after the release gates pass |
 
 **Runner group and egress.** Configure the runner group in GitHub settings; the workflow cannot create or restrict it. The group and its runner must meet these requirements:
@@ -179,7 +187,7 @@ Runner location still matters: a distant runner adds round-trip time to every re
 - `FALLA 5xx: ...` or `429: ...`: open `<prefix>_codigos.json` for the route; 429 in a single-IP run usually means the limits of §3.2 were not raised.
 - `FALLA rafaga N: ...`: two 201s is a double booking (the GiST exclusion or the lock failed) and blocks the release; a 5xx inside the burst is a lock or deadlock handled as an error.
 - `FALLA SLO ...`: the outbox or the mail dispatch fell behind under load; check the Celery worker and `process_outbox_batch` logs for that window.
-- Locust's own failure count also includes business answers marked as failures; the check script is the verdict, not Locust's exit code.
+- `FALLA Locust termino con codigo N`: Locust recorded a request failure or stopped early. The scenario marks the expected business answers (200, 201, 204, 409; `OK_NEGOCIO` in `loadtests/locust_aceptacion.py`) as successes, so a non-zero exit code means something else failed.
 
 ## 6. When to run it
 
