@@ -541,8 +541,22 @@ def test_perf_valida_el_destino_antes_de_leer_datos_o_usar_credenciales() -> Non
     )
     assert indice_guard < indice_manifest < indice_locust
     guard = pasos[indice_guard]
+    assert guard["run"].strip() == "uv run python scripts/verify_perf_target.py"
     assert guard["env"]["STAGING_URL"] == "${{ secrets.STAGING_URL }}"
     assert guard["env"]["PERF_ALLOWED_ORIGIN"] == "$" + "{{ vars.PERF_ALLOWED_ORIGIN }}"
+    allowed_origin = "$" + "{{ vars.PERF_ALLOWED_ORIGIN }}"
+    manifest = pasos[indice_manifest]
+    locust = pasos[indice_locust]
+    assert manifest["env"]["STAGING_URL"] == guard["env"]["STAGING_URL"]
+    assert locust["env"]["STAGING_URL"] == guard["env"]["STAGING_URL"]
+    assert manifest["env"]["PERF_ALLOWED_ORIGIN"] == allowed_origin
+    assert locust["env"]["PERF_ALLOWED_ORIGIN"] == allowed_origin
+    assert all(
+        "--local-rehearsal" not in str(paso.get("run", ""))
+        for paso in (guard, manifest, locust)
+    )
+    assert '--host "$STAGING_URL"' in str(manifest.get("run", ""))
+    assert '--host "$STAGING_URL"' in str(locust.get("run", ""))
 
 
 @pytest.mark.skipif(BASH is None, reason="hace falta bash")

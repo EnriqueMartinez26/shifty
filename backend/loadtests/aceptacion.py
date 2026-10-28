@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import random
 import sys
 import time
@@ -21,6 +22,15 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
+
+BACKEND_ROOT = Path(__file__).resolve().parents[1]
+if str(BACKEND_ROOT) not in sys.path:
+    sys.path.insert(0, str(BACKEND_ROOT))
+
+from scripts.verify_perf_target import (  # noqa: E402
+    TargetCheckError,
+    verify_target_url,
+)
 
 # Mezcla de la prueba: 200 usuarios concurrentes.
 CLIENTES = 150
@@ -222,12 +232,22 @@ def _obtener_http(host: str, pausa_s: float) -> Callable[[str], Any]:
     return obtener
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def main(
+    argv: Sequence[str] | None = None,
+    *,
+    target_environment: Mapping[str, str] | None = None,
+    opener: Any | None = None,
+) -> int:
     """``python loadtests/aceptacion.py --host URL/api --out manifiesto.json``."""
     parser = argparse.ArgumentParser(
         description="Arma el manifiesto de la prueba desde la API de staging."
     )
     parser.add_argument("--host", required=True, help="URL de la API, con /api")
+    parser.add_argument(
+        "--local-rehearsal",
+        action="store_true",
+        help="permite HTTP solo para una IP de loopback literal",
+    )
     parser.add_argument("--stores", type=int, default=TIENDAS_SEMBRADAS)
     parser.add_argument("--domain", default=DOMINIO_DUENOS)
     parser.add_argument("--out", required=True)
@@ -235,8 +255,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--pause", type=float, default=0.05, help="pausa entre requests (limites)"
     )
     args = parser.parse_args(argv)
+    variables = os.environ if target_environment is None else target_environment
+    try:
+        api_base = verify_target_url(
+            args.host,
+            variables.get("PERF_ALLOWED_ORIGIN"),
+            allow_local=args.local_rehearsal,
+            opener=opener,
+        )
+    except TargetCheckError as exc:
+        print(f"Destino de rendimiento rechazado: {exc}", file=sys.stderr)
+        return 1
+
     manifiesto = manifiesto_desde_api(
-        _obtener_http(args.host.rstrip("/"), args.pause),
+        _obtener_http(api_base, args.pause),
         tiendas=args.stores,
         dominio=args.domain,
     )

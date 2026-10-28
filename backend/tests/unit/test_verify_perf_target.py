@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import importlib.util
+import os
+import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -74,6 +76,112 @@ def test_builds_probe_url_from_normalized_approved_origin() -> None:
         modulo.build_health_url("https://staging.example.test/api", ALLOWED_ORIGIN)
         == "https://staging.example.test/api/ops/health/ready"
     )
+
+
+def test_remote_target_returns_the_api_base_that_was_probed() -> None:
+    modulo = _modulo()
+    opener = _Opener()
+
+    api_base = modulo.verify_target_url(STAGING_URL, ALLOWED_ORIGIN, opener=opener)
+
+    assert api_base == "https://staging.example.test/api"
+    assert opener.request is not None
+    assert opener.request.full_url == f"{api_base}/ops/health/ready"
+
+
+def test_staging_verifier_rejects_loopback_http_unless_local_mode_is_explicit() -> None:
+    modulo = _modulo()
+    local_url = "http://127.0.0.1:8080/api"
+
+    with pytest.raises(modulo.TargetCheckError, match="debe usar HTTPS"):
+        modulo.verify_target_url(local_url)
+
+    assert modulo.verify_target_url(local_url, allow_local=True) == local_url
+
+
+def test_staging_preflight_rejects_loopback_before_probe_even_with_allowlist() -> None:
+    modulo = _modulo()
+    opener = _Opener()
+
+    with pytest.raises(modulo.TargetCheckError, match="debe usar HTTPS"):
+        modulo.verify_target(
+            {
+                "STAGING_URL": "http://127.0.0.1:8080/api",
+                "PERF_ALLOWED_ORIGIN": ALLOWED_ORIGIN,
+            },
+            opener=opener,
+        )
+
+    assert opener.request is None
+
+
+def test_standalone_staging_cli_rejects_loopback_http_before_any_probe() -> None:
+    environment = os.environ.copy()
+    environment["STAGING_URL"] = "http://127.0.0.1:8080/api"
+    result = subprocess.run(
+        [sys.executable, str(SCRIPT)],
+        cwd=BACKEND_ROOT,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "debe usar HTTPS" in result.stderr
+    assert "validado" not in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("http://127.0.0.1:8080/api/", "http://127.0.0.1:8080/api"),
+        ("http://[::1]:8080/api", "http://[::1]:8080/api"),
+        ("http://127.0.0.1/api", "http://127.0.0.1/api"),
+    ],
+)
+def test_permite_solo_loopback_http_literal_para_ensayo_local(
+    url: str, expected: str
+) -> None:
+    assert _modulo().verify_target_url(url, allow_local=True) == expected
+
+
+@pytest.mark.parametrize(
+    ("url", "allow_local"),
+    [
+        ("http://１２７.０.０.１:8080/api", True),
+        ("https://１２７.０.０.１/api", False),
+        ("http://ｌｏｃａｌｈｏｓｔ:8080/api", True),
+        ("https://ｌｏｃａｌｈｏｓｔ/api", False),
+    ],
+)
+def test_idna_no_permite_loopback_numerico_ni_localhost_compatibles(
+    url: str, allow_local: bool
+) -> None:
+    modulo = _modulo()
+
+    with pytest.raises(modulo.TargetCheckError):
+        modulo.verify_target_url(
+            url, allowed_origin=ALLOWED_ORIGIN, allow_local=allow_local
+        )
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://localhost:8000/api",
+        "http://shifty.local/api",
+        "http://192.168.1.20/api",
+        "http://2130706433/api",
+        "https://127.0.0.1/api",
+        "https://[::1]/api",
+    ],
+)
+def test_rechaza_http_no_loopback_y_https_loopback(url: str) -> None:
+    modulo = _modulo()
+    with pytest.raises(modulo.TargetCheckError):
+        modulo.verify_target_url(url, ALLOWED_ORIGIN)
 
 
 @pytest.mark.parametrize(

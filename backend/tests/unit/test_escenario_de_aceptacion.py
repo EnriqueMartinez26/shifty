@@ -11,10 +11,13 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import random
+import subprocess
 import sys
 import threading
 import urllib.error
+from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from datetime import date
 from pathlib import Path
@@ -36,12 +39,19 @@ class _Adapter(BaseAdapter):
         self.requests: list[requests.PreparedRequest] = []
 
     def send(
-        self, request: requests.PreparedRequest, **_kwargs: object
+        self,
+        request: requests.PreparedRequest,
+        stream: bool = False,
+        timeout: float | tuple[float | None, float | None] | None = None,
+        verify: bool | str = True,
+        cert: str | tuple[str, str] | None = None,
+        proxies: dict[str, str] | None = None,
     ) -> requests.Response:
+        del stream, timeout, verify, cert, proxies
         self.requests.append(request)
         response = requests.Response()
         response.status_code = self.status
-        response.url = request.url
+        response.url = request.url or ""
         response.request = request
         response._content = b"{}"
         if self.location:
@@ -67,6 +77,180 @@ def test_la_mezcla_es_la_del_plan() -> None:
     assert m.TOTAL_USUARIOS == 200
     assert (m.RAMPA_S, m.MESETA_S) == (300, 1200)
     assert (m.RAFAGA_CADA_S, m.RAFAGA_TAMANO) == (300, 10)
+
+
+def test_cli_rechaza_destino_remoto_antes_de_consultar_o_escribir_manifiesto(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    m = _modulo()
+    salida = tmp_path / "manifiesto.json"
+    monkeypatch.setattr(
+        m,
+        "manifiesto_desde_api",
+        lambda *_args, **_kwargs: pytest.fail("no debe consultar la API"),
+    )
+
+    resultado = m.main(
+        [
+            "--host",
+            "https://production.example.test/api",
+            "--stores",
+            "1",
+            "--out",
+            str(salida),
+        ],
+        target_environment={"PERF_ALLOWED_ORIGIN": "https://staging.example.test"},
+    )
+
+    assert resultado == 1
+    assert "no coincide con el origen aprobado" in capsys.readouterr().err
+    assert not salida.exists()
+
+
+def test_cli_real_importa_el_guard_canonico_y_rechaza_antes_de_escribir(
+    tmp_path: Path,
+) -> None:
+    salida = tmp_path / "manifiesto.json"
+    environment = os.environ.copy()
+    environment["PERF_ALLOWED_ORIGIN"] = "https://staging.example.test"
+    resultado = subprocess.run(
+        [
+            sys.executable,
+            str(BACKEND_ROOT / "loadtests" / "aceptacion.py"),
+            "--host",
+            "https://production.example.test/api",
+            "--stores",
+            "1",
+            "--out",
+            str(salida),
+        ],
+        cwd=BACKEND_ROOT,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+
+    assert resultado.returncode == 1
+    assert "Destino de rendimiento rechazado" in resultado.stderr
+    assert "no coincide con el origen aprobado" in resultado.stderr
+    assert not salida.exists()
+
+
+def test_cli_usa_el_api_base_canonico_que_valido_el_guard(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    m = _modulo()
+    salida = tmp_path / "manifiesto.json"
+    bases: list[str] = []
+
+    def obtener_http(host: str, _pausa: float) -> Callable[[str], object]:
+        bases.append(host)
+        return lambda _ruta: None
+
+    monkeypatch.setattr(m, "_obtener_http", obtener_http)
+    monkeypatch.setattr(
+        m, "manifiesto_desde_api", lambda *_args, **_kwargs: {"stores": [{}]}
+    )
+
+    resultado = m.main(
+        [
+            "--host",
+            "http://127.0.0.1:8080/api/",
+            "--local-rehearsal",
+            "--stores",
+            "1",
+            "--out",
+            str(salida),
+        ],
+        target_environment={},
+    )
+
+    assert resultado == 0
+    assert bases == ["http://127.0.0.1:8080/api"]
+    assert json.loads(salida.read_text(encoding="utf-8")) == {"stores": [{}]}
+
+
+def _locust_run(
+    host: str, *, manifest: str, local_rehearsal: bool = False
+) -> subprocess.CompletedProcess[str]:
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "PERF_ALLOWED_ORIGIN": "https://staging.example.test",
+            "SHIFTY_MANIFEST": manifest,
+            "SEED_OWNER_PASSWORD": "test-password",
+            "SHIFTY_SUPERADMIN_EMAIL": "admin@example.test",
+            "SHIFTY_SUPERADMIN_PASSWORD": "test-password",
+        }
+    )
+    command = [
+        sys.executable,
+        "-m",
+        "locust",
+        "-f",
+        str(LOCUSTFILE),
+        "--headless",
+        "--users",
+        "1",
+        "--spawn-rate",
+        "1",
+        "--run-time",
+        "1s",
+        "--host",
+        host,
+    ]
+    if local_rehearsal:
+        command.append("--local-rehearsal")
+    return subprocess.run(
+        command,
+        cwd=BACKEND_ROOT,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+    )
+
+
+def test_locust_rechaza_origen_no_aprobado_antes_de_leer_el_manifiesto(
+    tmp_path: Path,
+) -> None:
+    resultado = _locust_run(
+        "https://production.example.test/api", manifest=str(tmp_path / "missing.json")
+    )
+    salida = resultado.stdout + resultado.stderr
+
+    assert resultado.returncode != 0
+    assert "Destino de rendimiento rechazado" in salida
+    assert "no coincide con el origen aprobado" in salida
+    assert "FileNotFoundError" not in salida
+
+
+def test_locust_conserva_loopback_http_solo_para_ensayo_local(tmp_path: Path) -> None:
+    resultado = _locust_run(
+        "http://127.0.0.1:8080/api/",
+        manifest=str(tmp_path / "missing.json"),
+        local_rehearsal=True,
+    )
+    salida = resultado.stdout + resultado.stderr
+
+    assert resultado.returncode != 0
+    assert "Destino de rendimiento rechazado" not in salida
+    assert "SHIFTY_MANIFEST" in salida or "FileNotFoundError" in salida
+
+
+def test_locust_rechaza_loopback_http_sin_modo_local_explicito(tmp_path: Path) -> None:
+    resultado = _locust_run(
+        "http://127.0.0.1:8080/api/", manifest=str(tmp_path / "missing.json")
+    )
+    salida = resultado.stdout + resultado.stderr
+
+    assert resultado.returncode != 0
+    assert "Destino de rendimiento rechazado" in salida
+    assert "debe usar HTTPS" in salida
+    assert "FileNotFoundError" not in salida
 
 
 def test_la_forma_sube_en_cinco_minutos_y_corta_al_final_de_la_meseta() -> None:

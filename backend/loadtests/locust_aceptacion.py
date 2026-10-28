@@ -58,6 +58,13 @@ from locust.exception import StopUser
 from locust.runners import LocalRunner
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+BACKEND_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(BACKEND_ROOT))
+
+from scripts.verify_perf_target import (  # noqa: E402
+    TargetCheckError,
+    verify_target_url,
+)
 
 from aceptacion import (  # noqa: E402
     CLIENTES,
@@ -93,7 +100,8 @@ MESETA = int(os.getenv("SHIFTY_MESETA_S", str(MESETA_S)))
 RAFAGA_CADA = int(os.getenv("SHIFTY_RAFAGA_CADA_S", str(RAFAGA_CADA_S)))
 USUARIOS = int(os.getenv("SHIFTY_USUARIOS", str(TOTAL_USUARIOS)))
 
-TIENDAS: list[TiendaSembrada] = cargar_manifiesto(MANIFEST) if MANIFEST else []
+TIENDAS: list[TiendaSembrada] = []
+TARGET_VERIFIED = False
 CONTEO = ConteoDeCodigos()
 _DUENO_SIGUIENTE = itertools.count()
 _RNG = random.Random()
@@ -158,16 +166,43 @@ def _contar(
     CONTEO.registrar(request_type, name, codigo)
 
 
+@events.init_command_line_parser.add_listener  # type: ignore[untyped-decorator]
+def _agregar_opcion_local(parser: Any, **_kwargs: Any) -> None:
+    parser.add_argument(
+        "--local-rehearsal",
+        action="store_true",
+        help="permite HTTP solo para una IP de loopback literal",
+    )
+
+
 @events.init.add_listener  # type: ignore[untyped-decorator]
 def _validar(environment: Environment, **_kwargs: Any) -> None:
+    global TARGET_VERIFIED
+
+    opciones = environment.parsed_options
+    try:
+        api_base = verify_target_url(
+            environment.host or "",
+            os.getenv("PERF_ALLOWED_ORIGIN"),
+            allow_local=bool(getattr(opciones, "local_rehearsal", False)),
+        )
+    except TargetCheckError as exc:
+        raise SystemExit(f"Destino de rendimiento rechazado: {exc}") from None
+
+    # Locust's clients are created after the init event. Store the canonical
+    # base returned by the guard so requests use precisely the checked URL.
+    environment.host = api_base
     if not TIENDAS:
-        raise SystemExit("Falta SHIFTY_MANIFEST (manifiesto de seed_capacidad.py)")
+        if not MANIFEST:
+            raise SystemExit("Falta SHIFTY_MANIFEST (manifiesto de seed_capacidad.py)")
+        TIENDAS.extend(cargar_manifiesto(MANIFEST))
     if not OWNER_PASSWORD:
         raise SystemExit("Falta SEED_OWNER_PASSWORD")
     if not SUPERADMIN_EMAIL or not SUPERADMIN_PASSWORD:
         # Sin superadmin no hay muestras de /ops/slo y el veredicto rechaza
         # despues de 25 minutos: mejor cortar ahora.
         raise SystemExit("Faltan SHIFTY_SUPERADMIN_EMAIL / SHIFTY_SUPERADMIN_PASSWORD")
+    TARGET_VERIFIED = True
 
 
 class ClientePublico(HttpUser):
@@ -587,6 +622,8 @@ def _muestrear_slo(environment: Environment) -> None:
 
 @events.test_start.add_listener  # type: ignore[untyped-decorator]
 def _arrancar(environment: Environment, **_kwargs: Any) -> None:
+    if not TARGET_VERIFIED:
+        raise SystemExit("El destino no fue validado antes de iniciar Locust")
     if not isinstance(environment.runner, LocalRunner):
         print("AVISO: rafaga y SLO solo corren con un proceso local de Locust")
         return

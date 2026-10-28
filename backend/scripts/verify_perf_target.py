@@ -1,4 +1,4 @@
-"""Fail-closed guard for the staging target used by capacity acceptance."""
+"""Fail-closed validator for performance-test targets and staging preflight."""
 
 from __future__ import annotations
 
@@ -8,22 +8,40 @@ import os
 import re
 import sys
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
+
+BACKEND_ROOT = Path(__file__).resolve().parents[1]
+if str(BACKEND_ROOT) not in sys.path:
+    sys.path.insert(0, str(BACKEND_ROOT))
 
 HEALTH_PATH = "/api/ops/health/ready"
 REQUEST_TIMEOUT_SECONDS = 5
 MAX_RESPONSE_BYTES = 64 * 1024
 _DNS_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z")
-_NUMERIC_HOST = re.compile(r"[0-9.]+\Z")
+_NUMERIC_HOST = re.compile(r"(?i)(?:0x[0-9a-f]+|[0-9]+)(?:\.(?:0x[0-9a-f]+|[0-9]+))*\Z")
 
 
 class TargetCheckError(Exception):
     """Safe, user-facing failure with no target or response data attached."""
 
 
-def _normalized_host(host: str) -> str:
+def _address_is_prohibited(
+    address: ipaddress.IPv4Address | ipaddress.IPv6Address,
+) -> bool:
+    mapped = address.ipv4_mapped if isinstance(address, ipaddress.IPv6Address) else None
+    return (
+        address.is_loopback
+        or address.is_unspecified
+        or address.is_link_local
+        or address.is_multicast
+        or (mapped is not None and mapped.is_loopback)
+    )
+
+
+def _normalized_host(host: str, *, allow_loopback: bool = False) -> str:
     if not host or "%" in host:
         raise TargetCheckError("El origen aprobado no es válido.")
 
@@ -33,15 +51,8 @@ def _normalized_host(host: str) -> str:
         if _NUMERIC_HOST.fullmatch(host):
             raise TargetCheckError("El origen aprobado no es válido.") from None
     else:
-        mapped = (
-            address.ipv4_mapped if isinstance(address, ipaddress.IPv6Address) else None
-        )
-        if (
-            address.is_loopback
-            or address.is_unspecified
-            or address.is_link_local
-            or address.is_multicast
-            or (mapped is not None and mapped.is_loopback)
+        if _address_is_prohibited(address) and not (
+            allow_loopback and address.is_loopback
         ):
             raise TargetCheckError("El origen aprobado no es válido.")
         return address.compressed.lower()
@@ -58,13 +69,32 @@ def _normalized_host(host: str) -> str:
         or ascii_host.endswith(".localhost")
     ):
         raise TargetCheckError("El origen aprobado no es válido.")
+
+    # IDNA maps compatibility characters (for example fullwidth digits and
+    # letters) to ASCII. Re-parse that result so an obfuscated address or a
+    # localhost alias cannot bypass the checks applied to literal IP hosts.
+    try:
+        normalized_address = ipaddress.ip_address(ascii_host)
+    except ValueError:
+        if _NUMERIC_HOST.fullmatch(ascii_host):
+            raise TargetCheckError("El origen aprobado no es válido.") from None
+    else:
+        # Loopback is accepted only when the original URL contained a literal
+        # IP recognized by ipaddress above; IDNA-mapped spellings are not a
+        # local-rehearsal exception.
+        if _address_is_prohibited(normalized_address):
+            raise TargetCheckError("El origen aprobado no es válido.")
+        return normalized_address.compressed.lower()
+
     labels = ascii_host.split(".")
     if any(not _DNS_LABEL.fullmatch(label) for label in labels):
         raise TargetCheckError("El origen aprobado no es válido.")
     return ascii_host
 
 
-def _parse_https_url(value: str, *, allow_api_path: bool) -> tuple[str, int | None]:
+def _parse_url(
+    value: str, *, schemes: tuple[str, ...], allow_api_path: bool
+) -> tuple[str, str, int | None]:
     if (
         not value
         or value != value.strip()
@@ -81,20 +111,16 @@ def _parse_https_url(value: str, *, allow_api_path: bool) -> tuple[str, int | No
     except ValueError:
         raise TargetCheckError("La configuración del destino no es válida.") from None
 
+    scheme = parsed.scheme.lower()
     if (
-        parsed.scheme.lower() != "https"
+        scheme not in schemes
         or not parsed.netloc
         or parsed.hostname is None
         or "@" in parsed.netloc
         or parsed.username is not None
         or parsed.password is not None
+        or parsed.netloc.endswith(":")
     ):
-        raise TargetCheckError("La configuración del destino no es válida.")
-
-    host = _normalized_host(parsed.hostname)
-    # An empty explicit port (``https://host:``) is malformed even though
-    # urllib reports ``None`` for it.
-    if parsed.netloc.endswith(":"):
         raise TargetCheckError("La configuración del destino no es válida.")
 
     if allow_api_path:
@@ -103,10 +129,11 @@ def _parse_https_url(value: str, *, allow_api_path: bool) -> tuple[str, int | No
     elif parsed.path not in ("", "/"):
         raise TargetCheckError("El origen aprobado no es válido.")
 
-    return host, port
+    host = _normalized_host(parsed.hostname, allow_loopback=scheme == "http")
+    return scheme, host, port
 
 
-def _format_origin(host: str, port: int | None) -> str:
+def _format_origin(scheme: str, host: str, port: int | None) -> str:
     try:
         address = ipaddress.ip_address(host)
     except ValueError:
@@ -116,22 +143,30 @@ def _format_origin(host: str, port: int | None) -> str:
             f"[{address.compressed}]" if address.version == 6 else address.compressed
         )
 
-    if port is not None and port != 443:
+    default_port = 80 if scheme == "http" else 443
+    if port is not None and port != default_port:
         authority = f"{authority}:{port}"
-    return f"https://{authority}"
+    return f"{scheme}://{authority}"
+
+
+def _parse_https_url(value: str, *, allow_api_path: bool) -> tuple[str, int | None]:
+    _, host, port = _parse_url(value, schemes=("https",), allow_api_path=allow_api_path)
+    return host, port
 
 
 def normalize_origin(value: str) -> str:
     """Return a canonical HTTPS origin; accept only an origin and optional slash."""
     host, port = _parse_https_url(value, allow_api_path=False)
-    return _format_origin(host, port)
+    return _format_origin("https", host, port)
 
 
 def build_health_url(staging_url: str, allowed_origin: str) -> str:
-    """Validate the API base against the approved origin and build the probe URL."""
-    staging_host, staging_port = _parse_https_url(staging_url, allow_api_path=True)
+    """Validate the API base against the approved origin and build its probe URL."""
+    _, staging_host, staging_port = _parse_url(
+        staging_url, schemes=("https",), allow_api_path=True
+    )
     approved = normalize_origin(allowed_origin)
-    if _format_origin(staging_host, staging_port) != approved:
+    if _format_origin("https", staging_host, staging_port) != approved:
         raise TargetCheckError("El destino no coincide con el origen aprobado.")
     return f"{approved}{HEALTH_PATH}"
 
@@ -193,15 +228,57 @@ def probe_health(url: str, *, opener: Any | None = None) -> None:
     validate_health_response(status, body)
 
 
+def verify_target_url(
+    api_url: str,
+    allowed_origin: str | None = None,
+    *,
+    allow_local: bool = False,
+    opener: Any | None = None,
+) -> str:
+    """Validate and return the canonical API base an entrypoint must use.
+
+    Plain HTTP is reserved for literal loopback IPs used by local rehearsals.
+    Any remote target must match the HTTPS allowlist and pass the staging
+    readiness probe before this function returns.
+    """
+    scheme, host, port = _parse_url(
+        api_url, schemes=("https", "http"), allow_api_path=True
+    )
+
+    if scheme == "http":
+        if not allow_local:
+            raise TargetCheckError("El destino de staging debe usar HTTPS.")
+        try:
+            address = ipaddress.ip_address(host)
+        except ValueError:
+            raise TargetCheckError(
+                "HTTP solo se permite para una IP local de loopback."
+            ) from None
+        if not address.is_loopback:
+            raise TargetCheckError(
+                "HTTP solo se permite para una IP local de loopback."
+            )
+        return f"{_format_origin('http', host, port)}/api"
+
+    if not allowed_origin:
+        raise TargetCheckError("Falta PERF_ALLOWED_ORIGIN para validar staging.")
+    health_url = build_health_url(api_url, allowed_origin)
+    probe_health(health_url, opener=opener)
+    approved = normalize_origin(allowed_origin)
+    return f"{approved}/api"
+
+
 def verify_target(
     environment: Mapping[str, str] | None = None, *, opener: Any | None = None
-) -> None:
+) -> str:
+    """Validate ``STAGING_URL`` strictly as remote HTTPS staging."""
     variables = os.environ if environment is None else environment
     staging_url = variables.get("STAGING_URL", "")
-    allowed_origin = variables.get("PERF_ALLOWED_ORIGIN", "")
-    if not staging_url or not allowed_origin:
-        raise TargetCheckError("Faltan variables para validar el destino de staging.")
-    probe_health(build_health_url(staging_url, allowed_origin), opener=opener)
+    if not staging_url:
+        raise TargetCheckError("Falta STAGING_URL para validar el destino.")
+    return verify_target_url(
+        staging_url, variables.get("PERF_ALLOWED_ORIGIN"), opener=opener
+    )
 
 
 def main(

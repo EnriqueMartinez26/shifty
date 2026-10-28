@@ -92,6 +92,7 @@ jobs:
       - name: Manifiesto de tiendas desde staging
         env:
           STAGING_URL: ${{ secrets.STAGING_URL }}
+          PERF_ALLOWED_ORIGIN: ${{ vars.PERF_ALLOWED_ORIGIN }}
         run: |
           mkdir -p "$RUNNER_TEMP/perf"
           uv run python loadtests/aceptacion.py \
@@ -100,6 +101,7 @@ jobs:
       - name: Locust (rampa 5 min + meseta 20 min)
         env:
           STAGING_URL: ${{ secrets.STAGING_URL }}
+          PERF_ALLOWED_ORIGIN: ${{ vars.PERF_ALLOWED_ORIGIN }}
           SEED_OWNER_PASSWORD: ${{ secrets.SEED_OWNER_PASSWORD }}
           SHIFTY_SUPERADMIN_EMAIL: ${{ secrets.SHIFTY_SUPERADMIN_EMAIL }}
           SHIFTY_SUPERADMIN_PASSWORD: ${{ secrets.SHIFTY_SUPERADMIN_PASSWORD }}
