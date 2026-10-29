@@ -5,6 +5,8 @@ import { Outlet } from 'react-router'
 
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
 import { useAuth } from '../context/AuthContext'
+import { superAdminPalette } from '../pages/superadmin/palette'
+import { scopeBadgeStyle } from '../pages/superadmin/shared'
 
 const SuperAdminLayout: React.FC = () => {
   const { logout, user } = useAuth()
@@ -12,13 +14,15 @@ const SuperAdminLayout: React.FC = () => {
   return (
     <div
       className="min-h-screen"
-      style={{
-        background: [
-          'radial-gradient(circle at top right, rgba(30,64,175,0.10), transparent 28%)',
-          `linear-gradient(180deg, ${colors2000s.bg.primary} 0%, ${colors2000s.bg.secondary} 100%)`
-        ].join(', '),
-        color: colors2000s.text.primary
-      }}
+      style={
+        {
+          background: [
+            'radial-gradient(circle at top right, rgba(230,126,34,0.10), transparent 28%)',
+            `linear-gradient(180deg, ${colors2000s.bg.primary} 0%, ${colors2000s.bg.secondary} 100%)`
+          ].join(', '),
+          color: colors2000s.text.primary
+        } as React.CSSProperties
+      }
     >
       <header
         className="sticky top-0 z-40 border-b px-6 py-4 backdrop-blur"
@@ -34,7 +38,7 @@ const SuperAdminLayout: React.FC = () => {
               className="flex h-12 w-12 items-center justify-center rounded-2xl relative overflow-hidden"
               style={{
                 background: `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`,
-                boxShadow: colors2000s.shadows.outerOrange
+                boxShadow: superAdminPalette.brandShadow
               }}
             >
               <div className="absolute inset-x-0 top-0 h-1/2 bg-white/20 pointer-events-none" />
@@ -51,10 +55,7 @@ const SuperAdminLayout: React.FC = () => {
                 </span>
                 <span
                   className="rounded-full px-3 py-1 text-[10px] font-black uppercase tracking-[0.18em]"
-                  style={{
-                    background: '#eff6ff',
-                    color: '#1d4ed8'
-                  }}
+                  style={scopeBadgeStyle('global')}
                 >
                   Super Admin
                 </span>
@@ -104,7 +105,7 @@ const SuperAdminLayout: React.FC = () => {
             boxShadow: colors2000s.shadows.outer
           }}
         >
-          <ArrowLeftRight className="h-5 w-5" style={{ color: colors2000s.orange.accent }} />
+          <ArrowLeftRight className="h-5 w-5" style={{ color: superAdminPalette.icon }} />
           <p className="text-sm font-bold" style={{ color: colors2000s.text.secondary }}>
             Esta sección administra dueños de tiendas y la configuración global de Shifty. No entra
             al panel de ninguna tienda.

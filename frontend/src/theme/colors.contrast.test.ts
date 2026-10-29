@@ -1,4 +1,4 @@
-import { colors2000s } from './colors'
+import { buttonStyles2000s, colors2000s } from './colors'
 
 declare const __dirname: string
 
@@ -7,11 +7,10 @@ const { readFileSync } = jest.requireActual<{
 }>('node:fs')
 const { resolve } = jest.requireActual<{ resolve: (...paths: string[]) => string }>('node:path')
 
-// El naranja vivo de marca (#ff8c42/#e67e22) se reserva para decoración.
-// CTA y selección usan una rampa naranja propia, con blanco por encima de
-// 4.5:1. Este test fija WCAG 2.1 AA para cada par de tokens de texto:
-// los mismos tokens aparecen en etiquetas pequeñas. text.disabled queda
-// fuera a propósito: solo se usa en controles deshabilitados (1.4.3).
+// Los tokens neutrales y semánticos deben cumplir WCAG 2.1 AA sobre superficies
+// claras. El naranja de marca se usa como relleno, pero el texto claro pedido
+// sobre #ff8c42/#e67e22 da 2.31:1/2.85:1: se mide explícitamente y no se declara AA.
+// text.disabled queda fuera a propósito: solo se usa en controles deshabilitados.
 
 const AA_NORMAL = 4.5
 const AA_LARGE = 3
@@ -49,6 +48,7 @@ const LIGHT_SURFACES = {
 const TEXT_ON_LIGHT = {
   'text.primary': colors2000s.text.primary,
   'text.secondary': colors2000s.text.secondary,
+  'orange.heading': colors2000s.orange.heading,
   'orange.accent': colors2000s.orange.accent,
   'status.success.text': colors2000s.status.success.text,
   'status.danger.text': colors2000s.status.danger.text,
@@ -60,20 +60,20 @@ const lightPairs = Object.entries(TEXT_ON_LIGHT).flatMap(([text, fg]) =>
   Object.entries(LIGHT_SURFACES).map(([surface, bg]) => [text, fg, surface, bg] as const)
 )
 
-// El CTA y todo lo "seleccionado": texto blanco sobre la rampa naranja
-// orange.cta -> orange.ctaEnd (buttonStyles2000s.selected, orangeCtaGradient).
-const ctaPairs = [
+// Se mide el interior del glifo sin asumir una contribución del borde del botón.
+// No hay contorno ni halo; el par de texto y relleno queda por debajo de AA.
+const brandOrangePairs = [
   [
     'text.onOrangeSelection',
     colors2000s.text.onOrangeSelection,
-    'orange.cta',
-    colors2000s.orange.cta
+    'orange.light',
+    colors2000s.orange.light
   ],
   [
     'text.onOrangeSelection',
     colors2000s.text.onOrangeSelection,
-    'orange.ctaEnd',
-    colors2000s.orange.ctaEnd
+    'orange.dark',
+    colors2000s.orange.dark
   ]
 ] as const
 
@@ -104,7 +104,7 @@ describe('contraste de los tokens de texto (WCAG 2.1 AA)', () => {
     expect(() => luminance('#fff')).toThrow()
   })
 
-  it.each([...lightPairs, ...ctaPairs, ...statusPairs, ...infoAvatarPairs])(
+  it.each([...lightPairs, ...statusPairs, ...infoAvatarPairs])(
     '%s (%s) sobre %s (%s) llega a 4.5:1',
     (_text, fg, _surface, bg) => {
       expect(contrast(fg, bg)).toBeGreaterThanOrEqual(AA_NORMAL)
@@ -120,6 +120,23 @@ describe('contraste de los tokens de texto (WCAG 2.1 AA)', () => {
     )
   })
 
+  it.each(brandOrangePairs)(
+    '%s (%s) interior sobre %s (%s) queda documentado bajo AA',
+    (_text, fg, _surface, bg) => {
+      const ratio = contrast(fg, bg)
+      expect(ratio).toBeCloseTo(bg === colors2000s.orange.light ? 2.31 : 2.85, 2)
+      expect(ratio).toBeLessThan(AA_NORMAL)
+    }
+  )
+
+  it('mantiene texto blanco sin contorno en los botones naranjas seleccionados', () => {
+    expect(colors2000s.text.onOrangeSelection).toBe('#ffffff')
+    expect(buttonStyles2000s.selected.color).toBe('#ffffff')
+    expect(buttonStyles2000s.selected).not.toHaveProperty('WebkitTextStroke')
+    expect(buttonStyles2000s.selected).not.toHaveProperty('textShadow')
+    expect(buttonStyles2000s.selected).not.toHaveProperty('paintOrder')
+  })
+
   it('mantiene el tema activo de Tailwind alineado con los tokens canónicos', () => {
     const activeTheme = readFileSync(resolve(__dirname, '../index.css'), 'utf8')
     const tailwindToken = (name: string) => {
@@ -128,7 +145,7 @@ describe('contraste de los tokens de texto (WCAG 2.1 AA)', () => {
       return value.toLowerCase()
     }
 
-    expect(tailwindToken('primary')).toBe(colors2000s.orange.cta)
+    expect(tailwindToken('primary')).toBe(colors2000s.orange.light)
     expect(tailwindToken('primary-foreground')).toBe(colors2000s.text.onOrangeSelection)
     expect(tailwindToken('background')).toBe(colors2000s.bg.primary)
     expect(tailwindToken('background-end')).toBe(colors2000s.bg.secondary)
@@ -177,8 +194,9 @@ describe('contraste de los tokens de texto (WCAG 2.1 AA)', () => {
       expect(tailwindToken(utility)).toBe(color)
     }
 
-    expect(
-      contrast(tailwindToken('primary-foreground'), tailwindToken('primary'))
-    ).toBeGreaterThanOrEqual(AA_NORMAL)
+    expect(contrast(tailwindToken('primary-foreground'), tailwindToken('primary'))).toBeCloseTo(
+      2.31,
+      2
+    )
   })
 })

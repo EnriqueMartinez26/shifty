@@ -102,14 +102,27 @@ export type DashboardOperationCard = {
   tone?: Tone
 }
 
+export type DashboardQueryIssue = {
+  id: string
+  title: string
+  message: string
+  retrying: boolean
+  onRetry: () => void
+}
+
 export type EnterpriseDashboardProps = {
+  reportsAllowed: boolean
   copy: DashboardCopy
   hero: DashboardHero
+  queryIssues: DashboardQueryIssue[]
   trendPoints: ReportTrendPoint[]
   trendLoading: boolean
+  trendUnavailable: boolean
   topServices: ReportTopServiceItem[]
   salesLoading: boolean
+  salesUnavailable: boolean
   transactions: TransactionItem[]
+  transactionsUnavailable: boolean
   onViewTransactions: () => void
   todayMetrics: MetricItem[]
   urgentActions: ActionItem[]
@@ -117,6 +130,7 @@ export type EnterpriseDashboardProps = {
   operationCards: DashboardOperationCard[]
   moneyMetrics: MetricItem[]
   performanceItems: RankedItem[]
+  performanceUnavailable: boolean
   alerts: ActionItem[]
   opportunities: OpportunityItem[]
   isLoading: boolean

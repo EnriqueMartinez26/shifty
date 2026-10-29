@@ -1,5 +1,6 @@
 import React from 'react'
 
+import { superAdminPrimaryControlStyle } from './superadmin/palette'
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
 import { ToggleSwitch } from '../components/molecules/ToggleSwitch'
 import { create2000sInnerCardStyle, create2000sInputStyle } from '../lib/surfaceStyles'
@@ -13,7 +14,7 @@ import { create2000sInnerCardStyle, create2000sInputStyle } from '../lib/surface
  */
 
 const primaryActionStyle = {
-  ...buttonStyles2000s.selected,
+  ...superAdminPrimaryControlStyle,
   borderRadius: '14px',
   padding: '12px 16px',
   fontSize: '10px',
@@ -45,7 +46,7 @@ const dangerActionStyle = {
 }
 
 export const buttonFocusVisibleClassName =
-  'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-solid focus-visible:outline-[#9a4507]'
+  'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-solid focus-visible:outline-[var(--color-brand-accent)]'
 
 export const FieldLabel: React.FC<{ children: React.ReactNode; htmlFor: string }> = ({
   children,

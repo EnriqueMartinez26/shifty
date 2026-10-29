@@ -106,7 +106,7 @@ export const StaffScheduleModal: React.FC<StaffScheduleModalProps> = ({
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
-        className="relative w-full max-w-2xl rounded-t-md sm:rounded-md shadow-2xl flex flex-col overflow-hidden max-h-[100dvh] sm:max-h-[90vh]"
+        className="relative w-full max-w-2xl rounded-t-md sm:rounded-md shadow-2xl flex flex-col overflow-hidden max-h-[100dvh] sm:max-h-[90dvh]"
         style={create2000sModalSurfaceStyle()}
       >
         <div

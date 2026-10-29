@@ -52,7 +52,7 @@ describe('BookingOtpSection', () => {
     expect(codigo).toHaveAttribute('inputmode', 'numeric')
     expect(codigo).toHaveAttribute('autocomplete', 'one-time-code')
     expect(codigo).toHaveAttribute('maxlength', '6')
-    const email = screen.getByLabelText('Email para el código')
+    const email = screen.getByLabelText('Email para recibir el código')
     expect(email).toHaveAttribute('inputmode', 'email')
     expect(email).toHaveAttribute('autocomplete', 'email')
   })
@@ -163,7 +163,7 @@ describe('BookingOtpSection', () => {
       const onOtpEmailChange = jest.fn()
       render(<BookingOtpSection {...props({ onOtpEmailChange })} />)
 
-      fireEvent.change(screen.getByLabelText('Email para el código'), {
+      fireEvent.change(screen.getByLabelText('Email para recibir el código'), {
         target: { value: 'otra@example.com' }
       })
 

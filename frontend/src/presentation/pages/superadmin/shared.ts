@@ -4,6 +4,7 @@ import type { SuperAdminCoupon } from '@application/services/SuperAdminService'
 
 import { formatArgentinaDate } from '@shared/utils/argentinaTime'
 
+import { superAdminGlobalScopeStyle, superAdminTenantScopeStyle } from './palette'
 import { colors2000s } from '../../../theme/colors'
 import { userRoleLabel } from '../../lib/enumLabels'
 import {
@@ -106,25 +107,19 @@ export interface RedeemFormState {
   coupon_code: string
 }
 
-export const scopeBadgeStyle = (variant: 'global' | 'tenant' | 'danger') => {
+export const scopeBadgeStyle = (variant: 'global' | 'tenant') => {
   if (variant === 'global') {
-    return {
-      background: colors2000s.status.info.bg,
-      border: `1px solid ${colors2000s.status.info.border}`,
-      color: colors2000s.status.info.text
-    }
+    return superAdminGlobalScopeStyle
   }
-  if (variant === 'danger') {
-    return {
-      background: colors2000s.status.danger.bg,
-      border: `1px solid ${colors2000s.status.danger.border}`,
-      color: colors2000s.status.danger.text
-    }
-  }
+  return superAdminTenantScopeStyle
+}
+
+export const statusBadgeStyle = (variant: 'success' | 'warning' | 'danger' | 'info') => {
+  const status = colors2000s.status[variant]
   return {
-    background: '#fff7ed',
-    border: `1px solid ${colors2000s.orange.light}`,
-    color: colors2000s.orange.accent
+    background: status.bg,
+    border: `1px solid ${status.border}`,
+    color: status.text
   }
 }
 
@@ -263,6 +258,8 @@ export interface QueryState<T> {
   data: T | undefined
   isLoading: boolean
   isFetching: boolean
+  error: unknown
+  refetch: () => unknown
 }
 
 // Mismo patron que core/validation.py::SLUG_PATTERN.

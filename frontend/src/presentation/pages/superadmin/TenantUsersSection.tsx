@@ -10,16 +10,19 @@ import type {
 
 import { withoutTechnicalEmail } from '@shared/utils/deliverableEmail'
 
-import { colors2000s } from '../../../theme/colors'
-import { MiniButton } from '../SuperAdminUi'
+import { superAdminPalette } from './palette'
 import {
   emptyStateStyle,
   innerCardStyle,
   panelStyle,
   roleLabel,
   scopeBadgeStyle,
+  statusBadgeStyle,
   type QueryState
 } from './shared'
+import { colors2000s } from '../../../theme/colors'
+import { QuerySectionFeedback } from '../../components/molecules/QuerySectionFeedback'
+import { MiniButton } from '../SuperAdminUi'
 
 /**
  * Seccion del panel SuperAdmin (descompuesto por dominio).
@@ -65,32 +68,34 @@ export const TenantUsersSection: React.FC<TenantUsersSectionProps> = ({
           Detalle de la tienda
         </h2>
         {selectedStore ? (
-          <p className="text-lg font-black" style={{ color: colors2000s.orange.accent }}>
+          <p className="text-lg font-black" style={{ color: colors2000s.text.primary }}>
             {selectedStore.name}
           </p>
         ) : null}
       </div>
       {overviewQuery.isFetching ? (
-        <Loader2 className="h-4 w-4 animate-spin" style={{ color: colors2000s.orange.accent }} />
+        <Loader2 className="h-4 w-4 animate-spin" style={{ color: superAdminPalette.icon }} />
       ) : null}
     </div>
 
-    {!overview && overviewQuery.isLoading ? (
-      <div className="rounded-[1.5rem] p-8 text-center" style={emptyStateStyle}>
-        <Loader2 className="mx-auto mb-3 h-8 w-8 animate-spin" />
-        <p
-          className="text-sm font-black uppercase tracking-widest"
-          style={{ color: colors2000s.text.primary }}
-        >
-          Cargando contexto
-        </p>
-      </div>
-    ) : overview ? (
+    <QuerySectionFeedback
+      loading={Boolean(selectedStore) && !overview && !overviewQuery.error}
+      loadingMessage={overview ? 'Actualizando contexto...' : 'Cargando contexto...'}
+      error={overviewQuery.error}
+      errorMessage={
+        overview
+          ? 'No se pudo actualizar el detalle. Se muestran los últimos datos disponibles.'
+          : 'No se pudo cargar el detalle de la tienda. Reintentá para consultar usuarios y permisos.'
+      }
+      isFetching={overviewQuery.isFetching}
+      onRetry={overviewQuery.refetch}
+    />
+    {overview ? (
       <div className="space-y-4">
         {!selectedStore?.is_active ? (
           <div
             className="rounded-[1.5rem] px-4 py-3 text-xs font-bold"
-            style={scopeBadgeStyle('danger')}
+            style={statusBadgeStyle('danger')}
           >
             Contexto de tienda inactiva. Crear admins, asignar planes y canjear cupones puede quedar
             bloqueado por las reglas del sistema.
@@ -99,7 +104,7 @@ export const TenantUsersSection: React.FC<TenantUsersSectionProps> = ({
 
         <div className="rounded-[1.5rem] p-4" style={innerCardStyle}>
           <div className="mb-3 flex items-center gap-2">
-            <Shield className="h-4 w-4" style={{ color: colors2000s.orange.accent }} />
+            <Shield className="h-4 w-4" style={{ color: superAdminPalette.icon }} />
             <p
               className="text-[10px] font-black uppercase tracking-widest"
               style={{ color: colors2000s.text.secondary }}
@@ -115,24 +120,27 @@ export const TenantUsersSection: React.FC<TenantUsersSectionProps> = ({
                   className="rounded-2xl p-3"
                   style={{ background: colors2000s.bg.button }}
                 >
-                  <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <p className="font-black" style={{ color: colors2000s.text.primary }}>
+                  <div className="flex min-w-0 flex-col items-start gap-2 md:flex-row md:items-start">
+                    <div className="min-w-0 flex-1">
+                      <p
+                        className="break-words font-black"
+                        style={{ color: colors2000s.text.primary }}
+                      >
                         {[admin.first_name, admin.last_name].filter(Boolean).join(' ') ||
                           admin.email}
                       </p>
                       <p
-                        className="text-[10px] font-bold uppercase tracking-widest"
+                        className="break-all text-[10px] font-bold uppercase tracking-widest"
                         style={{ color: colors2000s.text.secondary }}
                       >
                         {admin.email}
                       </p>
                     </div>
                     <span
-                      className="rounded-full px-2 py-1 text-[10px] font-black uppercase tracking-widest"
+                      className="w-fit max-w-full break-words rounded-full px-2 py-1 text-center text-[10px] font-black uppercase tracking-widest"
                       style={
                         admin.is_global_admin
-                          ? scopeBadgeStyle('danger')
+                          ? scopeBadgeStyle('global')
                           : scopeBadgeStyle('tenant')
                       }
                     >
@@ -185,7 +193,7 @@ export const TenantUsersSection: React.FC<TenantUsersSectionProps> = ({
 
         <div className="rounded-[1.5rem] p-4" style={innerCardStyle}>
           <div className="mb-3 flex items-center gap-2">
-            <Users className="h-4 w-4" style={{ color: colors2000s.orange.accent }} />
+            <Users className="h-4 w-4" style={{ color: superAdminPalette.icon }} />
             <p
               className="text-[10px] font-black uppercase tracking-widest"
               style={{ color: colors2000s.text.secondary }}
@@ -242,7 +250,11 @@ export const TenantUsersSection: React.FC<TenantUsersSectionProps> = ({
                     ) : (
                       <span
                         className="text-[10px] font-black uppercase tracking-widest"
-                        style={{ color: tenantUser.is_active ? '#15803d' : '#b91c1c' }}
+                        style={{
+                          color: tenantUser.is_active
+                            ? colors2000s.status.success.text
+                            : colors2000s.status.danger.text
+                        }}
                       >
                         {tenantUser.is_active ? 'Activo' : 'Inactivo'}
                       </span>
@@ -297,7 +309,7 @@ export const TenantUsersSection: React.FC<TenantUsersSectionProps> = ({
           </div>
         </div>
       </div>
-    ) : (
+    ) : !selectedStore ? (
       <div className="rounded-[1.5rem] p-8 text-center" style={emptyStateStyle}>
         <Users className="mx-auto mb-3 h-10 w-10 opacity-25" />
         <p
@@ -307,6 +319,6 @@ export const TenantUsersSection: React.FC<TenantUsersSectionProps> = ({
           Seleccioná una tienda
         </p>
       </div>
-    )}
+    ) : null}
   </section>
 )

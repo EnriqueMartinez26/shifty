@@ -4,6 +4,7 @@ import { Sparkles, TrendingUp, TriangleAlert, Wallet } from 'lucide-react'
 
 import ActionList from './ActionList'
 import ChartPlaceholder from './ChartPlaceholder'
+import DashboardQueryIssues from './DashboardQueryIssues'
 import {
   boardGridStyle,
   insightsGridStyle,
@@ -37,6 +38,7 @@ const TREND_CHART_HEIGHT = 280
 const SALES_DONUT_HEIGHT = 200
 
 function EnterpriseDashboard({
+  reportsAllowed,
   copy,
   hero,
   trendPoints,
@@ -54,8 +56,20 @@ function EnterpriseDashboard({
   alerts,
   opportunities,
   isLoading,
-  errorMessage
+  errorMessage,
+  queryIssues,
+  trendUnavailable,
+  salesUnavailable,
+  transactionsUnavailable,
+  performanceUnavailable
 }: EnterpriseDashboardProps) {
+  const unavailableReportText = (message: string, issueIds: string[]) =>
+    !reportsAllowed
+      ? 'Sin acceso a reportes'
+      : queryIssues.some((issue) => issueIds.includes(issue.id))
+        ? `${message} Reintentá desde el aviso del panel.`
+        : message
+
   if (isLoading) {
     return (
       <main style={{ ...pageStyle, width: '100%', minWidth: 0 }}>
@@ -76,25 +90,44 @@ function EnterpriseDashboard({
   return (
     <main style={{ ...pageStyle, width: '100%', minWidth: 0 }}>
       {errorMessage ? <ErrorPanel message={errorMessage} /> : null}
+      <DashboardQueryIssues issues={queryIssues} />
 
       <SummaryMetricsPanel title={copy.metricsTitle} metrics={todayMetrics} />
 
       <section style={insightsGridStyle} className="dashboard-insights-grid">
-        <Suspense
-          fallback={<ChartPlaceholder text="Cargando tendencia..." height={TREND_CHART_HEIGHT} />}
-        >
-          <TrendChart points={trendPoints} isLoading={trendLoading} />
-        </Suspense>
-        <Suspense
-          fallback={<ChartPlaceholder text="Cargando ventas..." height={SALES_DONUT_HEIGHT} />}
-        >
-          <SalesDonut services={topServices} isLoading={salesLoading} />
-        </Suspense>
+        {trendUnavailable ? (
+          <ChartPlaceholder
+            text={unavailableReportText('Tendencia no disponible.', ['trend'])}
+            height={TREND_CHART_HEIGHT}
+          />
+        ) : (
+          <Suspense
+            fallback={<ChartPlaceholder text="Cargando tendencia..." height={TREND_CHART_HEIGHT} />}
+          >
+            <TrendChart points={trendPoints} isLoading={trendLoading} />
+          </Suspense>
+        )}
+        {salesUnavailable ? (
+          <ChartPlaceholder
+            text={unavailableReportText('Ventas no disponibles.', ['reports'])}
+            height={SALES_DONUT_HEIGHT}
+          />
+        ) : (
+          <Suspense
+            fallback={<ChartPlaceholder text="Cargando ventas..." height={SALES_DONUT_HEIGHT} />}
+          >
+            <SalesDonut services={topServices} isLoading={salesLoading} />
+          </Suspense>
+        )}
         <TransactionsPanel
           title={copy.transactionsTitle}
           description={copy.transactionsDescription}
           items={transactions}
-          emptyText={copy.emptyTransactions}
+          emptyText={
+            transactionsUnavailable
+              ? unavailableReportText('Transacciones no disponibles.', ['reports'])
+              : copy.emptyTransactions
+          }
           viewAllLabel={copy.viewTransactionsLabel}
           onViewAll={onViewTransactions}
         />
@@ -136,7 +169,20 @@ function EnterpriseDashboard({
           description="Servicios, profesionales y recurrencia."
           icon={<TrendingUp size={18} />}
         >
-          <RankedList items={performanceItems} />
+          {performanceUnavailable && performanceItems.length === 0 ? (
+            <p
+              role="status"
+              className="m-0 rounded-2xl border border-dashed p-4 text-center text-xs font-bold"
+              style={{
+                borderColor: colors2000s.border.default,
+                color: colors2000s.text.secondary
+              }}
+            >
+              {unavailableReportText('Rendimiento no disponible.', ['reports', 'professionals'])}
+            </p>
+          ) : (
+            <RankedList items={performanceItems} />
+          )}
         </Panel>
 
         <Panel

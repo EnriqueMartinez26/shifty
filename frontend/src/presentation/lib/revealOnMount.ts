@@ -1,7 +1,11 @@
 const reveal = (node: HTMLElement | null, block: ScrollLogicalPosition): void => {
   if (!node) return
   if (typeof node.scrollIntoView === 'function') {
-    node.scrollIntoView({ block, behavior: 'smooth' })
+    const reduceMotion =
+      typeof window !== 'undefined' &&
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    node.scrollIntoView({ block, behavior: reduceMotion ? 'auto' : 'smooth' })
   }
   if (node.hasAttribute('tabindex')) {
     node.focus({ preventScroll: true })

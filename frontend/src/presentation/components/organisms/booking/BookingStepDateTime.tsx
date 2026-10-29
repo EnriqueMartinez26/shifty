@@ -134,7 +134,13 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
   }
   const dateStr = activeDate ? format(activeDate, 'yyyy-MM-dd') : ''
 
-  const { data: serviceStaff, isLoading: isStaffLoading } = usePublicStaff(storePublicId, serviceId)
+  const {
+    data: serviceStaff,
+    isError: isStaffError,
+    isFetching: isStaffFetching,
+    isLoading: isStaffLoading,
+    refetch: refetchStaff
+  } = usePublicStaff(storePublicId, serviceId)
   // Con varios servicios, solo quien los hace todos (la grilla ya viene asi).
   const staffList = useMemo(
     () => serviceStaff && staffForAllServices(serviceStaff, extraServiceIds),
@@ -294,6 +300,38 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
             <span>{staffLabel}</span>
           </div>
 
+          {isStaffError && (
+            <div
+              role="status"
+              aria-live="polite"
+              className="mb-3 flex flex-col items-start gap-3 rounded-md border p-3 sm:flex-row sm:items-center sm:justify-between"
+              style={{
+                background: colors2000s.status.warning.bg,
+                borderColor: colors2000s.status.warning.border,
+                color: colors2000s.status.warning.text
+              }}
+            >
+              <p className="text-sm font-bold">
+                {serviceStaff === undefined
+                  ? 'No pudimos cargar la lista de profesionales. Podés revisar los horarios del servicio.'
+                  : 'No pudimos actualizar la lista de profesionales. Podés revisar los horarios del servicio.'}
+              </p>
+              <button
+                type="button"
+                onClick={() => void refetchStaff()}
+                disabled={isStaffFetching}
+                className="min-h-11 shrink-0 rounded-md border px-4 py-2 text-xs font-black uppercase tracking-wide disabled:opacity-50"
+                style={{
+                  background: colors2000s.bg.button,
+                  borderColor: colors2000s.border.default,
+                  color: colors2000s.text.primary
+                }}
+              >
+                {isStaffFetching ? 'Actualizando…' : 'Reintentar profesionales'}
+              </button>
+            </div>
+          )}
+
           <div
             role="region"
             aria-label={`${hayRecursos ? 'Canchas o salas' : 'Profesionales'} disponibles, desplazable horizontalmente`}
@@ -433,11 +471,11 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
                   color: isSelected ? brandColor.onFill : colors2000s.text.primary
                 }}
               >
-                <span className="text-[9px] uppercase font-black tracking-widest opacity-80">
+                <span className="text-[9px] uppercase font-black tracking-widest">
                   {isToday ? 'Hoy' : format(date, 'EEE', { locale: es })}
                 </span>
                 <span className="text-2xl font-black mt-1 leading-none">{format(date, 'dd')}</span>
-                <span className="text-[9px] font-black uppercase tracking-widest opacity-80 mt-1">
+                <span className="text-[9px] font-black uppercase tracking-widest mt-1">
                   {format(date, 'MMM', { locale: es })}
                 </span>
               </button>
@@ -568,10 +606,10 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
                 {waitlistAvailable && !diaSinAtencion && (
                   <div className="px-4 text-left">
                     <WaitlistJoinForm
-                      key={dateStr}
+                      key={`${dateStr}:${staffFilterId ?? 'any'}`}
                       storePublicId={storePublicId}
                       serviceId={serviceId}
-                      staffId={staffId}
+                      staffId={staffFilterId}
                       date={dateStr}
                     />
                   </div>

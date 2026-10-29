@@ -73,7 +73,8 @@ export const useSuperAdminStores = (params: Omit<ListStoresParams, 'limit' | 'of
     isFetchingNextPage: query.isFetchingNextPage,
     isLoading: query.isLoading,
     isFetching: query.isFetching,
-    error: query.error
+    error: query.error,
+    refetch: query.refetch
   }
 }
 

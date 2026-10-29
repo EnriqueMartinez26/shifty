@@ -17,6 +17,7 @@ import {
   INTERNAL_STORE_NOTICE,
   panelStyle,
   scopeBadgeStyle,
+  statusBadgeStyle,
   statusLabel
 } from './shared'
 
@@ -110,7 +111,7 @@ export const SuperAdminHeader: React.FC<SuperAdminHeaderProps> = ({
 
     <div className="mt-6 rounded-[1.75rem] p-5" style={innerCardStyle}>
       {selectedStore ? (
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
+        <div className="grid gap-4 2xl:grid-cols-[minmax(0,1fr)_auto] 2xl:items-center">
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-6">
             <div>
               <p
@@ -124,7 +125,7 @@ export const SuperAdminHeader: React.FC<SuperAdminHeaderProps> = ({
               <p
                 aria-live="polite"
                 className="break-words text-2xl font-black leading-tight"
-                style={{ color: colors2000s.orange.accent }}
+                style={{ color: colors2000s.text.primary }}
               >
                 {selectedStore.name}
               </p>
@@ -139,7 +140,7 @@ export const SuperAdminHeader: React.FC<SuperAdminHeaderProps> = ({
               <span
                 className="inline-flex rounded-full px-3 py-1 text-[10px] font-black uppercase tracking-widest"
                 style={
-                  selectedStore.is_active ? scopeBadgeStyle('tenant') : scopeBadgeStyle('danger')
+                  selectedStore.is_active ? statusBadgeStyle('success') : statusBadgeStyle('danger')
                 }
               >
                 {statusLabel(selectedStore.is_active)}
@@ -204,7 +205,7 @@ export const SuperAdminHeader: React.FC<SuperAdminHeaderProps> = ({
 
           <div
             className="rounded-2xl px-4 py-3"
-            style={{ ...scopeBadgeStyle('danger'), boxShadow: colors2000s.shadows.outer }}
+            style={{ ...statusBadgeStyle('danger'), boxShadow: colors2000s.shadows.outer }}
           >
             <p className="text-[10px] font-black uppercase tracking-widest">Protecciones</p>
             <p className="mt-1 text-[11px] font-bold">

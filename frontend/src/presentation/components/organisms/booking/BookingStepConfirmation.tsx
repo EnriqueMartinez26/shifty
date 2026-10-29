@@ -460,6 +460,29 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
   const serviceComboMessage = SERVICE_COMBO_MESSAGES[getErrorCode(depositQuery.error) ?? '']
   const canSubmit =
     acceptsTerms && clientValid && otpVerifiedGate && !addonsBlocked && amountConfirmed
+  // Explica el primer paso pendiente junto al resumen, sin repetir errores que
+  // ya aparecen junto al campo o en los avisos de importe y adicionales.
+  const submitGuidance = (() => {
+    if (canSubmit) return null
+    if (!client.name.trim()) return 'Completá tu nombre para continuar.'
+    if (!client.email.trim() && emailRequired) return 'Completá tu email para continuar.'
+    if (!emailValid) return null
+    if (!client.phone.trim()) return 'Completá tu teléfono para continuar.'
+    if (!phoneValid) return null
+    if (!customFieldsValid) return 'Completá los datos extra obligatorios marcados con *.'
+    if (!otpVerifiedGate) return otpState.error ? null : 'Verificá tu teléfono para continuar.'
+    if (!acceptsTerms) return 'Aceptá los términos y condiciones para confirmar.'
+    if (addonsBlocked) {
+      return addonsChanged || addonsOutdated
+        ? null
+        : 'Esperá a que actualicemos los adicionales elegidos.'
+    }
+    if (!amountConfirmed) {
+      if (amountFailed || addonsOutdated || promotionCheckFailed || promotionChecking) return null
+      return 'Esperá a que confirmemos el importe antes de reservar.'
+    }
+    return null
+  })()
   const showOtpSection = requiresOtp && client.phone.trim().length >= 6
   // Abierto si se pidio, si hay un codigo aplicado o si hay un aviso del
   // codigo: un aviso nunca queda escondido detras del link.
@@ -633,8 +656,10 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
   const clientInputStyle = createBookingClientInputStyle()
 
   const renderCustomField = (field: StoreCustomField) => {
+    const inputId = `${fieldId}-custom-${field.key}`
     const commonProps = {
-      id: `${fieldId}-custom-${field.key}`,
+      id: inputId,
+      'aria-describedby': field.help_text ? `${inputId}-help` : undefined,
       required: field.required,
       value: client.customFields[field.key] || '',
       onChange: (
@@ -690,7 +715,8 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
       <div className="relative">
         <label
           htmlFor={`${fieldId}-name`}
-          className="text-[10px] font-black uppercase tracking-widest text-gray-400 ml-1 block mb-1"
+          className="text-xs font-black uppercase tracking-wide ml-1 block mb-1"
+          style={{ color: colors2000s.text.secondary }}
         >
           Nombre Completo
         </label>
@@ -714,7 +740,8 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
       <div className="relative">
         <label
           htmlFor={`${fieldId}-phone`}
-          className="text-[10px] font-black uppercase tracking-widest text-gray-400 ml-1 block mb-1"
+          className="text-xs font-black uppercase tracking-wide ml-1 block mb-1"
+          style={{ color: colors2000s.text.secondary }}
         >
           Teléfono
         </label>
@@ -751,7 +778,8 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
       <div className="relative">
         <label
           htmlFor={`${fieldId}-email`}
-          className="text-[10px] font-black uppercase tracking-widest text-gray-400 ml-1 block mb-1"
+          className="text-xs font-black uppercase tracking-wide ml-1 block mb-1"
+          style={{ color: colors2000s.text.secondary }}
         >
           {emailRequired ? 'Email' : 'Email (opcional)'}
         </label>
@@ -768,15 +796,15 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
             style={clientInputStyle}
             placeholder="juan@email.com"
             aria-invalid={emailTyped && !emailFormatValid}
-            aria-describedby="booking-email-hint"
+            aria-describedby={`${fieldId}-email-hint`}
           />
         </div>
         {emailTyped && !emailFormatValid ? (
-          <p id="booking-email-hint" className="mt-1 ml-1 text-[11px] font-bold text-red-600">
+          <p id={`${fieldId}-email-hint`} className="mt-1 ml-1 text-[11px] font-bold text-red-600">
             {BOOKING_FIELD_MESSAGES.client_email}
           </p>
         ) : (
-          <p id="booking-email-hint" className="mt-1 ml-1 text-[11px] font-bold text-gray-500">
+          <p id={`${fieldId}-email-hint`} className="mt-1 ml-1 text-[11px] font-bold text-gray-500">
             {emailRequired
               ? 'Te enviamos la confirmación y el acceso a tus turnos.'
               : 'Opcional. Si no lo dejás, no vas a poder gestionar tu turno desde acá ni recibir avisos; para cambiarlo o cancelarlo escribile a la tienda por WhatsApp.'}
@@ -838,7 +866,12 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
               </label>
               {renderCustomField(field)}
               {field.help_text && (
-                <p className="text-[11px] font-bold text-gray-400 ml-1">{field.help_text}</p>
+                <p
+                  id={`${fieldId}-custom-${field.key}-help`}
+                  className="text-[11px] font-bold text-gray-400 ml-1"
+                >
+                  {field.help_text}
+                </p>
               )}
             </div>
           ))}
@@ -878,7 +911,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
           style={{ color: colors2000s.text.primary }}
         >
           <FileText className="w-4 h-4" />
-          Agregar una nota para la tienda
+          Agregar un mensaje para la tienda
         </button>
       )}
     </div>
@@ -1096,8 +1129,14 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
 
   if (submission.phase === 'submitting') {
     return (
-      <div className="flex flex-col items-center justify-center py-20 duration-500">
+      <div
+        role="status"
+        aria-live="polite"
+        aria-busy="true"
+        className="flex flex-col items-center justify-center py-20 duration-500"
+      >
         <Loader2
+          aria-hidden="true"
           className="w-16 h-16 animate-spin mb-6"
           style={{ color: colors2000s.text.secondary }}
         />
@@ -1213,6 +1252,23 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
 
         {renderPromotion()}
         {renderAlerts()}
+        {submitGuidance && (
+          <p
+            id={`${fieldId}-submit-guidance`}
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+            data-testid="booking-submit-guidance"
+            className="p-3 text-xs font-bold"
+            style={createBookingAccentBoxStyle(
+              colors2000s.status.info.bg,
+              colors2000s.status.info.border,
+              colors2000s.status.info.text
+            )}
+          >
+            {submitGuidance}
+          </p>
+        )}
       </BookingConfirmationCard>
 
       {submission.phase === 'error' && submission.slotMayBeTaken && (

@@ -42,7 +42,7 @@ describe('resolveBrandTheme', () => {
   })
 
   // 2026-10-22 (revision de #239): el respaldo usaba la rampa oscura de CTA
-  // del panel (#c04f00 -> #b84d00) y no coincidia con el naranja del logo.
+  // del panel y no coincidía con el naranja definido en el logo.
   it('uses the logo orange ramp for stores without a color', () => {
     expect(DEFAULT_BRAND_THEME.fill).toBe(colors2000s.orange.light)
     expect(DEFAULT_BRAND_THEME.fillBottom).toBe(colors2000s.orange.dark)
@@ -50,18 +50,29 @@ describe('resolveBrandTheme', () => {
     expect(DEFAULT_BRAND_THEME.fillBottom).toBe('#e67e22')
   })
 
-  // El texto blanco no llega a AA sobre el naranja del logo (2.31:1 y 2.85:1):
-  // el texto del respaldo tiene que pasar AA en los dos extremos.
-  it('keeps AA for the default Shifty orange on both ends of the fill', () => {
+  // El texto claro solicitado sobre el naranja del logo queda fuera de AA.
+  // No se oscurece el fallback ni se cambia su foreground por negro.
+  it('documents the light text contrast on the default Shifty orange', () => {
     const theme = DEFAULT_BRAND_THEME
-    expect(contrastRatio(theme.onFill, theme.fill)).toBeGreaterThanOrEqual(4.5)
-    expect(contrastRatio(theme.onFill, theme.fillBottom)).toBeGreaterThanOrEqual(4.5)
+    expect(theme.onFill).toBe('#ffffff')
+    expect(contrastRatio(theme.onFill, theme.fill)).toBeCloseTo(2.31, 2)
+    expect(contrastRatio(theme.onFill, theme.fillBottom)).toBeCloseTo(2.85, 2)
+    expect(contrastRatio(theme.onFill, theme.fill)).toBeLessThan(4.5)
+    expect(contrastRatio(theme.onFill, theme.fillBottom)).toBeLessThan(4.5)
   })
 
   it('keeps the store color as the fill, as is', () => {
     const theme = resolveBrandTheme('#FF70FA')
     expect(theme.fill).toBe('#ff70fa')
     expect(theme.onFill).toBe('#000000')
+  })
+
+  it('keeps Salon Sentinel tenant pink and its own AA foreground', () => {
+    const theme = resolveBrandTheme('#BE185D')
+    expect(theme.fill).toBe('#be185d')
+    expect(theme.isDefault).toBe(false)
+    expect(contrastRatio(theme.onFill, theme.fill)).toBeGreaterThanOrEqual(4.5)
+    expect(contrastRatio(theme.onFill, theme.fillBottom)).toBeGreaterThanOrEqual(4.5)
   })
 
   it('exposes the theme as CSS custom properties', () => {
@@ -93,9 +104,11 @@ describe('resolveBrandTheme', () => {
 describe('brand variable references', () => {
   it('point at the custom properties the portal root sets, with the orange as fallback', () => {
     const defaults = brandCssVariables(DEFAULT_BRAND_THEME) as Record<string, string>
-    expect([brandColor.fill, brandColor.fillBottom, brandColor.onFill]).toEqual(
-      Object.entries(defaults).map(([name, value]) => `var(${name}, ${value})`)
-    )
+    expect([brandColor.fill, brandColor.fillBottom, brandColor.onFill]).toEqual([
+      `var(--brand-fill, ${defaults['--brand-fill']})`,
+      `var(--brand-fill-bottom, ${defaults['--brand-fill-bottom']})`,
+      `var(--brand-on-fill, ${defaults['--brand-on-fill']})`
+    ])
     expect(brandColor.fill).toBe(`var(--brand-fill, ${colors2000s.orange.light})`)
     expect(brandColor.fillGradient).toBe(
       `linear-gradient(180deg, ${brandColor.fill} 0%, ${brandColor.fillBottom} 100%)`
@@ -127,5 +140,8 @@ describe('brand variable references', () => {
       color: brandColor.onFill,
       boxShadow: `${colors2000s.shadows.insetLight}, ${brandGlowShadow}`
     })
+    expect(brandCtaStyle.color).toBe(brandColor.onFill)
+    expect(brandCtaStyle).not.toHaveProperty('WebkitTextStroke')
+    expect(brandCtaStyle).not.toHaveProperty('textShadow')
   })
 })
