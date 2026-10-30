@@ -278,6 +278,7 @@ const adminScenario = (): Scenario => ({
   outbox: { pending_with_error: 2 },
   ledger: { total_balance: 25000, debtors_count: 2 },
   queryErrors: {},
+  loadingQueries: {},
   refetches: {}
 })
 
@@ -638,6 +639,26 @@ describe('Dashboard (red de seguridad de la extraccion F11b-09)', () => {
       Object.assign(mockScenario, { user: { role: 'professional' } })
     })
 
+    it('prioriza confirmaciones pendientes sobre el acceso parcial para recepción', async () => {
+      Object.assign(mockScenario, {
+        ...emptyScenario(),
+        user: { role: 'receptionist' },
+        summary: {
+          data: {
+            stats: { ...ADMIN_STATS, pending_confirmations: 2 },
+            upcoming_appointments: []
+          },
+          isLoading: false,
+          isError: false
+        }
+      })
+      await renderDashboard()
+
+      const hero = section('Hoy en Shifty')
+      expect(hero.getByText('requiere seguimiento')).toBeInTheDocument()
+      expect(hero.queryByText('vista parcial')).not.toBeInTheDocument()
+    })
+
     it('no consulta cobros ni outbox: sin esas acciones y con el cobrado de los reportes', async () => {
       await renderDashboard()
 
@@ -650,7 +671,7 @@ describe('Dashboard (red de seguridad de la extraccion F11b-09)', () => {
       expect(screen.queryByText('Revisar cobros online')).not.toBeInTheDocument()
 
       const hero = section('Hoy en Shifty')
-      expect(hero.getByText('vista parcial')).toBeInTheDocument()
+      expect(hero.getByText('requiere seguimiento')).toBeInTheDocument()
       expect(
         within(hero.getByText('Cobros online').parentElement as HTMLElement).getByText('Sin acceso')
       ).toBeInTheDocument()
@@ -770,9 +791,45 @@ describe('Dashboard (red de seguridad de la extraccion F11b-09)', () => {
       ).toBeInTheDocument()
     })
 
+    it('muestra estados de consulta en las tarjetas de reportes y rendimiento', async () => {
+      Object.assign(mockScenario, {
+        ...adminScenario(),
+        reports: { data: undefined, isLoading: true },
+        professionals: { data: undefined },
+        trend: { data: undefined, isLoading: true },
+        loadingQueries: { reports: true, professionals: true, trend: true }
+      })
+      await renderDashboard()
+
+      const summary = section('Resumen del día')
+      expect(
+        cardOf(summary, 'Cancelaciones').getByText('Consultando...', { selector: 'strong' })
+      ).toBeInTheDocument()
+      expect(cardOf(summary, 'Clientes nuevos').getByText('Consultando...')).toBeInTheDocument()
+
+      const operation = section('Operación de hoy')
+      const cancellations = within(
+        operation.getByText('Cancelaciones').parentElement as HTMLElement
+      )
+      expect(cancellations.getAllByText('Consultando...')).toHaveLength(2)
+      const professional = within(
+        operation.getByText('Profesional destacado').parentElement as HTMLElement
+      )
+      expect(professional.getAllByText('Consultando...')).toHaveLength(2)
+
+      expect(
+        cardOf(section('Dinero'), 'Ticket promedio').getAllByText('Consultando...')
+      ).toHaveLength(2)
+      expect(
+        section('Rendimiento semanal').getByText('Consultando rendimiento...')
+      ).toBeInTheDocument()
+      expect(screen.queryByText('Rendimiento no disponible.')).not.toBeInTheDocument()
+    })
+
     it('no presenta los modulos como desactivados si falla la consulta de funciones y permite reintentar', async () => {
       const retryFlags = jest.fn()
       Object.assign(mockScenario, {
+        flags: { data: undefined, isSuccess: false },
         queryErrors: { featureFlags: true },
         refetches: { featureFlags: retryFlags }
       })
@@ -790,6 +847,24 @@ describe('Dashboard (red de seguridad de la extraccion F11b-09)', () => {
       ).toBeInTheDocument()
       fireEvent.click(screen.getByRole('button', { name: 'Reintentar funciones de la tienda' }))
       expect(retryFlags).toHaveBeenCalledTimes(1)
+    })
+
+    it('conserva los modulos habilitados desde cache si falla una recarga de funciones', async () => {
+      Object.assign(mockScenario, {
+        flags: { data: { flags: { payments: true, ledger: true } }, isSuccess: false },
+        queryErrors: { featureFlags: true }
+      })
+      await renderDashboard()
+
+      const hero = section('Hoy en Shifty')
+      const pillOf = (label: string) => within(hero.getByText(label).parentElement as HTMLElement)
+      expect(pillOf('Cobros online').getByText('3 errores')).toBeInTheDocument()
+      expect(pillOf('Cuentas pendientes').getByText('2 clientes con deuda')).toBeInTheDocument()
+      expect(screen.queryByText('Cobros online desactivados')).not.toBeInTheDocument()
+      expect(screen.queryByText('Cuentas pendientes desactivadas')).not.toBeInTheDocument()
+      expect(
+        screen.getByText('No pudimos confirmar qué módulos están activos.')
+      ).toBeInTheDocument()
     })
 
     it('marca los reportes como no disponibles en vez de vacíos y permite reintentarlos', async () => {

@@ -130,6 +130,7 @@ export type EnterpriseDashboardProps = {
   operationCards: DashboardOperationCard[]
   moneyMetrics: MetricItem[]
   performanceItems: RankedItem[]
+  performanceLoading: boolean
   performanceUnavailable: boolean
   alerts: ActionItem[]
   opportunities: OpportunityItem[]

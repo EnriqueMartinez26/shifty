@@ -53,6 +53,7 @@ function EnterpriseDashboard({
   operationCards,
   moneyMetrics,
   performanceItems,
+  performanceLoading,
   alerts,
   opportunities,
   isLoading,
@@ -169,7 +170,18 @@ function EnterpriseDashboard({
           description="Servicios, profesionales y recurrencia."
           icon={<TrendingUp size={18} />}
         >
-          {performanceUnavailable && performanceItems.length === 0 ? (
+          {performanceLoading ? (
+            <p
+              role="status"
+              className="m-0 rounded-2xl border border-dashed p-4 text-center text-xs font-bold"
+              style={{
+                borderColor: colors2000s.border.default,
+                color: colors2000s.text.secondary
+              }}
+            >
+              Consultando rendimiento...
+            </p>
+          ) : performanceUnavailable && performanceItems.length === 0 ? (
             <p
               role="status"
               className="m-0 rounded-2xl border border-dashed p-4 text-center text-xs font-bold"

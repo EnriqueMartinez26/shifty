@@ -57,6 +57,7 @@ const dashboardProps: EnterpriseDashboardProps = {
   operationCards: [],
   moneyMetrics: [],
   performanceItems: [],
+  performanceLoading: false,
   performanceUnavailable: false,
   alerts: [],
   opportunities: [],
@@ -85,6 +86,13 @@ describe('EnterpriseDashboard responsive layout', () => {
 })
 
 describe('EnterpriseDashboard report availability', () => {
+  it('shows a loading status while professional performance reports are pending', () => {
+    render(<EnterpriseDashboard {...dashboardProps} performanceLoading />)
+
+    expect(screen.getByText('Consultando rendimiento...')).toBeInTheDocument()
+    expect(screen.queryByText('Rendimiento no disponible.')).not.toBeInTheDocument()
+  })
+
   it('shows neutral access states instead of retry prompts when reports are forbidden', () => {
     render(
       <EnterpriseDashboard

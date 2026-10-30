@@ -68,8 +68,8 @@ const Dashboard = () => {
   const professionalsQuery = useProfessionalReports(fromDate, toDate, reportsAllowed)
   const trendQuery = useReportTrend(6, reportsAllowed)
 
-  const featureFlagsAvailable = featureFlagsQuery.isSuccess && !featureFlagsQuery.isError
-  const flags = featureFlagsAvailable ? featureFlagsQuery.data?.flags : undefined
+  const featureFlagsAvailable = Boolean(featureFlagsQuery.data?.flags)
+  const flags = featureFlagsQuery.data?.flags
   const paymentsEnabled = flags ? Boolean(flags.payments) : undefined
   const ledgerEnabled = flags ? Boolean(flags.ledger) : undefined
 
@@ -81,6 +81,12 @@ const Dashboard = () => {
   const stats = summaryAvailable ? summaryQuery.data?.stats : undefined
   const reportsAvailable = reportsAllowed && Boolean(reportsQuery.data) && !reportsQuery.isError
   const reportsUnavailableLabel = reportsAllowed ? 'No disponible' : 'Sin acceso'
+  const reportsLoadingLabel =
+    reportsAllowed && reportsQuery.isLoading ? 'Consultando...' : reportsUnavailableLabel
+  const reportsPendingLabel =
+    reportsAllowed && reportsQuery.isLoading ? 'Consultando...' : 'No disponible'
+  const professionalsLoadingLabel =
+    reportsAllowed && professionalsQuery.isLoading ? 'Consultando...' : reportsUnavailableLabel
   const reportStats = reportsAvailable ? reportsQuery.data?.stats : undefined
   const clientStats = reportsAvailable ? reportsQuery.data?.client_stats : undefined
   const professionalsAvailable =
@@ -221,29 +227,30 @@ const Dashboard = () => {
     (debtorsCount ?? 0) > 0
   const heroStatusLabel = hasQueryErrors
     ? 'datos incompletos'
-    : hasPartialAccess
-      ? 'vista parcial'
-      : isHealthLoading
-        ? 'consultando...'
-        : requiresFollowup
-          ? 'requiere seguimiento'
+    : isHealthLoading
+      ? 'consultando...'
+      : requiresFollowup
+        ? 'requiere seguimiento'
+        : hasPartialAccess
+          ? 'vista parcial'
           : 'estable'
 
-  const paymentsHealthValue = featureFlagsQuery.isError
-    ? 'No disponible'
-    : !featureFlagsAvailable
-      ? 'Consultando...'
-      : !paymentsEnabled
-        ? 'deshabilitados'
-        : !financialAdminAllowed
-          ? 'Sin acceso'
-          : paymentsQuery.isError || outboxQuery.isError
-            ? 'No disponible'
-            : !paymentsAvailable || !outboxAvailable
-              ? 'Consultando...'
-              : paymentErrors && paymentErrors > 0
-                ? `${numberFormatter.format(paymentErrors)} errores`
-                : 'sin fallas'
+  const paymentsHealthValue =
+    featureFlagsQuery.isError && !featureFlagsAvailable
+      ? 'No disponible'
+      : !featureFlagsAvailable
+        ? 'Consultando...'
+        : !paymentsEnabled
+          ? 'deshabilitados'
+          : !financialAdminAllowed
+            ? 'Sin acceso'
+            : paymentsQuery.isError || outboxQuery.isError
+              ? 'No disponible'
+              : !paymentsAvailable || !outboxAvailable
+                ? 'Consultando...'
+                : paymentErrors && paymentErrors > 0
+                  ? `${numberFormatter.format(paymentErrors)} errores`
+                  : 'sin fallas'
 
   const paymentsHealthTone =
     paymentsHealthValue === 'sin fallas'
@@ -252,19 +259,20 @@ const Dashboard = () => {
         ? 'danger'
         : 'neutral'
 
-  const ledgerHealthValue = featureFlagsQuery.isError
-    ? 'No disponible'
-    : !featureFlagsAvailable
-      ? 'Consultando...'
-      : !ledgerEnabled
-        ? 'desactivadas'
-        : !reportsAllowed
-          ? 'Sin acceso'
-          : !debtAvailable
-            ? 'No disponible'
-            : (debtorsCount ?? 0) > 0
-              ? `${numberFormatter.format(debtorsCount ?? 0)} clientes con deuda`
-              : 'sin deuda'
+  const ledgerHealthValue =
+    featureFlagsQuery.isError && !featureFlagsAvailable
+      ? 'No disponible'
+      : !featureFlagsAvailable
+        ? 'Consultando...'
+        : !ledgerEnabled
+          ? 'desactivadas'
+          : !reportsAllowed
+            ? 'Sin acceso'
+            : !debtAvailable
+              ? 'No disponible'
+              : (debtorsCount ?? 0) > 0
+                ? `${numberFormatter.format(debtorsCount ?? 0)} clientes con deuda`
+                : 'sin deuda'
 
   const ledgerHealthTone = ledgerHealthValue.endsWith('clientes con deuda')
     ? 'warning'
@@ -379,7 +387,7 @@ const Dashboard = () => {
         : 'No disponible',
       detail: reportsAvailable
         ? `${numberFormatter.format(clientStats?.returning_clients ?? 0)} recurrentes activos`
-        : reportsUnavailableLabel,
+        : reportsLoadingLabel,
       signal: !summaryAvailable
         ? 'No disponible'
         : Number(stats?.new_clients_last_30d ?? 0) > 0
@@ -413,13 +421,15 @@ const Dashboard = () => {
       id: 'cancellations',
       label: 'Cancelaciones',
       value: !reportsAvailable
-        ? 'No disponible'
+        ? reportsPendingLabel
         : numberFormatter.format(reportStats?.cancelled_appointments ?? 0),
       detail: summaryAvailable
         ? `${numberFormatter.format(upcomingAppointments.length)} próximos en agenda`
         : 'Agenda no disponible',
       signal: !reportsAvailable
-        ? 'Dato no disponible'
+        ? reportsAllowed && reportsQuery.isLoading
+          ? 'Consultando...'
+          : 'Dato no disponible'
         : Number(reportStats?.cancelled_appointments ?? 0) > 0
           ? 'Revisar patron'
           : 'Sin cancelaciones',
@@ -465,9 +475,13 @@ const Dashboard = () => {
     },
     {
       title: 'Cancelaciones',
-      detail: reportsAvailable ? 'Impacto registrado en el periodo' : 'Dato no disponible',
+      detail: reportsAvailable
+        ? 'Impacto registrado en el periodo'
+        : reportsAllowed && reportsQuery.isLoading
+          ? 'Consultando...'
+          : 'Dato no disponible',
       meta: !reportsAvailable
-        ? 'No disponible'
+        ? reportsPendingLabel
         : numberFormatter.format(reportStats?.cancelled_appointments ?? 0),
       tone: !reportsAvailable
         ? 'neutral'
@@ -478,12 +492,12 @@ const Dashboard = () => {
     {
       title: 'Profesional destacado',
       detail: !professionalsAvailable
-        ? reportsUnavailableLabel
+        ? professionalsLoadingLabel
         : topProfessional
           ? topProfessional.staff_name
           : 'Sin lider claro',
       meta: !professionalsAvailable
-        ? reportsUnavailableLabel
+        ? professionalsLoadingLabel
         : topProfessional
           ? formatPercent(topProfessional.occupancy_rate)
           : '--',
@@ -567,10 +581,8 @@ const Dashboard = () => {
     {
       id: 'average-ticket',
       label: 'Ticket promedio',
-      value: reportsAvailable
-        ? formatCurrency(reportStats?.average_ticket)
-        : reportsUnavailableLabel,
-      detail: reportsAvailable ? 'Promedio móvil de 7 días' : reportsUnavailableLabel,
+      value: reportsAvailable ? formatCurrency(reportStats?.average_ticket) : reportsLoadingLabel,
+      detail: reportsAvailable ? 'Promedio móvil de 7 días' : reportsLoadingLabel,
       tone: 'neutral',
       onSelect: () => void navigate('/dashboard/reports')
     },
@@ -746,8 +758,14 @@ const Dashboard = () => {
       operationCards={operationCards}
       moneyMetrics={moneyMetrics}
       performanceItems={performanceItems}
+      performanceLoading={
+        reportsAllowed && (reportsQuery.isLoading || professionalsQuery.isLoading)
+      }
       performanceUnavailable={
-        performanceItems.length === 0 && (!reportsAvailable || !professionalsAvailable)
+        performanceItems.length === 0 &&
+        !reportsQuery.isLoading &&
+        !professionalsQuery.isLoading &&
+        (!reportsAvailable || !professionalsAvailable)
       }
       alerts={alerts}
       opportunities={opportunities}
