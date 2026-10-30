@@ -44,6 +44,7 @@ const staffName = 'Recurso QA'
 const SUBMIT_NAME = /^(confirmar reserva|reservar y pagar la seña por whatsapp)$/i
 const SUCCESS_HEADING = /^Reserva (Confirmada|Registrada|Pendiente de Pago)$/
 const TERMS_CHECKBOX = /acepto los términos y condiciones/i
+const FORM_HUMAN_DWELL_MS = 3_000
 
 const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
@@ -84,6 +85,12 @@ const elegirPrimerHorario = async (page: Page, motivo: string) => {
   }
   await expect(slots.first(), motivo).toBeVisible()
   await slots.first().click()
+}
+
+/** El backend rechaza `form_elapsed_ms < 2500`; simula el tiempo humano con margen. */
+const waitForBookingFormDwell = async (page: Page) => {
+  await expect(page.getByPlaceholder('Ej: Juan Perez')).toBeVisible()
+  await page.waitForTimeout(FORM_HUMAN_DWELL_MS)
 }
 
 /**
@@ -162,6 +169,7 @@ test.describe('reserva pública aislada desde el celular', () => {
     await expect(tituloHorario).toBeVisible()
     await sinScrollHorizontal(page, 'horario')
     await elegirPrimerHorario(page, 'el fixture debe ofrecer al menos un horario')
+    await waitForBookingFormDwell(page)
 
     await expect(page.getByPlaceholder('Ej: 351 1234567')).toBeVisible()
     await sinScrollHorizontal(page, 'datos')
@@ -293,6 +301,7 @@ test.describe('reserva pública aislada desde el celular', () => {
     await expect(page.getByRole('heading', { name: /elegí fecha y hora/i })).toBeVisible()
 
     await elegirPrimerHorario(page, 'el fixture debe ofrecer otro horario disponible')
+    await waitForBookingFormDwell(page)
 
     const clientPhone = `+54911${runSuffix.slice(-6)}00`
     await page.getByPlaceholder('Ej: Juan Perez').fill('Cliente QA reintento')
