@@ -171,9 +171,9 @@ test.describe('reserva pública aislada desde el celular', () => {
     await expect(summaryLine).toContainText(`${totalDuration} min`)
     await expect(summaryLine).toContainText(/\d{2}:\d{2} hs/)
     await expect(summaryLine).toContainText(staffName)
-    // La nota para la tienda queda plegada hasta que el cliente la pide.
+    // El mensaje para la tienda queda plegado hasta que el cliente lo pide.
     await expect(
-      page.getByRole('button', { name: 'Agregar una nota para la tienda' })
+      page.getByRole('button', { name: 'Agregar un mensaje para la tienda' })
     ).toBeVisible()
     await expect(page.getByPlaceholder('Algo que debamos saber?')).toHaveCount(0)
 
