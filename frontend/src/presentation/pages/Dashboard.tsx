@@ -269,7 +269,9 @@ const Dashboard = () => {
           : !reportsAllowed
             ? 'Sin acceso'
             : !debtAvailable
-              ? 'No disponible'
+              ? ledgerQuery.isLoading || reportsQuery.isLoading
+                ? 'Consultando...'
+                : 'No disponible'
               : (debtorsCount ?? 0) > 0
                 ? `${numberFormatter.format(debtorsCount ?? 0)} clientes con deuda`
                 : 'sin deuda'

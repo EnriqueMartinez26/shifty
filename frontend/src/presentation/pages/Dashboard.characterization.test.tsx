@@ -794,6 +794,7 @@ describe('Dashboard (red de seguridad de la extraccion F11b-09)', () => {
     it('muestra estados de consulta en las tarjetas de reportes y rendimiento', async () => {
       Object.assign(mockScenario, {
         ...adminScenario(),
+        ledger: undefined,
         reports: { data: undefined, isLoading: true },
         professionals: { data: undefined },
         trend: { data: undefined, isLoading: true },
@@ -806,6 +807,13 @@ describe('Dashboard (red de seguridad de la extraccion F11b-09)', () => {
         cardOf(summary, 'Cancelaciones').getByText('Consultando...', { selector: 'strong' })
       ).toBeInTheDocument()
       expect(cardOf(summary, 'Clientes nuevos').getByText('Consultando...')).toBeInTheDocument()
+
+      const hero = section('Hoy en Shifty')
+      expect(
+        within(hero.getByText('Cuentas pendientes').parentElement as HTMLElement).getByText(
+          'Consultando...'
+        )
+      ).toBeInTheDocument()
 
       const operation = section('Operación de hoy')
       const cancellations = within(
@@ -824,6 +832,23 @@ describe('Dashboard (red de seguridad de la extraccion F11b-09)', () => {
         section('Rendimiento semanal').getByText('Consultando rendimiento...')
       ).toBeInTheDocument()
       expect(screen.queryByText('Rendimiento no disponible.')).not.toBeInTheDocument()
+    })
+
+    it('muestra cuentas pendientes consultando mientras carga el fiado', async () => {
+      Object.assign(mockScenario, {
+        ...adminScenario(),
+        ledger: undefined,
+        reports: { data: undefined, isLoading: false },
+        loadingQueries: { ledger: true }
+      })
+      await renderDashboard()
+
+      const hero = section('Hoy en Shifty')
+      expect(
+        within(hero.getByText('Cuentas pendientes').parentElement as HTMLElement).getByText(
+          'Consultando...'
+        )
+      ).toBeInTheDocument()
     })
 
     it('no presenta los modulos como desactivados si falla la consulta de funciones y permite reintentar', async () => {
