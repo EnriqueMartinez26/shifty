@@ -388,7 +388,7 @@ describe('BookingStepDateTime', () => {
   // 2026-10-16 (pedido de Mateo): con un solo profesional para el servicio se
   // ofrecia "Cualquiera" y ese profesional, dos opciones que eran lo mismo.
   describe('con un solo profesional para el servicio', () => {
-    const SUBTITULO_UNICO = 'Elegí el día y el horario que te quede mejor.'
+    const TEXTO_AUSENTE = 'Elegí el día y el horario que te quede mejor.'
     const ana = { public_id: 'st-1', kind: 'person', display_name: 'Ana', service_ids: ['svc-1'] }
     const bruno = {
       public_id: 'st-2',
@@ -419,7 +419,12 @@ describe('BookingStepDateTime', () => {
       expect(screen.queryByRole('button', { name: /Ana/ })).not.toBeInTheDocument()
       expect(screen.getByText('Profesional')).toBeInTheDocument()
       expect(screen.getByText('Ana')).toBeInTheDocument()
-      expect(screen.getByText(SUBTITULO_UNICO)).toBeInTheDocument()
+      expect(screen.queryByText(TEXTO_AUSENTE)).not.toBeInTheDocument()
+      const heading = screen.getByRole('heading', { name: 'Elegí fecha y hora' })
+      const reservedLine = heading.nextElementSibling
+      expect(reservedLine).toHaveAttribute('aria-hidden', 'true')
+      expect(reservedLine).toHaveClass('h-5')
+      expect(reservedLine?.textContent).toBe('')
       expect(
         screen.queryByText('Te mostramos horarios con cualquier profesional disponible.')
       ).not.toBeInTheDocument()
@@ -449,7 +454,12 @@ describe('BookingStepDateTime', () => {
       expect(screen.queryByRole('button', { name: /Cualquiera/ })).not.toBeInTheDocument()
       expect(screen.getByText('Cancha / sala')).toBeInTheDocument()
       expect(screen.getByText('Cancha 1')).toBeInTheDocument()
-      expect(screen.getByText(SUBTITULO_UNICO)).toBeInTheDocument()
+      expect(screen.queryByText(TEXTO_AUSENTE)).not.toBeInTheDocument()
+      const heading = screen.getByRole('heading', { name: 'Elegí fecha y hora' })
+      const reservedLine = heading.nextElementSibling
+      expect(reservedLine).toHaveAttribute('aria-hidden', 'true')
+      expect(reservedLine).toHaveClass('h-5')
+      expect(reservedLine?.textContent).toBe('')
       expect(screen.queryByText(/profesional/i)).not.toBeInTheDocument()
     })
 
@@ -469,7 +479,7 @@ describe('BookingStepDateTime', () => {
       expect(
         screen.getByText('Te mostramos horarios con cualquier profesional disponible.')
       ).toBeInTheDocument()
-      expect(screen.queryByText(SUBTITULO_UNICO)).not.toBeInTheDocument()
+      expect(screen.queryByText(TEXTO_AUSENTE)).not.toBeInTheDocument()
 
       fireEvent.click(screen.getByRole('button', { name: /09:00/ }))
 

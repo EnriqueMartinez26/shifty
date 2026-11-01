@@ -253,7 +253,7 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
   ])
 
   const subtitle = soloStaff
-    ? 'Elegí el día y el horario que te quede mejor.'
+    ? null
     : hayRecursos
       ? staffFilterId
         ? 'Busca un horario disponible para esa cancha o sala.'
@@ -274,7 +274,11 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
           >
             {heading}
           </h2>
-          <p className="text-sm font-bold text-gray-500">{subtitle}</p>
+          {subtitle ? (
+            <p className="text-sm font-bold text-gray-500">{subtitle}</p>
+          ) : (
+            <p aria-hidden="true" className="h-5" />
+          )}
         </div>
       </div>
 
