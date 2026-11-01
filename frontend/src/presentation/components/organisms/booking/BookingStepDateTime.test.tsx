@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { addDays, format, parseISO } from 'date-fns'
 
 import { formatArgentinaDate } from '@shared/utils/argentinaTime'
@@ -11,18 +11,113 @@ const asRgb = (hex: string): string =>
 
 const mockAvailability = jest.fn()
 const mockStaff = jest.fn()
+const mockJoinWaitlist = jest.fn()
 
 jest.mock('@presentation/hooks/usePublic', () => ({
   usePublicAvailability: (...args: unknown[]) => mockAvailability(...args),
   usePublicStaff: (...args: unknown[]) => mockStaff(...args),
-  useJoinWaitlist: () => ({ mutateAsync: jest.fn(), isPending: false, isSuccess: false })
+  useJoinWaitlist: () => ({ mutateAsync: mockJoinWaitlist, isPending: false, isSuccess: false })
 }))
 
 describe('BookingStepDateTime', () => {
   beforeEach(() => {
     mockAvailability.mockReset()
     mockStaff.mockReset()
+    mockJoinWaitlist.mockReset()
     mockStaff.mockReturnValue({ data: [], isLoading: false })
+  })
+
+  it('permite revisar horarios y reintentar si falla la lista de profesionales', () => {
+    const refetch = jest.fn()
+    mockStaff.mockReturnValue({ data: undefined, isLoading: false, isError: true, refetch })
+    mockAvailability.mockReturnValue({
+      isLoading: false,
+      isError: false,
+      isFetching: false,
+      data: [
+        {
+          staff_id: 'st-1',
+          staff_name: 'Ana',
+          starts_at: '2026-09-15T12:00:00+00:00',
+          ends_at: '2026-09-15T12:30:00+00:00',
+          status: 'available',
+          reason: null
+        }
+      ]
+    })
+
+    render(
+      <BookingStepDateTime
+        storePublicId="store-1"
+        serviceId="svc-1"
+        staffId="st-1"
+        selectedDate={null}
+        selectedTime={null}
+        onSelect={() => undefined}
+        onBack={() => undefined}
+        showWaitlist={false}
+      />
+    )
+
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'No pudimos cargar la lista de profesionales.'
+    )
+    expect(screen.getByRole('button', { name: /09:00/ })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Reintentar profesionales' }))
+    expect(refetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('inscribe en la lista de espera para la opción de profesional que se eligió', async () => {
+    const date = format(addDays(new Date(), 1), 'yyyy-MM-dd')
+    mockJoinWaitlist.mockResolvedValue({ public_id: 'wl-1' })
+    mockStaff.mockReturnValue({
+      data: [
+        { public_id: 'st-1', kind: 'person', display_name: 'Ana', service_ids: ['svc-1'] },
+        { public_id: 'st-2', kind: 'person', display_name: 'Bruno', service_ids: ['svc-1'] }
+      ],
+      isLoading: false
+    })
+    mockAvailability.mockReturnValue({
+      isLoading: false,
+      data: [
+        {
+          staff_id: 'st-1',
+          staff_name: 'Ana',
+          starts_at: `${date}T12:00:00Z`,
+          status: 'booked'
+        },
+        {
+          staff_id: 'st-2',
+          staff_name: 'Bruno',
+          starts_at: `${date}T12:00:00Z`,
+          status: 'booked'
+        }
+      ]
+    })
+
+    render(
+      <BookingStepDateTime
+        storePublicId="store-1"
+        serviceId="svc-1"
+        staffId="st-1"
+        selectedDate={date}
+        selectedTime={null}
+        onSelect={jest.fn()}
+        onBack={jest.fn()}
+      />
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Bruno' }))
+    fireEvent.click(screen.getByRole('button', { name: /Avisame si se libera/ }))
+    fireEvent.change(screen.getByLabelText('Nombre'), { target: { value: 'Lucia' } })
+    fireEvent.change(screen.getByLabelText('Teléfono'), { target: { value: '1155550101' } })
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'lucia@example.com' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Anotarme' }))
+
+    await waitFor(() => expect(mockJoinWaitlist).toHaveBeenCalledTimes(1))
+    expect(mockJoinWaitlist).toHaveBeenCalledWith(
+      expect.objectContaining({ store_public_id: 'store-1', service_id: 'svc-1', staff_id: 'st-2' })
+    )
   })
 
   it('incluye el texto visible "Hoy" al principio del nombre accesible de la fecha actual', () => {
@@ -574,7 +669,7 @@ describe('BookingStepDateTime', () => {
       <BookingStepDateTime
         storePublicId="store-1"
         serviceId="svc-1"
-        staffId={null}
+        staffId="st-1"
         selectedDate={null}
         selectedTime={null}
         onSelect={() => undefined}
@@ -592,6 +687,9 @@ describe('BookingStepDateTime', () => {
     for (const name of [/Cualquiera/, /Ana/, /Sol/]) {
       expect(screen.getByRole('button', { name })).toHaveClass('min-h-11', 'min-w-11')
     }
+    expect(screen.getByRole('button', { name: /Ana/ }).getAttribute('style')).not.toContain(
+      '-webkit-text-stroke'
+    )
   })
 
   it('usa texto secundario AA en el estado vacío sobre superficie blanca', () => {
@@ -949,6 +1047,10 @@ describe('BookingStepDateTime con el color de la tienda', () => {
     expect(dia).toHaveAttribute('aria-pressed', 'true')
     expect(dia.getAttribute('style')).toContain('var(--brand-fill,')
     expect(dia.getAttribute('style')).toContain('var(--brand-on-fill,')
+    expect(dia.getAttribute('style')).not.toContain('-webkit-text-stroke')
+    const [diaLabel, , mesLabel] = Array.from(dia.querySelectorAll('span'))
+    expect(diaLabel).not.toHaveClass('opacity-80')
+    expect(mesLabel).not.toHaveClass('opacity-80')
 
     const horario = screen.getByRole('button', { name: /09:00/ })
     expect(horario).toHaveAttribute('aria-pressed', 'true')
@@ -956,6 +1058,7 @@ describe('BookingStepDateTime con el color de la tienda', () => {
     expect(horario.getAttribute('style')).toContain('var(--brand-fill-bottom,')
     expect(horario.getAttribute('style')).not.toContain('--brand-ink')
     expect(horario.getAttribute('style')).toContain('var(--brand-on-fill,')
+    expect(horario.getAttribute('style')).not.toContain('-webkit-text-stroke')
 
     const otroHorario = screen.getByRole('button', { name: /10:00/ })
     expect(otroHorario.getAttribute('style')).not.toContain('var(--brand-fill,')

@@ -35,6 +35,18 @@ describe('accessibility smoke checks', () => {
 
     const dashboardLink = screen.getByRole('link', { name: 'Dashboard' })
     const logoutButton = screen.getByRole('button', { name: 'Cerrar sesión' })
+    const userName = screen.getByText('Ana', { selector: 'p' })
+    const userEmail = screen.getByText('ana@example.com', { selector: 'p' })
+
+    expect(userName).toHaveClass('whitespace-normal', 'break-words')
+    expect(userEmail).toHaveClass('whitespace-normal', 'break-all')
+    expect(userName).not.toHaveClass('truncate')
+    expect(userEmail).not.toHaveClass('truncate')
+
+    // Programmatic focus also works for `tabIndex={-1}`; 0 keeps these native
+    // controls in the normal keyboard sequence as well.
+    expect(dashboardLink.tabIndex).toBe(0)
+    expect(logoutButton.tabIndex).toBe(0)
 
     dashboardLink.focus()
     expect(dashboardLink).toHaveFocus()
@@ -53,6 +65,10 @@ describe('accessibility smoke checks', () => {
     const emailInput = screen.getByLabelText('Email')
     const submitButton = screen.getByRole('button', { name: 'Enviar enlace' })
     const backLink = screen.getByRole('link', { name: 'Volver a iniciar sesión' })
+
+    expect(emailInput.tabIndex).toBe(0)
+    expect(submitButton.tabIndex).toBe(0)
+    expect(backLink.tabIndex).toBe(0)
 
     emailInput.focus()
     expect(emailInput).toHaveFocus()

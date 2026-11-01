@@ -142,6 +142,26 @@ describe('LoginPage: atributos y clave sin recortar', () => {
     expect(password).not.toHaveAttribute('minlength')
   })
 
+  it('permite mostrar u ocultar la contraseña desde un control accesible', () => {
+    renderLogin()
+
+    const password = screen.getByLabelText('Contraseña')
+    const toggle = screen.getByRole('button', { name: 'Mostrar contraseña' })
+
+    expect(toggle).toHaveAttribute('type', 'button')
+    expect(toggle).toHaveAttribute('aria-controls', 'login-password')
+    expect(toggle).toHaveAttribute('aria-pressed', 'false')
+    fireEvent.click(toggle)
+
+    expect(password).toHaveAttribute('type', 'text')
+    expect(screen.getByRole('button', { name: 'Ocultar contraseña' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Ocultar contraseña' }))
+    expect(password).toHaveAttribute('type', 'password')
+  })
+
   it('rechaza 129 code points sin enviar el login', () => {
     mockMutateAsync.mockClear()
     renderLogin()

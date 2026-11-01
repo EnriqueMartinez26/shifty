@@ -10,8 +10,16 @@ import type {
 
 import { formatCurrency } from '@shared/utils/currency'
 
-import { emptyStateStyle, innerCardStyle, panelStyle, scopeBadgeStyle } from './shared'
+import { superAdminPalette } from './palette'
+import {
+  emptyStateStyle,
+  innerCardStyle,
+  panelStyle,
+  scopeBadgeStyle,
+  type QueryState
+} from './shared'
 import { colors2000s } from '../../../theme/colors'
+import { QuerySectionFeedback } from '../../components/molecules/QuerySectionFeedback'
 import { formatDateTimeEsAr } from '../../lib/formatters'
 import { ActionButton } from '../SuperAdminUi'
 
@@ -25,6 +33,7 @@ interface RedemptionsSectionProps {
   selectedStore: SuperAdminStoreRow | null
   hasSelectedStoreSubscription: boolean
   overview: SuperAdminStoreOverview | undefined
+  overviewQuery: QueryState<SuperAdminStoreOverview>
   activeCoupons: SuperAdminCoupon[]
   openRedeemCouponModal: () => void
 }
@@ -33,13 +42,14 @@ export const RedemptionsSection: React.FC<RedemptionsSectionProps> = ({
   selectedStore,
   hasSelectedStoreSubscription,
   overview,
+  overviewQuery,
   activeCoupons,
   openRedeemCouponModal
 }) => (
   <section className="rounded-[2rem] p-6" style={panelStyle}>
     <div className="mb-4 flex items-center justify-between gap-3">
       <div className="flex items-center gap-2">
-        <Tag className="h-4 w-4" style={{ color: colors2000s.orange.accent }} />
+        <Tag className="h-4 w-4" style={{ color: superAdminPalette.icon }} />
         <span
           className="rounded-full px-3 py-1 text-[10px] font-black uppercase tracking-widest"
           style={scopeBadgeStyle('tenant')}
@@ -50,10 +60,42 @@ export const RedemptionsSection: React.FC<RedemptionsSectionProps> = ({
       <ActionButton
         label="Canjear cupón"
         onClick={openRedeemCouponModal}
-        disabled={!selectedStore || !hasSelectedStoreSubscription || !activeCoupons.length}
+        disabled={
+          !selectedStore ||
+          !overview ||
+          Boolean(overviewQuery.error) ||
+          overviewQuery.isFetching ||
+          !hasSelectedStoreSubscription ||
+          !activeCoupons.length
+        }
       />
     </div>
-    {overview?.recent_redemptions.length ? (
+    <QuerySectionFeedback
+      loading={Boolean(selectedStore) && !overview && !overviewQuery.error}
+      loadingMessage={overview ? 'Actualizando canjes...' : 'Cargando canjes...'}
+      error={overviewQuery.error}
+      errorMessage={
+        overview
+          ? 'No se pudieron actualizar los canjes. Se muestran los últimos datos disponibles.'
+          : 'No se pudieron confirmar los canjes. Reintentá para consultar este estado.'
+      }
+      isFetching={overviewQuery.isFetching}
+      onRetry={overviewQuery.refetch}
+      errorRole="status"
+      retryLabel="Reintentar canjes"
+    />
+    {!selectedStore ? (
+      <div className="rounded-[1.5rem] p-8 text-center" style={emptyStateStyle}>
+        <Tag className="mx-auto mb-3 h-10 w-10 opacity-25" />
+        <p
+          className="text-sm font-black uppercase tracking-widest"
+          style={{ color: colors2000s.text.primary }}
+        >
+          Seleccioná una tienda para consultar sus canjes
+        </p>
+      </div>
+    ) : null}
+    {selectedStore && overview?.recent_redemptions.length ? (
       <div className="space-y-3">
         {overview.recent_redemptions.map((redemption) => (
           <div key={redemption.public_id} className="rounded-[1.5rem] p-4" style={innerCardStyle}>
@@ -88,7 +130,7 @@ export const RedemptionsSection: React.FC<RedemptionsSectionProps> = ({
           </div>
         ))}
       </div>
-    ) : (
+    ) : selectedStore && overview ? (
       <div className="rounded-[1.5rem] p-8 text-center" style={emptyStateStyle}>
         <Tag className="mx-auto mb-3 h-10 w-10 opacity-25" />
         <p
@@ -98,6 +140,6 @@ export const RedemptionsSection: React.FC<RedemptionsSectionProps> = ({
           No hay canjes recientes
         </p>
       </div>
-    )}
+    ) : null}
   </section>
 )

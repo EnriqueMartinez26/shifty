@@ -6,7 +6,7 @@ import { formatCurrency } from '@shared/utils/currency'
 
 import {
   formGridClass,
-  scopeBadgeStyle,
+  statusBadgeStyle,
   storeScopedTitle,
   type PendingState,
   type PlanFormState,
@@ -192,7 +192,7 @@ export const PlanModals: React.FC<PlanModalsProps> = ({
       submitDisabled={selectedStoreUnavailable || !activePlans.length}
     >
       {selectedStoreUnavailable ? (
-        <div className="rounded-2xl px-4 py-3 text-xs font-bold" style={scopeBadgeStyle('danger')}>
+        <div className="rounded-2xl px-4 py-3 text-xs font-bold" style={statusBadgeStyle('danger')}>
           La tienda está inactiva. Puede que no se acepten suscripciones nuevas hasta reactivarla.
         </div>
       ) : null}

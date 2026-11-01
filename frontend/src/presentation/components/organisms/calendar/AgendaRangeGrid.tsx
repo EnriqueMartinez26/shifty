@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useEffect, useState } from 'react'
 
 import { format } from 'date-fns'
 
@@ -18,6 +18,12 @@ interface AgendaRangeGridProps {
 
 /** Eventos por dia que entran en una celda del mes en pantalla grande. */
 const MONTH_CELL_EVENTS = 4
+const TABLET_VIEWPORT_QUERY = '(min-width: 768px)'
+
+const isTabletViewport = (): boolean =>
+  typeof window !== 'undefined' &&
+  typeof window.matchMedia === 'function' &&
+  window.matchMedia(TABLET_VIEWPORT_QUERY).matches
 
 /**
  * Grilla de dias de las vistas semana y mes (F11c-08). Solo pinta; cada
@@ -33,10 +39,37 @@ export const AgendaRangeGrid: React.FC<AgendaRangeGridProps> = ({
   compact,
   renderEvent
 }) => {
+  const [hasTabletViewport, setHasTabletViewport] = useState(isTabletViewport)
+  const [expandedMonthDays, setExpandedMonthDays] = useState<ReadonlySet<string>>(() => new Set())
+
+  useEffect(() => {
+    if (typeof window.matchMedia !== 'function') return
+    const query = window.matchMedia(TABLET_VIEWPORT_QUERY)
+    const onChange = (event: MediaQueryListEvent) => setHasTabletViewport(event.matches)
+    query.addEventListener('change', onChange)
+    return () => query.removeEventListener('change', onChange)
+  }, [])
+
   const monthIsEmpty =
     compact && days.every((day) => !eventsByDay.get(format(day, 'yyyy-MM-dd'))?.length)
+  const hasHorizontalScrollRegion = compact && hasTabletViewport
   return (
-    <div className={compact ? 'md:overflow-x-auto' : undefined}>
+    <div
+      className={compact ? 'md:overflow-x-auto' : undefined}
+      role={hasHorizontalScrollRegion ? 'region' : undefined}
+      aria-label={
+        hasHorizontalScrollRegion ? 'Calendario mensual desplazable horizontalmente' : undefined
+      }
+      tabIndex={hasHorizontalScrollRegion ? 0 : undefined}
+    >
+      {compact && (
+        <p
+          className="hidden px-2 pb-2 text-xs font-medium md:block xl:hidden"
+          style={{ color: colors2000s.text.secondary }}
+        >
+          Deslizá horizontalmente para ver todos los días del mes.
+        </p>
+      )}
       {monthIsEmpty && (
         <p
           className="md:hidden rounded-[6px] p-6 bg-white text-sm font-bold"
@@ -52,6 +85,13 @@ export const AgendaRangeGrid: React.FC<AgendaRangeGridProps> = ({
           const dayKey = format(day, 'yyyy-MM-dd')
           const dayEvents = eventsByDay.get(dayKey) ?? NO_EVENTS
           const hideOnPhone = compact && dayEvents.length === 0
+          const hasMoreMonthEvents = compact && dayEvents.length > MONTH_CELL_EVENTS
+          const monthDayExpanded = expandedMonthDays.has(dayKey)
+          const scrollableEvents =
+            hasTabletViewport &&
+            dayEvents.length > MONTH_CELL_EVENTS &&
+            (!compact || monthDayExpanded)
+          const eventsId = `agenda-events-${dayKey}`
           return (
             <div
               key={day.toISOString()}
@@ -70,23 +110,31 @@ export const AgendaRangeGrid: React.FC<AgendaRangeGridProps> = ({
                   {format(day, 'dd/MM')}
                 </p>
               </div>
-              <div className="space-y-2 md:max-h-64 md:overflow-auto">
+              <div
+                id={eventsId}
+                role="group"
+                aria-label={`Eventos del ${format(day, 'dd/MM')}`}
+                aria-describedby={scrollableEvents ? `${eventsId}-scroll-hint` : undefined}
+                tabIndex={scrollableEvents ? 0 : undefined}
+                className={`space-y-2 ${scrollableEvents ? 'md:max-h-64 md:overflow-y-auto' : ''}`}
+              >
+                {scrollableEvents && (
+                  <p
+                    id={`${eventsId}-scroll-hint`}
+                    className="hidden text-xs font-medium md:block"
+                    style={{ color: colors2000s.text.secondary }}
+                  >
+                    Deslizá verticalmente para recorrer los eventos del día.
+                  </p>
+                )}
                 {dayEvents.map((event, index) =>
-                  compact && index >= MONTH_CELL_EVENTS ? (
+                  compact && index >= MONTH_CELL_EVENTS && !monthDayExpanded ? (
                     <div key={`${event.type}-${event.id}`} className="md:hidden">
                       {renderEvent(event, compact)}
                     </div>
                   ) : (
                     renderEvent(event, compact)
                   )
-                )}
-                {compact && dayEvents.length > MONTH_CELL_EVENTS && (
-                  <div
-                    className="hidden md:block text-[10px] font-black uppercase tracking-widest"
-                    style={{ color: colors2000s.text.secondary }}
-                  >
-                    +{dayEvents.length - MONTH_CELL_EVENTS} eventos
-                  </div>
                 )}
                 {dayEvents.length === 0 && (
                   <div
@@ -97,6 +145,32 @@ export const AgendaRangeGrid: React.FC<AgendaRangeGridProps> = ({
                   </div>
                 )}
               </div>
+              {hasMoreMonthEvents && (
+                <button
+                  type="button"
+                  aria-controls={eventsId}
+                  aria-expanded={monthDayExpanded}
+                  aria-label={
+                    monthDayExpanded
+                      ? `Mostrar menos eventos del ${format(day, 'dd/MM')}`
+                      : `Mostrar ${dayEvents.length - MONTH_CELL_EVENTS} eventos más del ${format(day, 'dd/MM')}`
+                  }
+                  className="hidden min-h-11 min-w-11 items-center rounded px-1 text-left text-[10px] font-black uppercase tracking-widest md:flex"
+                  style={{ color: colors2000s.text.secondary }}
+                  onClick={() =>
+                    setExpandedMonthDays((current) => {
+                      const next = new Set(current)
+                      if (monthDayExpanded) next.delete(dayKey)
+                      else next.add(dayKey)
+                      return next
+                    })
+                  }
+                >
+                  {monthDayExpanded
+                    ? 'Mostrar menos eventos'
+                    : `+${dayEvents.length - MONTH_CELL_EVENTS} eventos`}
+                </button>
+              )}
             </div>
           )
         })}

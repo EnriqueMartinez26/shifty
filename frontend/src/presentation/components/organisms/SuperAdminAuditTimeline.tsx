@@ -1,15 +1,21 @@
 import type { ReactElement } from 'react'
 
-import { History, Loader2 } from 'lucide-react'
+import { History } from 'lucide-react'
 
 import type { SuperAdminAuditLog } from '@application/services/SuperAdminService'
 
 import { colors2000s } from '../../../theme/colors'
 import { formatDateTimeEsAr } from '../../lib/formatters'
+import { superAdminPalette } from '../../pages/superadmin/palette'
+import { QuerySectionFeedback } from '../molecules/QuerySectionFeedback'
 
 interface SuperAdminAuditTimelineProps {
+  hasSelectedStore: boolean
   entries: SuperAdminAuditLog[] | undefined
   isLoading: boolean
+  isFetching: boolean
+  error: unknown
+  onRetry: () => unknown
 }
 
 const actionLabels: Record<string, string> = {
@@ -43,8 +49,12 @@ function summarizeAuditEntry(entry: SuperAdminAuditLog): string {
 }
 
 export function SuperAdminAuditTimeline({
+  hasSelectedStore,
   entries,
-  isLoading
+  isLoading,
+  isFetching,
+  error,
+  onRetry
 }: SuperAdminAuditTimelineProps): ReactElement {
   return (
     <section
@@ -56,7 +66,7 @@ export function SuperAdminAuditTimeline({
       }}
     >
       <div className="mb-4 flex items-center gap-2">
-        <History className="h-4 w-4" style={{ color: colors2000s.orange.accent }} />
+        <History className="h-4 w-4" style={{ color: superAdminPalette.icon }} />
         <div>
           <p
             className="text-[10px] font-black uppercase tracking-widest"
@@ -73,14 +83,28 @@ export function SuperAdminAuditTimeline({
         </div>
       </div>
 
-      {isLoading ? (
-        <div className="flex items-center justify-center gap-3 rounded-[1.5rem] p-8">
-          <Loader2 className="h-5 w-5 animate-spin" style={{ color: colors2000s.orange.accent }} />
-          <span className="text-sm font-bold" style={{ color: colors2000s.text.secondary }}>
-            Cargando auditoría...
-          </span>
-        </div>
-      ) : entries?.length ? (
+      <QuerySectionFeedback
+        loading={hasSelectedStore && (isLoading || (!entries && !error))}
+        loadingMessage={entries ? 'Actualizando auditoría...' : 'Cargando auditoría...'}
+        error={error}
+        errorMessage={
+          entries
+            ? 'No se pudo actualizar la auditoría. Se muestran los últimos datos disponibles.'
+            : 'No se pudo cargar la auditoría reciente. Reintentá para consultar el historial.'
+        }
+        isFetching={isFetching}
+        onRetry={onRetry}
+      />
+      {!hasSelectedStore ? (
+        <p
+          role="status"
+          className="rounded-[1.5rem] p-4 text-sm font-bold"
+          style={{ color: colors2000s.text.secondary, background: colors2000s.bg.button }}
+        >
+          Seleccioná una tienda para consultar la auditoría.
+        </p>
+      ) : null}
+      {!hasSelectedStore || !entries ? null : entries.length ? (
         <div className="space-y-3">
           {entries.map((entry) => (
             <div

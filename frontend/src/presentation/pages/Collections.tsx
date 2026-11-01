@@ -15,7 +15,7 @@ import { getErrorMessage } from '@shared/errors/getErrorMessage'
 import { formatCurrency } from '@shared/utils/currency'
 import { createUuid } from '@shared/utils/uuid'
 
-import { colors2000s } from '../../theme/colors'
+import { buttonStyles2000s, colors2000s } from '../../theme/colors'
 import { CollectionAppointmentCard } from '../components/molecules/CollectionAppointmentCard'
 import { FormFeedback, type FormFeedbackMessage } from '../components/molecules/FormFeedback'
 import { PageHeader } from '../components/molecules/PageHeader'
@@ -86,7 +86,9 @@ const CollectionsPage: React.FC = () => {
   // llegan no se supone nada: el backend sigue siendo la guarda.
   const flagsQuery = useStoreFeatureFlags()
   const paymentsOff = flagsQuery.data?.flags.payments === false
-  const summaryQuery = useReconciliationSummary(isAdmin && !paymentsOff)
+  const summaryEnabled = isAdmin && !paymentsOff
+  const summaryQuery = useReconciliationSummary(summaryEnabled)
+  const summaryError = summaryEnabled ? summaryQuery.error : null
   const createPreference = useCreatePaymentPreference()
   const manualConfirm = useManualConfirmPayment()
   // Tienda suspendida: crear el link y confirmar el pago responden 402.
@@ -115,23 +117,50 @@ const CollectionsPage: React.FC = () => {
 
   // Un completado o un ausente se sigue cobrando (regla 3): solo un turno
   // soltado (cancelado o vencido) sale de la lista.
-  const appointments = (appointmentsQuery.data ?? [])
+  const appointments = (appointmentsQuery.error ? [] : (appointmentsQuery.data ?? []))
     .filter((appointment) => isCollectibleStatus(appointment.status))
     .slice(0, 20)
 
   const summary = summaryQuery.data
+  const summaryStatus =
+    !summaryEnabled || summaryError
+      ? 'No disponible'
+      : summaryQuery.isLoading
+        ? 'Cargando…'
+        : summary
+          ? null
+          : 'No disponible'
+  const appointmentsPaused =
+    !appointmentsQuery.data &&
+    !appointmentsQuery.error &&
+    appointmentsQuery.fetchStatus === 'paused'
+  const appointmentCount = appointmentsPaused
+    ? 'Sin conexión'
+    : appointmentsQuery.error
+      ? 'No disponible'
+      : appointmentsQuery.isLoading
+        ? 'Cargando…'
+        : appointments.length
   const cards = [
-    { label: 'Turnos listados', value: appointments.length },
+    { label: 'Turnos listados', value: appointmentCount },
     ...(isAdmin
       ? [
-          { label: 'Pagos pendientes', value: summary?.pending_payments ?? 0 },
+          {
+            label: 'Pagos pendientes',
+            value: summaryStatus ?? summary?.pending_payments ?? 'No disponible'
+          },
           {
             label: 'Monto pendiente',
-            value: formatCurrency(Number(summary?.total_pending_amount ?? 0))
+            value: summaryStatus ?? formatCurrency(Number(summary?.total_pending_amount))
           }
         ]
       : [])
   ]
+
+  const retryCollections = () => {
+    void appointmentsQuery.refetch()
+    if (summaryEnabled) void summaryQuery.refetch()
+  }
 
   // Los avisos nombran al cliente, nunca un id (regla 20).
   const handleCreatePreference = async (appointment: AppointmentSearchItem) => {
@@ -228,9 +257,21 @@ const CollectionsPage: React.FC = () => {
       />
 
       <QueryErrorNotice
-        error={appointmentsQuery.error ?? summaryQuery.error}
-        message="No se pudieron cargar los cobros."
+        error={appointmentsQuery.error}
+        message="No se pudieron cargar los turnos para cobrar."
       />
+      <QueryErrorNotice error={summaryError} message="No se pudo cargar el resumen financiero." />
+      {(appointmentsQuery.error || summaryError || appointmentsPaused) && (
+        <button
+          type="button"
+          onClick={retryCollections}
+          disabled={appointmentsQuery.isFetching || (summaryEnabled && summaryQuery.isFetching)}
+          className="min-h-11 rounded-xl px-4 py-3 text-sm font-black uppercase tracking-wide transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-orange-900 disabled:cursor-not-allowed disabled:opacity-60"
+          style={buttonStyles2000s.selected}
+        >
+          Reintentar cobros
+        </button>
+      )}
 
       {paymentsOff && (
         <div
@@ -263,6 +304,19 @@ const CollectionsPage: React.FC = () => {
         </div>
 
         <div className="collections-mobile-actions space-y-3 max-sm:[&_button]:min-h-[44px] max-sm:[&_button]:min-w-[44px]">
+          {appointmentsPaused && (
+            <div
+              role="status"
+              className="rounded-2xl p-4 text-sm font-bold"
+              style={{
+                background: colors2000s.bg.disabled,
+                border: `1px solid ${colors2000s.border.default}`,
+                color: colors2000s.text.secondary
+              }}
+            >
+              Sin conexión. Los turnos se consultarán cuando vuelva internet.
+            </div>
+          )}
           {appointments.map((appointment) => (
             <CollectionAppointmentCard
               key={appointment.public_id}
@@ -301,14 +355,27 @@ const CollectionsPage: React.FC = () => {
             />
           ))}
 
-          {!appointments.length && !appointmentsQuery.isLoading && (
+          {appointmentsQuery.isLoading && (
             <div
+              role="status"
               className="rounded-2xl p-6 bg-white text-sm font-bold"
               style={{ ...create2000sListCardStyle(), color: colors2000s.text.secondary }}
             >
-              No hay turnos para cobrar ahora.
+              Buscando turnos para cobrar…
             </div>
           )}
+
+          {!appointments.length &&
+            !appointmentsQuery.isLoading &&
+            !appointmentsQuery.error &&
+            !appointmentsPaused && (
+              <div
+                className="rounded-2xl p-6 bg-white text-sm font-bold"
+                style={{ ...create2000sListCardStyle(), color: colors2000s.text.secondary }}
+              >
+                No hay turnos para cobrar ahora.
+              </div>
+            )}
         </div>
       </div>
 

@@ -78,7 +78,10 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
             type="button"
             onClick={onConfirm}
             className="rounded-xl px-4 py-2 text-xs font-black uppercase tracking-widest"
-            style={{ background: orangeCtaGradient, color: colors2000s.text.onOrangeSelection }}
+            style={{
+              background: orangeCtaGradient,
+              color: colors2000s.text.onOrangeSelection
+            }}
           >
             {confirmLabel}
           </button>

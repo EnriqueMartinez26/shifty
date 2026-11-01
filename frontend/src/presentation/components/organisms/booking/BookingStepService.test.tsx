@@ -67,7 +67,7 @@ describe('BookingStepService', () => {
     expect(img).toHaveAttribute('height', '56')
   })
 
-  it('muestra la selección con el naranja del logo y texto de contraste AA', () => {
+  it('muestra la selección con naranja Shifty y documenta el contraste del texto claro', () => {
     mockUsePublicServices.mockReturnValue({
       isLoading: false,
       data: [servicio('corte', 'Corte', 30, 10000)]
@@ -75,17 +75,20 @@ describe('BookingStepService', () => {
 
     render(<BookingStepService storePublicId="store-1" selectedId="corte" onSelect={jest.fn()} />)
 
-    // Con el color de la tienda (S3) la seleccion lee var(--brand-*); sin
-    // color de tienda el respaldo es el naranja del logo con texto oscuro
-    // (revision de Enrique en #239: el blanco no llega a AA sobre ese naranja).
+    // Sin color elegido, el portal conserva el naranja Shifty y el interior
+    // blanco solicitado; el contorno fino completa el contraste AA.
     const title = screen.getByText('Corte')
     expect(title.style.color).toBe(`var(--brand-on-fill, ${DEFAULT_BRAND_THEME.onFill})`)
-    expect(
-      contrastRatio(DEFAULT_BRAND_THEME.onFill, DEFAULT_BRAND_THEME.fill)
-    ).toBeGreaterThanOrEqual(4.5)
+    expect(contrastRatio(DEFAULT_BRAND_THEME.onFill, DEFAULT_BRAND_THEME.fill)).toBeCloseTo(2.31, 2)
+    expect(contrastRatio(DEFAULT_BRAND_THEME.onFill, DEFAULT_BRAND_THEME.fillBottom)).toBeCloseTo(
+      2.85,
+      2
+    )
+    expect(DEFAULT_BRAND_THEME.onFill).toBe(colors2000s.text.onOrangeSelection)
     const fondo = title.closest('button')?.style.background ?? ''
     expect(fondo).toContain(`var(--brand-fill, ${colors2000s.orange.light})`)
     expect(fondo).toContain(`var(--brand-fill-bottom, ${colors2000s.orange.dark})`)
+    expect(title.closest('button')?.getAttribute('style')).not.toContain('-webkit-text-stroke')
   })
 
   // QA movil 2026-10-08 (QA!): en 390 px el nombre salia cortado ("BARBA Y
@@ -146,6 +149,54 @@ describe('BookingStepService', () => {
 
     expect(onSelect).toHaveBeenCalledWith('barba')
     expect(screen.queryByTestId('booking-services-bar')).not.toBeInTheDocument()
+  })
+
+  it('si falla la carga inicial explica el problema y permite reintentar', () => {
+    const refetch = jest.fn()
+    mockUsePublicServices.mockReturnValue({
+      data: undefined,
+      isError: true,
+      isFetching: false,
+      isLoading: false,
+      refetch
+    })
+
+    render(<BookingStepService storePublicId="store-1" selectedId={null} onSelect={jest.fn()} />)
+
+    expect(screen.getByRole('alert')).toHaveTextContent('No pudimos cargar los servicios')
+    const retry = screen.getByRole('button', { name: 'Reintentar' })
+    expect(retry).toHaveClass('min-h-11')
+    expect(retry.getAttribute('style')).toContain('var(--brand-fill,')
+
+    fireEvent.click(retry)
+    expect(refetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('mantiene el catálogo visible si falla una actualización y explica que puede seguir', () => {
+    mockUsePublicServices.mockReturnValue({
+      data: [servicio('corte', 'Corte', 30, 10000)],
+      isError: true,
+      isFetching: false,
+      isLoading: false,
+      refetch: jest.fn()
+    })
+
+    render(<BookingStepService storePublicId="store-1" selectedId={null} onSelect={jest.fn()} />)
+
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'No pudimos actualizar el catálogo. Podés seguir con los servicios cargados.'
+    )
+    expect(screen.getByRole('button', { name: /Corte/ })).toBeInTheDocument()
+  })
+
+  it('explica cuando el catálogo está vacío', () => {
+    mockUsePublicServices.mockReturnValue({ data: [], isError: false, isLoading: false })
+
+    render(<BookingStepService storePublicId="store-1" selectedId={null} onSelect={jest.fn()} />)
+
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'No hay servicios disponibles para reservar en este momento.'
+    )
   })
 
   // Varios servicios en un turno (2026-10-16).

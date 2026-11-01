@@ -14,8 +14,8 @@ function HeroPanel({ hero }: { hero: DashboardHero }) {
       }}
     >
       <div
+        className="p-4 sm:p-6"
         style={{
-          padding: 24,
           display: 'grid',
           gap: 24,
           background: [
@@ -27,7 +27,7 @@ function HeroPanel({ hero }: { hero: DashboardHero }) {
         <div
           style={{ display: 'flex', justifyContent: 'space-between', gap: 24, flexWrap: 'wrap' }}
         >
-          <div style={{ display: 'grid', gap: 8, minWidth: 280 }}>
+          <div style={{ display: 'grid', gap: 8, minWidth: 0, flex: '1 1 16rem' }}>
             <span
               style={{ ...subtleTextStyle, textTransform: 'uppercase', letterSpacing: '0.12em' }}
             >
@@ -59,7 +59,9 @@ function HeroPanel({ hero }: { hero: DashboardHero }) {
               lineHeight: '16px',
               fontWeight: 900,
               textTransform: 'uppercase',
-              letterSpacing: '0.08em'
+              letterSpacing: '0.08em',
+              maxWidth: '100%',
+              minWidth: 0
             }}
           >
             Estado general:{' '}
@@ -70,7 +72,7 @@ function HeroPanel({ hero }: { hero: DashboardHero }) {
         <div
           style={{
             display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 160px), 1fr))',
             gap: 12
           }}
         >
@@ -82,7 +84,7 @@ function HeroPanel({ hero }: { hero: DashboardHero }) {
         <div
           style={{
             display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 180px), 1fr))',
             gap: 12
           }}
         >

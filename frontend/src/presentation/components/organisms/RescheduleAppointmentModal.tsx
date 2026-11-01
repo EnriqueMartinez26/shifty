@@ -74,7 +74,7 @@ export const RescheduleAppointmentModal: React.FC<RescheduleAppointmentModalProp
         role="dialog"
         aria-modal="true"
         aria-labelledby="reschedule-title"
-        className="relative w-full max-w-lg rounded-md shadow-2xl flex flex-col overflow-hidden max-h-[90vh]"
+        className="relative w-full max-w-lg rounded-md shadow-2xl flex flex-col overflow-hidden max-h-[90dvh]"
         style={create2000sModalSurfaceStyle()}
       >
         <div

@@ -3,7 +3,7 @@
 # Rama estable 1.30: la 1.27 dejo de publicarse en abril de 2025 (Alpine 3.21.3,
 # OpenSSL 3.3.3 con CVE-2026-31789). El borde de produccion usa el mismo tag
 # (docker-compose.prod.yml).
-FROM nginx:1.30.5-alpine
+FROM nginx:1.30.6-alpine
 
 # El tag fija nginx; los paquetes de Alpine se llevan al ultimo parche de la
 # misma rama (3.24) en el build. El scan de CI (security-scan.yml) mira la

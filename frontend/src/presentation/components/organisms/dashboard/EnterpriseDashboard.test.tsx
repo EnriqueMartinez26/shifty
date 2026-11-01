@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 
 import EnterpriseDashboard from './EnterpriseDashboard'
 import type { EnterpriseDashboardProps } from './types'
@@ -14,6 +14,7 @@ jest.mock('./SalesDonut', () => ({
 }))
 
 const dashboardProps: EnterpriseDashboardProps = {
+  reportsAllowed: true,
   copy: {
     metricsTitle: 'Pulso del negocio',
     transactionsTitle: 'Últimos movimientos',
@@ -40,11 +41,15 @@ const dashboardProps: EnterpriseDashboardProps = {
     health: [],
     quickActions: []
   },
+  queryIssues: [],
   trendPoints: [],
   trendLoading: false,
+  trendUnavailable: false,
   topServices: [],
   salesLoading: false,
+  salesUnavailable: false,
   transactions: [],
+  transactionsUnavailable: false,
   onViewTransactions: jest.fn(),
   todayMetrics: [],
   urgentActions: [],
@@ -52,6 +57,8 @@ const dashboardProps: EnterpriseDashboardProps = {
   operationCards: [],
   moneyMetrics: [],
   performanceItems: [],
+  performanceLoading: false,
+  performanceUnavailable: false,
   alerts: [],
   opportunities: [],
   isLoading: false
@@ -75,5 +82,104 @@ describe('EnterpriseDashboard responsive layout', () => {
     expect(styles).toContain('@media (max-width: 720px)')
     expect(styles).toMatch(/grid-template-columns:\s*minmax\(0,\s*1fr\)/)
     expect(styles).toMatch(/\.dashboard-insights-grid > :last-child[\s\S]*?grid-column:\s*auto/)
+  })
+})
+
+describe('EnterpriseDashboard report availability', () => {
+  it('shows a loading status while professional performance reports are pending', () => {
+    render(<EnterpriseDashboard {...dashboardProps} performanceLoading />)
+
+    expect(screen.getByText('Consultando rendimiento...')).toBeInTheDocument()
+    expect(screen.queryByText('Rendimiento no disponible.')).not.toBeInTheDocument()
+  })
+
+  it('shows neutral access states instead of retry prompts when reports are forbidden', () => {
+    render(
+      <EnterpriseDashboard
+        {...dashboardProps}
+        reportsAllowed={false}
+        trendUnavailable
+        salesUnavailable
+        transactionsUnavailable
+        performanceUnavailable
+      />
+    )
+
+    expect(screen.getAllByText('Sin acceso a reportes')).toHaveLength(4)
+    expect(screen.queryByText(/Reintentá desde el aviso/)).not.toBeInTheDocument()
+    expect(screen.queryByText('Sin movimientos')).not.toBeInTheDocument()
+  })
+
+  it('keeps retry prompts when an authorized report query has a visible error notice', () => {
+    const onRetry = jest.fn()
+
+    render(
+      <EnterpriseDashboard
+        {...dashboardProps}
+        reportsAllowed
+        queryIssues={[
+          {
+            id: 'reports',
+            title: 'Reportes del período',
+            message: 'No se pudieron cargar los reportes.',
+            retrying: false,
+            onRetry
+          },
+          {
+            id: 'professionals',
+            title: 'Rendimiento profesional',
+            message: 'No se pudo cargar el rendimiento.',
+            retrying: false,
+            onRetry
+          },
+          {
+            id: 'trend',
+            title: 'Tendencia',
+            message: 'No se pudo cargar la tendencia.',
+            retrying: false,
+            onRetry
+          }
+        ]}
+        trendUnavailable
+        salesUnavailable
+        transactionsUnavailable
+        performanceUnavailable
+      />
+    )
+
+    expect(
+      screen.getByText('Tendencia no disponible. Reintentá desde el aviso del panel.')
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText('Ventas no disponibles. Reintentá desde el aviso del panel.')
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText('Transacciones no disponibles. Reintentá desde el aviso del panel.')
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText('Rendimiento no disponible. Reintentá desde el aviso del panel.')
+    ).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Reintentar reportes del período' }))
+    expect(onRetry).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not suggest retrying when report data is unavailable without an error notice', () => {
+    render(
+      <EnterpriseDashboard
+        {...dashboardProps}
+        reportsAllowed
+        queryIssues={[]}
+        trendUnavailable
+        salesUnavailable
+        transactionsUnavailable
+        performanceUnavailable
+      />
+    )
+
+    expect(screen.getByText('Tendencia no disponible.')).toBeInTheDocument()
+    expect(screen.getByText('Ventas no disponibles.')).toBeInTheDocument()
+    expect(screen.getByText('Transacciones no disponibles.')).toBeInTheDocument()
+    expect(screen.getByText('Rendimiento no disponible.')).toBeInTheDocument()
+    expect(screen.queryByText(/Reintentá desde el aviso/)).not.toBeInTheDocument()
   })
 })

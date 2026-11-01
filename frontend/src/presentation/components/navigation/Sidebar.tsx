@@ -28,10 +28,9 @@ import { Link, useLocation } from 'react-router'
 import { buttonStyles2000s, colors2000s } from '../../../theme/colors'
 import { useAuth } from '../../context/AuthContext'
 import {
-  ROLE_PROFESSIONAL,
-  ROLE_RECEPTIONIST,
-  ROLE_STORE_ADMIN,
-  ROLE_SUPER_ADMIN,
+  ROLES_ADMIN_SUPER,
+  ROLES_ADMIN_SUPER_PRO,
+  ROLES_TENANT_STAFF,
   hasAnyRole
 } from '../../context/roles'
 import { Icon2000s } from '../legacy/Icon2000s'
@@ -41,7 +40,7 @@ type MenuLink = {
   iconPath: string
   label: string
   path: string
-  roles: string[]
+  roles: readonly string[]
 }
 
 type MenuGroup = {
@@ -63,19 +62,19 @@ const menuEntries: MenuEntry[] = [
     iconPath: mdiViewDashboard,
     label: 'Dashboard',
     path: '/dashboard',
-    roles: [ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN, ROLE_PROFESSIONAL, ROLE_RECEPTIONIST]
+    roles: ROLES_TENANT_STAFF
   }),
   link({
     iconPath: mdiCalendar,
     label: 'Agenda',
     path: '/dashboard/calendar',
-    roles: [ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN, ROLE_PROFESSIONAL, ROLE_RECEPTIONIST]
+    roles: ROLES_TENANT_STAFF
   }),
   link({
     iconPath: mdiAccountClock,
     label: 'Lista de espera',
     path: '/dashboard/waitlist',
-    roles: [ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN, ROLE_PROFESSIONAL, ROLE_RECEPTIONIST]
+    roles: ROLES_TENANT_STAFF
   }),
   // Junto a Agenda y Lista de espera: es trabajo sobre turnos, no catalogo ni
   // ventas. Solo el dueno o administrador, como el backend (S6 antiabuso).
@@ -83,13 +82,13 @@ const menuEntries: MenuEntry[] = [
     iconPath: mdiCalendarSearch,
     label: 'Reservas del portal',
     path: '/dashboard/portal-bookings',
-    roles: [ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN]
+    roles: ROLES_ADMIN_SUPER
   }),
   link({
     iconPath: mdiChartBar,
     label: 'Reportes',
     path: '/dashboard/reports',
-    roles: [ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN, ROLE_PROFESSIONAL]
+    roles: ROLES_ADMIN_SUPER_PRO
   }),
   {
     type: 'group',
@@ -102,25 +101,25 @@ const menuEntries: MenuEntry[] = [
         path: '/dashboard/payments',
         // El backend le niega al profesional conciliacion, cola de envios y
         // devoluciones (403): la pantalla solo le mostraba ceros (FF-21).
-        roles: [ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN]
+        roles: ROLES_ADMIN_SUPER
       }),
       link({
         iconPath: mdiCashClock,
         label: 'Cobros',
         path: '/dashboard/collections',
-        roles: [ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN, ROLE_PROFESSIONAL]
+        roles: ROLES_ADMIN_SUPER_PRO
       }),
       link({
         iconPath: mdiWalletOutline,
         label: 'Cuentas pendientes',
         path: '/dashboard/ledger',
-        roles: [ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN, ROLE_PROFESSIONAL]
+        roles: ROLES_ADMIN_SUPER_PRO
       }),
       link({
         iconPath: mdiTagOutline,
         label: 'Promociones',
         path: '/dashboard/promotions',
-        roles: [ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN]
+        roles: ROLES_ADMIN_SUPER
       })
     ]
   },
@@ -133,19 +132,19 @@ const menuEntries: MenuEntry[] = [
         iconPath: mdiBriefcase,
         label: 'Servicios',
         path: '/dashboard/services',
-        roles: [ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN]
+        roles: ROLES_ADMIN_SUPER
       }),
       link({
         iconPath: mdiAccountGroup,
         label: 'Personal',
         path: '/dashboard/staff',
-        roles: [ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN]
+        roles: ROLES_ADMIN_SUPER
       }),
       link({
         iconPath: mdiShieldCheck,
         label: 'Usuarios',
         path: '/dashboard/users',
-        roles: [ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN]
+        roles: ROLES_ADMIN_SUPER
       })
     ]
   }
@@ -156,13 +155,13 @@ const bottomEntries: MenuLink[] = [
     iconPath: mdiCog,
     label: 'Configuración',
     path: '/dashboard/settings',
-    roles: [ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN]
+    roles: ROLES_ADMIN_SUPER
   }),
   link({
     iconPath: mdiHelpCircle,
     label: 'Manual de uso',
     path: '/dashboard/manual',
-    roles: [ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN, ROLE_PROFESSIONAL, ROLE_RECEPTIONIST]
+    roles: ROLES_TENANT_STAFF
   })
 ]
 
@@ -333,7 +332,7 @@ const Sidebar: React.FC<SidebarProps> = ({
       aria-modal={isModal || undefined}
       aria-label={isModal ? 'Menú de navegación' : undefined}
       inert={inert || undefined}
-      className={`w-64 h-screen flex flex-col fixed left-0 top-0 z-50 transition-transform duration-200 lg:translate-x-0 ${
+      className={`w-64 h-dvh flex flex-col fixed left-0 top-0 z-50 transition-transform duration-200 lg:translate-x-0 ${
         isOpen ? 'translate-x-0' : '-translate-x-full'
       }`}
       style={{
@@ -425,13 +424,13 @@ const Sidebar: React.FC<SidebarProps> = ({
           </div>
           <div className="flex-1 min-w-0">
             <p
-              className="text-sm font-black truncate uppercase tracking-tight"
+              className="text-sm font-black whitespace-normal break-words uppercase tracking-tight"
               style={{ color: colors2000s.text.primary }}
             >
               {user?.first_name || 'Usuario'}
             </p>
             <p
-              className="text-[10px] truncate font-bold"
+              className="text-[10px] whitespace-normal break-all font-bold"
               style={{ color: colors2000s.text.secondary }}
             >
               {user?.email}

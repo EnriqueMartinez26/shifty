@@ -53,8 +53,21 @@ export const ReportAppointmentsTable: React.FC<ReportAppointmentsTableProps> = (
       >
         <Download className="w-4 h-4" /> Detalle de turnos
       </div>
-      <div className="overflow-x-auto" style={{ opacity: isStale ? 0.6 : 1 }} aria-busy={isStale}>
-        <table className="min-w-full text-xs">
+      <p
+        className="px-4 py-2 text-xs font-medium xl:hidden"
+        style={{ color: colors2000s.text.secondary }}
+      >
+        Deslizá horizontalmente para comparar las columnas.
+      </p>
+      <div
+        role="region"
+        aria-label="Detalle de turnos: fecha, estado, servicio, personal, cliente y precio"
+        tabIndex={0}
+        className="overflow-x-auto overscroll-x-contain"
+        style={{ opacity: isStale ? 0.6 : 1 }}
+        aria-busy={isStale}
+      >
+        <table className="min-w-[760px] text-xs">
           <thead
             style={{
               background: colors2000s.bg.disabledBottom,

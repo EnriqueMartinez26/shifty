@@ -113,7 +113,7 @@ describe('AgendaDayView', () => {
 
   it('muestra el aviso de carga', () => {
     renderDayView(true)
-    expect(screen.getByText('Actualizando agenda...')).toBeInTheDocument()
+    expect(screen.getByText('Cargando profesionales...')).toBeInTheDocument()
   })
 
   // QA movil 2026-10-08: en el dia, los iconos tapaban el nombre del servicio
@@ -208,24 +208,38 @@ describe('AgendaDayView', () => {
     expect(onWhatsAppClick).toHaveBeenCalledTimes(1)
   })
 
-  it('en el telefono muestra un profesional por vez y deja elegirlo', () => {
-    renderDayView()
-    const picker = screen.getByRole('group', { name: 'Profesional' })
-    expect(picker).toHaveClass('md:hidden')
-    const ana = screen.getByRole('button', { name: 'Ana Gomez' })
-    const bruno = screen.getByRole('button', { name: 'Bruno Diaz' })
-    expect(ana).toHaveAttribute('aria-pressed', 'true')
-    expect(bruno).toHaveAttribute('aria-pressed', 'false')
-    // El turno es de Bruno: su columna se oculta en el telefono hasta elegirlo.
-    expect(screen.getByText('Carla Ruiz').closest('[data-staff-column]')).toHaveClass(
-      'hidden',
-      'md:block'
+  it('expone las regiones de desplazamiento de la grilla larga para teclado y lector de pantalla', () => {
+    render(
+      <AgendaDayView
+        staffMembers={staffMembers}
+        loading={false}
+        dayGrid={{ ...dayGrid, totalHeightPx: 900 }}
+        hoursOfDay={{ byStaff: new Map() }}
+        blocks={[]}
+        cards={[]}
+        canManageBlocks={false}
+        onToggleGap={jest.fn()}
+        onEditBlock={jest.fn()}
+        renderControls={() => null}
+      />
     )
 
-    fireEvent.click(bruno)
+    const horizontalRegion = screen.getByRole('region', {
+      name: 'Agenda diaria por profesional, desplazable horizontalmente'
+    })
+    const verticalRegion = screen.getByRole('region', {
+      name: 'Horarios de la agenda diaria, desplazable verticalmente'
+    })
 
-    expect(bruno).toHaveAttribute('aria-pressed', 'true')
-    expect(screen.getByText('Carla Ruiz').closest('[data-staff-column]')).not.toHaveClass('hidden')
+    expect(horizontalRegion).toHaveAttribute('tabindex', '0')
+    expect(verticalRegion).toHaveAttribute('tabindex', '0')
+    expect(verticalRegion).toHaveAttribute('aria-describedby', 'agenda-day-scroll-hint')
+    expect(
+      screen.getByText('Deslizá verticalmente para recorrer los horarios.')
+    ).toBeInTheDocument()
+    expect(screen.getByText('Ana Gomez', { selector: 'p' })).toBeInTheDocument()
+    expect(screen.getByText('Bruno Diaz', { selector: 'p' })).toBeInTheDocument()
+    expect(screen.queryByRole('group', { name: 'Profesional' })).not.toBeInTheDocument()
   })
 
   it('la grilla solo exige 800 px de ancho desde tablet', () => {

@@ -118,6 +118,12 @@ describe('BookingSuccess', () => {
       expect(screen.getByText('25/09/2026')).toBeInTheDocument()
       expect(screen.queryByText('2026-09-25')).not.toBeInTheDocument()
     })
+
+    it('lleva el foco al título de confirmación cuando aparece el resultado', () => {
+      render(<BookingSuccess {...props()} />)
+
+      expect(screen.getByRole('heading', { name: 'Reserva Confirmada' })).toHaveFocus()
+    })
   })
 
   describe('pago', () => {

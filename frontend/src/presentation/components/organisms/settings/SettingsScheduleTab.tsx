@@ -43,7 +43,7 @@ export const SettingsScheduleTab: React.FC<SettingsScheduleTabProps> = ({
   </div>
 )
 
-const TIME_INPUT_CLASS = 'rounded-lg px-2 py-1 text-[11px] font-black uppercase outline-none'
+const TIME_INPUT_CLASS = 'min-h-11 rounded-lg px-2 py-1 text-[11px] font-black uppercase'
 
 /**
  * Un dia de la semana: cerrado o UN periodo. El backend guarda un solo periodo
@@ -100,7 +100,7 @@ const BusinessHoursDayRow: React.FC<{
               type="button"
               aria-label={`Cerrar ${label}`}
               onClick={() => onChange([])}
-              className="p-1.5 transition-all"
+              className="inline-flex min-h-11 min-w-11 items-center justify-center p-1.5 transition-all"
               style={{ color: colors2000s.status.danger.light }}
             >
               <Trash2 className="w-3.5 h-3.5" />
@@ -126,7 +126,7 @@ const BusinessHoursDayRow: React.FC<{
                 type="button"
                 aria-label={`Conservar ${p.open} a ${p.close} el ${label}`}
                 onClick={() => onChange([p])}
-                className="px-2 py-1 text-[9px] font-black uppercase"
+                className="min-h-11 min-w-11 px-2 py-1 text-[9px] font-black uppercase"
                 style={buttonStyles2000s.default}
               >
                 Conservar este
@@ -146,7 +146,7 @@ const BusinessHoursDayRow: React.FC<{
             type="button"
             aria-label={`Abrir ${label}`}
             onClick={() => onChange([{ open: '09:00', close: '18:00' }])}
-            className="px-3 py-2 text-[9px] font-black uppercase tracking-widest transition-all active:scale-95"
+            className="min-h-11 min-w-11 px-3 py-2 text-[9px] font-black uppercase tracking-widest transition-all active:scale-95"
             style={buttonStyles2000s.default}
           >
             Abrir

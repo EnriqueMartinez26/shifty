@@ -59,7 +59,7 @@ import {
   isValidSlug,
   panelStyle,
   parseOptionalInt,
-  scopeBadgeStyle,
+  statusBadgeStyle,
   SLUG_RULE_TEXT,
   SUPERADMIN_FIELD_ERRORS,
   type AdminFormState,
@@ -692,17 +692,15 @@ const SuperAdminPage: React.FC = () => {
     <div className="space-y-6">
       {confirmDialog}
       <QueryErrorNotice
-        error={
-          storesQuery.error ??
-          overviewQuery.error ??
-          auditQuery.error ??
-          plansQuery.error ??
-          couponsQuery.error
-        }
+        // Cada sección muestra el error y el reintento junto a los datos afectados.
+        error={undefined}
         message="No se pudieron cargar los datos del panel."
       />
       {feedback ? (
         <div
+          role={feedback.tone === 'error' ? 'alert' : 'status'}
+          aria-live={feedback.tone === 'error' ? 'assertive' : 'polite'}
+          aria-atomic="true"
           className="flex items-start gap-3 rounded-[1.5rem] px-5 py-4 text-sm font-bold"
           style={feedbackStyle}
         >
@@ -733,7 +731,7 @@ const SuperAdminPage: React.FC = () => {
         openRedeemCouponModal={openRedeemCouponModal}
       />
 
-      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1.45fr)_420px]">
+      <div className="grid grid-cols-1 gap-6 2xl:grid-cols-[minmax(0,1.45fr)_420px]">
         <div className="space-y-6">
           <StoresSection
             search={draftSearch}
@@ -771,17 +769,25 @@ const SuperAdminPage: React.FC = () => {
           <SuperAdminHealthPanel
             selectedStore={selectedStore}
             overview={overview}
+            overviewLoading={overviewQuery.isLoading}
+            overviewError={overviewQuery.isError}
+            overviewFetching={overviewQuery.isFetching}
+            onRetryOverview={() => void overviewQuery.refetch()}
             onCreateAdmin={openCreateAdminModal}
             onAssignPlan={openAssignPlanModal}
             onRedeemCoupon={openRedeemCouponModal}
             onEditStore={openEditStoreModal}
-            activePlansCount={activePlans.length}
-            activeCouponsCount={activeCoupons.length}
+            activePlansCount={plansQuery.data ? activePlans.length : null}
+            activeCouponsCount={couponsQuery.data ? activeCoupons.length : null}
           />
 
           <SuperAdminAuditTimeline
+            hasSelectedStore={Boolean(selectedStore)}
             entries={auditQuery.data}
-            isLoading={auditQuery.isLoading || auditQuery.isFetching}
+            isLoading={auditQuery.isLoading}
+            isFetching={auditQuery.isFetching}
+            error={auditQuery.error}
+            onRetry={() => void auditQuery.refetch()}
           />
 
           <TenantUsersSection
@@ -797,6 +803,7 @@ const SuperAdminPage: React.FC = () => {
           <SubscriptionSection
             selectedStore={selectedStore}
             overview={overview}
+            overviewQuery={overviewQuery}
             activePlans={activePlans}
             openAssignPlanModal={openAssignPlanModal}
           />
@@ -805,6 +812,7 @@ const SuperAdminPage: React.FC = () => {
             selectedStore={selectedStore}
             hasSelectedStoreSubscription={hasSelectedStoreSubscription}
             overview={overview}
+            overviewQuery={overviewQuery}
             activeCoupons={activeCoupons}
             openRedeemCouponModal={openRedeemCouponModal}
           />
@@ -812,7 +820,7 @@ const SuperAdminPage: React.FC = () => {
           <section className="rounded-[2rem] p-6" style={panelStyle}>
             <div
               className="flex items-start gap-3 rounded-[1.5rem] p-4"
-              style={{ ...scopeBadgeStyle('danger'), boxShadow: colors2000s.shadows.outer }}
+              style={{ ...statusBadgeStyle('danger'), boxShadow: colors2000s.shadows.outer }}
             >
               <AlertTriangle className="mt-0.5 h-5 w-5 flex-shrink-0" />
               <div>

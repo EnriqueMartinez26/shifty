@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useId } from 'react'
 
 import { ShieldCheck, TriangleAlert } from 'lucide-react'
 
@@ -40,6 +40,7 @@ export const BookingOtpSection: React.FC<BookingOtpSectionProps> = ({
   onOtpEmailChange,
   onOtpCodeChange
 }) => {
+  const fieldId = useId()
   const clientInputStyle = createBookingClientInputStyle()
 
   return (
@@ -64,17 +65,25 @@ export const BookingOtpSection: React.FC<BookingOtpSectionProps> = ({
       </div>
 
       <div className="grid sm:grid-cols-[1fr_auto] gap-3">
-        <input
-          type="email"
-          inputMode="email"
-          autoComplete="email"
-          aria-label="Email para el código"
-          value={otpState.email}
-          onChange={(e) => onOtpEmailChange(e.target.value)}
-          className="px-4 py-3 font-bold outline-none"
-          style={clientInputStyle}
-          placeholder="tu@email.com"
-        />
+        <div>
+          <label
+            htmlFor={`${fieldId}-email`}
+            className="mb-1 block text-[10px] font-black uppercase tracking-widest text-gray-500"
+          >
+            Email para recibir el código
+          </label>
+          <input
+            id={`${fieldId}-email`}
+            type="email"
+            inputMode="email"
+            autoComplete="email"
+            value={otpState.email}
+            onChange={(e) => onOtpEmailChange(e.target.value)}
+            className="w-full px-4 py-3 font-bold outline-none"
+            style={clientInputStyle}
+            placeholder="tu@email.com"
+          />
+        </div>
         <button
           type="button"
           disabled={
@@ -84,7 +93,7 @@ export const BookingOtpSection: React.FC<BookingOtpSectionProps> = ({
             otpState.rateLimited
           }
           onClick={onRequestOtp}
-          className="px-4 py-3 text-xs font-black uppercase tracking-widest"
+          className="min-h-11 px-4 py-3 text-xs font-black uppercase tracking-widest"
           style={{ ...buttonStyles2000s.default, borderRadius: 6 }}
         >
           {isRequestingOtp
@@ -96,7 +105,14 @@ export const BookingOtpSection: React.FC<BookingOtpSectionProps> = ({
       </div>
 
       <div className="space-y-3">
+        <label
+          htmlFor={`${fieldId}-code`}
+          className="block text-[10px] font-black uppercase tracking-widest text-gray-500"
+        >
+          Código de verificación
+        </label>
         <input
+          id={`${fieldId}-code`}
           inputMode="numeric"
           autoComplete="one-time-code"
           maxLength={6}
@@ -107,6 +123,16 @@ export const BookingOtpSection: React.FC<BookingOtpSectionProps> = ({
           style={clientInputStyle}
           placeholder="Código que te llegó por email"
         />
+        {isRequestingOtp && (
+          <p role="status" aria-live="polite" className="text-xs font-bold text-gray-500">
+            Enviando el código…
+          </p>
+        )}
+        {isVerifyingOtp && (
+          <p role="status" aria-live="polite" className="text-xs font-bold text-gray-500">
+            Verificando el código…
+          </p>
+        )}
 
         {/* J7 (2026-09-30): debug_code tal cual lo devolvio la API, solo si
             vino. Si el codigo fue al email de la ficha y no al tipeado, el
@@ -144,6 +170,7 @@ export const BookingOtpSection: React.FC<BookingOtpSectionProps> = ({
 
         {otpState.verified ? (
           <div
+            role="status"
             className="p-3 text-xs font-bold flex items-center gap-2"
             style={createBookingAccentBoxStyle(
               colors2000s.status.success.bg,
@@ -159,7 +186,7 @@ export const BookingOtpSection: React.FC<BookingOtpSectionProps> = ({
             type="button"
             disabled={!otpState.code || isVerifyingOtp}
             onClick={onVerifyOtp}
-            className="w-full px-4 py-3 text-xs font-black uppercase tracking-widest disabled:opacity-50"
+            className="w-full min-h-11 px-4 py-3 text-xs font-black uppercase tracking-widest disabled:opacity-50"
             style={{ ...brandSelectedStyle, borderRadius: 6 }}
           >
             {isVerifyingOtp ? 'Verificando...' : 'Verificar código'}
