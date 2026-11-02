@@ -76,7 +76,7 @@ def test_auth_email_sink_reports_smtp_failure_without_logging_recipient(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     reports: list[dict[str, str]] = []
-    monkeypatch.setattr(auth_service.smtplib, "SMTP", _SmtpRechaza)
+    monkeypatch.setattr(smtplib, "SMTP", _SmtpRechaza)
     monkeypatch.setattr(
         auth_service,
         "report_mail_failure",
