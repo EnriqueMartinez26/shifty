@@ -27,6 +27,7 @@ from core.database import (
     _apply_tenant_context,
     set_tenant_context,
 )
+from core.observability import report_mail_failure
 from modules.notifications.reminders import (
     STAGE_2H,
     STAGE_24H,
@@ -222,6 +223,9 @@ class SmtpSession:
                 error_type=type(exc).__name__,
                 error=_safe_error(exc),
             )
+            report_mail_failure(
+                component="notifications", error_type=type(exc).__name__
+            )
             return False
 
     def close(self) -> None:
@@ -335,6 +339,7 @@ async def enqueue_otp_email(to: str, subject: str, body: str) -> bool:
     encolado = await enqueue(send_otp_email, to, subject, body)
     if not encolado:
         logger.warning("otp_email_enqueue_failed")
+        report_mail_failure(component="notifications", error_type="MailEnqueueFailed")
     return encolado
 
 
@@ -604,6 +609,7 @@ async def send_reschedule_email(
             appointment=details.get("public_id"),
             error_type=type(exc).__name__,
         )
+        report_mail_failure(component="notifications", error_type=type(exc).__name__)
         return {"status": "failed", "reason": type(exc).__name__}
     if not success:
         return {"status": "failed", "reason": "smtp"}
@@ -774,6 +780,7 @@ async def send_registration_email(
             appointment=details.get("public_id"),
             error_type=type(exc).__name__,
         )
+        report_mail_failure(component="notifications", error_type=type(exc).__name__)
         return {"status": "failed", "reason": type(exc).__name__}
 
 
@@ -796,6 +803,7 @@ async def send_cancellation_email(
             appointment=details.get("public_id"),
             error_type=type(exc).__name__,
         )
+        report_mail_failure(component="notifications", error_type=type(exc).__name__)
         return {"status": "failed", "reason": type(exc).__name__}
     if not success:
         return {"status": "failed", "reason": "smtp"}
@@ -821,6 +829,7 @@ async def send_rebook_email(
             appointment=details.get("public_id"),
             error_type=type(exc).__name__,
         )
+        report_mail_failure(component="notifications", error_type=type(exc).__name__)
         return {"status": "failed", "reason": type(exc).__name__}
     if not success:
         return {"status": "failed", "reason": "smtp"}
@@ -866,6 +875,7 @@ async def send_waitlist_offer_email(
             entry=details.get("public_id"),
             error_type=type(exc).__name__,
         )
+        report_mail_failure(component="notifications", error_type=type(exc).__name__)
         return {"status": "failed", "reason": type(exc).__name__}
     if not success:
         return {"status": "failed", "reason": "smtp"}
@@ -892,6 +902,7 @@ async def send_confirmation_email(
             error_type=type(exc).__name__,
             error=_safe_error(exc),
         )
+        report_mail_failure(component="notifications", error_type=type(exc).__name__)
         return {
             "status": "failed",
             "reason": type(exc).__name__,
@@ -1053,6 +1064,7 @@ async def enqueue_registration_email(*, store_id: str, appointment_id: str) -> b
             kind=BOOKING_MAIL_REGISTRATION,
             appointment=appointment_id,
         )
+        report_mail_failure(component="notifications", error_type="MailEnqueueFailed")
     return encolado
 
 
@@ -1067,6 +1079,7 @@ async def enqueue_confirmation_email(*, store_id: str, appointment_id: str) -> b
             kind=BOOKING_MAIL_CONFIRMATION,
             appointment=appointment_id,
         )
+        report_mail_failure(component="notifications", error_type="MailEnqueueFailed")
     return encolado
 
 
@@ -1109,6 +1122,7 @@ async def _dispatch_reminder(
             error_type=type(exc).__name__,
             error=_safe_error(exc),
         )
+        report_mail_failure(component="notifications", error_type=type(exc).__name__)
         return False
     return result.get("status") == "sent"
 
@@ -1372,4 +1386,5 @@ async def send_store_notification_email(
             email=_mask_email(email),
             error_type=type(exc).__name__,
         )
+        report_mail_failure(component="notifications", error_type=type(exc).__name__)
         return {"status": "failed", "reason": type(exc).__name__}
