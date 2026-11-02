@@ -10,6 +10,7 @@ import type {
 
 import { ConflictError } from '@shared/errors/ConflictError'
 import { ValidationError } from '@shared/errors/ValidationError'
+import { fromDateTimeInput } from '@shared/utils/argentinaTime'
 
 import SuperAdminPage from './SuperAdmin'
 
@@ -584,6 +585,76 @@ describe('SuperAdminPage', () => {
           current_period_end: null
         }
       })
+    })
+  })
+
+  // 2026-11-02 (#274): renovar una suscripcion vencida o suspendida
+  // extendiendo solo "Periodo hasta" la dejaba en ese estado, porque el
+  // formulario reenviaba el estado actual. Con la renovacion manual por
+  // transferencia, la tienda que pago seguia con el portal oculto.
+  describe('renovación de una suscripción vencida', () => {
+    const FUTURO = '2099-12-31T10:00'
+    const estadoOriginal = mockOverview.subscription!.status
+
+    const abrirConEstado = (status: string) => {
+      mockOverview.subscription = { ...mockOverview.subscription!, status }
+      render(<SuperAdminPage />)
+      fireEvent.click(screen.getByRole('button', { name: 'Asignar plan' }))
+    }
+
+    const payloadEnviado = async () => {
+      await waitFor(() => {
+        expect(mockMutations.assignSubscription).toHaveBeenCalledTimes(1)
+      })
+      return mockMutations.assignSubscription.mock.calls[0][0].payload
+    }
+
+    afterEach(() => {
+      mockOverview.subscription = { ...mockOverview.subscription!, status: estadoOriginal }
+    })
+
+    it.each(['past_due', 'suspended'])(
+      'extender el periodo de una suscripcion %s la pasa a Activa y lo avisa',
+      async (status) => {
+        abrirConEstado(status)
+
+        fireEvent.change(screen.getByLabelText('Período hasta'), { target: { value: FUTURO } })
+
+        expect((screen.getByLabelText('Status') as HTMLSelectElement).value).toBe('active')
+        expect(screen.getByText(/Renovación: el estado pasó a Activa/)).toHaveAttribute(
+          'role',
+          'status'
+        )
+        fireEvent.submit(openModalForm())
+        const payload = await payloadEnviado()
+        expect(payload.status).toBe('active')
+        expect(payload.current_period_end).toBe(fromDateTimeInput(FUTURO))
+      }
+    )
+
+    it('un cambio que no es una renovacion conserva el estado', async () => {
+      abrirConEstado('past_due')
+
+      fireEvent.change(screen.getByLabelText('Período hasta'), {
+        target: { value: '2020-01-01T10:00' }
+      })
+      fireEvent.change(screen.getByLabelText('Monto base'), { target: { value: '20000' } })
+
+      expect((screen.getByLabelText('Status') as HTMLSelectElement).value).toBe('past_due')
+      expect(screen.queryByText(/Renovación: el estado pasó a Activa/)).not.toBeInTheDocument()
+      fireEvent.submit(openModalForm())
+      expect((await payloadEnviado()).status).toBe('past_due')
+    })
+
+    it('un estado elegido a mano despues de extender el periodo se respeta', async () => {
+      abrirConEstado('past_due')
+
+      fireEvent.change(screen.getByLabelText('Período hasta'), { target: { value: FUTURO } })
+      fireEvent.change(screen.getByLabelText('Status'), { target: { value: 'suspended' } })
+
+      expect(screen.queryByText(/Renovación: el estado pasó a Activa/)).not.toBeInTheDocument()
+      fireEvent.submit(openModalForm())
+      expect((await payloadEnviado()).status).toBe('suspended')
     })
   })
 

@@ -11,7 +11,8 @@ import {
   type PendingState,
   type PlanFormState,
   type SubscriptionFormState,
-  type SuperAdminModalKey
+  type SuperAdminModalKey,
+  withPeriodEnd
 } from './shared'
 import { SuperAdminFormModal } from '../../components/organisms/SuperAdminFormModal'
 import { FieldLabel, SelectInput, TextArea, TextInput, ToggleRow } from '../SuperAdminUi'
@@ -222,7 +223,11 @@ export const PlanModals: React.FC<PlanModalsProps> = ({
             id="subscription-status"
             value={subscriptionForm.status}
             onChange={(event) =>
-              setSubscriptionForm((current) => ({ ...current, status: event.target.value }))
+              setSubscriptionForm((current) => ({
+                ...current,
+                status: event.target.value,
+                renewal_reactivated: false
+              }))
             }
           >
             {/* Los cuatro estados del grafo del backend; "Prueba" no existia. */}
@@ -286,14 +291,20 @@ export const PlanModals: React.FC<PlanModalsProps> = ({
             type="datetime-local"
             value={subscriptionForm.current_period_end}
             onChange={(event) =>
-              setSubscriptionForm((current) => ({
-                ...current,
-                current_period_end: event.target.value
-              }))
+              setSubscriptionForm((current) => withPeriodEnd(current, event.target.value))
             }
           />
         </div>
       </div>
+      {subscriptionForm.renewal_reactivated ? (
+        <p
+          role="status"
+          className="rounded-2xl px-4 py-3 text-xs font-bold"
+          style={statusBadgeStyle('success')}
+        >
+          Renovación: el estado pasó a Activa. Si no corresponde, elegí otro estado arriba.
+        </p>
+      ) : null}
     </SuperAdminFormModal>
   </>
 )

@@ -275,7 +275,8 @@ const SuperAdminPage: React.FC = () => {
         : '',
       currency: overview?.subscription?.currency || 'ARS',
       current_period_start: toDateTimeInput(overview?.subscription?.current_period_start || null),
-      current_period_end: toDateTimeInput(overview?.subscription?.current_period_end || null)
+      current_period_end: toDateTimeInput(overview?.subscription?.current_period_end || null),
+      renewal_reactivated: false
     })
     openModal('assign-plan')
   }

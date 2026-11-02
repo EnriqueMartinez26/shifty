@@ -2,7 +2,7 @@ import { PASSWORD_REJECTED_MESSAGE } from '@domain/value-objects/PasswordRules'
 
 import type { SuperAdminCoupon } from '@application/services/SuperAdminService'
 
-import { formatArgentinaDate } from '@shared/utils/argentinaTime'
+import { formatArgentinaDate, fromDateTimeInput } from '@shared/utils/argentinaTime'
 
 import { superAdminGlobalScopeStyle, superAdminTenantScopeStyle } from './palette'
 import { colors2000s } from '../../../theme/colors'
@@ -88,6 +88,29 @@ export interface SubscriptionFormState {
   currency: string
   current_period_start: string
   current_period_end: string
+  /** The status was switched to active because the period end was extended. */
+  renewal_reactivated: boolean
+}
+
+const LAPSED_SUBSCRIPTION_STATUSES = new Set(['past_due', 'suspended'])
+
+/**
+ * Form state after the operator edits "Período hasta". Extending a lapsed
+ * (past due or suspended) subscription into the future records a renewal, so
+ * the status switches to active. Before #274 the form resent the lapsed
+ * status and the paid store stayed hidden. The switch is visible and the
+ * operator can still pick another status afterwards.
+ */
+export const withPeriodEnd = (
+  form: SubscriptionFormState,
+  periodEnd: string,
+  now: Date = new Date()
+): SubscriptionFormState => {
+  const next = { ...form, current_period_end: periodEnd }
+  if (!LAPSED_SUBSCRIPTION_STATUSES.has(form.status)) return next
+  const end = fromDateTimeInput(periodEnd)
+  if (!end || new Date(end).getTime() <= now.getTime()) return next
+  return { ...next, status: 'active', renewal_reactivated: true }
 }
 
 export interface CouponFormState {
@@ -173,7 +196,8 @@ export const createEmptySubscriptionForm = (): SubscriptionFormState => ({
   base_amount: '',
   currency: 'ARS',
   current_period_start: '',
-  current_period_end: ''
+  current_period_end: '',
+  renewal_reactivated: false
 })
 
 export const createEmptyCouponForm = (): CouponFormState => ({
