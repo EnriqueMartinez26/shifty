@@ -83,9 +83,9 @@ describe('ResetPasswordPage', () => {
     expect(column.lastElementChild?.textContent).toBe('Términos y condiciones·Privacidad')
   })
 
-  const renderReset = () =>
+  const renderReset = (entry = '/reset-password?token=abc') =>
     render(
-      <MemoryRouter initialEntries={['/reset-password?token=abc']}>
+      <MemoryRouter initialEntries={[entry]}>
         <ResetPasswordPage />
       </MemoryRouter>
     )
@@ -98,6 +98,33 @@ describe('ResetPasswordPage', () => {
 
   beforeEach(() => {
     mockMutateAsync.mockReset()
+  })
+
+  it('si falta el token, explica el problema y ofrece pedir otro enlace', () => {
+    renderReset('/reset-password')
+
+    expect(screen.getByRole('alert')).toHaveTextContent('El enlace está incompleto o no es válido')
+    expect(screen.queryByLabelText('Nueva contraseña')).not.toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Solicitar un nuevo enlace' })).toHaveAttribute(
+      'href',
+      '/forgot-password'
+    )
+  })
+
+  it('tras actualizar, mantiene la confirmación y ofrece ir al login', async () => {
+    mockMutateAsync.mockResolvedValue({ message: 'Contraseña actualizada correctamente.' })
+    renderReset()
+
+    submitWith('abc123')
+
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      'Contraseña actualizada correctamente.'
+    )
+    expect(screen.queryByRole('button', { name: 'Actualizar contraseña' })).not.toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Ir a iniciar sesión' })).toHaveAttribute(
+      'href',
+      '/login'
+    )
   })
 
   it('rechaza una clave de menos de 6 caracteres sin llamar al backend (L1)', async () => {

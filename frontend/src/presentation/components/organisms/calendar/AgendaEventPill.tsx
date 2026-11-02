@@ -26,9 +26,9 @@ export const AgendaEventPill: React.FC<AgendaEventPillProps> = ({
   const style =
     event.type === 'block'
       ? {
-          accent: '#c2410c',
-          background: 'linear-gradient(180deg, #fff7ed 0%, #fed7aa 100%)',
-          text: '#9a3412'
+          accent: colors2000s.status.warning.accent,
+          background: `linear-gradient(180deg, ${colors2000s.status.warning.bg} 0%, ${colors2000s.status.warning.border} 100%)`,
+          text: colors2000s.status.warning.text
         }
       : statusStyle(event.status)
   return (

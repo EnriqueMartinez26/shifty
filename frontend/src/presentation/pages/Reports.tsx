@@ -329,7 +329,7 @@ const ReportsPage: React.FC = () => {
               void downloadFile('csv')
             }}
             disabled={exportMutation.isPending}
-            className="px-5 py-3 text-xs font-black uppercase tracking-widest transition-all active:scale-95 disabled:opacity-50"
+            className="min-h-11 px-5 py-3 text-xs font-black uppercase tracking-widest transition-all active:scale-95 disabled:opacity-50"
             style={buttonStyles2000s.default}
           >
             <Table2 className="w-4 h-4 mr-2" /> Exportar CSV
@@ -340,7 +340,7 @@ const ReportsPage: React.FC = () => {
               void downloadFile('excel')
             }}
             disabled={exportMutation.isPending}
-            className="px-5 py-3 rounded-xl text-xs font-black uppercase tracking-widest transition-all active:scale-95 disabled:opacity-50"
+            className="min-h-11 px-5 py-3 rounded-xl text-xs font-black uppercase tracking-widest transition-all active:scale-95 disabled:opacity-50"
             style={{
               ...buttonStyles2000s.selected,
               background: 'linear-gradient(180deg, #10b981 0%, #059669 100%)',
@@ -355,7 +355,7 @@ const ReportsPage: React.FC = () => {
               void downloadFile('pdf')
             }}
             disabled={exportMutation.isPending}
-            className="px-5 py-3 rounded-xl text-xs font-black uppercase tracking-widest transition-all active:scale-95 disabled:opacity-50"
+            className="min-h-11 px-5 py-3 rounded-xl text-xs font-black uppercase tracking-widest transition-all active:scale-95 disabled:opacity-50"
             style={{
               ...buttonStyles2000s.selected,
               background: 'linear-gradient(180deg, #3b82f6 0%, #2563eb 100%)',

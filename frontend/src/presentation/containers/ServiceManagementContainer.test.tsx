@@ -28,6 +28,11 @@ const mockListCatalog = jest.fn(() => ({
   isLoading: false,
   error: null
 }))
+const cssColor = (color: string) => {
+  const probe = document.createElement('span')
+  probe.style.color = color
+  return probe.style.color
+}
 jest.mock('../hooks/useManagedServices', () => ({
   useManagedServices: () => mockListShared(),
   useManagedServiceCatalog: () => mockListCatalog(),
@@ -37,6 +42,14 @@ jest.mock('../hooks/useManagedServices', () => ({
   useUploadServiceImage: () => ({ mutateAsync: jest.fn() }),
   useRemoveServiceImage: () => ({ mutateAsync: jest.fn() })
 }))
+
+afterEach(() => {
+  mockListCatalog.mockImplementation(() => ({
+    data: [{ id: 'svc-1', name: 'Corte' }],
+    isLoading: false,
+    error: null
+  }))
+})
 
 let mockStaff: { data?: { isActive: boolean; serviceIds: string[] }[] } = { data: [] }
 jest.mock('../hooks/useManagedStaff', () => ({
@@ -108,6 +121,32 @@ describe('ServiceManagementContainer: tienda suspendida', () => {
 
     expect(getByRole('button', { name: /nuevo servicio/i })).not.toBeDisabled()
     expect(getByTestId('card-reason')).toHaveTextContent('editable')
+  })
+
+  it('deja que el foco visible global se aplique al campo de búsqueda', () => {
+    const { getByPlaceholderText } = render(<ServiceManagementContainer />)
+
+    expect(getByPlaceholderText('BUSCAR SERVICIO...').style.outline).toBe('')
+  })
+})
+
+describe('ServiceManagementContainer: contraste de búsqueda y carga', () => {
+  it('usa el color semántico secundario para el icono, el placeholder y el indicador de carga', () => {
+    mockListCatalog.mockImplementation(() => ({ data: [], isLoading: true, error: null }))
+    const { container, getByPlaceholderText, getByText } = render(<ServiceManagementContainer />)
+
+    const input = getByPlaceholderText('BUSCAR SERVICIO...')
+    const searchIcon = container.querySelector('svg.lucide-search')
+    expect((searchIcon as SVGElement | null)?.style.color).toBe(
+      cssColor(colors2000s.text.secondary)
+    )
+    expect(input).toHaveClass('placeholder:text-[color:var(--placeholder-color)]')
+    expect((input as HTMLInputElement).style.getPropertyValue('--placeholder-color')).toBe(
+      colors2000s.text.secondary
+    )
+    expect((getByText('Cargando servicios...') as HTMLElement).style.color).toBe(
+      cssColor(colors2000s.text.secondary)
+    )
   })
 })
 
@@ -228,7 +267,7 @@ describe('ServiceManagementContainer: búsqueda y catálogo vacío', () => {
     const search = getByRole('textbox', { name: 'Buscar servicio' })
 
     expect(search).toHaveClass('focus-visible:outline-2', 'focus-visible:outline-offset-2')
-    expect(search.style.outlineColor).toBe('rgb(199, 90, 0)')
+    expect(search.style.outlineColor).toBe('')
     expect(contrastRatio(colors2000s.orange.heading, '#ffffff')).toBeGreaterThanOrEqual(3)
     search.focus()
     expect(search).toHaveFocus()

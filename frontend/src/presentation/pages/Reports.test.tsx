@@ -128,6 +128,16 @@ describe('ReportsPage', () => {
     expect(container.querySelectorAll('button:not([type])')).toHaveLength(0)
   })
 
+  it('mantiene fechas y exportaciones dentro del objetivo táctil mínimo', () => {
+    render(<ReportsPage />)
+
+    expect(screen.getByLabelText('Desde')).toHaveClass('min-h-11')
+    expect(screen.getByLabelText('Hasta')).toHaveClass('min-h-11')
+    for (const format of ['CSV', 'Excel', 'PDF']) {
+      expect(screen.getByRole('button', { name: `Exportar ${format}` })).toHaveClass('min-h-11')
+    }
+  })
+
   it('el profesional no ve los botones de exportar (FF-18)', () => {
     mockAuthUser = { role: 'professional' }
     render(<ReportsPage />)

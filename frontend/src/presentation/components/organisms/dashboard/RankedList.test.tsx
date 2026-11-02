@@ -32,15 +32,15 @@ describe('RankedList', () => {
     expect(first.style.background).toBe('rgba(255, 255, 255, 0.65)')
   })
 
-  it('pinta el numero y el valor con el naranja de acento', () => {
+  it('pinta el numero y el valor con el acento definido por la paleta', () => {
     render(<RankedList items={[item()]} />)
 
     const row = screen.getByRole('listitem')
     const badge = row.querySelector('span') as HTMLElement
     expect(badge.textContent).toBe('1')
-    expect(badge.style.color).toBe('rgb(154, 69, 7)')
+    expect(badge.style.color).toBe('rgb(92, 92, 92)')
     expect(badge.style.background).toBe('rgba(255, 140, 66, 0.12)')
-    expect(screen.getByText('30').style.color).toBe('rgb(154, 69, 7)')
+    expect(screen.getByText('30').style.color).toBe('rgb(92, 92, 92)')
   })
 
   it('omite el detalle cuando no viene', () => {

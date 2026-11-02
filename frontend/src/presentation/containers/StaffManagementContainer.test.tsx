@@ -131,7 +131,7 @@ describe('StaffManagementContainer: búsqueda y estados vacíos', () => {
       'focus-visible:outline',
       'focus-visible:outline-2',
       'focus-visible:outline-offset-2',
-      'focus-visible:outline-[#9a4507]'
+      'focus-visible:outline-[var(--color-brand-accent)]'
     )
   })
 

@@ -13,9 +13,11 @@ import {
   isCouponExpired,
   panelStyle,
   scopeBadgeStyle,
+  statusBadgeStyle,
   type QueryState
 } from './shared'
 import { colors2000s } from '../../../theme/colors'
+import { QuerySectionFeedback } from '../../components/molecules/QuerySectionFeedback'
 import { formatDateEsAr } from '../../lib/formatters'
 import { ActionButton, MiniButton } from '../SuperAdminUi'
 
@@ -58,6 +60,18 @@ export const CouponsSection: React.FC<CouponsSectionProps> = ({
     </div>
 
     <div className="space-y-3">
+      <QuerySectionFeedback
+        loading={couponsQuery.isLoading || (!couponsQuery.data && !couponsQuery.error)}
+        loadingMessage={couponsQuery.data ? 'Actualizando cupones...' : 'Cargando cupones...'}
+        error={couponsQuery.error}
+        errorMessage={
+          couponsQuery.data
+            ? 'No se pudieron actualizar los cupones. Se muestran los últimos datos disponibles.'
+            : 'No se pudieron cargar los cupones globales. Reintentá para consultar el catálogo.'
+        }
+        isFetching={couponsQuery.isFetching}
+        onRetry={couponsQuery.refetch}
+      />
       {couponsQuery.data?.length ? (
         couponsQuery.data.map((coupon) => {
           const expired = isCouponExpired(coupon)
@@ -81,7 +95,9 @@ export const CouponsSection: React.FC<CouponsSectionProps> = ({
                 </div>
                 <span
                   className="rounded-full px-3 py-1 text-[10px] font-black uppercase tracking-widest"
-                  style={coupon.is_active ? scopeBadgeStyle('global') : scopeBadgeStyle('danger')}
+                  style={
+                    coupon.is_active ? statusBadgeStyle('success') : statusBadgeStyle('danger')
+                  }
                 >
                   {coupon.current_uses}
                   {coupon.max_uses ? `/${coupon.max_uses}` : ''} usos
@@ -115,7 +131,7 @@ export const CouponsSection: React.FC<CouponsSectionProps> = ({
               {expired || exhausted ? (
                 <div
                   className="mt-4 rounded-2xl px-3 py-2 text-[10px] font-black uppercase tracking-widest"
-                  style={scopeBadgeStyle('danger')}
+                  style={statusBadgeStyle('danger')}
                 >
                   {expired ? 'Cupón expirado' : 'Máximo de usos alcanzado'}
                 </div>
@@ -142,7 +158,7 @@ export const CouponsSection: React.FC<CouponsSectionProps> = ({
             </div>
           )
         })
-      ) : (
+      ) : couponsQuery.data ? (
         <div className="rounded-[1.5rem] p-8 text-center" style={emptyStateStyle}>
           <Tag className="mx-auto mb-3 h-10 w-10 opacity-25" />
           <p
@@ -155,7 +171,7 @@ export const CouponsSection: React.FC<CouponsSectionProps> = ({
             Creá el primer cupón global para empezar a ofrecer descuentos.
           </p>
         </div>
-      )}
+      ) : null}
     </div>
   </section>
 )

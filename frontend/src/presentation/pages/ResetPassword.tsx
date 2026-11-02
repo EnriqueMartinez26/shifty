@@ -2,7 +2,7 @@ import React, { useState } from 'react'
 
 import { mdiShieldAlert } from '@mdi/js'
 import { KeyRound } from 'lucide-react'
-import { useNavigate, useSearchParams } from 'react-router'
+import { Link, useSearchParams } from 'react-router'
 
 import {
   PASSWORD_MAX_LENGTH,
@@ -23,7 +23,6 @@ const inputStyle = create2000sInputStyle()
 
 const ResetPasswordPage: React.FC = () => {
   const [searchParams] = useSearchParams()
-  const navigate = useNavigate()
   const token = searchParams.get('token') || ''
 
   const [newPassword, setNewPassword] = useState('')
@@ -31,6 +30,8 @@ const ResetPasswordPage: React.FC = () => {
   const [error, setError] = useState<string | null>(null)
   const [message, setMessage] = useState<string | null>(null)
   const resetPasswordMutation = useResetPassword()
+  const title = 'Restablecer contraseña'
+  const subtitle = 'Definí una nueva contraseña para tu cuenta.'
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -60,7 +61,6 @@ const ResetPasswordPage: React.FC = () => {
         new_password: newPassword
       })
       setMessage(response.message || 'Contraseña actualizada correctamente.')
-      setTimeout(() => navigate('/login'), 1200)
     } catch (error: unknown) {
       // Si el 422 señala la clave, se avisa con texto propio; el token
       // rechazado conserva su mensaje específico.
@@ -77,12 +77,65 @@ const ResetPasswordPage: React.FC = () => {
     }
   }
 
+  if (!token) {
+    return (
+      <AuthShell title={title} subtitle={subtitle} showBackToLogin>
+        <div className="space-y-4">
+          <div
+            role="alert"
+            className="text-sm p-3 rounded-xl"
+            style={{
+              background: colors2000s.status.danger.bg,
+              border: `1px solid ${colors2000s.status.danger.border}`,
+              color: colors2000s.status.danger.text,
+              boxShadow: colors2000s.shadows.insetDark
+            }}
+          >
+            El enlace está incompleto o no es válido. Solicitá uno nuevo para cambiar tu contraseña.
+          </div>
+          <Link
+            to="/forgot-password"
+            className="w-full font-bold py-4 rounded-2xl flex items-center justify-center gap-2 transition-all"
+            style={buttonStyles2000s.selected}
+          >
+            Solicitar un nuevo enlace
+          </Link>
+        </div>
+      </AuthShell>
+    )
+  }
+
+  if (message) {
+    return (
+      <AuthShell title={title} subtitle={subtitle}>
+        <div className="space-y-4">
+          <div
+            role="status"
+            aria-live="polite"
+            className="text-sm p-3 rounded-xl font-medium"
+            style={{
+              background: colors2000s.status.success.bg,
+              border: `1px solid ${colors2000s.status.success.border}`,
+              color: colors2000s.status.success.text,
+              boxShadow: colors2000s.shadows.insetDark
+            }}
+          >
+            {message}
+          </div>
+          <Link
+            to="/login"
+            className="w-full font-bold py-4 rounded-2xl flex items-center justify-center gap-2 transition-all"
+            style={buttonStyles2000s.selected}
+          >
+            Ir a iniciar sesión
+          </Link>
+        </div>
+      </AuthShell>
+    )
+  }
+
   return (
-    <AuthShell
-      title="Restablecer contraseña"
-      subtitle="Definí una nueva contraseña para tu cuenta."
-      showBackToLogin
-    >
+    <AuthShell title={title} subtitle={subtitle} showBackToLogin>
       <form
         onSubmit={(event) => {
           void handleSubmit(event)
@@ -145,21 +198,6 @@ const ResetPasswordPage: React.FC = () => {
           </div>
         </div>
 
-        {message && (
-          <div
-            role="status"
-            aria-live="polite"
-            className="text-sm p-3 rounded-xl font-medium"
-            style={{
-              background: colors2000s.status.success.bg,
-              border: `1px solid ${colors2000s.status.success.border}`,
-              color: colors2000s.status.success.text,
-              boxShadow: colors2000s.shadows.insetDark
-            }}
-          >
-            {message}
-          </div>
-        )}
         {error && (
           <div
             role="alert"

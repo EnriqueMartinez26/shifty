@@ -60,6 +60,8 @@ describe('AbsencesTimeline', () => {
         onDeactivate={onDeactivate}
       />
     )
+    expect(screen.getByRole('button', { name: 'Editar' })).toHaveClass('min-h-11')
+    expect(screen.getByRole('button', { name: 'Desactivar' })).toHaveClass('min-h-11')
     fireEvent.click(screen.getByRole('button', { name: 'Editar' }))
     fireEvent.click(screen.getByRole('button', { name: 'Desactivar' }))
 
@@ -78,5 +80,24 @@ describe('AbsencesTimeline', () => {
       <AbsencesTimeline events={[]} canManageBlocks onEdit={jest.fn()} onDeactivate={jest.fn()} />
     )
     expect(screen.getByText('No hay bloqueos ni ausencias en el rango actual.')).toBeInTheDocument()
+  })
+
+  it('conserva los eventos disponibles junto al aviso de un rango incompleto', () => {
+    render(
+      <AbsencesTimeline
+        events={[block]}
+        canManageBlocks
+        onEdit={jest.fn()}
+        onDeactivate={jest.fn()}
+        statusMessage="No se pudo cargar el rango actual."
+      />
+    )
+
+    expect(screen.getByRole('status')).toHaveTextContent('No se pudo cargar el rango actual.')
+    expect(screen.getByText('Almuerzo')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Editar' })).toBeInTheDocument()
+    expect(
+      screen.queryByText('No hay bloqueos ni ausencias en el rango actual.')
+    ).not.toBeInTheDocument()
   })
 })

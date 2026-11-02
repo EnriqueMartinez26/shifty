@@ -25,6 +25,7 @@ const readFrom = (state: unknown): unknown =>
 const LoginPage: React.FC = () => {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [isPasswordVisible, setIsPasswordVisible] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const navigate = useNavigate()
   const location = useLocation()
@@ -92,19 +93,32 @@ const LoginPage: React.FC = () => {
           >
             Contraseña
           </label>
-          <input
-            id="login-password"
-            type="password"
-            autoComplete="current-password"
-            maxLength={LOGIN_PASSWORD_MAX_LENGTH * 2}
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            className="w-full rounded-xl px-4 py-3 outline-none transition-all"
-            style={inputStyle}
-            placeholder="********"
-            required
-          />
-          <div className="mt-2 flex justify-end">
+          <div className="relative">
+            <input
+              id="login-password"
+              type={isPasswordVisible ? 'text' : 'password'}
+              autoComplete="current-password"
+              maxLength={LOGIN_PASSWORD_MAX_LENGTH * 2}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="w-full rounded-xl px-4 pr-20 py-3 outline-none transition-all"
+              style={inputStyle}
+              placeholder="********"
+              required
+            />
+            <button
+              type="button"
+              aria-label={isPasswordVisible ? 'Ocultar contraseña' : 'Mostrar contraseña'}
+              aria-pressed={isPasswordVisible}
+              aria-controls="login-password"
+              onClick={() => setIsPasswordVisible((visible) => !visible)}
+              className="absolute inset-y-0 right-3 my-auto h-fit rounded px-1 text-xs font-bold focus-visible:outline focus-visible:outline-2"
+              style={{ color: colors2000s.orange.accent }}
+            >
+              {isPasswordVisible ? 'Ocultar' : 'Mostrar'}
+            </button>
+          </div>
+          <div className="mt-2 text-right">
             <Link
               to="/forgot-password"
               className="inline-flex min-h-11 items-center rounded-md px-2 text-xs transition-colors font-medium"

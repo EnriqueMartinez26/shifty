@@ -20,6 +20,8 @@ interface AbsencesTimelineProps {
   canManageBlocks: boolean
   onEdit: (block: AbsencesTimelineBlock) => void
   onDeactivate: (blockId: string) => void
+  /** Rango pendiente o incompleto: no afirmar que está vacío. */
+  statusMessage?: string | null
   /** Tienda suspendida: PATCH y DELETE de bloqueos responden 402 (FF-15). */
   readOnlyReason?: string | null
 }
@@ -33,6 +35,7 @@ export const AbsencesTimeline: React.FC<AbsencesTimelineProps> = ({
   canManageBlocks,
   onEdit,
   onDeactivate,
+  statusMessage = null,
   readOnlyReason = null
 }) => (
   <div className="p-6 rounded-[8px] space-y-4" style={panelStyle}>
@@ -43,6 +46,16 @@ export const AbsencesTimeline: React.FC<AbsencesTimelineProps> = ({
       Bloqueos y ausencias
     </h3>
     <div className="space-y-3">
+      {statusMessage ? (
+        <div
+          role="status"
+          aria-live="polite"
+          className="rounded-[6px] p-6 bg-white text-sm font-bold"
+          style={{ ...cardStyle, color: colors2000s.text.secondary }}
+        >
+          {statusMessage}
+        </div>
+      ) : null}
       {events.map((event) => (
         <div
           key={`${event.type}-${event.id}`}
@@ -63,8 +76,14 @@ export const AbsencesTimeline: React.FC<AbsencesTimelineProps> = ({
             <span
               className="px-2 py-1 rounded-[4px] text-[10px] font-black uppercase tracking-widest"
               style={{
-                background: event.type === 'block' ? '#ffedd5' : '#fee2e2',
-                color: event.type === 'block' ? '#c2410c' : '#b91c1c'
+                background:
+                  event.type === 'block'
+                    ? colors2000s.status.warning.bg
+                    : colors2000s.status.danger.bg,
+                color:
+                  event.type === 'block'
+                    ? colors2000s.status.warning.text
+                    : colors2000s.status.danger.text
               }}
             >
               {event.type === 'block' ? 'Bloqueo' : 'Ausencia'}
@@ -85,7 +104,7 @@ export const AbsencesTimeline: React.FC<AbsencesTimelineProps> = ({
                 }
                 disabled={readOnlyReason !== null}
                 title={readOnlyReason ?? undefined}
-                className="px-3 py-2 text-[10px] font-black uppercase tracking-widest disabled:opacity-50"
+                className="min-h-11 px-3 py-2 text-[10px] font-black uppercase tracking-widest disabled:opacity-50"
                 style={buttonStyles2000s.default}
               >
                 Editar
@@ -95,7 +114,7 @@ export const AbsencesTimeline: React.FC<AbsencesTimelineProps> = ({
                 onClick={() => onDeactivate(event.id)}
                 disabled={readOnlyReason !== null}
                 title={readOnlyReason ?? undefined}
-                className="px-3 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest disabled:opacity-50"
+                className="min-h-11 px-3 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest disabled:opacity-50"
                 style={buttonStyles2000s.selected}
               >
                 Desactivar
@@ -104,7 +123,7 @@ export const AbsencesTimeline: React.FC<AbsencesTimelineProps> = ({
           )}
         </div>
       ))}
-      {!events.length && (
+      {!statusMessage && !events.length && (
         <div
           className="rounded-[6px] p-6 bg-white text-sm font-bold"
           style={{ ...cardStyle, color: colors2000s.text.secondary }}

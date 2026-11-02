@@ -15,6 +15,7 @@ import * as safeUrl from '@shared/utils/safeUrl'
 import type { BookingBotTrap } from './BookingBotTrap'
 import { BookingStepConfirmation } from './BookingStepConfirmation'
 import type { BookingClientData, BookingOtpState, BookingWizardState } from './types'
+import { colors2000s } from '../../../../theme/colors'
 
 // Lo que manda una persona en la trampa para bots (S4): el campo oculto vacio
 // y el tiempo que tardo, que en estos tests no importa.
@@ -175,6 +176,48 @@ describe('BookingStepConfirmation', () => {
       expect(screen.getByPlaceholderText('Ej: 351 1234567')).toBeInTheDocument()
     })
 
+    it('asocia los nombres y muestra etiquetas legibles en los campos principales', () => {
+      render(<BookingStepConfirmation {...props()} />)
+      const reference = document.createElement('span')
+      reference.style.color = colors2000s.text.secondary
+
+      for (const name of ['Nombre Completo', 'Email (opcional)', 'Teléfono']) {
+        const input = screen.getByLabelText(name)
+        const label = screen.getByText(name, { selector: 'label' })
+        expect(label).toHaveAttribute('for', input.id)
+        expect(label).toHaveClass('text-xs')
+        expect(label.style.color).toBe(reference.style.color)
+      }
+    })
+
+    it('explica junto al resumen el primer paso pendiente antes de reservar', () => {
+      render(<ConEstado base={props()} />)
+
+      expect(screen.getByTestId('booking-submit-guidance')).toHaveTextContent(
+        'Completá tu nombre para continuar.'
+      )
+      expect(screen.getByTestId('booking-submit-guidance')).toHaveAttribute('aria-live', 'polite')
+      expect(screen.getByTestId('booking-submit-guidance')).toHaveAttribute('aria-atomic', 'true')
+
+      fireEvent.change(screen.getByLabelText('Nombre Completo'), {
+        target: { value: 'Lucia' }
+      })
+      expect(screen.getByTestId('booking-submit-guidance')).toHaveTextContent(
+        'Completá tu teléfono para continuar.'
+      )
+
+      fireEvent.change(screen.getByLabelText('Teléfono'), {
+        target: { value: '1155550101' }
+      })
+      expect(screen.getByTestId('booking-submit-guidance')).toHaveTextContent(
+        'Aceptá los términos y condiciones para confirmar.'
+      )
+
+      aceptarTerminos()
+      expect(screen.queryByTestId('booking-submit-guidance')).not.toBeInTheDocument()
+      expect(botonReservar()).not.toBeDisabled()
+    })
+
     it('mantiene la fecha completa en una sola línea en el resumen angosto', () => {
       render(<BookingStepConfirmation {...props()} />)
 
@@ -228,7 +271,7 @@ describe('BookingStepConfirmation', () => {
 
       expect(screen.getByLabelText('Teléfono')).toHaveAttribute('placeholder', 'Ej: 351 1234567')
       // Plegadas detras de un link desde S5.
-      fireEvent.click(screen.getByRole('button', { name: 'Agregar una nota para la tienda' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Agregar un mensaje para la tienda' }))
       expect(screen.getByLabelText('Notas para la tienda (opcional)')).toBeInTheDocument()
       expect(screen.queryByText(/PREFIJO/)).not.toBeInTheDocument()
       expect(screen.queryByText(/Notas Adicionales/)).not.toBeInTheDocument()
@@ -869,6 +912,13 @@ describe('BookingStepConfirmation', () => {
       )
 
       expect(screen.getByText('Verificamos tu teléfono')).toBeInTheDocument()
+      const otpEmail = screen.getByLabelText('Email para recibir el código')
+      expect(otpEmail).toHaveAttribute('autocomplete', 'email')
+      expect(screen.getByLabelText('Código de verificación')).toHaveAttribute(
+        'autocomplete',
+        'one-time-code'
+      )
+      expect(otpEmail.closest('div')?.querySelector('label')).toHaveAttribute('for', otpEmail.id)
       expect(screen.getByRole('button', { name: 'Verificar código' })).toBeDisabled()
       fireEvent.click(screen.getByRole('button', { name: 'Enviar código' }))
       expect(onRequestOtp).toHaveBeenCalledTimes(1)
@@ -931,7 +981,10 @@ describe('BookingStepConfirmation', () => {
       expect(codigo).toHaveAttribute('inputmode', 'numeric')
       expect(codigo).toHaveAttribute('autocomplete', 'one-time-code')
       expect(codigo).toHaveAttribute('maxlength', '6')
-      expect(screen.getByLabelText('Email para el código')).toHaveAttribute('autocomplete', 'email')
+      expect(screen.getByLabelText('Email para recibir el código')).toHaveAttribute(
+        'autocomplete',
+        'email'
+      )
     })
 
     it('el codigo descarta lo que no es un digito', () => {
@@ -1999,7 +2052,7 @@ describe('BookingStepConfirmation: confirmación compacta (S5)', () => {
     expect(datos.compareDocumentPosition(dni) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     // Las notas van plegadas detras de un link, como el codigo.
     expect(screen.queryByLabelText('Notas para la tienda (opcional)')).not.toBeInTheDocument()
-    const link = screen.getByRole('button', { name: 'Agregar una nota para la tienda' })
+    const link = screen.getByRole('button', { name: 'Agregar un mensaje para la tienda' })
     expect(link).toHaveAttribute('aria-expanded', 'false')
     fireEvent.click(link)
     const notas = screen.getByLabelText('Notas para la tienda (opcional)')

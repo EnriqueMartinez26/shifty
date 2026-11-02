@@ -1,10 +1,12 @@
-import React, { useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 
 import {
   addDays,
+  addMonths,
   endOfMonth,
   endOfWeek,
   format,
+  setDate,
   startOfDay,
   startOfMonth,
   startOfWeek,
@@ -21,6 +23,7 @@ import {
   RescheduleAppointmentDialog,
   type ReschedulableAppointment
 } from './RescheduleAppointmentDialog'
+import { colors2000s } from '../../theme/colors'
 import {
   AppointmentActions,
   type AppointmentAction
@@ -73,6 +76,13 @@ import {
 } from '../lib/calendarGrid'
 import { mondayBasedWeekday, storeRangesFor, workingRangesFor } from '../lib/staffHours'
 
+const MOBILE_CALENDAR_QUERY = '(max-width: 767px)'
+
+const isPhoneViewport = (): boolean =>
+  typeof window !== 'undefined' &&
+  typeof window.matchMedia === 'function' &&
+  window.matchMedia(MOBILE_CALENDAR_QUERY).matches
+
 export const CalendarContainer: React.FC = () => {
   const { confirm, confirmDialog } = useConfirm()
   const { user } = useAuth()
@@ -103,10 +113,37 @@ export const CalendarContainer: React.FC = () => {
   const writeAccess = useStoreWriteAccess()
   const readOnlyReason = writeAccess.readOnly ? writeAccess.reason : null
   const [selectedDate, setSelectedDate] = useState(new Date())
-  // Lista en el telefono, Día en pantallas grandes, o la que eligio la ultima
-  // vez (QA movil 2026-10-08: volvia a "Día" en cada navegacion).
+  const [isPhone, setIsPhone] = useState(isPhoneViewport)
+  const [mobileSingleDay, setMobileSingleDay] = useState(false)
+  // La preferencia de escritorio se conserva por usuario; en teléfonos la
+  // agenda usa lista aunque la última vista guardada haya sido día/semana/mes.
   const [view, setView] = useState<CalendarView>(() => initialAgendaView(user?.public_id))
+  const activeView: CalendarView = isPhone ? 'list' : view
+
+  useEffect(() => {
+    if (typeof window.matchMedia !== 'function') return
+    const query = window.matchMedia(MOBILE_CALENDAR_QUERY)
+    const onChange = () => setIsPhone(query.matches)
+    onChange()
+    query.addEventListener('change', onChange)
+    return () => query.removeEventListener('change', onChange)
+  }, [])
+
+  // Al navegar meses, conservá el día original aunque un mes corto lo limite.
+  const monthAnchorDay = useRef<number | null>(view === 'month' ? selectedDate.getDate() : null)
+  const previousPhoneViewport = useRef(isPhone)
+
+  useEffect(() => {
+    if (previousPhoneViewport.current && !isPhone && view === 'month') {
+      monthAnchorDay.current = selectedDate.getDate()
+    }
+    previousPhoneViewport.current = isPhone
+  }, [isPhone, selectedDate, view])
+
   const changeView = (next: CalendarView) => {
+    if (isPhone) return
+    if (next === 'month' && view !== 'month') monthAnchorDay.current = selectedDate.getDate()
+    else if (next !== 'month') monthAnchorDay.current = null
     setView(next)
     saveAgendaView(user?.public_id, next)
   }
@@ -126,17 +163,19 @@ export const CalendarContainer: React.FC = () => {
   const [rescheduleTarget, setRescheduleTarget] = useState<ReschedulableAppointment | null>(null)
 
   const rangeStart = useMemo(() => {
-    if (view === 'day' || view === 'list') return selectedDate
-    if (view === 'week') return startOfWeek(selectedDate, { weekStartsOn: 1 })
+    if (activeView === 'day' || activeView === 'list') return selectedDate
+    if (activeView === 'week') return startOfWeek(selectedDate, { weekStartsOn: 1 })
     return startOfMonth(selectedDate)
-  }, [selectedDate, view])
+  }, [activeView, selectedDate])
 
   const rangeEnd = useMemo(() => {
-    if (view === 'day') return selectedDate
-    if (view === 'list') return addDays(selectedDate, 13)
-    if (view === 'week') return endOfWeek(selectedDate, { weekStartsOn: 1 })
+    if (activeView === 'day') return selectedDate
+    if (activeView === 'list') {
+      return isPhone && mobileSingleDay ? selectedDate : addDays(selectedDate, 13)
+    }
+    if (activeView === 'week') return endOfWeek(selectedDate, { weekStartsOn: 1 })
     return endOfMonth(selectedDate)
-  }, [selectedDate, view])
+  }, [activeView, isPhone, mobileSingleDay, selectedDate])
 
   const rangeKeyFrom = format(rangeStart, 'yyyy-MM-dd')
   const rangeKeyTo = format(rangeEnd, 'yyyy-MM-dd')
@@ -147,14 +186,35 @@ export const CalendarContainer: React.FC = () => {
   // Nombre y slug de la tienda para el texto de WhatsApp y el deep-link.
   const { data: storeSettings } = useStoreSettings()
   const agendaQuery = useCalendarAgenda(rangeKeyFrom, rangeKeyTo)
+  const blocksQuery = useAppointmentBlocks(rangeKeyFrom, rangeKeyTo)
+  const isAgendaPaused =
+    agendaQuery.fetchStatus === 'paused' && (agendaQuery.isPlaceholderData || !agendaQuery.data)
+  const areBlocksPaused =
+    blocksQuery.fetchStatus === 'paused' && (blocksQuery.isPlaceholderData || !blocksQuery.data)
+  const isRangePaused = isAgendaPaused || areBlocksPaused
+  const isRangeLoading =
+    agendaQuery.isLoading ||
+    blocksQuery.isLoading ||
+    agendaQuery.isPlaceholderData ||
+    blocksQuery.isPlaceholderData ||
+    isRangePaused
+  const hasAgendaLoadError = Boolean(
+    agendaQuery.error && (!agendaQuery.data || agendaQuery.isPlaceholderData)
+  )
+  const hasBlocksLoadError = Boolean(
+    blocksQuery.error && (!blocksQuery.data || blocksQuery.isPlaceholderData)
+  )
+  const timelineStatusMessage =
+    hasAgendaLoadError || hasBlocksLoadError ? 'No se pudo cargar el rango actual.' : null
   // La agenda trae hasta un tope de paginas; si el servidor tiene mas turnos
   // en el rango, se avisa en vez de mostrar la lista como completa (F10-12).
-  const agendaRange = agendaQuery.data
+  // Al cambiar de rango, React Query conserva el anterior como placeholder:
+  // nunca se presenta bajo una fecha o etiqueta que ya no le corresponde.
+  const agendaRange = agendaQuery.isPlaceholderData ? undefined : agendaQuery.data
   const truncatedAgenda =
     agendaRange && agendaRange.total > agendaRange.appointments.length
       ? { shown: agendaRange.appointments.length, total: agendaRange.total }
       : null
-  const blocksQuery = useAppointmentBlocks(rangeKeyFrom, rangeKeyTo)
   const deleteBlock = useDeleteAppointmentBlock()
   const releaseAppointment = useReleaseAppointment()
   /** Huecos de la jornada partida que el dueno decidio ver a escala real. */
@@ -180,12 +240,12 @@ export const CalendarContainer: React.FC = () => {
   const blocksInRange = useMemo(() => {
     // El servidor ya manda solo los activos del rango (F4-07); el filtro de
     // is_active queda por si llega uno igual (FF-12).
-    return (blocksQuery.data || []).filter((block) => {
+    return (blocksQuery.isPlaceholderData ? [] : (blocksQuery.data ?? [])).filter((block) => {
       if (!block.is_active) return false
       const startsAt = new Date(block.starts_at)
       return startsAt >= startOfDay(rangeStart) && startsAt <= addDays(startOfDay(rangeEnd), 1)
     })
-  }, [blocksQuery.data, rangeEnd, rangeStart])
+  }, [blocksQuery.data, blocksQuery.isPlaceholderData, rangeEnd, rangeStart])
 
   const blocksForSelectedDate = useMemo(() => {
     // `starts_at` es UTC: recortar sus 10 primeros caracteres daba el dia UTC,
@@ -196,11 +256,11 @@ export const CalendarContainer: React.FC = () => {
   const unifiedEvents = useMemo<UnifiedCalendarEvent[]>(
     () =>
       buildUnifiedEvents({
-        appointments: agendaQuery.data?.appointments ?? [],
+        appointments: agendaRange?.appointments ?? [],
         blocks: blocksInRange,
         staffMembers
       }),
-    [agendaQuery.data, blocksInRange, staffMembers]
+    [agendaRange, blocksInRange, staffMembers]
   )
 
   const eventsByDay = useMemo(() => groupEventsByDay(unifiedEvents), [unifiedEvents])
@@ -398,10 +458,21 @@ export const CalendarContainer: React.FC = () => {
     }
   }
 
-  const goPrev = () =>
-    setSelectedDate((prev) => subDays(prev, view === 'month' ? 30 : view === 'week' ? 7 : 1))
-  const goNext = () =>
-    setSelectedDate((prev) => addDays(prev, view === 'month' ? 30 : view === 'week' ? 7 : 1))
+  const navigateDate = (direction: -1 | 1) => {
+    if (activeView === 'month') {
+      const preferredDay = monthAnchorDay.current ?? selectedDate.getDate()
+      monthAnchorDay.current = preferredDay
+      setSelectedDate((prev) => {
+        const targetMonth = addMonths(startOfMonth(prev), direction)
+        return setDate(targetMonth, Math.min(preferredDay, endOfMonth(targetMonth).getDate()))
+      })
+      return
+    }
+    const days = activeView === 'week' ? 7 : 1
+    setSelectedDate((prev) => (direction < 0 ? subDays(prev, days) : addDays(prev, days)))
+  }
+  const goPrev = () => navigateDate(-1)
+  const goNext = () => navigateDate(1)
 
   const handleDeactivateBlock = (blockId: string) => {
     void (async () => {
@@ -480,7 +551,10 @@ export const CalendarContainer: React.FC = () => {
     <div className="space-y-6 duration-700">
       {confirmDialog}
       <AgendaToolbar
-        view={view}
+        view={activeView}
+        mobileList={isPhone}
+        mobileSingleDay={mobileSingleDay}
+        onToggleMobileRange={() => setMobileSingleDay((singleDay) => !singleDay)}
         selectedDate={selectedDate}
         onPrev={goPrev}
         onNext={goNext}
@@ -494,20 +568,32 @@ export const CalendarContainer: React.FC = () => {
         message="No se pudo cargar la agenda."
       />
 
-      {truncatedAgenda && (
+      {!isRangeLoading && truncatedAgenda && (
         <div
           role="status"
           className="p-4 rounded-[6px] text-sm font-bold"
-          style={{ background: '#fff7ed', border: '1px solid #fed7aa', color: '#c2410c' }}
+          style={{
+            background: colors2000s.status.warning.bg,
+            border: `1px solid ${colors2000s.status.warning.border}`,
+            color: colors2000s.status.warning.text
+          }}
         >
-          {`Se muestran ${truncatedAgenda.shown} de ${truncatedAgenda.total} turnos de este rango. Pasá a la vista de día o de semana para verlos todos.`}
+          {isPhone
+            ? mobileSingleDay
+              ? `Se muestran ${truncatedAgenda.shown} de ${truncatedAgenda.total} turnos de este día. El día también supera el límite; usá Anterior o Siguiente para revisar otros días.`
+              : `Se muestran ${truncatedAgenda.shown} de ${truncatedAgenda.total} turnos de este rango. Usá “Ver solo este día” para reducirlo y consultar el resto.`
+            : `Se muestran ${truncatedAgenda.shown} de ${truncatedAgenda.total} turnos de este rango. Pasá a día o semana para reducir el rango y consultar los demás.`}
         </div>
       )}
 
       {message && (
         <div
           className="p-4 rounded-[6px] text-sm font-bold"
-          style={{ background: '#fff7ed', border: '1px solid #fed7aa', color: '#c2410c' }}
+          style={{
+            background: colors2000s.status.warning.bg,
+            border: `1px solid ${colors2000s.status.warning.border}`,
+            color: colors2000s.status.warning.text
+          }}
         >
           {message}
         </div>
@@ -517,10 +603,10 @@ export const CalendarContainer: React.FC = () => {
         <NoEmailCancelNudge whatsappHref={noEmailNudge.whatsappHref} />
       )}
 
-      {view === 'day' && (
+      {!isRangeLoading && activeView === 'day' && !hasAgendaLoadError && (
         <AgendaDayView
           staffMembers={staffMembers}
-          loading={loadingStaff || agendaQuery.isLoading}
+          loading={loadingStaff}
           dayGrid={dayGrid}
           hoursOfDay={hoursOfDay}
           blocks={blocksForSelectedDate}
@@ -537,7 +623,23 @@ export const CalendarContainer: React.FC = () => {
           )}
         />
       )}
-      {view === 'week' && (
+      {isRangeLoading && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="rounded-[6px] p-6 text-sm font-bold"
+          style={{
+            background: colors2000s.bg.button,
+            border: `1px solid ${colors2000s.border.light}`,
+            color: colors2000s.text.secondary
+          }}
+        >
+          {isRangePaused
+            ? 'Sin conexión: los datos de este rango todavía no están disponibles.'
+            : 'Actualizando la agenda para este rango…'}
+        </div>
+      )}
+      {!isRangeLoading && !hasAgendaLoadError && activeView === 'week' && (
         <AgendaRangeGrid
           days={daysInRange}
           eventsByDay={eventsByDay}
@@ -545,7 +647,7 @@ export const CalendarContainer: React.FC = () => {
           renderEvent={renderEventPill}
         />
       )}
-      {view === 'month' && (
+      {!isRangeLoading && !hasAgendaLoadError && activeView === 'month' && (
         <AgendaRangeGrid
           days={daysInRange}
           eventsByDay={eventsByDay}
@@ -553,11 +655,13 @@ export const CalendarContainer: React.FC = () => {
           renderEvent={renderEventPill}
         />
       )}
-      {view === 'list' && (
+      {!isRangeLoading && !hasAgendaLoadError && activeView === 'list' && (
         <AgendaListView eventsByDay={eventsByDay} renderEvent={(event) => renderEventPill(event)} />
       )}
 
-      <div className={`grid gap-6 ${canManageBlocks ? 'xl:grid-cols-[1.05fr_0.95fr]' : ''}`}>
+      <div
+        className={`grid gap-6 ${canManageBlocks && !isRangeLoading ? 'xl:grid-cols-[1.05fr_0.95fr]' : ''}`}
+      >
         <BlocksPanel
           key={blockToEdit?.public_id ?? 'new'}
           staffMembers={staffMembers}
@@ -569,13 +673,16 @@ export const CalendarContainer: React.FC = () => {
           onMessage={setMessage}
         />
 
-        <AbsencesTimeline
-          events={timelineEvents}
-          canManageBlocks={canManageBlocks}
-          onEdit={setBlockToEdit}
-          onDeactivate={handleDeactivateBlock}
-          readOnlyReason={readOnlyReason}
-        />
+        {!isRangeLoading && (
+          <AbsencesTimeline
+            events={timelineEvents}
+            canManageBlocks={canManageBlocks}
+            onEdit={setBlockToEdit}
+            onDeactivate={handleDeactivateBlock}
+            statusMessage={timelineStatusMessage}
+            readOnlyReason={readOnlyReason}
+          />
+        )}
       </div>
       {isNewAppointmentOpen && (
         <NewAppointmentModal

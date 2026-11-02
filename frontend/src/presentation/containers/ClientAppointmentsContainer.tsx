@@ -42,6 +42,10 @@ const ESTADO: Record<BookingStatusValue, { label: string; color: string }> = {
 const serviceLabelOf = (item: ClientAppointmentItem): string =>
   item.services_label || item.service_name
 
+const actionClass =
+  'min-h-11 min-w-11 px-4 py-2.5 rounded-xl text-sm font-black uppercase tracking-widest focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2'
+const actionStyle = { ...buttonStyles2000s.default, outlineColor: colors2000s.orange.accent }
+
 interface ClientAppointmentsContainerProps {
   store: Pick<PublicStore, 'public_id' | 'name' | 'slug'>
 }
@@ -186,7 +190,9 @@ export const ClientAppointmentsContainer: React.FC<ClientAppointmentsContainerPr
     }
   }
 
-  const items = appointments.data?.appointments ?? []
+  // Una recarga fallida puede conservar `data` de React Query. No mostramos
+  // acciones sobre ese estado hasta tener una lista vigente otra vez.
+  const items = appointments.isError ? [] : (appointments.data?.appointments ?? [])
 
   return (
     <section className="max-w-2xl mx-auto space-y-4">
@@ -207,8 +213,8 @@ export const ClientAppointmentsContainer: React.FC<ClientAppointmentsContainerPr
             forgetOtpVerification(store.slug)
             setPhone(null)
           }}
-          className="min-h-11 min-w-11 px-3 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest"
-          style={buttonStyles2000s.default}
+          className={actionClass}
+          style={actionStyle}
         >
           Salir
         </button>
@@ -251,8 +257,8 @@ export const ClientAppointmentsContainer: React.FC<ClientAppointmentsContainerPr
               onClick={() => {
                 void appointments.refetch()
               }}
-              className="min-h-11 min-w-11 px-3 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest"
-              style={buttonStyles2000s.default}
+              className={actionClass}
+              style={actionStyle}
             >
               Reintentar
             </button>
@@ -271,6 +277,7 @@ export const ClientAppointmentsContainer: React.FC<ClientAppointmentsContainerPr
           ? ESTADO[item.status]
           : { label: item.status, color: colors2000s.text.secondary }
         const editando = rescheduling?.id === item.public_id
+        const reschedulePanelId = `client-reschedule-${item.public_id}`
         return (
           <article
             key={item.public_id}
@@ -302,8 +309,10 @@ export const ClientAppointmentsContainer: React.FC<ClientAppointmentsContainerPr
                   <button
                     type="button"
                     onClick={() => setRescheduling(editando ? null : { id: item.public_id })}
-                    className="inline-flex min-h-11 min-w-11 items-center justify-center gap-1 rounded-lg px-3 py-2 text-[9px] font-black uppercase tracking-widest"
-                    style={buttonStyles2000s.default}
+                    aria-expanded={editando}
+                    aria-controls={editando ? reschedulePanelId : undefined}
+                    className={`${actionClass} inline-flex items-center gap-2`}
+                    style={actionStyle}
                   >
                     <CalendarClock className="w-3 h-3" /> Cambiar
                   </button>
@@ -315,8 +324,8 @@ export const ClientAppointmentsContainer: React.FC<ClientAppointmentsContainerPr
                     onClick={() => {
                       void cancelar(item)
                     }}
-                    className="inline-flex min-h-11 min-w-11 items-center justify-center gap-1 rounded-lg px-3 py-2 text-[9px] font-black uppercase tracking-widest disabled:opacity-50"
-                    style={{ ...buttonStyles2000s.default, color: colors2000s.status.danger.text }}
+                    className={`${actionClass} inline-flex items-center gap-2 disabled:opacity-50`}
+                    style={{ ...actionStyle, color: colors2000s.status.danger.text }}
                   >
                     <XCircle className="w-3 h-3" /> Cancelar
                   </button>
@@ -328,22 +337,24 @@ export const ClientAppointmentsContainer: React.FC<ClientAppointmentsContainerPr
               // El backend reprograma siempre con el mismo profesional y para
               // el mismo servicio: la grilla queda fija en los dos y sin lista
               // de espera, porque el cliente ya tiene turno.
-              <BookingStepDateTime
-                storePublicId={store.public_id}
-                serviceId={item.service_id}
-                // Con varios servicios el turno nuevo dura lo mismo: la grilla los incluye.
-                extraServiceIds={(item.extra_services ?? []).map((extra) => extra.public_id)}
-                staffId={item.staff_id}
-                lockedStaffId={item.staff_id}
-                selectedDate={null}
-                selectedTime={null}
-                showWaitlist={false}
-                heading="Elegí el nuevo horario"
-                onBack={() => setRescheduling(null)}
-                onSelect={(_date, _time, _assigned, _requested, startsAt) => {
-                  void reprogramar(item, startsAt)
-                }}
-              />
+              <div id={reschedulePanelId}>
+                <BookingStepDateTime
+                  storePublicId={store.public_id}
+                  serviceId={item.service_id}
+                  // Con varios servicios el turno nuevo dura lo mismo: la grilla los incluye.
+                  extraServiceIds={(item.extra_services ?? []).map((extra) => extra.public_id)}
+                  staffId={item.staff_id}
+                  lockedStaffId={item.staff_id}
+                  selectedDate={null}
+                  selectedTime={null}
+                  showWaitlist={false}
+                  heading="Elegí el nuevo horario"
+                  onBack={() => setRescheduling(null)}
+                  onSelect={(_date, _time, _assigned, _requested, startsAt) => {
+                    void reprogramar(item, startsAt)
+                  }}
+                />
+              </div>
             )}
           </article>
         )

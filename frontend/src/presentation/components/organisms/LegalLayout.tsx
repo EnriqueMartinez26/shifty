@@ -14,7 +14,7 @@ interface LegalLayoutProps {
 }
 
 const NAV_BUTTON_CLASS =
-  'inline-flex items-center gap-2 px-4 py-2.5 text-xs font-black uppercase tracking-widest'
+  'inline-flex min-h-11 items-center justify-center gap-2 px-3 py-2 text-xs font-black uppercase tracking-widest sm:px-4'
 
 /**
  * Cascara de las paginas legales: barra con la marca y la navegacion de salida
@@ -41,7 +41,7 @@ export const LegalLayout: React.FC<LegalLayoutProps> = ({ title, intro, children
         color: colors2000s.text.primary
       }}
     >
-      <header className="max-w-3xl mx-auto py-5 flex flex-wrap items-center justify-between gap-3">
+      <header className="max-w-3xl mx-auto py-4 flex flex-wrap items-center justify-between gap-3 sm:py-5">
         <div className="inline-flex items-center gap-3">
           <span
             className="w-10 h-10 rounded-xl flex items-center justify-center relative overflow-hidden"
@@ -60,7 +60,10 @@ export const LegalLayout: React.FC<LegalLayoutProps> = ({ title, intro, children
             Shifty
           </span>
         </div>
-        <nav aria-label="Navegación" className="flex items-center gap-2">
+        <nav
+          aria-label="Navegación"
+          className="flex max-w-full flex-wrap items-center justify-end gap-2"
+        >
           {canGoBack && (
             <button
               type="button"
@@ -89,7 +92,7 @@ export const LegalLayout: React.FC<LegalLayoutProps> = ({ title, intro, children
           }}
         >
           <h1
-            className="text-3xl font-black tracking-tight mb-3 uppercase"
+            className="break-words text-2xl font-black tracking-tight mb-3 uppercase sm:text-3xl"
             style={{ color: colors2000s.orange.accent }}
           >
             {title}

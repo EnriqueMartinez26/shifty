@@ -5,13 +5,27 @@ import CollectionsPage from './Collections'
 // FF-21: la conciliacion es solo de admins; al profesional el backend le
 // responde 403, asi que la pantalla no la pide ni muestra sus indicadores.
 const mockUseReconciliationSummary = jest.fn((enabled?: boolean) => ({
-  data: enabled ? { pending_payments: 4, total_pending_amount: '1500' } : undefined,
-  error: null
+  data: enabled ? mockSummaryData : undefined,
+  error: enabled ? mockSummaryError : null,
+  isLoading: Boolean(enabled && mockSummaryLoading),
+  isFetching: Boolean(enabled && mockSummaryLoading),
+  refetch: mockRefetchSummary
 }))
 let mockAuthUser: { role: string; is_global_admin: boolean }
-let mockAppointments: unknown[] = []
+let mockAppointments: unknown[] | undefined = []
+let mockAppointmentsLoading = false
+let mockAppointmentsFetchStatus: 'idle' | 'fetching' | 'paused' = 'idle'
+let mockAppointmentsError: Error | null = null
 let mockFlags: { payments: boolean } | undefined = { payments: true }
 let mockWriteAccess = { readOnly: false, reason: 'Tienda suspendida' }
+let mockSummaryData: { pending_payments: number; total_pending_amount: string } | undefined = {
+  pending_payments: 4,
+  total_pending_amount: '1500'
+}
+let mockSummaryLoading = false
+let mockSummaryError: Error | null = null
+const mockRefetchAppointments = jest.fn()
+const mockRefetchSummary = jest.fn()
 const mockManualConfirm = jest.fn()
 const mockCreatePreference = jest.fn()
 const mockRecordRemaining = jest.fn()
@@ -30,7 +44,14 @@ jest.mock('../context/AuthContext', () => ({
 }))
 
 jest.mock('../hooks/usePayments', () => ({
-  usePaymentsAppointments: () => ({ data: mockAppointments, isLoading: false, error: null }),
+  usePaymentsAppointments: () => ({
+    data: mockAppointments,
+    isLoading: mockAppointmentsLoading,
+    isFetching: mockAppointmentsLoading,
+    fetchStatus: mockAppointmentsFetchStatus,
+    error: mockAppointmentsError,
+    refetch: mockRefetchAppointments
+  }),
   useReconciliationSummary: (enabled?: boolean) => mockUseReconciliationSummary(enabled),
   useCreatePaymentPreference: () => ({ mutateAsync: mockCreatePreference, data: undefined }),
   useManualConfirmPayment: () => ({ mutateAsync: mockManualConfirm, isPending: false }),
@@ -40,10 +61,22 @@ jest.mock('../hooks/usePayments', () => ({
 
 const valorDe = (label: string) => screen.getByText(label).nextElementSibling?.textContent
 
+beforeEach(() => {
+  mockAppointmentsLoading = false
+  mockAppointmentsFetchStatus = 'idle'
+  mockAppointmentsError = null
+  mockRefetchAppointments.mockReset()
+  mockSummaryData = { pending_payments: 4, total_pending_amount: '1500' }
+  mockSummaryLoading = false
+  mockSummaryError = null
+  mockRefetchSummary.mockReset()
+})
+
 describe('CollectionsPage', () => {
   beforeEach(() => {
     mockUseReconciliationSummary.mockClear()
     mockAppointments = []
+    mockAppointmentsFetchStatus = 'idle'
     mockFlags = { payments: true }
     mockWriteAccess = { readOnly: false, reason: 'Tienda suspendida' }
   })
@@ -76,6 +109,104 @@ describe('CollectionsPage', () => {
       expect(screen.getByText('Monto pendiente')).toBeInTheDocument()
     }
   )
+})
+
+describe('CollectionsPage: estados de carga y consulta', () => {
+  const turno = {
+    public_id: 'appt-cached',
+    status: 'confirmed',
+    client_name: 'Lucia',
+    service_name: 'Corte',
+    staff_name: 'Ana',
+    starts_at: '2026-10-02T13:00:00Z',
+    price_amount: '3200.00'
+  }
+
+  beforeEach(() => {
+    mockAuthUser = { role: 'store_admin', is_global_admin: false }
+    mockAppointments = []
+    mockFlags = { payments: true }
+  })
+
+  it('distingue la carga inicial de una lista vacía', () => {
+    mockAppointments = []
+    mockAppointmentsLoading = true
+    mockSummaryLoading = true
+    mockSummaryData = undefined
+    render(<CollectionsPage />)
+
+    expect(screen.getByRole('status')).toHaveTextContent('Buscando turnos para cobrar')
+    expect(screen.queryByText('No hay turnos para cobrar ahora.')).not.toBeInTheDocument()
+    expect(valorDe('Turnos listados')).toBe('Cargando…')
+    expect(valorDe('Pagos pendientes')).toBe('Cargando…')
+    expect(valorDe('Monto pendiente')).toBe('Cargando…')
+  })
+
+  it('no presenta como vacía una consulta pausada sin conexión y permite reintentar', () => {
+    mockAppointments = undefined
+    mockAppointmentsFetchStatus = 'paused'
+    render(<CollectionsPage />)
+
+    expect(valorDe('Turnos listados')).toBe('Sin conexión')
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Sin conexión. Los turnos se consultarán cuando vuelva internet.'
+    )
+    expect(screen.queryByText('No hay turnos para cobrar ahora.')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reintentar cobros' }))
+
+    expect(mockRefetchAppointments).toHaveBeenCalledTimes(1)
+    expect(mockRefetchSummary).toHaveBeenCalledTimes(1)
+  })
+
+  it('muestra el vacío confirmado cuando la consulta termina sin turnos', () => {
+    render(<CollectionsPage />)
+
+    expect(valorDe('Turnos listados')).toBe('0')
+    expect(screen.getByText('No hay turnos para cobrar ahora.')).toBeInTheDocument()
+  })
+
+  it('oculta turnos en caché y acciones cuando falla la consulta, y permite reintentar las consultas habilitadas', () => {
+    mockAppointments = [turno]
+    mockAppointmentsError = new Error('network')
+    mockSummaryError = new Error('network')
+    render(<CollectionsPage />)
+
+    const alerts = screen.getAllByRole('alert')
+    expect(alerts[0]).toHaveTextContent('No se pudieron cargar los turnos para cobrar')
+    expect(alerts[1]).toHaveTextContent('No se pudo cargar el resumen financiero')
+    expect(screen.queryByText('Lucia')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Crear link/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Confirmar pago/ })).not.toBeInTheDocument()
+    expect(screen.queryByText('No hay turnos para cobrar ahora.')).not.toBeInTheDocument()
+    expect(valorDe('Turnos listados')).toBe('No disponible')
+    expect(valorDe('Pagos pendientes')).toBe('No disponible')
+    expect(valorDe('Monto pendiente')).toBe('No disponible')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reintentar cobros' }))
+
+    expect(mockRefetchAppointments).toHaveBeenCalledTimes(1)
+    expect(mockRefetchSummary).toHaveBeenCalledTimes(1)
+  })
+
+  it('no muestra importes en cero cuando falla el resumen financiero', () => {
+    // Aunque quede un valor anterior en caché, el error no se presenta como
+    // si ese resumen siguiera confirmado.
+    mockSummaryError = new Error('network')
+    render(<CollectionsPage />)
+
+    expect(screen.getAllByRole('alert')).toHaveLength(1)
+    expect(screen.getAllByRole('alert')[0]).toHaveTextContent(
+      'No se pudo cargar el resumen financiero'
+    )
+    expect(valorDe('Pagos pendientes')).toBe('No disponible')
+    expect(valorDe('Monto pendiente')).toBe('No disponible')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reintentar cobros' }))
+
+    expect(mockRefetchAppointments).toHaveBeenCalledTimes(1)
+    expect(mockRefetchSummary).toHaveBeenCalledTimes(1)
+  })
 })
 
 // 2026-10-02, QA en navegador: con los cobros apagados "Crear link" y

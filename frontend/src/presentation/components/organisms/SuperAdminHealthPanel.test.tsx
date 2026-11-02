@@ -1,6 +1,9 @@
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 
-import type { SuperAdminStoreRow } from '@application/services/SuperAdminService'
+import type {
+  SuperAdminStoreOverview,
+  SuperAdminStoreRow
+} from '@application/services/SuperAdminService'
 
 import { SuperAdminHealthPanel } from './SuperAdminHealthPanel'
 
@@ -28,11 +31,37 @@ const store: SuperAdminStoreRow = {
   last_redemption_at: null
 }
 
-const renderPanel = (selectedStore: SuperAdminStoreRow) =>
+const overviewWithNoSubscription: SuperAdminStoreOverview = {
+  store,
+  users: {
+    admins: [],
+    users: [],
+    admins_count: 0,
+    users_count: 0,
+    active_users_count: 0
+  },
+  subscription: null,
+  recent_redemptions: []
+}
+
+const renderPanel = (
+  selectedStore: SuperAdminStoreRow | null,
+  options: {
+    overview?: SuperAdminStoreOverview
+    overviewLoading?: boolean
+    overviewError?: boolean
+    overviewFetching?: boolean
+    onRetryOverview?: () => void
+  } = {}
+) =>
   render(
     <SuperAdminHealthPanel
       selectedStore={selectedStore}
-      overview={undefined}
+      overview={options.overview}
+      overviewLoading={options.overviewLoading ?? false}
+      overviewError={options.overviewError ?? false}
+      overviewFetching={options.overviewFetching ?? false}
+      onRetryOverview={options.onRetryOverview ?? jest.fn()}
       onCreateAdmin={jest.fn()}
       onAssignPlan={jest.fn()}
       onRedeemCoupon={jest.fn()}
@@ -55,5 +84,41 @@ describe('SuperAdminHealthPanel', () => {
     renderPanel({ ...store, is_internal: true })
 
     expect(screen.getByRole('button', { name: 'Crear admin' })).toBeDisabled()
+  })
+
+  it('muestra carga sin convertir una consulta pendiente en alertas de cero', () => {
+    renderPanel(store, { overviewLoading: true })
+
+    expect(screen.getByRole('status')).toHaveTextContent('Cargando estado operativo')
+    expect(screen.queryByText('Sin suscripción')).not.toBeInTheDocument()
+    expect(screen.queryByText('Sin admins activos')).not.toBeInTheDocument()
+    expect(screen.getAllByText('—')).toHaveLength(3)
+  })
+
+  it('permite reintentar el fallo sin presentar datos desconocidos como cero', () => {
+    const onRetryOverview = jest.fn()
+    renderPanel(store, { overviewError: true, onRetryOverview })
+
+    expect(screen.getByRole('alert')).toHaveTextContent('No se pudo cargar el estado operativo')
+    expect(screen.queryByText('Sin suscripción')).not.toBeInTheDocument()
+    expect(screen.queryByText('Sin admins activos')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Reintentar resumen' }))
+
+    expect(onRetryOverview).toHaveBeenCalledTimes(1)
+  })
+
+  it('muestra cero y la ausencia de suscripción solo cuando el resumen cargó', () => {
+    renderPanel(store, { overview: overviewWithNoSubscription })
+
+    expect(screen.getByText('Sin suscripción')).toBeInTheDocument()
+    expect(screen.getByText('Sin admins activos')).toBeInTheDocument()
+    expect(screen.getAllByText('0')).toHaveLength(3)
+  })
+
+  it('explica cuando todavía no hay una tienda seleccionada', () => {
+    renderPanel(null)
+
+    expect(screen.getByRole('status')).toHaveTextContent('Seleccioná una tienda')
+    expect(screen.queryByText('Sin suscripción')).not.toBeInTheDocument()
   })
 })

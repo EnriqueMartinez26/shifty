@@ -4,6 +4,7 @@ import { Loader2, X } from 'lucide-react'
 
 import { buttonStyles2000s, colors2000s } from '../../../theme/colors'
 import { create2000sModalSurfaceStyle } from '../../lib/surfaceStyles'
+import { superAdminPrimaryControlStyle } from '../../pages/superadmin/palette'
 import { FormErrorAlert } from '../molecules/FormErrorAlert'
 
 interface SuperAdminFormModalProps {
@@ -133,7 +134,7 @@ export const SuperAdminFormModal: React.FC<SuperAdminFormModalProps> = ({
         aria-labelledby={titleId}
         aria-describedby={subtitleId}
         tabIndex={-1}
-        className="relative w-full max-w-3xl overflow-y-auto rounded-[2.5rem] border p-8 max-h-[92vh]"
+        className="relative w-full max-w-3xl overflow-y-auto rounded-[2.5rem] border p-8 max-h-[92dvh]"
         style={create2000sModalSurfaceStyle()}
       >
         <div className="mb-8 flex items-start justify-between gap-4">
@@ -189,7 +190,7 @@ export const SuperAdminFormModal: React.FC<SuperAdminFormModalProps> = ({
               type="submit"
               disabled={loading || submitDisabled}
               className="flex-1 rounded-2xl px-6 py-4 text-xs font-black uppercase tracking-widest disabled:opacity-50"
-              style={buttonStyles2000s.selected}
+              style={superAdminPrimaryControlStyle}
             >
               {loading ? <Loader2 className="mx-auto h-5 w-5 animate-spin" /> : submitLabel}
             </button>

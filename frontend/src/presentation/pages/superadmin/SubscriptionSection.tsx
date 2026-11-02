@@ -10,8 +10,16 @@ import type {
 
 import { formatCurrency } from '@shared/utils/currency'
 
-import { emptyStateStyle, innerCardStyle, panelStyle, scopeBadgeStyle } from './shared'
+import { superAdminPalette } from './palette'
+import {
+  emptyStateStyle,
+  innerCardStyle,
+  panelStyle,
+  scopeBadgeStyle,
+  type QueryState
+} from './shared'
 import { colors2000s } from '../../../theme/colors'
+import { QuerySectionFeedback } from '../../components/molecules/QuerySectionFeedback'
 import { billingIntervalLabel, subscriptionStatusLabel } from '../../lib/enumLabels'
 import { formatDateEsAr } from '../../lib/formatters'
 import { ActionButton } from '../SuperAdminUi'
@@ -25,6 +33,7 @@ import { ActionButton } from '../SuperAdminUi'
 interface SubscriptionSectionProps {
   selectedStore: SuperAdminStoreRow | null
   overview: SuperAdminStoreOverview | undefined
+  overviewQuery: QueryState<SuperAdminStoreOverview>
   activePlans: SuperAdminPlan[]
   openAssignPlanModal: () => void
 }
@@ -32,13 +41,14 @@ interface SubscriptionSectionProps {
 export const SubscriptionSection: React.FC<SubscriptionSectionProps> = ({
   selectedStore,
   overview,
+  overviewQuery,
   activePlans,
   openAssignPlanModal
 }) => (
   <section className="rounded-[2rem] p-6" style={panelStyle}>
     <div className="mb-4 flex items-center justify-between gap-3">
       <div className="flex items-center gap-2">
-        <CreditCard className="h-4 w-4" style={{ color: colors2000s.orange.accent }} />
+        <CreditCard className="h-4 w-4" style={{ color: superAdminPalette.icon }} />
         <span
           className="rounded-full px-3 py-1 text-[10px] font-black uppercase tracking-widest"
           style={scopeBadgeStyle('tenant')}
@@ -47,12 +57,53 @@ export const SubscriptionSection: React.FC<SubscriptionSectionProps> = ({
         </span>
       </div>
       <ActionButton
-        label={overview?.subscription ? 'Reasignar plan' : 'Asignar plan'}
+        label={
+          !selectedStore
+            ? 'Seleccioná tienda'
+            : overviewQuery.error
+              ? 'No disponible'
+              : !overview
+                ? 'Cargando...'
+                : overview.subscription
+                  ? 'Reasignar plan'
+                  : 'Asignar plan'
+        }
         onClick={openAssignPlanModal}
-        disabled={!selectedStore || !activePlans.length}
+        disabled={
+          !selectedStore ||
+          !overview ||
+          Boolean(overviewQuery.error) ||
+          overviewQuery.isFetching ||
+          !activePlans.length
+        }
       />
     </div>
-    {overview?.subscription ? (
+    <QuerySectionFeedback
+      loading={Boolean(selectedStore) && !overview && !overviewQuery.error}
+      loadingMessage={overview ? 'Actualizando suscripción...' : 'Cargando suscripción...'}
+      error={overviewQuery.error}
+      errorMessage={
+        overview
+          ? 'No se pudo actualizar la suscripción. Se muestran los últimos datos disponibles.'
+          : 'No se pudo confirmar la suscripción. Reintentá para consultar este estado.'
+      }
+      isFetching={overviewQuery.isFetching}
+      onRetry={overviewQuery.refetch}
+      errorRole="status"
+      retryLabel="Reintentar suscripción"
+    />
+    {!selectedStore ? (
+      <div className="rounded-[1.5rem] p-8 text-center" style={emptyStateStyle}>
+        <CreditCard className="mx-auto mb-3 h-10 w-10 opacity-25" />
+        <p
+          className="text-sm font-black uppercase tracking-widest"
+          style={{ color: colors2000s.text.primary }}
+        >
+          Seleccioná una tienda para consultar su suscripción
+        </p>
+      </div>
+    ) : null}
+    {selectedStore && overview?.subscription ? (
       <div className="rounded-[1.5rem] p-4" style={innerCardStyle}>
         <div className="flex items-start justify-between gap-3">
           <div>
@@ -130,7 +181,7 @@ export const SubscriptionSection: React.FC<SubscriptionSectionProps> = ({
           </p>
         </div>
       </div>
-    ) : (
+    ) : selectedStore && overview ? (
       <div className="rounded-[1.5rem] p-8 text-center" style={emptyStateStyle}>
         <CreditCard className="mx-auto mb-3 h-10 w-10 opacity-25" />
         <p
@@ -143,6 +194,6 @@ export const SubscriptionSection: React.FC<SubscriptionSectionProps> = ({
           Asigná un plan para habilitar el cobro y los canjes de la tienda.
         </p>
       </div>
-    )}
+    ) : null}
   </section>
 )

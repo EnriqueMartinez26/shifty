@@ -8,13 +8,22 @@ import PublicBooking from './PublicBooking'
 
 const mockRefetch = jest.fn()
 const mockRefetchTienda = jest.fn()
-let mockPago = {
+let mockPago: {
+  data:
+    | { payment_status: string; appointment_status: string; appointment_public_id?: string }
+    | undefined
+  pollingStopped: boolean
+  isError: boolean
+  isFetching: boolean
+} = {
   data: {
     payment_status: 'approved',
     appointment_status: 'confirmed',
     appointment_public_id: 'apt-9'
   },
-  pollingStopped: false
+  pollingStopped: false,
+  isError: false,
+  isFetching: false
 }
 
 const TIENDA_SOL = {
@@ -43,8 +52,8 @@ jest.mock('../hooks/usePublic', () => ({
   usePublicPaymentStatus: (_store: string | undefined, paymentId: string | undefined) => ({
     data: paymentId ? mockPago.data : undefined,
     pollingStopped: paymentId ? mockPago.pollingStopped : false,
-    isError: false,
-    isFetching: false,
+    isError: mockPago.isError,
+    isFetching: mockPago.isFetching,
     refetch: mockRefetch
   }),
   usePublicServices: () => ({ data: undefined, isLoading: false }),
@@ -82,7 +91,9 @@ describe('PublicBooking al volver del pago', () => {
   const pagoCon = (payment_status: string, appointment_status: string, pollingStopped = false) => {
     mockPago = {
       data: { payment_status, appointment_status, appointment_public_id: 'apt-9' },
-      pollingStopped
+      pollingStopped,
+      isError: false,
+      isFetching: false
     }
   }
 
@@ -137,6 +148,64 @@ describe('PublicBooking al volver del pago', () => {
     expect(mockRefetch).toHaveBeenCalledTimes(1)
   })
 
+  it('si falla la primera consulta no afirma que el pago sigue pendiente y permite reintentar', () => {
+    mockPago = { data: undefined, pollingStopped: false, isError: true, isFetching: false }
+    renderEn('/booking/sol?payment_id=p1')
+
+    expect(
+      screen.getByRole('heading', { name: 'No pudimos consultar el pago' })
+    ).toBeInTheDocument()
+    expect(screen.getByRole('alert')).toHaveTextContent('No sabemos si la seña se acreditó')
+    expect(screen.queryByText(/No cierres esta pantalla/)).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Reserva confirmada' })).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Volver a consultar' }))
+    expect(mockRefetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('antes de la primera respuesta dice que está consultando el estado', () => {
+    mockPago = { data: undefined, pollingStopped: false, isError: false, isFetching: true }
+    renderEn('/booking/sol?payment_id=p1')
+
+    expect(screen.getByRole('heading', { name: 'Consultando estado del pago' })).toBeInTheDocument()
+    expect(screen.queryByText(/No cierres esta pantalla/)).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Volver a consultar' })).not.toBeInTheDocument()
+  })
+
+  it('si falla una actualización distingue el último estado consultado del actual', () => {
+    pagoCon('pending', 'pending_payment')
+    mockPago.isError = true
+    renderEn('/booking/sol?payment_id=p1')
+
+    expect(
+      screen.getByRole('heading', { name: 'No pudimos actualizar el pago' })
+    ).toBeInTheDocument()
+    expect(screen.getByText('Última consulta: pago pendiente.')).toBeInTheDocument()
+    expect(screen.queryByText(/No cierres esta pantalla/)).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Volver a consultar' })).not.toBeDisabled()
+  })
+
+  it('no presenta como pendiente una seña aprobada cuyo turno aún figura pendiente', () => {
+    pagoCon('approved', 'pending_payment')
+    mockPago.isError = true
+    renderEn('/booking/sol?payment_id=p1')
+
+    expect(
+      screen.getByText('Última consulta: seña aprobada; turno pendiente de confirmación.')
+    ).toBeInTheDocument()
+    expect(screen.queryByText('Última consulta: pago pendiente.')).not.toBeInTheDocument()
+    expect(
+      screen.getByRole('heading', { name: 'No pudimos actualizar el pago' })
+    ).toBeInTheDocument()
+  })
+
+  it('deshabilita la nueva consulta mientras se está reintentando', () => {
+    mockPago = { data: undefined, pollingStopped: false, isError: true, isFetching: true }
+    renderEn('/booking/sol?payment_id=p1')
+
+    expect(screen.getByRole('button', { name: 'Volver a consultar' })).toBeDisabled()
+  })
+
   // QA 2026-10-21 (S3): la vuelta de Mercado Pago era toda naranja, sin la tienda.
   it('muestra la tienda arriba: su nombre es el titulo principal y el estado va debajo', () => {
     mockTienda = { ...TIENDA_SOL, data: { ...TIENDA_SOL.data, primary_color: '#ff70fa' } }
@@ -185,7 +254,9 @@ describe('PublicBooking: diseño previo al volver de Mercado Pago', () => {
   const pagoCon = (payment_status: string, appointment_status: string) => {
     mockPago = {
       data: { payment_status, appointment_status, appointment_public_id: 'apt-9' },
-      pollingStopped: false
+      pollingStopped: false,
+      isError: false,
+      isFetching: false
     }
   }
   const guardarResumen = (appointmentPublicId = 'apt-9') =>

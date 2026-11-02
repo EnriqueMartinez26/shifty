@@ -137,6 +137,9 @@ describe('ClientAppointmentsContainer', () => {
     expect(screen.getByText('Confirmado')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Cambiar/ })).toHaveClass('min-h-11', 'min-w-11')
     expect(screen.getByRole('button', { name: 'Cancelar' })).toHaveClass('min-h-11', 'min-w-11')
+    for (const name of ['Salir', 'Cambiar', 'Cancelar']) {
+      expect(screen.getByRole('button', { name })).toHaveClass('min-h-11', 'text-sm')
+    }
   })
 
   // Varios servicios en un turno (2026-10-16): la etiqueta del backend y la
@@ -339,6 +342,15 @@ describe('ClientAppointmentsContainer', () => {
     it('"Cambiar" pide la disponibilidad del servicio del turno, sin selector de profesional', async () => {
       await abrirGrilla()
 
+      const toggle = screen.getByRole('button', { name: 'Cambiar' })
+      expect(toggle).toHaveAttribute('aria-expanded', 'true')
+      expect(toggle).toHaveAttribute('aria-controls', 'client-reschedule-appt-1')
+      expect(
+        document
+          .getElementById('client-reschedule-appt-1')
+          ?.contains(screen.getByRole('heading', { name: titulo }))
+      ).toBe(true)
+
       expect(mockAvailability).toHaveBeenCalledWith(
         'store-1',
         'svc-1',
@@ -353,6 +365,18 @@ describe('ClientAppointmentsContainer', () => {
       expect(screen.queryByRole('button', { name: /17:00/ })).not.toBeInTheDocument()
       // Sin lista de espera: el cliente ya tiene turno.
       expect(screen.queryByRole('button', { name: /Avisame si se libera/ })).not.toBeInTheDocument()
+    })
+
+    it('"Cambiar" expone su estado cerrado y permite cerrar la grilla', async () => {
+      await abrirGrilla()
+      const toggle = screen.getByRole('button', { name: 'Cambiar' })
+
+      fireEvent.click(toggle)
+
+      expect(toggle).toHaveAttribute('aria-expanded', 'false')
+      expect(toggle).not.toHaveAttribute('aria-controls')
+      expect(screen.queryByRole('heading', { name: titulo })).not.toBeInTheDocument()
+      expect(mockReschedule).not.toHaveBeenCalled()
     })
 
     it('confirmar manda el starts_at del slot tal cual, con clave de idempotencia', async () => {
@@ -672,8 +696,48 @@ describe('ClientAppointmentsContainer', () => {
       await entrar()
 
       expect(screen.getByRole('alert')).toHaveTextContent(mensaje)
+      expect(screen.getByRole('button', { name: 'Reintentar' })).toHaveClass('min-h-11', 'text-sm')
       fireEvent.click(screen.getByRole('button', { name: 'Reintentar' }))
       expect(mockRefetch).toHaveBeenCalledTimes(1)
+    })
+
+    it('oculta turnos y acciones de una respuesta guardada cuando la recarga falla', async () => {
+      const cachedData = {
+        client_name: 'Yo',
+        client_phone: '1155550101',
+        appointments: [turno]
+      }
+      let query = {
+        data: cachedData,
+        isLoading: false,
+        isError: false,
+        error: null as ServiceUnavailableError | null,
+        refetch: mockRefetch
+      }
+      mockAppointments.mockImplementation(() => query)
+      const view = render(<ClientAppointmentsContainer store={store} />)
+      await entrar()
+      expect(screen.getByRole('button', { name: 'Cancelar' })).toBeInTheDocument()
+      fireEvent.click(screen.getByRole('button', { name: 'Cambiar' }))
+      expect(screen.getByRole('heading', { name: 'Elegí el nuevo horario' })).toBeInTheDocument()
+
+      query = {
+        ...query,
+        isError: true,
+        error: new ServiceUnavailableError('Service Unavailable', { statusCode: 503 })
+      }
+      view.rerender(<ClientAppointmentsContainer store={store} />)
+
+      expect(screen.getByRole('alert')).toHaveTextContent('No pudimos cargar tus turnos')
+      expect(screen.queryByText('Corte')).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Cancelar' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Cambiar' })).not.toBeInTheDocument()
+      expect(
+        screen.queryByRole('heading', { name: 'Elegí el nuevo horario' })
+      ).not.toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Reintentar' })).toBeInTheDocument()
+      expect(mockCancel).not.toHaveBeenCalled()
+      expect(mockReschedule).not.toHaveBeenCalled()
     })
   })
 })

@@ -242,7 +242,7 @@ describe('PromotionsPage', () => {
     for (const label of ['Código', 'Tipo', 'Valor', 'Desde']) {
       expect(screen.getByLabelText(label)).toHaveClass(
         'focus-visible:ring-2',
-        'focus-visible:ring-[#9a4507]',
+        'focus-visible:ring-[var(--color-brand-accent)]',
         'focus-visible:ring-offset-2'
       )
     }
@@ -250,7 +250,7 @@ describe('PromotionsPage', () => {
     const activeSwitch = screen.getByRole('switch', { name: 'Promoción activa' })
     expect(activeSwitch.parentElement).toHaveClass(
       '[&>button]:focus-visible:ring-2',
-      '[&>button]:focus-visible:ring-[#9a4507]',
+      '[&>button]:focus-visible:ring-[var(--color-brand-accent)]',
       '[&>button]:focus-visible:ring-offset-2'
     )
   })
