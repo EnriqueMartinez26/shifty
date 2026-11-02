@@ -38,7 +38,7 @@ RUN npm run build
 RUN node configure-analytics-csp.mjs security-headers.conf /app/security-headers.generated.conf
 
 # Mismo nginx que el borde (nginx/Dockerfile, docker-compose.prod.yml).
-FROM nginx:1.30.5-alpine
+FROM nginx:1.30.6-alpine
 
 # Paquetes de Alpine al ultimo parche de la rama, como nginx/Dockerfile.
 # Cambia en cada build para que el upgrade de seguridad no salga de la cache

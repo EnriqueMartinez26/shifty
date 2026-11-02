@@ -24,6 +24,11 @@ interface AgendaToolbarProps {
   onNext: () => void
   onViewChange: (view: CalendarView) => void
   onNewAppointment: () => void
+  /** En teléfono la vista lista es fija; la preferencia de escritorio se conserva. */
+  mobileList?: boolean
+  /** El listado móvil puede acotarse al día seleccionado si el rango se recorta. */
+  mobileSingleDay?: boolean
+  onToggleMobileRange?: () => void
   /** Tienda suspendida: POST /appointments/ responde 402 (FF-15). */
   readOnlyReason?: string | null
 }
@@ -39,10 +44,13 @@ export const AgendaToolbar: React.FC<AgendaToolbarProps> = ({
   onNext,
   onViewChange,
   onNewAppointment,
+  mobileList = false,
+  mobileSingleDay = false,
+  onToggleMobileRange,
   readOnlyReason = null
 }) => (
   <div
-    className="flex flex-col md:flex-row items-center justify-between gap-6 p-4 sm:p-6 rounded-[8px]"
+    className="flex flex-col 2xl:flex-row items-stretch 2xl:items-center justify-between gap-4 2xl:gap-6 p-4 sm:p-6 rounded-[8px]"
     style={panelStyle}
   >
     <div className="flex items-center gap-4">
@@ -66,25 +74,22 @@ export const AgendaToolbar: React.FC<AgendaToolbarProps> = ({
           className="text-[10px] font-black uppercase tracking-widest"
           style={{ color: colors2000s.text.secondary }}
         >
-          Vistas día, semana, mes y lista
+          {mobileList ? 'Vista de lista móvil' : 'Vistas día, semana, mes y lista'}
         </p>
       </div>
     </div>
 
-    <div
-      className="flex flex-wrap items-center justify-center gap-2 sm:gap-3 p-2 rounded-[6px] border"
-      style={fieldStyle}
-    >
+    <div className="flex w-full min-w-0 items-center justify-center gap-2 2xl:w-auto 2xl:gap-4">
       <button
         type="button"
         onClick={onPrev}
         aria-label="Anterior"
-        className="min-w-11 min-h-11 flex items-center justify-center transition-all active:scale-90"
+        className="min-h-11 min-w-11 flex items-center justify-center transition-all active:scale-90"
         style={buttonStyles2000s.default}
       >
         <ChevronLeft size={20} className="text-gray-600" />
       </button>
-      <div className="px-4 sm:px-6 text-center min-w-[140px] sm:min-w-[200px]">
+      <div className="min-w-0 flex-1 px-1 text-center sm:flex-initial sm:min-w-[200px] sm:px-6">
         <p
           className="text-[9px] font-black uppercase tracking-widest mb-0.5"
           style={{ color: colors2000s.orange.accent }}
@@ -92,7 +97,7 @@ export const AgendaToolbar: React.FC<AgendaToolbarProps> = ({
           {VIEW_LABELS[view]}
         </p>
         <p
-          className="text-base font-black uppercase tracking-tight"
+          className="text-sm font-black uppercase tracking-tight sm:text-base"
           style={{ color: colors2000s.text.primary }}
         >
           {formatArgentinaLongDate(format(selectedDate, 'yyyy-MM-dd'))}
@@ -102,26 +107,55 @@ export const AgendaToolbar: React.FC<AgendaToolbarProps> = ({
         type="button"
         onClick={onNext}
         aria-label="Siguiente"
-        className="min-w-11 min-h-11 flex items-center justify-center transition-all active:scale-90"
+        className="min-h-11 min-w-11 flex items-center justify-center transition-all active:scale-90"
         style={buttonStyles2000s.default}
       >
         <ChevronRight size={20} className="text-gray-600" />
       </button>
     </div>
 
-    <div className="flex flex-wrap items-center gap-2">
-      {(Object.keys(VIEW_LABELS) as CalendarView[]).map((viewKey) => (
-        <button
-          key={viewKey}
-          type="button"
-          onClick={() => onViewChange(viewKey)}
-          aria-pressed={view === viewKey}
-          className="min-h-11 px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest"
-          style={view === viewKey ? buttonStyles2000s.selected : buttonStyles2000s.default}
+    <div className="flex w-full min-w-0 flex-wrap items-center justify-between gap-2 2xl:w-auto 2xl:justify-end">
+      {mobileList ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <span
+            role="status"
+            className="px-3 py-2 rounded-md text-xs font-bold"
+            style={{ color: colors2000s.text.secondary, background: 'white' }}
+          >
+            Lista en móvil · {mobileSingleDay ? '1 día' : '14 días'}
+          </span>
+          {onToggleMobileRange && (
+            <button
+              type="button"
+              onClick={onToggleMobileRange}
+              className="min-h-11 px-3 py-2 rounded-md text-xs font-bold"
+              style={buttonStyles2000s.default}
+            >
+              {mobileSingleDay ? 'Ver 14 días' : 'Ver solo este día'}
+            </button>
+          )}
+        </div>
+      ) : (
+        <div
+          role="group"
+          aria-label="Vista de agenda"
+          className="flex flex-wrap items-center gap-2 sm:gap-3 p-2 rounded-[6px] border"
+          style={fieldStyle}
         >
-          {VIEW_LABELS[viewKey]}
-        </button>
-      ))}
+          {(Object.keys(VIEW_LABELS) as CalendarView[]).map((viewKey) => (
+            <button
+              key={viewKey}
+              type="button"
+              onClick={() => onViewChange(viewKey)}
+              aria-pressed={view === viewKey}
+              className="min-h-11 px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest"
+              style={view === viewKey ? buttonStyles2000s.selected : buttonStyles2000s.default}
+            >
+              {VIEW_LABELS[viewKey]}
+            </button>
+          ))}
+        </div>
+      )}
       <button
         type="button"
         onClick={onNewAppointment}

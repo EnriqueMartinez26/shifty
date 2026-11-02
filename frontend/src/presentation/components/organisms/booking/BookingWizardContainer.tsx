@@ -340,7 +340,6 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
   const renderStepIndicator = () => (
     <div className="p-4 mb-8 relative overflow-hidden" style={createBookingSurfaceStyle()}>
       <p
-        aria-hidden="true"
         className="mb-3 text-center text-xs font-bold md:hidden"
         style={{ color: colors2000s.text.primary }}
       >
@@ -383,8 +382,14 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
                 {isCompleted ? <Check className="w-4 h-4 font-black" /> : i + 1}
               </div>
               <span
-                className={`text-[9px] uppercase tracking-wider hidden md:block mt-1 font-black text-center ${isActive ? '' : isCompleted ? 'text-green-600' : 'text-gray-400'}`}
-                style={isActive ? { color: colors2000s.text.primary } : undefined}
+                className="mt-1 block max-w-full break-words px-0.5 text-center text-[9px] font-black uppercase leading-tight tracking-wide sm:text-[11px]"
+                style={{
+                  color: isActive
+                    ? colors2000s.text.primary
+                    : isCompleted
+                      ? colors2000s.status.success.dark
+                      : colors2000s.text.secondary
+                }}
               >
                 {label}
               </span>

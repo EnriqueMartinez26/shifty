@@ -75,11 +75,11 @@ const ForgotPasswordPage: React.FC = () => {
           <div
             role="status"
             aria-live="polite"
-            className="text-sm p-3 rounded-xl font-medium"
+            className="break-words text-sm p-3 rounded-xl font-medium"
             style={{
-              background: '#ecfdf5',
-              border: '1px solid #bbf7d0',
-              color: '#166534',
+              background: colors2000s.status.success.bg,
+              border: `1px solid ${colors2000s.status.success.border}`,
+              color: colors2000s.status.success.text,
               boxShadow: colors2000s.shadows.insetDark
             }}
           >
@@ -90,15 +90,20 @@ const ForgotPasswordPage: React.FC = () => {
           <div
             role="alert"
             aria-live="polite"
-            className="text-sm p-3 rounded-xl flex items-center gap-2"
+            className="break-words text-sm p-3 rounded-xl flex items-center gap-2"
             style={{
-              background: '#ffeeee',
-              border: '1px solid #ffcccc',
-              color: '#cc0000',
+              background: colors2000s.status.danger.bg,
+              border: `1px solid ${colors2000s.status.danger.border}`,
+              color: colors2000s.status.danger.text,
               boxShadow: colors2000s.shadows.insetDark
             }}
           >
-            <Icon2000s path={mdiShieldAlert} size={16} variant="idle" color="#cc0000" />
+            <Icon2000s
+              path={mdiShieldAlert}
+              size={16}
+              variant="idle"
+              color={colors2000s.status.danger.text}
+            />
             {error}
           </div>
         )}

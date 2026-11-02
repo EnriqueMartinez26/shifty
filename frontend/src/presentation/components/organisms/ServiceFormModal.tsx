@@ -272,7 +272,7 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/45 backdrop-blur-sm" onClick={closeIfIdle} />
       <div
-        className="relative w-full max-w-5xl rounded-md duration-200 flex flex-col lg:flex-row overflow-hidden max-h-[95vh]"
+        className="relative w-full max-w-5xl rounded-md duration-200 flex flex-col lg:flex-row overflow-hidden max-h-[95dvh]"
         style={create2000sModalSurfaceStyle()}
       >
         {/* Formulario (Izquierda) */}

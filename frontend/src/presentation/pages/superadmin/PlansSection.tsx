@@ -4,8 +4,16 @@ import type { SuperAdminPlan } from '@application/services/SuperAdminService'
 
 import { formatCurrency } from '@shared/utils/currency'
 
-import { innerCardStyle, panelStyle, scopeBadgeStyle, type QueryState } from './shared'
+import {
+  emptyStateStyle,
+  innerCardStyle,
+  panelStyle,
+  scopeBadgeStyle,
+  statusBadgeStyle,
+  type QueryState
+} from './shared'
 import { colors2000s } from '../../../theme/colors'
+import { QuerySectionFeedback } from '../../components/molecules/QuerySectionFeedback'
 import { billingIntervalLabel } from '../../lib/enumLabels'
 import { ActionButton, MiniButton } from '../SuperAdminUi'
 
@@ -48,6 +56,18 @@ export const PlansSection: React.FC<PlansSectionProps> = ({
     </div>
 
     <div className="space-y-3">
+      <QuerySectionFeedback
+        loading={plansQuery.isLoading || (!plansQuery.data && !plansQuery.error)}
+        loadingMessage={plansQuery.data ? 'Actualizando planes...' : 'Cargando planes...'}
+        error={plansQuery.error}
+        errorMessage={
+          plansQuery.data
+            ? 'No se pudieron actualizar los planes. Se muestran los últimos datos disponibles.'
+            : 'No se pudieron cargar los planes globales. Reintentá para consultar el catálogo.'
+        }
+        isFetching={plansQuery.isFetching}
+        onRetry={plansQuery.refetch}
+      />
       {plansQuery.data?.map((plan) => (
         <div key={plan.public_id} className="rounded-[1.5rem] p-4" style={innerCardStyle}>
           <div className="flex items-start justify-between gap-3">
@@ -65,7 +85,7 @@ export const PlansSection: React.FC<PlansSectionProps> = ({
             </div>
             <span
               className="rounded-full px-3 py-1 text-[10px] font-black uppercase tracking-widest"
-              style={plan.is_active ? scopeBadgeStyle('global') : scopeBadgeStyle('danger')}
+              style={plan.is_active ? statusBadgeStyle('success') : statusBadgeStyle('danger')}
             >
               {plan.is_active ? 'Activo' : 'Inactivo'}
             </span>
@@ -119,6 +139,19 @@ export const PlansSection: React.FC<PlansSectionProps> = ({
           </div>
         </div>
       ))}
+      {plansQuery.data && plansQuery.data.length === 0 ? (
+        <div className="rounded-[1.5rem] p-8 text-center" style={emptyStateStyle}>
+          <p
+            className="text-sm font-black uppercase tracking-widest"
+            style={{ color: colors2000s.text.primary }}
+          >
+            No hay planes todavía
+          </p>
+          <p className="mt-2 text-xs font-bold" style={{ color: colors2000s.text.secondary }}>
+            Creá el primer plan global para habilitar suscripciones.
+          </p>
+        </div>
+      ) : null}
     </div>
   </section>
 )

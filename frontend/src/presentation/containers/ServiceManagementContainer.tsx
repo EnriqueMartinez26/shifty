@@ -125,13 +125,18 @@ export const ServiceManagementContainer: React.FC = () => {
         </div>
 
         <button
+          type="button"
           className="px-6 py-4 rounded-xl flex items-center gap-2 font-black uppercase tracking-widest text-xs transition-all active:scale-95 group disabled:opacity-50"
           style={buttonStyles2000s.selected}
           onClick={handleCreate}
           disabled={readOnlyReason !== null}
           title={readOnlyReason ?? undefined}
         >
-          <Plus size={18} className="group-hover:rotate-90 transition-transform duration-300" />
+          <Plus
+            size={18}
+            aria-hidden="true"
+            className="group-hover:rotate-90 transition-transform duration-300"
+          />
           NUEVO SERVICIO
         </button>
       </div>
@@ -139,21 +144,24 @@ export const ServiceManagementContainer: React.FC = () => {
       {/* Unified Brand Styled Search Input */}
       <div className="relative group">
         <Search
-          className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 group-focus-within:text-[#FF6B35] transition-colors"
+          className="absolute left-4 top-1/2 -translate-y-1/2 transition-colors"
           size={20}
+          style={{ color: colors2000s.text.secondary }}
         />
         <input
           type="text"
           placeholder="BUSCAR SERVICIO..."
           aria-label="Buscar servicio"
-          className="w-full pl-12 pr-4 py-3.5 rounded-xl border text-xs font-black uppercase tracking-widest transition-all placeholder-gray-400 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
-          style={{
-            background: 'white',
-            borderColor: colors2000s.border.default,
-            boxShadow: colors2000s.shadows.insetDark,
-            color: colors2000s.text.primary,
-            outlineColor: colors2000s.orange.heading
-          }}
+          className="min-h-11 w-full pl-12 pr-4 py-3.5 rounded-xl border text-xs font-black uppercase tracking-widest transition-all placeholder:text-[color:var(--placeholder-color)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
+          style={
+            {
+              '--placeholder-color': colors2000s.text.secondary,
+              background: 'white',
+              borderColor: colors2000s.border.default,
+              boxShadow: colors2000s.shadows.insetDark,
+              color: colors2000s.text.primary
+            } as React.CSSProperties
+          }
           value={searchTerm}
           onChange={(e) => setSearchTerm(e.target.value)}
         />
@@ -163,8 +171,11 @@ export const ServiceManagementContainer: React.FC = () => {
 
       {isLoading ? (
         <div className="flex flex-col items-center justify-center py-20 gap-4">
-          <Loader2 className="animate-spin text-orange-500" size={40} />
-          <p className="text-gray-400 font-black uppercase text-xs tracking-widest">
+          <Loader2 className="animate-spin text-orange-500" size={40} aria-hidden="true" />
+          <p
+            className="font-black uppercase text-xs tracking-widest"
+            style={{ color: colors2000s.text.secondary }}
+          >
             Cargando servicios...
           </p>
         </div>

@@ -135,7 +135,7 @@ export const NewAppointmentModal: React.FC<NewAppointmentModalProps> = ({
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
       <div
-        className="relative w-full max-w-2xl rounded-md shadow-2xl duration-200 flex flex-col overflow-hidden max-h-[90vh]"
+        className="relative w-full max-w-2xl rounded-md shadow-2xl duration-200 flex flex-col overflow-hidden max-h-[90dvh]"
         style={create2000sModalSurfaceStyle()}
       >
         <div

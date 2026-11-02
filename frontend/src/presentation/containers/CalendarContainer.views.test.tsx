@@ -224,7 +224,12 @@ describe('CalendarContainer - vistas, orden y navegacion (F11c-08)', () => {
     for (const n of [1, 2, 3, 4]) expect(onlyOnPhone(`Cliente ${n}`)).toBeNull()
     expect(onlyOnPhone('Cliente 5')).not.toBeNull()
     expect(onlyOnPhone('Cliente 6')).not.toBeNull()
-    expect(cell.getByText('+2 eventos')).toHaveClass('hidden', 'md:block')
+    const showMore = cell.getByRole('button', { name: 'Mostrar 2 eventos más del 15/09' })
+    expect(showMore).toHaveAttribute('aria-expanded', 'false')
+    expect(showMore).toHaveClass('min-h-11', 'min-w-11')
+    fireEvent.click(showMore)
+    expect(showMore).toHaveAttribute('aria-expanded', 'true')
+    expect(showMore).toHaveAttribute('aria-label', 'Mostrar menos eventos del 15/09')
   })
 
   it('semana muestra todos los eventos del dia, sin "+N eventos"', () => {
@@ -319,11 +324,12 @@ describe('CalendarContainer - vistas, orden y navegacion (F11c-08)', () => {
     mockTotal = 5
     render(<CalendarContainer />)
 
-    expect(
-      screen.getByText(
-        'Se muestran 1 de 5 turnos de este rango. Pasá a la vista de día o de semana para verlos todos.'
-      )
-    ).toHaveAttribute('role', 'status')
+    const rangeStatus = screen
+      .getAllByRole('status')
+      .find((status) => status.textContent?.startsWith('Se muestran 1 de 5 turnos de este rango.'))
+    expect(rangeStatus).toBeDefined()
+    expect(rangeStatus).toHaveTextContent('Se muestran 1 de 5 turnos de este rango.')
+    expect(rangeStatus).toHaveTextContent('Pasá a día o semana')
   })
 
   it('sin recorte no hay aviso de turnos', () => {
@@ -417,7 +423,7 @@ describe('CalendarContainer - vistas, orden y navegacion (F11c-08)', () => {
   it.each([
     ['Día', '19 de septiembre', '21 de septiembre'],
     ['Semana', '13 de septiembre', '27 de septiembre'],
-    ['Mes', '21 de agosto', '20 de octubre']
+    ['Mes', '20 de agosto', '20 de octubre']
   ] as const)('la vista %s salta hacia atras a %s y hacia adelante a %s', (view, back, forward) => {
     const { container } = render(<CalendarContainer />)
     chooseView(view)
@@ -429,6 +435,24 @@ describe('CalendarContainer - vistas, orden y navegacion (F11c-08)', () => {
     fireEvent.click(arrow(container, 'right'))
     fireEvent.click(arrow(container, 'right'))
     expect(screen.getByText(forward)).toBeInTheDocument()
+  })
+
+  it('recorre meses completos desde el último día y conserva el día ancla', () => {
+    jest.setSystemTime(new Date('2026-01-31T15:30:00.000Z'))
+    const { container } = render(<CalendarContainer />)
+    chooseView('Mes')
+
+    expect(screen.getByText('31 de enero')).toBeInTheDocument()
+
+    fireEvent.click(arrow(container, 'right'))
+    expect(screen.getByText('28 de febrero')).toBeInTheDocument()
+
+    fireEvent.click(arrow(container, 'left'))
+    expect(screen.getByText('31 de enero')).toBeInTheDocument()
+
+    fireEvent.click(arrow(container, 'right'))
+    fireEvent.click(arrow(container, 'right'))
+    expect(screen.getByText('31 de marzo')).toBeInTheDocument()
   })
 
   it('la lista sin eventos dice "No hay eventos para el rango seleccionado."', () => {
@@ -457,7 +481,8 @@ describe('CalendarContainer - vista inicial y preferencia', () => {
 
   const pressedView = () =>
     ['Día', 'Semana', 'Mes', 'Lista'].filter(
-      (label) => screen.getByRole('button', { name: label }).getAttribute('aria-pressed') === 'true'
+      (label) =>
+        screen.queryByRole('button', { name: label })?.getAttribute('aria-pressed') === 'true'
     )
 
   beforeEach(() => {
@@ -470,12 +495,38 @@ describe('CalendarContainer - vista inicial y preferencia', () => {
 
   afterEach(() => {
     Reflect.deleteProperty(window, 'matchMedia')
+    jest.useRealTimers()
   })
 
   it('en un telefono arranca en Lista', () => {
     setPhone(true)
     render(<CalendarContainer />)
-    expect(pressedView()).toEqual(['Lista'])
+    expect(screen.getByRole('status')).toHaveTextContent('Lista en móvil · 14 días')
+    expect(screen.getByRole('button', { name: 'Ver solo este día' })).toBeInTheDocument()
+    expect(screen.queryByRole('group', { name: 'Vista de agenda' })).not.toBeInTheDocument()
+  })
+
+  it('en un telefono muestra turnos del rango en la lista, no la grilla diaria', () => {
+    jest.useFakeTimers({ now: new Date('2026-09-20T15:30:00.000Z') })
+    setPhone(true)
+    mockAppointments = [
+      appointmentOf(
+        'phone-list-1',
+        'Alma Móvil',
+        '2026-09-21T13:00:00.000Z',
+        '2026-09-21T13:30:00.000Z'
+      )
+    ]
+
+    render(<CalendarContainer />)
+
+    expect(screen.getByText('Alma Móvil')).toBeInTheDocument()
+    expect(screen.getByText('10:00 - 10:30 · Ana Gomez')).toBeInTheDocument()
+    expect(
+      screen.queryByRole('region', {
+        name: 'Agenda diaria por profesional, desplazable horizontalmente'
+      })
+    ).not.toBeInTheDocument()
   })
 
   it('en una pantalla grande arranca en Día', () => {
@@ -495,14 +546,15 @@ describe('CalendarContainer - vista inicial y preferencia', () => {
   })
 
   it('la preferencia es de cada usuario', () => {
-    setPhone(true)
+    setPhone(false)
     const { unmount } = render(<CalendarContainer />)
     chooseView('Mes')
     unmount()
 
+    setPhone(false)
     mockUser.public_id = 'otro-usuario'
     render(<CalendarContainer />)
-    expect(pressedView()).toEqual(['Lista'])
+    expect(pressedView()).toEqual(['Día'])
   })
 
   it('sin almacenamiento disponible, la agenda funciona igual', () => {

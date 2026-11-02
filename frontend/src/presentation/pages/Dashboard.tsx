@@ -25,6 +25,7 @@ import type {
   ActionItem,
   DashboardHero,
   DashboardOperationCard,
+  DashboardQueryIssue,
   MetricItem,
   OpportunityItem,
   RankedItem
@@ -67,81 +68,269 @@ const Dashboard = () => {
   const professionalsQuery = useProfessionalReports(fromDate, toDate, reportsAllowed)
   const trendQuery = useReportTrend(6, reportsAllowed)
 
+  const featureFlagsAvailable = Boolean(featureFlagsQuery.data?.flags)
   const flags = featureFlagsQuery.data?.flags
-  const paymentsEnabled = Boolean(flags?.payments)
-  const ledgerEnabled = Boolean(flags?.ledger)
+  const paymentsEnabled = flags ? Boolean(flags.payments) : undefined
+  const ledgerEnabled = flags ? Boolean(flags.ledger) : undefined
 
   const paymentsQuery = useReconciliationSummary(Boolean(paymentsEnabled && financialAdminAllowed))
   const outboxQuery = useOutboxStats(Boolean(paymentsEnabled && financialAdminAllowed))
   const ledgerQuery = useLedgerSummary(Boolean(ledgerEnabled && reportsAllowed))
 
-  const stats = summaryQuery.data?.stats
-  const reportStats = reportsQuery.data?.stats
-  const clientStats = reportsQuery.data?.client_stats
-  const outstandingBalance = Number(
-    ledgerQuery.data?.total_balance ?? reportsQuery.data?.debt_summary.outstanding_balance ?? 0
-  )
-  const debtorsCount = Number(
-    ledgerQuery.data?.debtors_count ?? reportsQuery.data?.debt_summary.debtors_count ?? 0
-  )
-  const topProfessional = getTopProfessional(professionalsQuery.data?.professionals)
-  const upcomingAppointments = summaryQuery.data?.upcoming_appointments ?? []
-  const occupancy = Number(stats?.occupancy_rate ?? 0)
-  const availableCapacity = Math.max(0, 100 - occupancy)
+  const summaryAvailable = Boolean(summaryQuery.data) && !summaryQuery.isError
+  const stats = summaryAvailable ? summaryQuery.data?.stats : undefined
+  const reportsAvailable = reportsAllowed && Boolean(reportsQuery.data) && !reportsQuery.isError
+  const reportsUnavailableLabel = reportsAllowed ? 'No disponible' : 'Sin acceso'
+  const reportsLoadingLabel =
+    reportsAllowed && reportsQuery.isLoading ? 'Consultando...' : reportsUnavailableLabel
+  const reportsPendingLabel =
+    reportsAllowed && reportsQuery.isLoading ? 'Consultando...' : 'No disponible'
+  const professionalsLoadingLabel =
+    reportsAllowed && professionalsQuery.isLoading ? 'Consultando...' : reportsUnavailableLabel
+  const reportStats = reportsAvailable ? reportsQuery.data?.stats : undefined
+  const clientStats = reportsAvailable ? reportsQuery.data?.client_stats : undefined
+  const professionalsAvailable =
+    reportsAllowed && Boolean(professionalsQuery.data) && !professionalsQuery.isError
+  const topProfessional = professionalsAvailable
+    ? getTopProfessional(professionalsQuery.data?.professionals)
+    : null
+  const ledgerAvailable =
+    reportsAllowed && Boolean(ledgerEnabled) && Boolean(ledgerQuery.data) && !ledgerQuery.isError
+  const reportDebtAvailable = reportsAvailable && reportsQuery.data?.debt_summary !== undefined
+  const debtAvailable = ledgerAvailable || reportDebtAvailable
+  const outstandingBalance = ledgerAvailable
+    ? Number(ledgerQuery.data?.total_balance)
+    : reportDebtAvailable
+      ? Number(reportsQuery.data?.debt_summary.outstanding_balance)
+      : undefined
+  const debtorsCount = ledgerAvailable
+    ? Number(ledgerQuery.data?.debtors_count)
+    : reportDebtAvailable
+      ? Number(reportsQuery.data?.debt_summary.debtors_count)
+      : undefined
+  const upcomingAppointments = summaryAvailable
+    ? (summaryQuery.data?.upcoming_appointments ?? [])
+    : []
+  const occupancy = summaryAvailable ? Number(stats?.occupancy_rate ?? 0) : undefined
+  const availableCapacity = occupancy === undefined ? undefined : Math.max(0, 100 - occupancy)
+  const paymentsQueriesEnabled = Boolean(paymentsEnabled && financialAdminAllowed)
+  const reconciliationData = paymentsQuery.isError ? undefined : paymentsQuery.data
+  const outboxStats = outboxQuery.isError ? undefined : outboxQuery.data
+  const paymentsAvailable = paymentsQueriesEnabled && Boolean(reconciliationData)
+  const outboxAvailable = paymentsQueriesEnabled && Boolean(outboxStats)
   const paymentErrors =
-    Number(outboxQuery.data?.pending_with_error ?? 0) +
-    Number(paymentsQuery.data?.failed_webhooks ?? 0)
+    paymentsAvailable && outboxAvailable
+      ? Number(outboxStats?.pending_with_error ?? 0) +
+        Number(reconciliationData?.failed_webhooks ?? 0)
+      : undefined
 
-  const heroStatusLabel =
-    paymentErrors > 0 || Number(stats?.pending_confirmations ?? 0) > 0 || debtorsCount > 0
-      ? 'requiere seguimiento'
-      : 'estable'
+  const queryIssues: DashboardQueryIssue[] = []
+  const addQueryIssue = (
+    id: string,
+    title: string,
+    message: string,
+    refetch: () => Promise<unknown>,
+    retrying: boolean
+  ) => {
+    queryIssues.push({ id, title, message, onRetry: () => void refetch(), retrying })
+  }
+
+  if (summaryQuery.isError) {
+    addQueryIssue(
+      'summary',
+      'Resumen operativo',
+      'No se pudieron cargar la agenda ni las métricas operativas.',
+      summaryQuery.refetch,
+      summaryQuery.isFetching
+    )
+  }
+
+  if (featureFlagsQuery.isError) {
+    addQueryIssue(
+      'feature-flags',
+      'Funciones de la tienda',
+      'No pudimos confirmar qué módulos están activos.',
+      featureFlagsQuery.refetch,
+      featureFlagsQuery.isFetching
+    )
+  }
+  if (reportsAllowed && reportsQuery.isError) {
+    addQueryIssue(
+      'reports',
+      'Reportes del período',
+      'No se pudieron cargar los indicadores ni las transacciones del período.',
+      reportsQuery.refetch,
+      reportsQuery.isFetching
+    )
+  }
+  if (reportsAllowed && professionalsQuery.isError) {
+    addQueryIssue(
+      'professionals',
+      'Rendimiento profesional',
+      'No se pudo cargar el rendimiento de los profesionales.',
+      professionalsQuery.refetch,
+      professionalsQuery.isFetching
+    )
+  }
+  if (reportsAllowed && trendQuery.isError) {
+    addQueryIssue(
+      'trend',
+      'Tendencia',
+      'No se pudo cargar la tendencia de los últimos meses.',
+      trendQuery.refetch,
+      trendQuery.isFetching
+    )
+  }
+  if (featureFlagsAvailable && paymentsEnabled && financialAdminAllowed && paymentsQuery.isError) {
+    addQueryIssue(
+      'payments',
+      'Resumen de cobros',
+      'No se pudo consultar el estado de los cobros.',
+      paymentsQuery.refetch,
+      paymentsQuery.isFetching
+    )
+  }
+  if (featureFlagsAvailable && paymentsEnabled && financialAdminAllowed && outboxQuery.isError) {
+    addQueryIssue(
+      'outbox',
+      'Sincronización de cobros',
+      'No se pudo consultar la sincronización de los cobros.',
+      outboxQuery.refetch,
+      outboxQuery.isFetching
+    )
+  }
+  if (featureFlagsAvailable && ledgerEnabled && reportsAllowed && ledgerQuery.isError) {
+    addQueryIssue(
+      'ledger',
+      'Cuentas pendientes',
+      'No se pudo consultar el saldo de las cuentas pendientes.',
+      ledgerQuery.refetch,
+      ledgerQuery.isFetching
+    )
+  }
+
+  const hasQueryErrors = queryIssues.length > 0
+  const hasPartialAccess = !reportsAllowed || !financialAdminAllowed
+  const isHealthLoading =
+    summaryQuery.isLoading ||
+    featureFlagsQuery.isLoading ||
+    (reportsAllowed &&
+      (reportsQuery.isLoading || professionalsQuery.isLoading || trendQuery.isLoading)) ||
+    (paymentsEnabled &&
+      financialAdminAllowed &&
+      (paymentsQuery.isLoading || outboxQuery.isLoading)) ||
+    (ledgerEnabled && reportsAllowed && ledgerQuery.isLoading)
+
+  const requiresFollowup =
+    (paymentErrors ?? 0) > 0 ||
+    (summaryAvailable && Number(stats?.pending_confirmations ?? 0) > 0) ||
+    (debtorsCount ?? 0) > 0
+  const heroStatusLabel = hasQueryErrors
+    ? 'datos incompletos'
+    : isHealthLoading
+      ? 'consultando...'
+      : requiresFollowup
+        ? 'requiere seguimiento'
+        : hasPartialAccess
+          ? 'vista parcial'
+          : 'estable'
+
+  const paymentsHealthValue =
+    featureFlagsQuery.isError && !featureFlagsAvailable
+      ? 'No disponible'
+      : !featureFlagsAvailable
+        ? 'Consultando...'
+        : !paymentsEnabled
+          ? 'deshabilitados'
+          : !financialAdminAllowed
+            ? 'Sin acceso'
+            : paymentsQuery.isError || outboxQuery.isError
+              ? 'No disponible'
+              : !paymentsAvailable || !outboxAvailable
+                ? 'Consultando...'
+                : paymentErrors && paymentErrors > 0
+                  ? `${numberFormatter.format(paymentErrors)} errores`
+                  : 'sin fallas'
+
+  const paymentsHealthTone =
+    paymentsHealthValue === 'sin fallas'
+      ? 'success'
+      : paymentsHealthValue.endsWith('errores')
+        ? 'danger'
+        : 'neutral'
+
+  const ledgerHealthValue =
+    featureFlagsQuery.isError && !featureFlagsAvailable
+      ? 'No disponible'
+      : !featureFlagsAvailable
+        ? 'Consultando...'
+        : !ledgerEnabled
+          ? 'desactivadas'
+          : !reportsAllowed
+            ? 'Sin acceso'
+            : !debtAvailable
+              ? ledgerQuery.isLoading || reportsQuery.isLoading
+                ? 'Consultando...'
+                : 'No disponible'
+              : (debtorsCount ?? 0) > 0
+                ? `${numberFormatter.format(debtorsCount ?? 0)} clientes con deuda`
+                : 'sin deuda'
+
+  const ledgerHealthTone = ledgerHealthValue.endsWith('clientes con deuda')
+    ? 'warning'
+    : ledgerHealthValue === 'sin deuda'
+      ? 'success'
+      : 'neutral'
 
   const hero: DashboardHero = {
     title: 'Hoy en Shifty',
-    description: `${numberFormatter.format(stats?.appointments_today ?? 0)} turnos, ${numberFormatter.format(
-      stats?.pending_confirmations ?? 0
-    )} pendientes, ocupación ${formatPercent(stats?.occupancy_rate)}.`,
+    description: summaryAvailable
+      ? `${numberFormatter.format(stats?.appointments_today ?? 0)} turnos, ${numberFormatter.format(
+          stats?.pending_confirmations ?? 0
+        )} pendientes, ocupación ${formatPercent(stats?.occupancy_rate)}.`
+      : 'Agenda y ocupación no disponibles.',
     periodLabel: 'Corte operativo: hoy + últimos 7 días',
     statusLabel: heroStatusLabel,
     health: [
       {
         id: 'agenda',
         label: 'Agenda',
-        value:
-          Number(stats?.pending_confirmations ?? 0) > 0
+        value: !summaryAvailable
+          ? 'No disponible'
+          : Number(stats?.pending_confirmations ?? 0) > 0
             ? `${numberFormatter.format(stats?.pending_confirmations ?? 0)} pendientes`
             : 'al día',
-        tone: Number(stats?.pending_confirmations ?? 0) > 0 ? 'warning' : 'success'
+        tone: !summaryAvailable
+          ? 'neutral'
+          : Number(stats?.pending_confirmations ?? 0) > 0
+            ? 'warning'
+            : 'success'
       },
       {
         id: 'pagos',
         label: 'Cobros online',
-        value: !paymentsEnabled
-          ? 'deshabilitados'
-          : paymentErrors > 0
-            ? `${numberFormatter.format(paymentErrors)} errores`
-            : 'sin fallas',
-        tone: !paymentsEnabled ? 'neutral' : paymentErrors > 0 ? 'danger' : 'success'
+        value: paymentsHealthValue,
+        tone: paymentsHealthTone
       },
       {
         id: 'ledger',
         label: 'Cuentas pendientes',
-        value: !ledgerEnabled
-          ? 'desactivadas'
-          : debtorsCount > 0
-            ? `${numberFormatter.format(debtorsCount)} clientes con deuda`
-            : 'sin deuda',
-        tone: !ledgerEnabled ? 'neutral' : debtorsCount > 0 ? 'warning' : 'success'
+        value: ledgerHealthValue,
+        tone: ledgerHealthTone
       },
       {
         id: 'ingresos',
         label: 'Ingresos',
-        value:
-          Number(stats?.revenue_trend ?? 0) < 0
+        value: !summaryAvailable
+          ? 'No disponible'
+          : Number(stats?.revenue_trend ?? 0) < 0
             ? `${formatPercent(stats?.revenue_trend)} vs semana pasada`
             : `+${formatPercent(stats?.revenue_trend ?? 0)} de variación`,
-        tone: Number(stats?.revenue_trend ?? 0) < 0 ? 'warning' : 'primary'
+        tone: !summaryAvailable
+          ? 'neutral'
+          : Number(stats?.revenue_trend ?? 0) < 0
+            ? 'warning'
+            : 'primary'
       }
     ],
     quickActions: [
@@ -173,54 +362,85 @@ const Dashboard = () => {
     {
       id: 'weekly-revenue',
       label: 'Ingreso semanal',
-      value: formatCurrency(stats?.weekly_revenue),
-      detail: `${Number(stats?.revenue_trend ?? 0) >= 0 ? '+' : ''}${formatPercent(
-        stats?.revenue_trend
-      )} vs semana pasada`,
-      signal: Number(stats?.revenue_trend ?? 0) >= 0 ? 'Tendencia positiva' : 'Revisar caida',
+      value: summaryAvailable ? formatCurrency(stats?.weekly_revenue) : 'No disponible',
+      detail: summaryAvailable
+        ? `${Number(stats?.revenue_trend ?? 0) >= 0 ? '+' : ''}${formatPercent(
+            stats?.revenue_trend
+          )} vs semana pasada`
+        : 'Dato no disponible',
+      signal: summaryAvailable
+        ? Number(stats?.revenue_trend ?? 0) >= 0
+          ? 'Tendencia positiva'
+          : 'Revisar caida'
+        : 'No disponible',
       icon: <DollarSign size={18} />,
-      tone: Number(stats?.revenue_trend ?? 0) < 0 ? 'warning' : 'success',
+      tone: !summaryAvailable
+        ? 'neutral'
+        : Number(stats?.revenue_trend ?? 0) < 0
+          ? 'warning'
+          : 'success',
       onSelect: () => void navigate('/dashboard/reports')
     },
     {
       id: 'new-clients',
       label: 'Clientes nuevos',
-      value: numberFormatter.format(stats?.new_clients_last_30d ?? 0),
-      detail: `${numberFormatter.format(clientStats?.returning_clients ?? 0)} recurrentes activos`,
-      signal:
-        Number(stats?.new_clients_last_30d ?? 0) > 0
+      value: summaryAvailable
+        ? numberFormatter.format(stats?.new_clients_last_30d ?? 0)
+        : 'No disponible',
+      detail: reportsAvailable
+        ? `${numberFormatter.format(clientStats?.returning_clients ?? 0)} recurrentes activos`
+        : reportsLoadingLabel,
+      signal: !summaryAvailable
+        ? 'No disponible'
+        : Number(stats?.new_clients_last_30d ?? 0) > 0
           ? 'Adquisición en curso'
           : 'Sin altas recientes',
       icon: <UserRoundPlus size={18} />,
-      tone: 'success',
+      tone: summaryAvailable ? 'success' : 'neutral',
       onSelect: () => void navigate('/dashboard/users')
     },
     {
       id: 'occupancy',
       label: 'Ocupación',
-      value: formatPercent(stats?.occupancy_rate),
-      detail: `${formatPercent(availableCapacity)} de capacidad libre`,
+      value: summaryAvailable ? formatPercent(stats?.occupancy_rate) : 'No disponible',
+      detail:
+        availableCapacity === undefined
+          ? 'Dato no disponible'
+          : `${formatPercent(availableCapacity)} de capacidad libre`,
       signal:
-        occupancy >= 85
-          ? 'Día cargado'
-          : availableCapacity >= 40
-            ? 'Espacio para crecer'
-            : 'Ritmo estable',
+        availableCapacity === undefined
+          ? 'No disponible'
+          : occupancy !== undefined && occupancy >= 85
+            ? 'Día cargado'
+            : availableCapacity >= 40
+              ? 'Espacio para crecer'
+              : 'Ritmo estable',
       icon: <Gauge size={18} />,
-      tone: occupancy >= 85 ? 'warning' : 'neutral',
+      tone: occupancy === undefined ? 'neutral' : occupancy >= 85 ? 'warning' : 'neutral',
       onSelect: () => void navigate('/dashboard/reports')
     },
     {
       id: 'cancellations',
       label: 'Cancelaciones',
-      value: numberFormatter.format(reportStats?.cancelled_appointments ?? 0),
-      detail: `${numberFormatter.format(upcomingAppointments.length)} próximos en agenda`,
-      signal:
-        Number(reportStats?.cancelled_appointments ?? 0) > 0
+      value: !reportsAvailable
+        ? reportsPendingLabel
+        : numberFormatter.format(reportStats?.cancelled_appointments ?? 0),
+      detail: summaryAvailable
+        ? `${numberFormatter.format(upcomingAppointments.length)} próximos en agenda`
+        : 'Agenda no disponible',
+      signal: !reportsAvailable
+        ? reportsAllowed && reportsQuery.isLoading
+          ? 'Consultando...'
+          : 'Dato no disponible'
+        : Number(reportStats?.cancelled_appointments ?? 0) > 0
           ? 'Revisar patron'
           : 'Sin cancelaciones',
       icon: <CalendarX size={18} />,
-      tone: Number(reportStats?.cancelled_appointments ?? 0) > 0 ? 'warning' : 'success',
+      tone: !reportsAvailable
+        ? 'neutral'
+        : Number(reportStats?.cancelled_appointments ?? 0) > 0
+          ? 'warning'
+          : 'success',
       onSelect: () => void navigate('/dashboard/reports')
     }
   ]
@@ -228,36 +448,68 @@ const Dashboard = () => {
   const operationCards: DashboardOperationCard[] = [
     {
       title: 'Pendientes por confirmar',
-      detail:
-        Number(stats?.pending_confirmations ?? 0) > 0
+      detail: !summaryAvailable
+        ? 'Agenda no disponible'
+        : Number(stats?.pending_confirmations ?? 0) > 0
           ? 'Hay reservas esperando decisión'
           : 'No hay confirmaciones pendientes',
-      meta: numberFormatter.format(stats?.pending_confirmations ?? 0),
-      tone: Number(stats?.pending_confirmations ?? 0) > 0 ? 'warning' : 'success'
+      meta: summaryAvailable
+        ? numberFormatter.format(stats?.pending_confirmations ?? 0)
+        : 'No disponible',
+      tone: !summaryAvailable
+        ? 'neutral'
+        : Number(stats?.pending_confirmations ?? 0) > 0
+          ? 'warning'
+          : 'success'
     },
     {
       title: 'Capacidad disponible',
-      detail: 'Espacio operativo libre para hoy',
-      meta: formatPercent(availableCapacity),
-      tone: availableCapacity < 15 ? 'danger' : availableCapacity < 35 ? 'warning' : 'success'
+      detail: summaryAvailable ? 'Espacio operativo libre para hoy' : 'Dato no disponible',
+      meta: availableCapacity === undefined ? 'No disponible' : formatPercent(availableCapacity),
+      tone:
+        availableCapacity === undefined
+          ? 'neutral'
+          : availableCapacity < 15
+            ? 'danger'
+            : availableCapacity < 35
+              ? 'warning'
+              : 'success'
     },
     {
       title: 'Cancelaciones',
-      detail: 'Impacto registrado en el periodo',
-      meta: numberFormatter.format(reportStats?.cancelled_appointments ?? 0),
-      tone: Number(reportStats?.cancelled_appointments ?? 0) > 0 ? 'warning' : 'neutral'
+      detail: reportsAvailable
+        ? 'Impacto registrado en el periodo'
+        : reportsAllowed && reportsQuery.isLoading
+          ? 'Consultando...'
+          : 'Dato no disponible',
+      meta: !reportsAvailable
+        ? reportsPendingLabel
+        : numberFormatter.format(reportStats?.cancelled_appointments ?? 0),
+      tone: !reportsAvailable
+        ? 'neutral'
+        : Number(reportStats?.cancelled_appointments ?? 0) > 0
+          ? 'warning'
+          : 'neutral'
     },
     {
       title: 'Profesional destacado',
-      detail: topProfessional ? topProfessional.staff_name : 'Sin lider claro',
-      meta: topProfessional ? formatPercent(topProfessional.occupancy_rate) : '--',
-      tone: topProfessional ? 'primary' : 'neutral'
+      detail: !professionalsAvailable
+        ? professionalsLoadingLabel
+        : topProfessional
+          ? topProfessional.staff_name
+          : 'Sin lider claro',
+      meta: !professionalsAvailable
+        ? professionalsLoadingLabel
+        : topProfessional
+          ? formatPercent(topProfessional.occupancy_rate)
+          : '--',
+      tone: professionalsAvailable && topProfessional ? 'primary' : 'neutral'
     }
   ]
 
   const urgentActions: ActionItem[] = []
 
-  if (Number(stats?.pending_confirmations ?? 0) > 0) {
+  if (summaryAvailable && Number(stats?.pending_confirmations ?? 0) > 0) {
     urgentActions.push({
       id: 'confirmations',
       title: 'Confirmar turnos',
@@ -268,18 +520,18 @@ const Dashboard = () => {
     })
   }
 
-  if (Number(paymentsQuery.data?.pending_payments ?? 0) > 0) {
+  if (paymentsAvailable && Number(reconciliationData?.pending_payments ?? 0) > 0) {
     urgentActions.push({
       id: 'pending-payments',
       title: 'Revisar cobros pendientes',
-      description: formatCurrency(paymentsQuery.data?.total_pending_amount),
-      meta: numberFormatter.format(paymentsQuery.data?.pending_payments ?? 0),
+      description: formatCurrency(reconciliationData?.total_pending_amount),
+      meta: numberFormatter.format(reconciliationData?.pending_payments ?? 0),
       tone: 'warning',
       onSelect: () => void navigate('/dashboard/collections')
     })
   }
 
-  if (paymentErrors > 0) {
+  if (paymentErrors !== undefined && paymentErrors > 0) {
     urgentActions.push({
       id: 'payment-sync',
       title: 'Revisar cobros online',
@@ -290,53 +542,69 @@ const Dashboard = () => {
     })
   }
 
-  if (debtorsCount > 0) {
+  if (debtorsCount !== undefined && debtorsCount > 0) {
     urgentActions.push({
       id: 'debtors',
       title: 'Gestionar deuda',
-      description: formatCurrency(outstandingBalance),
+      description:
+        outstandingBalance === undefined
+          ? 'Saldo no disponible'
+          : formatCurrency(outstandingBalance),
       meta: numberFormatter.format(debtorsCount),
       tone: 'warning',
       onSelect: () => void navigate('/dashboard/ledger')
     })
   }
 
+  const collectedAmount =
+    paymentsAvailable && reconciliationData
+      ? totalCollected(
+          reconciliationData.total_approved_amount,
+          reconciliationData.total_remainder_amount
+        )
+      : reportsAvailable
+        ? reportStats?.total_revenue
+        : undefined
+
   const moneyMetrics: MetricItem[] = [
     {
       id: 'approved-amount',
       label: 'Cobrado',
-      value: formatCurrency(
-        paymentsQuery.data
-          ? totalCollected(
-              paymentsQuery.data.total_approved_amount,
-              paymentsQuery.data.total_remainder_amount
-            )
-          : reportStats?.total_revenue
-      ),
-      detail: paymentsEnabled ? 'Pagos aprobados, manuales y restos' : 'Ingresos por turnos',
-      tone: 'success',
+      value: collectedAmount === undefined ? 'No disponible' : formatCurrency(collectedAmount),
+      detail: paymentsAvailable
+        ? 'Pagos aprobados, manuales y restos'
+        : reportsAvailable
+          ? 'Ingresos por turnos'
+          : 'Dato no disponible',
+      tone: collectedAmount === undefined ? 'neutral' : 'success',
       onSelect: () =>
         void navigate(paymentsEnabled ? '/dashboard/collections' : '/dashboard/reports')
     },
     {
       id: 'average-ticket',
       label: 'Ticket promedio',
-      value: formatCurrency(reportStats?.average_ticket),
-      detail: 'Promedio móvil de 7 días',
+      value: reportsAvailable ? formatCurrency(reportStats?.average_ticket) : reportsLoadingLabel,
+      detail: reportsAvailable ? 'Promedio móvil de 7 días' : reportsLoadingLabel,
       tone: 'neutral',
       onSelect: () => void navigate('/dashboard/reports')
     },
     {
       id: 'outstanding-balance',
       label: 'Saldo pendiente',
-      value: formatCurrency(outstandingBalance),
-      detail: `${numberFormatter.format(debtorsCount)} clientes con deuda`,
-      tone: debtorsCount > 0 ? 'warning' : 'neutral',
+      value:
+        outstandingBalance === undefined ? 'No disponible' : formatCurrency(outstandingBalance),
+      detail:
+        debtorsCount === undefined
+          ? 'Saldo no disponible'
+          : `${numberFormatter.format(debtorsCount)} clientes con deuda`,
+      tone: (debtorsCount ?? 0) > 0 ? 'warning' : 'neutral',
       onSelect: () => void navigate('/dashboard/ledger')
     }
   ]
 
-  const rankedItems: RankedItem[] = mapTopServices(reportsQuery.data?.top_services)
+  const rankedItems: RankedItem[] = mapTopServices(
+    reportsAvailable ? reportsQuery.data?.top_services : undefined
+  )
 
   if (topProfessional) {
     rankedItems.unshift({
@@ -360,7 +628,7 @@ const Dashboard = () => {
 
   const alerts: ActionItem[] = []
 
-  if (featureFlagsQuery.isSuccess && !paymentsEnabled) {
+  if (featureFlagsAvailable && !paymentsEnabled) {
     alerts.push({
       id: 'payments-disabled',
       title: 'Cobros online desactivados',
@@ -370,7 +638,7 @@ const Dashboard = () => {
     })
   }
 
-  if (featureFlagsQuery.isSuccess && !ledgerEnabled) {
+  if (featureFlagsAvailable && !ledgerEnabled) {
     alerts.push({
       id: 'ledger-disabled',
       title: 'Cuentas pendientes desactivadas',
@@ -391,7 +659,7 @@ const Dashboard = () => {
     })
   }
 
-  if (Number(stats?.revenue_trend ?? 0) < -15) {
+  if (summaryAvailable && Number(stats?.revenue_trend ?? 0) < -15) {
     alerts.push({
       id: 'revenue-drop',
       title: 'Ingreso semanal en baja',
@@ -403,7 +671,7 @@ const Dashboard = () => {
 
   const opportunityCandidates: OpportunityItem[] = []
 
-  if (availableCapacity >= 35) {
+  if (availableCapacity !== undefined && availableCapacity >= 35) {
     opportunityCandidates.push({
       id: 'low-occupancy',
       title: 'Día con capacidad libre',
@@ -444,13 +712,47 @@ const Dashboard = () => {
 
   return (
     <EnterpriseDashboard
-      copy={copy}
+      reportsAllowed={reportsAllowed}
+      copy={{
+        ...copy,
+        emptyAgenda: summaryAvailable
+          ? copy.emptyAgenda
+          : 'Agenda no disponible. Reintentá desde el aviso del panel.',
+        emptyActions: financialAdminAllowed
+          ? copy.emptyActions
+          : 'Sin acceso a cobros y deuda para consultar otras tareas.',
+        emptyTransactions: !reportsAllowed
+          ? 'Sin acceso a reportes para consultar transacciones.'
+          : reportsQuery.isLoading && !reportsAvailable
+            ? 'Consultando transacciones...'
+            : !reportsAvailable
+              ? 'Transacciones no disponibles.'
+              : copy.emptyTransactions,
+        emptyAlerts: !reportsAllowed
+          ? 'Sin acceso a reportes para consultar alertas.'
+          : !reportsAvailable
+            ? reportsQuery.isLoading
+              ? 'Consultando alertas...'
+              : 'Alertas no disponibles.'
+            : copy.emptyAlerts,
+        emptyOpportunities: !reportsAllowed
+          ? 'Sin acceso a reportes para identificar oportunidades.'
+          : !reportsAvailable || !professionalsAvailable
+            ? reportsQuery.isLoading || professionalsQuery.isLoading
+              ? 'Consultando oportunidades...'
+              : 'Oportunidades no disponibles.'
+            : copy.emptyOpportunities
+      }}
       hero={hero}
-      trendPoints={trendQuery.data?.points ?? []}
+      queryIssues={queryIssues}
+      trendPoints={!reportsAllowed || trendQuery.isError ? [] : (trendQuery.data?.points ?? [])}
       trendLoading={trendQuery.isLoading}
-      topServices={reportsQuery.data?.top_services ?? []}
+      trendUnavailable={!reportsAllowed || Boolean(trendQuery.isError)}
+      topServices={reportsAvailable ? (reportsQuery.data?.top_services ?? []) : []}
       salesLoading={reportsQuery.isLoading}
-      transactions={mapTransactions(reportsQuery.data?.appointments)}
+      salesUnavailable={!reportsAllowed || Boolean(reportsQuery.isError)}
+      transactions={reportsAvailable ? mapTransactions(reportsQuery.data?.appointments) : []}
+      transactionsUnavailable={!reportsAllowed || Boolean(reportsQuery.isError)}
       onViewTransactions={() => void navigate('/dashboard/reports')}
       todayMetrics={todayMetrics}
       urgentActions={urgentActions}
@@ -458,6 +760,15 @@ const Dashboard = () => {
       operationCards={operationCards}
       moneyMetrics={moneyMetrics}
       performanceItems={performanceItems}
+      performanceLoading={
+        reportsAllowed && (reportsQuery.isLoading || professionalsQuery.isLoading)
+      }
+      performanceUnavailable={
+        performanceItems.length === 0 &&
+        !reportsQuery.isLoading &&
+        !professionalsQuery.isLoading &&
+        (!reportsAvailable || !professionalsAvailable)
+      }
       alerts={alerts}
       opportunities={opportunities}
       isLoading={summaryQuery.isLoading}

@@ -1,9 +1,10 @@
 import React from 'react'
 
-import { Building2, Filter, Loader2, Search } from 'lucide-react'
+import { Building2, Filter, Search } from 'lucide-react'
 
 import type { SuperAdminStoreRow } from '@application/services/SuperAdminService'
 
+import { superAdminPalette, superAdminSelectedControlStyle } from './palette'
 import {
   daysUntil,
   emptyStateStyle,
@@ -11,12 +12,14 @@ import {
   innerCardStyle,
   panelStyle,
   scopeBadgeStyle,
+  statusBadgeStyle,
   statusLabel,
   type ActivityFilter,
   type QueryState,
   type SubscriptionFilter
 } from './shared'
 import { buttonStyles2000s, colors2000s } from '../../../theme/colors'
+import { QuerySectionFeedback } from '../../components/molecules/QuerySectionFeedback'
 import { subscriptionStatusLabel } from '../../lib/enumLabels'
 import { formatDateEsAr } from '../../lib/formatters'
 import { create2000sInputStyle } from '../../lib/surfaceStyles'
@@ -132,7 +135,7 @@ export const StoresSection: React.FC<StoresSectionProps> = ({
               className={`min-h-11 rounded-xl px-3 py-2 text-[10px] font-black uppercase tracking-widest ${buttonFocusVisibleClassName}`}
               style={
                 activityFilter === item.value
-                  ? buttonStyles2000s.selected
+                  ? superAdminSelectedControlStyle
                   : buttonStyles2000s.default
               }
             >
@@ -160,7 +163,7 @@ export const StoresSection: React.FC<StoresSectionProps> = ({
               className={`min-h-11 rounded-xl px-3 py-2 text-[10px] font-black uppercase tracking-widest ${buttonFocusVisibleClassName}`}
               style={
                 subscriptionFilter === item.value
-                  ? buttonStyles2000s.selected
+                  ? superAdminSelectedControlStyle
                   : buttonStyles2000s.default
               }
             >
@@ -172,199 +175,213 @@ export const StoresSection: React.FC<StoresSectionProps> = ({
     </div>
 
     <div className="mt-6 overflow-hidden rounded-[1.75rem]" style={innerCardStyle}>
-      {storesQuery.isLoading ? (
-        <div
-          className="flex items-center justify-center gap-3 p-10"
-          style={{ color: colors2000s.text.secondary }}
-        >
-          <Loader2 className="h-5 w-5 animate-spin" />
-          <span className="font-bold">Cargando tiendas...</span>
-        </div>
-      ) : storesQuery.data?.length ? (
-        <div className="overflow-x-auto">
-          <table className="min-w-full text-left">
-            <thead style={{ background: colors2000s.bg.disabled }}>
-              <tr>
-                {[
-                  'Tienda',
-                  'Estado',
-                  'Recordatorios',
-                  'Usuarios',
-                  'Suscripción',
-                  'Renueva',
-                  'Acciones'
-                ].map((label) => (
-                  <th
-                    key={label}
-                    className="px-4 py-3 text-[10px] font-black uppercase tracking-widest"
-                    style={{ color: colors2000s.text.secondary }}
-                  >
-                    {label}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {storesQuery.data.map((store) => {
-                const isSelected = store.public_id === selectedStoreId
-                return (
-                  <tr
-                    key={store.public_id}
-                    onClick={() => setSelectedStoreId(store.public_id)}
-                    aria-current={isSelected ? 'true' : undefined}
-                    className="cursor-pointer transition-colors"
-                    style={
-                      isSelected
-                        ? {
-                            background: '#fff7ed',
-                            boxShadow: `inset 4px 0 0 ${colors2000s.orange.accent}`
-                          }
-                        : { background: 'transparent' }
-                    }
-                  >
-                    <td className="px-4 py-4">
-                      <div className="flex items-center gap-3">
-                        <span
-                          className="h-4 w-4 rounded-full border"
-                          style={{
-                            background: store.primary_color,
-                            borderColor: colors2000s.border.default
-                          }}
-                        />
-                        <div>
-                          <p className="font-black" style={{ color: colors2000s.text.primary }}>
-                            {store.name}
-                          </p>
-                          <p
-                            className="text-[10px] font-bold uppercase tracking-widest"
-                            style={{ color: colors2000s.text.secondary }}
-                          >
-                            {store.slug}
-                          </p>
-                          {store.is_internal ? (
-                            <span
-                              className="mt-1 mr-1 inline-flex rounded-full px-2 py-0.5 text-[10px] font-black uppercase tracking-widest"
-                              style={scopeBadgeStyle('global')}
-                            >
-                              Interna
-                            </span>
-                          ) : null}
-                          {isSelected ? (
-                            <span
-                              className="mt-1 inline-flex rounded-full px-2 py-0.5 text-[10px] font-black uppercase tracking-widest"
-                              style={scopeBadgeStyle('tenant')}
-                            >
-                              Seleccionada
-                            </span>
-                          ) : null}
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-4 py-4">
-                      <span
-                        className="rounded-full px-3 py-1 text-[10px] font-black uppercase tracking-widest"
-                        style={
-                          store.is_active ? scopeBadgeStyle('tenant') : scopeBadgeStyle('danger')
-                        }
-                      >
-                        {statusLabel(store.is_active)}
-                      </span>
-                    </td>
-                    <td
-                      className="px-4 py-4 text-[10px] font-black uppercase tracking-widest"
+      <QuerySectionFeedback
+        loading={storesQuery.isLoading || (!storesQuery.data && !storesQuery.error)}
+        loadingMessage={storesQuery.data ? 'Actualizando tiendas...' : 'Cargando tiendas...'}
+        error={storesQuery.error}
+        errorMessage={
+          storesQuery.data
+            ? 'No se pudieron actualizar las tiendas. Se muestran los últimos datos disponibles.'
+            : 'No se pudieron cargar las tiendas. Reintentá para actualizar el listado.'
+        }
+        isFetching={storesQuery.isFetching}
+        onRetry={storesQuery.refetch}
+      />
+      {storesQuery.data?.length ? (
+        <>
+          <p
+            className="mb-2 px-4 pt-3 text-[10px] font-bold sm:hidden"
+            style={{ color: colors2000s.text.secondary }}
+          >
+            Deslizá horizontalmente para ver todas las columnas.
+          </p>
+          <div className="overflow-x-auto overscroll-x-contain">
+            <table className="min-w-full text-left">
+              <thead style={{ background: colors2000s.bg.disabled }}>
+                <tr>
+                  {[
+                    'Tienda',
+                    'Estado',
+                    'Recordatorios',
+                    'Usuarios',
+                    'Suscripción',
+                    'Renueva',
+                    'Acciones'
+                  ].map((label) => (
+                    <th
+                      key={label}
+                      className="px-4 py-3 text-[10px] font-black uppercase tracking-widest"
                       style={{ color: colors2000s.text.secondary }}
                     >
-                      <div>
-                        Confirmación:{' '}
-                        <span style={{ color: colors2000s.text.primary }}>
-                          {store.send_email_confirmation ? 'On' : 'Off'}
-                        </span>
-                      </div>
-                      <div className="mt-1">
-                        Reminders:{' '}
-                        <span style={{ color: colors2000s.text.primary }}>
-                          {store.send_email_reminders ? 'On' : 'Off'}
-                        </span>
-                      </div>
-                    </td>
-                    <td className="px-4 py-4">
-                      <p className="font-black" style={{ color: colors2000s.text.primary }}>
-                        {store.active_users_count}/{store.users_count}
-                      </p>
-                      <p
-                        className="text-[10px] font-bold uppercase tracking-widest"
-                        style={{ color: colors2000s.text.secondary }}
-                      >
-                        {store.admins_count} admins
-                      </p>
-                    </td>
-                    <td className="px-4 py-4">
-                      <p className="font-black" style={{ color: colors2000s.text.primary }}>
-                        {store.current_plan_name || 'Sin plan'}
-                      </p>
-                      <p
-                        className="text-[10px] font-bold uppercase tracking-widest"
-                        style={{ color: colors2000s.text.secondary }}
-                      >
-                        {store.subscription_status
-                          ? subscriptionStatusLabel(store.subscription_status)
-                          : 'Sin suscripción'}
-                      </p>
-                    </td>
-                    <td
-                      className="px-4 py-4 text-sm font-bold"
-                      style={{ color: colors2000s.text.primary }}
+                      {label}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {storesQuery.data.map((store) => {
+                  const isSelected = store.public_id === selectedStoreId
+                  return (
+                    <tr
+                      key={store.public_id}
+                      onClick={() => setSelectedStoreId(store.public_id)}
+                      aria-current={isSelected ? 'true' : undefined}
+                      className="cursor-pointer transition-colors"
+                      style={
+                        isSelected
+                          ? {
+                              background: superAdminPalette.orangePale,
+                              boxShadow: `inset 4px 0 0 ${superAdminPalette.orangeDark}`
+                            }
+                          : { background: 'transparent' }
+                      }
                     >
-                      {formatDateEsAr(store.current_period_end)}
-                      <span
-                        className="block text-[10px] font-black uppercase tracking-widest"
-                        style={{
-                          color:
-                            (daysUntil(store.current_period_end) ?? 99) < 0
-                              ? '#dc2626'
-                              : (daysUntil(store.current_period_end) ?? 99) <= 7
-                                ? '#d97706'
-                                : colors2000s.text.secondary
-                        }}
+                      <td className="px-4 py-4">
+                        <div className="flex items-center gap-3">
+                          <span
+                            className="h-4 w-4 rounded-full border"
+                            style={{
+                              background: store.primary_color,
+                              borderColor: colors2000s.border.default
+                            }}
+                          />
+                          <div>
+                            <p className="font-black" style={{ color: colors2000s.text.primary }}>
+                              {store.name}
+                            </p>
+                            <p
+                              className="text-[10px] font-bold uppercase tracking-widest"
+                              style={{ color: colors2000s.text.secondary }}
+                            >
+                              {store.slug}
+                            </p>
+                            {store.is_internal ? (
+                              <span
+                                className="mt-1 mr-1 inline-flex rounded-full px-2 py-0.5 text-[10px] font-black uppercase tracking-widest"
+                                style={scopeBadgeStyle('global')}
+                              >
+                                Interna
+                              </span>
+                            ) : null}
+                            {isSelected ? (
+                              <span
+                                className="mt-1 inline-flex rounded-full px-2 py-0.5 text-[10px] font-black uppercase tracking-widest"
+                                style={scopeBadgeStyle('tenant')}
+                              >
+                                Seleccionada
+                              </span>
+                            ) : null}
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-4 py-4">
+                        <span
+                          className="rounded-full px-3 py-1 text-[10px] font-black uppercase tracking-widest"
+                          style={
+                            store.is_active
+                              ? statusBadgeStyle('success')
+                              : statusBadgeStyle('danger')
+                          }
+                        >
+                          {statusLabel(store.is_active)}
+                        </span>
+                      </td>
+                      <td
+                        className="px-4 py-4 text-[10px] font-black uppercase tracking-widest"
+                        style={{ color: colors2000s.text.secondary }}
                       >
-                        {expiryLabel(store.current_period_end)}
-                      </span>
-                    </td>
-                    <td className="px-4 py-4">
-                      <div className="flex flex-wrap gap-2">
-                        <MiniButton
-                          label="Ver"
-                          onClick={(event) => {
-                            event.stopPropagation()
-                            onViewStore(store.public_id)
+                        <div>
+                          Confirmación:{' '}
+                          <span style={{ color: colors2000s.text.primary }}>
+                            {store.send_email_confirmation ? 'On' : 'Off'}
+                          </span>
+                        </div>
+                        <div className="mt-1">
+                          Reminders:{' '}
+                          <span style={{ color: colors2000s.text.primary }}>
+                            {store.send_email_reminders ? 'On' : 'Off'}
+                          </span>
+                        </div>
+                      </td>
+                      <td className="px-4 py-4">
+                        <p className="font-black" style={{ color: colors2000s.text.primary }}>
+                          {store.active_users_count}/{store.users_count}
+                        </p>
+                        <p
+                          className="text-[10px] font-bold uppercase tracking-widest"
+                          style={{ color: colors2000s.text.secondary }}
+                        >
+                          {store.admins_count} admins
+                        </p>
+                      </td>
+                      <td className="px-4 py-4">
+                        <p className="font-black" style={{ color: colors2000s.text.primary }}>
+                          {store.current_plan_name || 'Sin plan'}
+                        </p>
+                        <p
+                          className="text-[10px] font-bold uppercase tracking-widest"
+                          style={{ color: colors2000s.text.secondary }}
+                        >
+                          {store.subscription_status
+                            ? subscriptionStatusLabel(store.subscription_status)
+                            : 'Sin suscripción'}
+                        </p>
+                      </td>
+                      <td
+                        className="px-4 py-4 text-sm font-bold"
+                        style={{ color: colors2000s.text.primary }}
+                      >
+                        {formatDateEsAr(store.current_period_end)}
+                        <span
+                          className="block text-[10px] font-black uppercase tracking-widest"
+                          style={{
+                            color:
+                              (daysUntil(store.current_period_end) ?? 99) < 0
+                                ? '#dc2626'
+                                : (daysUntil(store.current_period_end) ?? 99) <= 7
+                                  ? '#d97706'
+                                  : colors2000s.text.secondary
                           }}
-                        />
-                        <MiniButton
-                          label="Editar"
-                          onClick={(event) => {
-                            event.stopPropagation()
-                            setSelectedStoreId(store.public_id)
-                            openEditStoreFor(store)
-                          }}
-                          tone="primary"
-                        />
-                        <MiniButton
-                          label={store.is_active ? 'Desactivar' : 'Activar'}
-                          onClick={(event) => {
-                            event.stopPropagation()
-                            void toggleStoreActive(store)
-                          }}
-                          tone={store.is_active ? 'danger' : 'default'}
-                        />
-                      </div>
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-        </div>
-      ) : (
+                        >
+                          {expiryLabel(store.current_period_end)}
+                        </span>
+                      </td>
+                      <td className="px-4 py-4">
+                        <div className="flex flex-wrap gap-2">
+                          <MiniButton
+                            label="Ver"
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              onViewStore(store.public_id)
+                            }}
+                          />
+                          <MiniButton
+                            label="Editar"
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              setSelectedStoreId(store.public_id)
+                              openEditStoreFor(store)
+                            }}
+                            tone="primary"
+                          />
+                          <MiniButton
+                            label={store.is_active ? 'Desactivar' : 'Activar'}
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              void toggleStoreActive(store)
+                            }}
+                            tone={store.is_active ? 'danger' : 'default'}
+                          />
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </>
+      ) : storesQuery.data ? (
         <div className="rounded-[1.5rem] p-10 text-center" style={emptyStateStyle}>
           <Building2 className="mx-auto mb-3 h-10 w-10 opacity-25" />
           <p
@@ -377,10 +394,10 @@ export const StoresSection: React.FC<StoresSectionProps> = ({
             Ajustá la búsqueda, el estado o la suscripción para ver resultados.
           </p>
         </div>
-      )}
+      ) : null}
     </div>
 
-    {storesQuery.data?.length ? (
+    {!storesQuery.error && storesQuery.data?.length ? (
       <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
         <p
           className="text-[10px] font-black uppercase tracking-widest"

@@ -1,8 +1,8 @@
-import React, { useState } from 'react'
+import React from 'react'
 
 import { Clock, Loader2 } from 'lucide-react'
 
-import { buttonStyles2000s, colors2000s, orangeCtaGradient } from '../../../../theme/colors'
+import { colors2000s, orangeCtaGradient } from '../../../../theme/colors'
 import type { UnifiedCalendarEvent } from '../../../lib/calendarEvents'
 import { SLOT_HEIGHT_PX, type DayGrid, type TimeRange } from '../../../lib/calendarGrid'
 import { canvasStyle, panelStyle } from '../../../lib/calendarStyles'
@@ -34,9 +34,8 @@ interface AgendaDayViewProps {
  * horas con los huecos cerrados y una StaffColumn por profesional. Solo
  * pinta; lo que hace cada click lo decide `CalendarContainer`.
  *
- * En el telefono (debajo de `md`) se ve un profesional por vez, elegido con
- * los botones de arriba: la grilla de 800 px con todos al lado no se podia
- * recorrer en 343 px (QA movil 2026-10-08). Desde `md` se ven todos.
+ * En telefonos `CalendarContainer` usa la lista movil (hasta 767 px); esta
+ * grilla se reserva para tablet y escritorio, donde se ven todos los profesionales.
  */
 export const AgendaDayView: React.FC<AgendaDayViewProps> = ({
   staffMembers,
@@ -49,54 +48,22 @@ export const AgendaDayView: React.FC<AgendaDayViewProps> = ({
   onToggleGap,
   onEditBlock,
   renderControls
-}) => {
-  const [chosenStaffId, setChosenStaffId] = useState<string | null>(null)
-  // Un profesional elegido que ya no esta (otra tienda, baja) vuelve al
-  // primero: se deriva en el render.
-  const focusedStaffId =
-    staffMembers?.find((staff) => staff.id === chosenStaffId)?.id ?? staffMembers?.[0]?.id
-  const hiddenOnPhone = (staffId: string) => staffId !== focusedStaffId
+}) => (
+  <AgendaDayGrid
+    staffMembers={staffMembers}
+    loading={loading}
+    dayGrid={dayGrid}
+    hoursOfDay={hoursOfDay}
+    blocks={blocks}
+    cards={cards}
+    canManageBlocks={canManageBlocks}
+    onToggleGap={onToggleGap}
+    onEditBlock={onEditBlock}
+    renderControls={renderControls}
+  />
+)
 
-  return (
-    <div className="space-y-3">
-      {staffMembers && staffMembers.length > 1 && (
-        <div role="group" aria-label="Profesional" className="md:hidden flex flex-wrap gap-2">
-          {staffMembers.map((staff) => (
-            <button
-              key={staff.id}
-              type="button"
-              aria-pressed={staff.id === focusedStaffId}
-              onClick={() => setChosenStaffId(staff.id)}
-              className="min-h-10 px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest"
-              style={
-                staff.id === focusedStaffId ? buttonStyles2000s.selected : buttonStyles2000s.default
-              }
-            >
-              {staff.displayName}
-            </button>
-          ))}
-        </div>
-      )}
-      <AgendaDayGrid
-        staffMembers={staffMembers}
-        loading={loading}
-        dayGrid={dayGrid}
-        hoursOfDay={hoursOfDay}
-        blocks={blocks}
-        cards={cards}
-        canManageBlocks={canManageBlocks}
-        onToggleGap={onToggleGap}
-        onEditBlock={onEditBlock}
-        renderControls={renderControls}
-        hiddenOnPhone={hiddenOnPhone}
-      />
-    </div>
-  )
-}
-
-const AgendaDayGrid: React.FC<
-  AgendaDayViewProps & { hiddenOnPhone: (staffId: string) => boolean }
-> = ({
+const AgendaDayGrid: React.FC<AgendaDayViewProps> = ({
   staffMembers,
   loading,
   dayGrid,
@@ -106,33 +73,59 @@ const AgendaDayGrid: React.FC<
   canManageBlocks,
   onToggleGap,
   onEditBlock,
-  renderControls,
-  hiddenOnPhone
+  renderControls
 }) => (
   <div className="rounded-[8px] border overflow-hidden relative" style={canvasStyle}>
     {loading && (
-      <div className="absolute inset-0 z-50 bg-white/60 backdrop-blur-[2px] flex flex-col items-center justify-center">
-        <Loader2 className="w-12 h-12 animate-spin text-orange-500 mb-4" />
-        <p className="text-xs font-black text-gray-400 uppercase tracking-widest">
-          Actualizando agenda...
+      <div
+        role="status"
+        aria-live="polite"
+        className="absolute inset-0 z-50 bg-white/60 backdrop-blur-[2px] flex flex-col items-center justify-center"
+      >
+        <Loader2 className="w-12 h-12 animate-spin text-orange-500 mb-4" aria-hidden="true" />
+        <p
+          className="text-xs font-black uppercase tracking-widest"
+          style={{ color: colors2000s.text.secondary }}
+        >
+          Cargando profesionales...
         </p>
       </div>
     )}
 
-    <div className="overflow-x-auto">
+    <div
+      role="region"
+      aria-label="Agenda diaria por profesional, desplazable horizontalmente"
+      tabIndex={0}
+      className="overflow-x-auto overscroll-x-contain"
+    >
+      <p
+        className="hidden px-3 py-2 text-xs font-medium md:block xl:hidden"
+        style={{ color: colors2000s.text.secondary }}
+      >
+        Deslizá horizontalmente para ver todos los profesionales.
+      </p>
+      {dayGrid.totalHeightPx > 600 && (
+        <p
+          id="agenda-day-scroll-hint"
+          className="px-3 py-2 text-xs font-medium"
+          style={{ color: colors2000s.text.secondary }}
+        >
+          Deslizá verticalmente para recorrer los horarios.
+        </p>
+      )}
       <div className="md:min-w-[800px]">
         <div className="flex border-b" style={{ borderColor: colors2000s.border.light }}>
           <div
             className="w-20 flex-shrink-0 flex items-center justify-center border-r"
             style={{ borderColor: colors2000s.border.light }}
           >
-            <Clock size={16} className="text-gray-400" />
+            <Clock size={16} style={{ color: colors2000s.text.secondary }} />
           </div>
           <div className="flex flex-1" style={panelStyle}>
             {staffMembers?.map((staff, idx) => (
               <div
                 key={staff.id}
-                className={`${hiddenOnPhone(staff.id) ? 'hidden md:block' : ''} flex-1 min-w-[150px] p-4 text-center border-r`}
+                className="flex-1 min-w-[150px] p-4 text-center border-r"
                 style={{ borderColor: colors2000s.border.light }}
               >
                 <div
@@ -140,7 +133,7 @@ const AgendaDayGrid: React.FC<
                   style={{
                     background:
                       idx % 2 === 0
-                        ? 'linear-gradient(180deg, #3b82f6 0%, #2563eb 100%)'
+                        ? `linear-gradient(180deg, ${colors2000s.status.info.dark} 0%, ${colors2000s.status.info.accent} 100%)`
                         : orangeCtaGradient,
                     color:
                       idx % 2 === 0
@@ -163,7 +156,13 @@ const AgendaDayGrid: React.FC<
           </div>
         </div>
 
-        <div className="h-[600px] overflow-y-auto relative bg-white">
+        <div
+          role="region"
+          aria-label="Horarios de la agenda diaria, desplazable verticalmente"
+          aria-describedby={dayGrid.totalHeightPx > 600 ? 'agenda-day-scroll-hint' : undefined}
+          tabIndex={dayGrid.totalHeightPx > 600 ? 0 : undefined}
+          className="h-[600px] overflow-y-auto relative bg-white"
+        >
           <div className="flex">
             <div
               className="w-20 flex-shrink-0 bg-white sticky left-0 z-10 border-r"
@@ -178,7 +177,12 @@ const AgendaDayGrid: React.FC<
                         className="absolute inset-x-0 border-b border-gray-50 flex items-start justify-center pt-2"
                         style={{ top: label.topPx, height: SLOT_HEIGHT_PX }}
                       >
-                        <span className="text-[10px] font-black text-gray-400">{label.text}</span>
+                        <span
+                          className="text-[10px] font-black"
+                          style={{ color: colors2000s.text.secondary }}
+                        >
+                          {label.text}
+                        </span>
                       </div>
                     ))
                   ) : (
@@ -230,7 +234,6 @@ const AgendaDayGrid: React.FC<
                       }))}
                     canManageBlocks={canManageBlocks}
                     onEditBlock={onEditBlock}
-                    hiddenOnPhone={hiddenOnPhone(staff.id)}
                   />
                 )
               })}

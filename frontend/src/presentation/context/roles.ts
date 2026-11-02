@@ -15,6 +15,15 @@ export const ROLES_ADMIN_SUPER_PRO = [
   ROLE_PROFESSIONAL
 ] as const
 export const ROLES_SUPER = [ROLE_SUPER_ADMIN] as const
+// Roles a los que se ofrece el panel de tienda. La lista de cada ruta puede
+// ser más acotada; este grupo solo describe Dashboard, Agenda, Lista de espera
+// y Manual, cuyo menú incluye a recepción.
+export const ROLES_TENANT_STAFF = [
+  ROLE_STORE_ADMIN,
+  ROLE_SUPER_ADMIN,
+  ROLE_PROFESSIONAL,
+  ROLE_RECEPTIONIST
+] as const
 
 const LEGACY_ROLE_ADMIN = 'admin'
 const LEGACY_ROLE_STAFF = 'staff'

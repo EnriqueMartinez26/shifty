@@ -29,6 +29,31 @@ describe('SettingsScheduleTab', () => {
     expect(onChange).toHaveBeenCalledWith({ mon: [] })
   })
 
+  it('expone áreas táctiles de 44px en todos los controles de horario', () => {
+    render(
+      <SettingsScheduleTab
+        businessHours={{
+          mon: [{ open: '09:00', close: '13:00' }],
+          tue: [],
+          wed: [
+            { open: '08:00', close: '12:00' },
+            { open: '13:00', close: '17:00' }
+          ]
+        }}
+        onChange={jest.fn()}
+      />
+    )
+
+    const controls = [
+      screen.getByRole('button', { name: 'Cerrar Lunes' }),
+      screen.getByRole('button', { name: 'Abrir Martes' }),
+      ...screen.getAllByRole('button', { name: /^Conservar/ })
+    ]
+    for (const control of controls) {
+      expect(control).toHaveClass('min-h-11', 'min-w-11')
+    }
+  })
+
   it('apertura posterior al cierre muestra el error del dia', () => {
     render(
       <SettingsScheduleTab

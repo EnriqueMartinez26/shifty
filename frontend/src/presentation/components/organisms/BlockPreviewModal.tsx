@@ -152,7 +152,7 @@ export const BlockPreviewModal: React.FC<BlockPreviewModalProps> = ({
       aria-labelledby="block-preview-title"
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
     >
-      <div className="w-full max-w-2xl rounded-3xl bg-white p-6 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto">
+      <div className="w-full max-w-2xl rounded-3xl bg-white p-6 shadow-2xl space-y-4 max-h-[90dvh] overflow-y-auto">
         <div className="flex items-start justify-between gap-4">
           <div className="flex items-start gap-3">
             <AlertTriangle className="w-6 h-6 text-amber-500 mt-0.5" />

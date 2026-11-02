@@ -37,9 +37,9 @@ const createEmptyPromotionForm = () => ({
 })
 
 const focusVisibleControlClassName =
-  'focus:outline-none focus-visible:ring-2 focus-visible:ring-[#9a4507] focus-visible:ring-offset-2'
+  'focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand-accent)] focus-visible:ring-offset-2'
 const focusVisibleSwitchClassName =
-  '[&>button]:focus-visible:outline-none [&>button]:focus-visible:ring-2 [&>button]:focus-visible:ring-[#9a4507] [&>button]:focus-visible:ring-offset-2'
+  '[&>button]:focus-visible:outline-none [&>button]:focus-visible:ring-2 [&>button]:focus-visible:ring-[var(--color-brand-accent)] [&>button]:focus-visible:ring-offset-2'
 
 type PromotionField = 'code' | 'title' | 'value' | 'min_service_amount' | 'max_uses' | 'valid_until'
 

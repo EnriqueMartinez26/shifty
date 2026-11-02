@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 
 import { AgendaRangeGrid } from './AgendaRangeGrid'
 import type { UnifiedCalendarEvent } from '../../../lib/calendarEvents'
@@ -26,6 +26,19 @@ const renderEvent = (event: UnifiedCalendarEvent, compact: boolean) => (
   <p key={event.id}>{`${event.title}${compact ? ' (compacto)' : ''}`}</p>
 )
 
+const setTabletViewport = (matches: boolean) => {
+  Object.defineProperty(window, 'matchMedia', {
+    configurable: true,
+    value: jest.fn(() => ({
+      matches,
+      addEventListener: jest.fn(),
+      removeEventListener: jest.fn()
+    }))
+  })
+}
+
+beforeEach(() => setTabletViewport(false))
+
 describe('AgendaRangeGrid', () => {
   it('en semana pinta todos los eventos del dia y avisa el dia vacio', () => {
     render(
@@ -44,19 +57,47 @@ describe('AgendaRangeGrid', () => {
     expect(screen.getByText('Sin eventos')).toBeInTheDocument()
   })
 
-  it('en mes, en pantalla grande corta en 4 eventos y cuenta el resto', () => {
+  it('en mes, en pantalla grande muestra 4 eventos y permite revelar el resto', () => {
+    setTabletViewport(true)
     render(
       <AgendaRangeGrid days={days} eventsByDay={eventsByDay} compact renderEvent={renderEvent} />
     )
+    expect(
+      screen.getByRole('region', { name: 'Calendario mensual desplazable horizontalmente' })
+    ).toHaveAttribute('tabindex', '0')
+    expect(
+      screen.getByText('Deslizá horizontalmente para ver todos los días del mes.')
+    ).toHaveClass('md:block', 'xl:hidden')
     expect(screen.getByText('Evento 4 (compacto)').closest('[class~="md:hidden"]')).toBeNull()
     // El quinto en adelante solo se ve en el telefono, donde el mes es una lista.
     expect(screen.getByText('Evento 5 (compacto)').closest('[class~="md:hidden"]')).not.toBeNull()
-    expect(screen.getByText('+2 eventos')).toHaveClass('hidden', 'md:block')
+    const showMore = screen.getByRole('button', { name: 'Mostrar 2 eventos más del 15/09' })
+    expect(showMore).toHaveClass('hidden', 'md:flex', 'min-h-11', 'min-w-11')
+    expect(showMore).toHaveAttribute('aria-controls', 'agenda-events-2026-09-15')
+    expect(showMore).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.getByText('+2 eventos')).toBeInTheDocument()
+    expect(screen.getByText('Evento 5 (compacto)').closest('[class~="md:hidden"]')).not.toBeNull()
+
+    fireEvent.click(showMore)
+
+    const showLess = screen.getByRole('button', { name: 'Mostrar menos eventos del 15/09' })
+    const scrollableDay = screen.getByRole('group', { name: 'Eventos del 15/09' })
+    expect(showLess).toHaveAttribute('aria-expanded', 'true')
+    expect(scrollableDay).toHaveAttribute('tabindex', '0')
+    expect(scrollableDay).toHaveAttribute(
+      'aria-describedby',
+      'agenda-events-2026-09-15-scroll-hint'
+    )
+    expect(
+      screen.getByText('Deslizá verticalmente para recorrer los eventos del día.')
+    ).toBeInTheDocument()
+    expect(screen.getByText('Evento 5 (compacto)').closest('[class~="md:hidden"]')).toBeNull()
   })
 
   // QA movil 2026-10-08: la grilla del mes medía 900 px dentro de 343 y no se
   // podia usar. En el telefono el mes es una lista de los dias con eventos.
   it('en mes, el telefono ve una lista de una columna sin los dias vacios', () => {
+    setTabletViewport(false)
     const { container } = render(
       <AgendaRangeGrid days={days} eventsByDay={eventsByDay} compact renderEvent={renderEvent} />
     )
@@ -65,9 +106,13 @@ describe('AgendaRangeGrid', () => {
     expect(grid).not.toHaveClass('min-w-[900px]')
     expect(screen.getByText('16/09').closest('[data-day]')).toHaveClass('hidden', 'md:block')
     expect(screen.getByText('15/09').closest('[data-day]')).not.toHaveClass('hidden')
+    expect(
+      screen.queryByRole('region', { name: 'Calendario mensual desplazable horizontalmente' })
+    ).not.toBeInTheDocument()
   })
 
-  it('en semana, el dia no tiene scroll propio en el telefono', () => {
+  it('en semana, una lista larga tiene scroll vertical accesible desde tablet', () => {
+    setTabletViewport(true)
     render(
       <AgendaRangeGrid
         days={days}
@@ -77,7 +122,11 @@ describe('AgendaRangeGrid', () => {
       />
     )
     const list = screen.getByText('Evento 1').parentElement
-    expect(list).not.toHaveClass('max-h-64')
-    expect(list).toHaveClass('md:max-h-64')
+    expect(list).toHaveAttribute('tabindex', '0')
+    expect(list).toHaveAttribute('aria-describedby', 'agenda-events-2026-09-15-scroll-hint')
+    expect(list).toHaveClass('md:max-h-64', 'md:overflow-y-auto')
+    expect(
+      screen.getByText('Deslizá verticalmente para recorrer los eventos del día.')
+    ).toBeInTheDocument()
   })
 })

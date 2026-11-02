@@ -72,16 +72,32 @@ describe('SettingsPaymentsTab', () => {
 
   it('las condiciones devuelven solo su campo y "Guardar condiciones" se delega', () => {
     const props = renderTab()
+    const depositPolicy = screen.getByRole('textbox', {
+      name: 'Política de seña, cancelación y reembolso'
+    })
 
     fireEvent.click(screen.getByRole('checkbox'))
-    fireEvent.change(screen.getByPlaceholderText(/La seña equivale al 30%/), {
-      target: { value: 'Política' }
-    })
+    fireEvent.change(depositPolicy, { target: { value: 'Política' } })
     fireEvent.click(screen.getByRole('button', { name: 'Guardar condiciones' }))
 
+    expect(depositPolicy).toHaveAttribute('aria-describedby', 'deposit-policy-help')
     expect(props.onChange).toHaveBeenNthCalledWith(1, { allow_manual_coordination: false })
     expect(props.onChange).toHaveBeenNthCalledWith(2, { deposit_policy: 'Política' })
     expect(props.onSave).toHaveBeenCalledTimes(1)
+  })
+
+  it('la etiqueta de coordinacion tiene un target tactil completo y admite wrapping', () => {
+    const props = renderTab()
+
+    const checkbox = screen.getByRole('checkbox')
+    const label = checkbox.closest('label')
+    const text = screen.getByText('Permitir coordinar el pago por fuera (WhatsApp).')
+
+    expect(label).toHaveClass('w-full', 'min-w-0', 'min-h-11')
+    expect(text).toHaveClass('min-w-0', 'flex-1', 'break-words')
+    fireEvent.click(text)
+    expect(checkbox).toBeInTheDocument()
+    expect(props.onChange).toHaveBeenCalledWith({ allow_manual_coordination: false })
   })
 
   it('en solo lectura "Guardar condiciones" lleva el motivo y conectar sigue', () => {

@@ -112,9 +112,45 @@ const PublicBooking: React.FC = () => {
 
   if (paymentId) {
     const payment = paymentStatus.data
+    const statusUnavailable = paymentStatus.isError && !payment
+    const statusStale = paymentStatus.isError && Boolean(payment)
+    const statusLoading = !payment && !paymentStatus.isError
     const approved =
       payment?.payment_status === 'approved' && payment.appointment_status === 'confirmed'
     const failed = ['rejected', 'expired', 'refunded'].includes(payment?.payment_status || '')
+    const lastStatusLabel = approved
+      ? 'reserva confirmada'
+      : failed
+        ? 'seña no aprobada'
+        : payment?.payment_status === 'approved'
+          ? 'seña aprobada; turno pendiente de confirmación'
+          : payment?.payment_status === 'pending'
+            ? 'pago pendiente'
+            : 'estado de pago no confirmado'
+    let statusTitle = 'Estamos validando tu pago'
+    let statusDescription =
+      'No cierres esta pantalla. El turno se confirma cuando Mercado Pago nos avisa del pago.'
+    if (statusUnavailable) {
+      statusTitle = 'No pudimos consultar el pago'
+      statusDescription =
+        'No sabemos si la seña se acreditó. Volvé a consultar antes de intentar otra reserva. Si ya pagaste, también podés hablar con la tienda.'
+    } else if (statusStale) {
+      statusTitle = 'No pudimos actualizar el pago'
+      statusDescription =
+        'El estado que se muestra abajo es la última consulta disponible y puede haber cambiado. Volvé a consultar para ver el estado actual.'
+    } else if (statusLoading) {
+      statusTitle = 'Consultando estado del pago'
+      statusDescription = 'Estamos consultando el estado de la seña y del turno.'
+    } else if (approved) {
+      statusTitle = 'Reserva confirmada'
+      statusDescription = 'Mercado Pago acreditó la seña y tu turno quedó reservado.'
+    } else if (failed) {
+      statusTitle = 'La seña no fue aprobada'
+      statusDescription = 'El turno no fue confirmado. Podés volver a intentarlo desde la tienda.'
+    } else if (paymentStatus.pollingStopped) {
+      statusDescription =
+        'Todavía no recibimos la confirmación del pago. Si ya pagaste, tu turno se confirma cuando Mercado Pago avise; podés volver a consultar o hablar con la tienda.'
+    }
     // Diseño previo (S7): el resumen que guardo el paso de confirmacion antes
     // de ir a MP, solo para este turno y mientras el pago no fallo.
     const priorDesign =
@@ -136,9 +172,9 @@ const PublicBooking: React.FC = () => {
             className="mx-auto mt-6 w-full max-w-2xl rounded-lg bg-white p-4 sm:p-8 text-center space-y-5"
             style={{ boxShadow: colors2000s.shadows.outer }}
           >
-            {approved ? (
+            {approved && !statusStale ? (
               <Check className="w-16 h-16 mx-auto" color={colors2000s.status.success.light} />
-            ) : failed ? (
+            ) : failed && !statusStale ? (
               <X className="w-16 h-16 mx-auto" color={colors2000s.status.danger.light} />
             ) : (
               <Clock3
@@ -146,22 +182,23 @@ const PublicBooking: React.FC = () => {
                 color={colors2000s.status.warning.light}
               />
             )}
-            <h2 className="text-2xl font-black uppercase tracking-tight">
-              {approved
-                ? 'Reserva confirmada'
-                : failed
-                  ? 'La seña no fue aprobada'
-                  : 'Estamos validando tu pago'}
-            </h2>
-            <p className="text-sm font-bold" style={{ color: colors2000s.text.secondary }}>
-              {approved
-                ? 'Mercado Pago acreditó la seña y tu turno quedó reservado.'
-                : failed
-                  ? 'El turno no fue confirmado. Podés volver a intentarlo desde la tienda.'
-                  : paymentStatus.pollingStopped
-                    ? 'Todavía no recibimos la confirmación del pago. Si ya pagaste, tu turno se confirma cuando Mercado Pago avise; podés volver a consultar o hablar con la tienda.'
-                    : 'No cierres esta pantalla. El turno se confirma cuando Mercado Pago nos avisa del pago.'}
+            <h2 className="text-2xl font-black uppercase tracking-tight">{statusTitle}</h2>
+            <p
+              role={paymentStatus.isError ? 'alert' : undefined}
+              className="text-sm font-bold"
+              style={{
+                color: paymentStatus.isError
+                  ? colors2000s.status.danger.dark
+                  : colors2000s.text.secondary
+              }}
+            >
+              {statusDescription}
             </p>
+            {statusStale && (
+              <p className="text-sm font-bold" style={{ color: colors2000s.text.secondary }}>
+                Última consulta: {lastStatusLabel}.
+              </p>
+            )}
             {priorDesign && (
               <BookingPriorDesignAfterPayment
                 handoff={priorDesign}
@@ -169,9 +206,9 @@ const PublicBooking: React.FC = () => {
                 whatsappNumber={store.whatsapp_number}
               />
             )}
-            {paymentStatus.pollingStopped && (
-              // Pasados 30 min el sondeo corta (F4-05); consultar de nuevo es a
-              // pedido. Solo relee el estado: confirmar es del webhook (regla 7).
+            {(paymentStatus.pollingStopped || paymentStatus.isError) && (
+              // Al cortar el sondeo (F4-05) o fallar una consulta, se puede
+              // reintentar. Solo relee el estado: confirmar es del webhook.
               <button
                 type="button"
                 onClick={() => void paymentStatus.refetch()}
@@ -184,15 +221,6 @@ const PublicBooking: React.FC = () => {
               >
                 Volver a consultar
               </button>
-            )}
-            {paymentStatus.isError && (
-              <p
-                role="alert"
-                className="text-sm font-bold"
-                style={{ color: colors2000s.status.danger.dark }}
-              >
-                No pudimos consultar el estado del pago. Actualizá la página en unos instantes.
-              </p>
             )}
             <button
               type="button"

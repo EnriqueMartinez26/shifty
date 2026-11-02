@@ -1,6 +1,6 @@
 import type { ComponentProps } from 'react'
 
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router'
 
 import { forgetClientToken, rememberClientToken } from '@application/services/clientToken'
@@ -182,6 +182,31 @@ describe('BookingWizardContainer', () => {
     mockServices.mockReturnValue({ data: [servicio('a'), servicio('b')], isLoading: false })
     render(<WizardEnRuta store={tienda(false)} />)
     expect(screen.getByText(SERVICIO)).toBeInTheDocument()
+  })
+
+  it('muestra los nombres de los pasos en móvil y marca el actual y los completados', () => {
+    mockServices.mockReturnValue({ data: [servicio('a'), servicio('b')], isLoading: false })
+    render(<WizardEnRuta store={tienda(false)} />)
+
+    const pasos = screen.getByRole('list', { name: 'Pasos de la reserva' })
+    const items = within(pasos).getAllByRole('listitem')
+    expect(items).toHaveLength(3)
+    expect(screen.getByText('Paso 1 de 3: Servicio')).not.toHaveClass('hidden')
+    for (const name of ['Servicio', 'Horario y Profesional', 'Datos y Confirmación']) {
+      expect(within(pasos).getByText(name)).not.toHaveClass('hidden')
+    }
+    expect(items[0]).toHaveAttribute('aria-current', 'step')
+    expect(items[0]).toHaveAttribute('aria-label', 'Paso 1 de 3: Servicio, actual')
+
+    fireEvent.click(screen.getByText('Servicio a'))
+    expect(screen.getByText('Paso 2 de 3: Horario y Profesional')).not.toHaveClass('hidden')
+    expect(items[0]).toHaveAttribute('aria-label', 'Paso 1 de 3: Servicio, completado')
+    expect(items[1]).toHaveAttribute('aria-current', 'step')
+
+    fireEvent.click(screen.getByText('09:00'))
+    expect(screen.getByText('Paso 3 de 3: Datos y Confirmación')).not.toHaveClass('hidden')
+    expect(items[1]).toHaveAttribute('aria-label', 'Paso 2 de 3: Horario y Profesional, completado')
+    expect(items[2]).toHaveAttribute('aria-current', 'step')
   })
 
   it('no mueve el foco al montar el paso inicial', () => {
@@ -415,7 +440,7 @@ describe('BookingWizardContainer', () => {
       target: { value: '+5491155550101' }
     })
     // El email del codigo arranca con el del formulario.
-    expect((screen.getByLabelText('Email para el código') as HTMLInputElement).value).toBe(
+    expect((screen.getByLabelText('Email para recibir el código') as HTMLInputElement).value).toBe(
       'lucia@example.com'
     )
     fireEvent.click(screen.getByText('Enviar código'))
@@ -496,7 +521,7 @@ describe('BookingWizardContainer', () => {
       )
 
       // Las notas van plegadas detras de un link (S5).
-      fireEvent.click(screen.getByText('Agregar una nota para la tienda'))
+      fireEvent.click(screen.getByText('Agregar un mensaje para la tienda'))
       fireEvent.change(screen.getByPlaceholderText('Algo que debamos saber?'), {
         target: { value: 'Llego 5 minutos tarde' }
       })
@@ -866,7 +891,7 @@ describe('BookingWizardContainer', () => {
       act(() => {
         jest.advanceTimersByTime(10 * 60_000)
       })
-      fireEvent.change(screen.getByLabelText('Email para el código'), {
+      fireEvent.change(screen.getByLabelText('Email para recibir el código'), {
         target: { value: 'otra@example.com' }
       })
       expect(screen.getByRole('button', { name: 'Enviar código' })).toBeDisabled()
@@ -905,7 +930,7 @@ describe('BookingWizardContainer', () => {
         await hastaPedirElCodigo()
 
         expect(mockRequestOtp).toHaveBeenCalledTimes(1)
-        expect(screen.getByRole('status')).toHaveTextContent(AVISO)
+        expect(screen.getByText(AVISO)).toBeInTheDocument()
       })
 
       it('un pedido exitoso sin debug_code no muestra nada', async () => {
@@ -1401,6 +1426,7 @@ describe('BookingWizardContainer con el color de la tienda', () => {
     const circulo = actual.querySelector('div') as HTMLElement
     expect(circulo.getAttribute('style')).toContain('var(--brand-fill,')
     expect(circulo.getAttribute('style')).toContain('var(--brand-on-fill,')
+    expect(circulo.getAttribute('style')).not.toContain('-webkit-text-stroke')
     // S9: el rotulo del paso es texto neutro; la marca queda en el circulo.
     expect(actual.querySelector('span')?.getAttribute('style') ?? '').not.toContain('--brand')
   })

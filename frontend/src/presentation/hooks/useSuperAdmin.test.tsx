@@ -106,4 +106,17 @@ describe('useSuperAdminStores', () => {
     expect(ids).toHaveLength(51)
     expect(new Set(ids).size).toBe(51)
   })
+
+  it('expone el reintento de la consulta del listado', async () => {
+    mockListStores
+      .mockResolvedValueOnce({ stores: tiendas(0, 1), total: 1 })
+      .mockResolvedValueOnce({ stores: tiendas(0, 1), total: 1 })
+
+    const { result } = renderHook(() => useSuperAdminStores({}), { wrapper: envoltorio })
+    await waitFor(() => expect(result.current.data).toHaveLength(1))
+
+    await act(() => result.current.refetch())
+
+    expect(mockListStores).toHaveBeenCalledTimes(2)
+  })
 })

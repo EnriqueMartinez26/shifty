@@ -7,7 +7,8 @@ import { buttonStyles2000s, colors2000s } from '../../theme/colors'
  * Colors of a store's public portal, derived from its `primary_color`.
  *
  * - `fill` / `fillBottom`: background of primary actions and selected states.
- * - `onFill`: text and icons on the fill; AA (>= 4.5:1) against both ends.
+ * - `onFill`: configured tenant colors resolve AA against both ends; the
+ *   Shifty fallback keeps white text on the brand orange.
  *
  * Text and icons on white or gray use the neutral text tokens, never a brand
  * tint (S9, 2026-10-22): the store color only appears as itself, as a fill.
@@ -26,14 +27,13 @@ const AA_MIN_CONTRAST = 4.5
 // (`modules/stores/model.py`). It means "not chosen", not "black on purpose".
 const UNSET_STORE_COLOR = '#000000'
 const GRADIENT_DARKEN = 0.1
-// Stores without a color get the logo orange (`orange.light` -> `orange.dark`),
-// not the darker CTA ramp of the panel (`orange.cta`). White text misses AA on
-// the logo orange, so the text is picked against the darker bottom end, which
-// is the harder one for a dark foreground.
+// Stores without a color get Shifty's logo orange. The requested light text on
+// this default fallback is 2.31:1/2.85:1, below AA; configured tenant colors
+// still resolve their own foreground through getContrastingForeground below.
 export const DEFAULT_BRAND_THEME: BrandTheme = {
   fill: colors2000s.orange.light,
   fillBottom: colors2000s.orange.dark,
-  onFill: getContrastingForeground(colors2000s.orange.dark),
+  onFill: colors2000s.text.onOrangeSelection,
   isDefault: true
 }
 

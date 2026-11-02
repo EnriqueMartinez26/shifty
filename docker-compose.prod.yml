@@ -248,7 +248,7 @@ services:
     # Mismo tag que nginx/Dockerfile (test_nginx_contract). La imagen oficial no
     # lleva su `apk upgrade`: un parche de Alpine posterior al tag llega cuando
     # Docker vuelve a publicar el tag, con `make deploy-edge`.
-    image: nginx:1.30.5-alpine
+    image: nginx:1.30.6-alpine
     build: !reset null
     ports:
       - "80:80"

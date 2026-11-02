@@ -18,15 +18,15 @@ export const colors2000s = {
     white: '#ffffff' // Tarjetas y superficies blancas
   },
 
-  // La marca conserva sus naranjas vivos; CTA y selección usan una rampa
-  // saturada más oscura para que el texto blanco alcance WCAG AA.
+  // Naranja de marca de Shifty. Los alias heredados para tinta son grises
+  // neutrales por contraste; el naranja vivo se usa como relleno, no como texto.
   orange: {
     light: '#ff8c42', // Marca - top
     dark: '#e67e22', // Marca - bottom (theme-color)
-    heading: '#c75a00', // Alias legacy para títulos existentes
-    accent: '#9a4507', // Titulos, labels y links sobre claro; borde del CTA
-    cta: '#c04f00', // Fondo de CTA y selección - top
-    ctaEnd: '#b84d00' // Fondo de CTA y selección - bottom
+    heading: '#404040', // Alias legacy neutro para títulos; no es un color de marca
+    accent: '#5c5c5c', // Alias legacy neutro para texto y acentos sobre claro
+    cta: '#ff8c42', // Alias del extremo superior de la rampa canónica de marca
+    ctaEnd: '#e67e22' // Alias del extremo inferior de la rampa canónica de marca
   },
 
   // Textos
@@ -35,14 +35,14 @@ export const colors2000s = {
     secondary: '#5c5c5c', // Labels, headers, ayudas y pies (AA sobre bg.secondary)
     disabled: '#b0b0b0', // SOLO controles deshabilitados (1.72:1): nunca contenido
     onOrange: '#ffffff', // Texto sobre estados oscuros (p. ej. success/info)
-    onOrangeSelection: '#ffffff' // Texto blanco AA sobre CTA y selección
+    onOrangeSelection: '#ffffff' // Texto blanco solicitado para CTA de Shifty
   },
 
   // Bordes
   border: {
     default: 'rgba(0, 0, 0, 0.15)',
     light: 'rgba(0, 0, 0, 0.12)',
-    hover: 'rgba(200, 90, 15, 0.3)'
+    hover: 'rgba(230, 126, 34, 0.3)'
   },
 
   // Sombras 2000s (inset + exterior)
@@ -52,7 +52,7 @@ export const colors2000s = {
     insetPressed: 'inset 0 1px 2px rgba(0, 0, 0, 0.2), inset 0 -1px 0 rgba(0, 0, 0, 0.1)',
     outer: '0 1px 2px rgba(0, 0, 0, 0.08)',
     outerMedium: '0 2px 4px rgba(0, 0, 0, 0.1)',
-    outerOrange: '0 2px 4px rgba(200, 90, 15, 0.25)'
+    outerOrange: '0 2px 4px rgba(230, 126, 34, 0.25)'
   },
 
   // Estados específicos
@@ -99,8 +99,7 @@ export const colors2000s = {
   }
 } as const
 
-// El naranja vivo sigue como color de marca; la rampa de CTA/selección
-// conserva identidad naranja y contraste AA para texto blanco (4.82:1-5.12:1).
+// CTA y selección usan el naranja de marca con texto blanco.
 export const orangeCtaGradient = `linear-gradient(180deg, ${colors2000s.orange.cta} 0%, ${colors2000s.orange.ctaEnd} 100%)`
 
 // Estilos CSS reutilizables
@@ -130,7 +129,7 @@ export const buttonStyles2000s = {
   },
   selected: {
     background: orangeCtaGradient,
-    border: `1px solid ${colors2000s.orange.accent}`,
+    border: `1px solid ${colors2000s.orange.dark}`,
     color: colors2000s.text.onOrangeSelection,
     boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerOrange}`
   },

@@ -20,6 +20,16 @@ import Dashboard from './Dashboard'
 // fijado que el rol gobierna que se consulta. Los graficos se reemplazan para no
 // depender de recharts en jsdom.
 
+type DashboardQuery =
+  | 'summary'
+  | 'featureFlags'
+  | 'reports'
+  | 'professionals'
+  | 'trend'
+  | 'payments'
+  | 'outbox'
+  | 'ledger'
+
 type Scenario = {
   user: { role?: string; is_global_admin?: boolean }
   summary: { data?: object; isLoading: boolean; isError: boolean }
@@ -30,6 +40,9 @@ type Scenario = {
   reconciliation?: object
   outbox?: object
   ledger?: object
+  queryErrors: Partial<Record<DashboardQuery, boolean>>
+  loadingQueries?: Partial<Record<DashboardQuery, boolean>>
+  refetches: Partial<Record<DashboardQuery, jest.Mock>>
 }
 
 const mockScenario: Scenario = {
@@ -41,8 +54,18 @@ const mockScenario: Scenario = {
   trend: { isLoading: false },
   reconciliation: undefined,
   outbox: undefined,
-  ledger: undefined
+  ledger: undefined,
+  queryErrors: {},
+  loadingQueries: {},
+  refetches: {}
 }
+
+const mockQueryState = (query: DashboardQuery) => ({
+  ...(mockScenario.loadingQueries?.[query] ? { isLoading: true } : {}),
+  isError: mockScenario.queryErrors[query] ?? false,
+  isFetching: false,
+  refetch: mockScenario.refetches[query] ?? jest.fn()
+})
 
 jest.mock('../components/organisms/dashboard/TrendChart', () => ({
   __esModule: true,
@@ -65,37 +88,49 @@ jest.mock('../context/AuthContext', () => ({
 jest.mock('../hooks/useDashboard', () => ({
   useDashboardSummary: (enabled = true) => ({
     ...mockScenario.summary,
-    data: enabled ? mockScenario.summary.data : undefined
+    data: enabled ? mockScenario.summary.data : undefined,
+    isFetching: false,
+    refetch: mockScenario.refetches.summary ?? jest.fn()
   })
 }))
 
 jest.mock('../hooks/useStores', () => ({
-  useStoreFeatureFlags: () => mockScenario.flags
+  useStoreFeatureFlags: () => ({ ...mockScenario.flags, ...mockQueryState('featureFlags') })
 }))
 
 jest.mock('../hooks/useReports', () => ({
   useReportSummary: (_from: string, _to: string, enabled = true) => ({
     ...mockScenario.reports,
+    ...mockQueryState('reports'),
     data: enabled ? mockScenario.reports.data : undefined
   }),
   useProfessionalReports: (_from: string, _to: string, enabled = true) => ({
+    ...mockQueryState('professionals'),
     data: enabled ? mockScenario.professionals.data : undefined
   }),
   useReportTrend: (_months: number, enabled = true) => ({
     ...mockScenario.trend,
+    ...mockQueryState('trend'),
     data: enabled ? mockScenario.trend.data : undefined
   })
 }))
 
 jest.mock('../hooks/usePayments', () => ({
   useReconciliationSummary: (enabled = true) => ({
+    ...mockQueryState('payments'),
     data: enabled ? mockScenario.reconciliation : undefined
   }),
-  useOutboxStats: (enabled = true) => ({ data: enabled ? mockScenario.outbox : undefined })
+  useOutboxStats: (enabled = true) => ({
+    ...mockQueryState('outbox'),
+    data: enabled ? mockScenario.outbox : undefined
+  })
 }))
 
 jest.mock('../hooks/useLedger', () => ({
-  useLedgerSummary: (enabled = true) => ({ data: enabled ? mockScenario.ledger : undefined })
+  useLedgerSummary: (enabled = true) => ({
+    ...mockQueryState('ledger'),
+    data: enabled ? mockScenario.ledger : undefined
+  })
 }))
 
 // Los pesos salen del mismo formateador de la app; se normaliza el espacio
@@ -241,13 +276,15 @@ const adminScenario = (): Scenario => ({
     failed_webhooks: 1
   },
   outbox: { pending_with_error: 2 },
-  ledger: { total_balance: 25000, debtors_count: 2 }
+  ledger: { total_balance: 25000, debtors_count: 2 },
+  queryErrors: {},
+  loadingQueries: {},
+  refetches: {}
 })
 
-// Sin reportes, sin finanzas y sin nada urgente: el dia "vacio".
+// Las queries habilitadas sí respondieron, con resultados vacíos.
 const emptyScenario = (): Scenario => ({
   ...adminScenario(),
-  user: { role: 'receptionist' },
   summary: {
     data: {
       stats: {
@@ -260,7 +297,44 @@ const emptyScenario = (): Scenario => ({
     },
     isLoading: false,
     isError: false
-  }
+  },
+  reports: {
+    data: {
+      ...ADMIN_REPORTS,
+      stats: {
+        ...ADMIN_REPORTS.stats,
+        total_appointments: 0,
+        completed_appointments: 0,
+        cancelled_appointments: 0,
+        pending_appointments: 0,
+        confirmed_appointments: 0,
+        total_revenue: 0,
+        average_ticket: 0
+      },
+      client_stats: { ...ADMIN_REPORTS.client_stats, new_clients: 0, returning_clients: 0 },
+      top_services: [],
+      top_clients: [],
+      debt_summary: { ...ADMIN_REPORTS.debt_summary, outstanding_balance: 0, debtors_count: 0 },
+      appointments: []
+    },
+    isLoading: false
+  },
+  professionals: { data: { ...ADMIN_PROFESSIONALS, professionals: [] } },
+  trend: { data: { points: [] }, isLoading: false },
+  reconciliation: {
+    pending_payments: 0,
+    total_pending_amount: 0,
+    total_approved_amount: 0,
+    failed_webhooks: 0
+  },
+  outbox: { pending_with_error: 0 },
+  ledger: { total_balance: 0, debtors_count: 0 }
+})
+
+// El rol tiene agenda, pero no consulta reportes ni datos financieros.
+const receptionistScenario = (): Scenario => ({
+  ...emptyScenario(),
+  user: { role: 'receptionist' }
 })
 
 const LocationProbe = () => <p data-testid="location">{useLocation().pathname}</p>
@@ -565,6 +639,26 @@ describe('Dashboard (red de seguridad de la extraccion F11b-09)', () => {
       Object.assign(mockScenario, { user: { role: 'professional' } })
     })
 
+    it('prioriza confirmaciones pendientes sobre el acceso parcial para recepción', async () => {
+      Object.assign(mockScenario, {
+        ...emptyScenario(),
+        user: { role: 'receptionist' },
+        summary: {
+          data: {
+            stats: { ...ADMIN_STATS, pending_confirmations: 2 },
+            upcoming_appointments: []
+          },
+          isLoading: false,
+          isError: false
+        }
+      })
+      await renderDashboard()
+
+      const hero = section('Hoy en Shifty')
+      expect(hero.getByText('requiere seguimiento')).toBeInTheDocument()
+      expect(hero.queryByText('vista parcial')).not.toBeInTheDocument()
+    })
+
     it('no consulta cobros ni outbox: sin esas acciones y con el cobrado de los reportes', async () => {
       await renderDashboard()
 
@@ -577,8 +671,9 @@ describe('Dashboard (red de seguridad de la extraccion F11b-09)', () => {
       expect(screen.queryByText('Revisar cobros online')).not.toBeInTheDocument()
 
       const hero = section('Hoy en Shifty')
+      expect(hero.getByText('requiere seguimiento')).toBeInTheDocument()
       expect(
-        within(hero.getByText('Cobros online').parentElement as HTMLElement).getByText('sin fallas')
+        within(hero.getByText('Cobros online').parentElement as HTMLElement).getByText('Sin acceso')
       ).toBeInTheDocument()
 
       const money = section('Dinero')
@@ -638,9 +733,11 @@ describe('Dashboard (red de seguridad de la extraccion F11b-09)', () => {
       expect(screen.queryByText('Hoy en Shifty')).not.toBeInTheDocument()
     })
 
-    it('muestra el ErrorPanel arriba de todo y el resto de la pagina igual', async () => {
+    it('marca las metricas del resumen como no disponibles y permite reintentarlo', async () => {
+      const retrySummary = jest.fn()
       Object.assign(mockScenario, {
-        summary: { data: undefined, isLoading: false, isError: true }
+        summary: { data: undefined, isLoading: false, isError: true },
+        refetches: { summary: retrySummary }
       })
       await renderDashboard()
 
@@ -649,6 +746,34 @@ describe('Dashboard (red de seguridad de la extraccion F11b-09)', () => {
       expect(message.closest('main')?.firstElementChild).toBe(message)
       expect(screen.getByText('Resumen del día')).toBeInTheDocument()
       expect(screen.getByText('Hoy en Shifty')).toBeInTheDocument()
+      expect(section('Hoy en Shifty').getByText('datos incompletos')).toBeInTheDocument()
+
+      const summary = section('Resumen del día')
+      expect(
+        cardOf(summary, 'Ingreso semanal').getByText('No disponible', { selector: 'strong' })
+      ).toBeInTheDocument()
+      expect(
+        cardOf(summary, 'Clientes nuevos').getByText('No disponible', { selector: 'strong' })
+      ).toBeInTheDocument()
+      expect(
+        cardOf(summary, 'Ocupación').getByText('No disponible', { selector: 'strong' })
+      ).toBeInTheDocument()
+      expect(
+        cardOf(summary, 'Ocupación').queryByText('100% de capacidad libre')
+      ).not.toBeInTheDocument()
+      expect(cardOf(summary, 'Cancelaciones').getByText('4')).toBeInTheDocument()
+      expect(cardOf(summary, 'Cancelaciones').getByText('Agenda no disponible')).toBeInTheDocument()
+      expect(
+        section('Operación de hoy').getByText(
+          'Agenda no disponible. Reintentá desde el aviso del panel.'
+        )
+      ).toBeInTheDocument()
+      expect(screen.queryByText('0 turnos, 0 pendientes, ocupación 0%.')).not.toBeInTheDocument()
+      expect(screen.queryByText('Sin altas recientes')).not.toBeInTheDocument()
+      expect(screen.queryByText('Sin confirmaciones pendientes')).not.toBeInTheDocument()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Reintentar resumen operativo' }))
+      expect(retrySummary).toHaveBeenCalledTimes(1)
     })
 
     it('entrega la carga de tendencia y de ventas a cada grafico', async () => {
@@ -664,6 +789,170 @@ describe('Dashboard (red de seguridad de la extraccion F11b-09)', () => {
       expect(
         await screen.findByText('Grafico de ventas: 0 servicios, cargando true')
       ).toBeInTheDocument()
+    })
+
+    it('muestra estados de consulta en las tarjetas de reportes y rendimiento', async () => {
+      Object.assign(mockScenario, {
+        ...adminScenario(),
+        ledger: undefined,
+        reports: { data: undefined, isLoading: true },
+        professionals: { data: undefined },
+        trend: { data: undefined, isLoading: true },
+        loadingQueries: { reports: true, professionals: true, trend: true }
+      })
+      await renderDashboard()
+
+      const summary = section('Resumen del día')
+      expect(
+        cardOf(summary, 'Cancelaciones').getByText('Consultando...', { selector: 'strong' })
+      ).toBeInTheDocument()
+      expect(cardOf(summary, 'Clientes nuevos').getByText('Consultando...')).toBeInTheDocument()
+
+      const hero = section('Hoy en Shifty')
+      expect(
+        within(hero.getByText('Cuentas pendientes').parentElement as HTMLElement).getByText(
+          'Consultando...'
+        )
+      ).toBeInTheDocument()
+
+      const operation = section('Operación de hoy')
+      const cancellations = within(
+        operation.getByText('Cancelaciones').parentElement as HTMLElement
+      )
+      expect(cancellations.getAllByText('Consultando...')).toHaveLength(2)
+      const professional = within(
+        operation.getByText('Profesional destacado').parentElement as HTMLElement
+      )
+      expect(professional.getAllByText('Consultando...')).toHaveLength(2)
+
+      expect(
+        cardOf(section('Dinero'), 'Ticket promedio').getAllByText('Consultando...')
+      ).toHaveLength(2)
+      expect(
+        section('Rendimiento semanal').getByText('Consultando rendimiento...')
+      ).toBeInTheDocument()
+      expect(screen.queryByText('Rendimiento no disponible.')).not.toBeInTheDocument()
+    })
+
+    it('muestra cuentas pendientes consultando mientras carga el fiado', async () => {
+      Object.assign(mockScenario, {
+        ...adminScenario(),
+        ledger: undefined,
+        reports: { data: undefined, isLoading: false },
+        loadingQueries: { ledger: true }
+      })
+      await renderDashboard()
+
+      const hero = section('Hoy en Shifty')
+      expect(
+        within(hero.getByText('Cuentas pendientes').parentElement as HTMLElement).getByText(
+          'Consultando...'
+        )
+      ).toBeInTheDocument()
+    })
+
+    it('no presenta los modulos como desactivados si falla la consulta de funciones y permite reintentar', async () => {
+      const retryFlags = jest.fn()
+      Object.assign(mockScenario, {
+        flags: { data: undefined, isSuccess: false },
+        queryErrors: { featureFlags: true },
+        refetches: { featureFlags: retryFlags }
+      })
+      await renderDashboard()
+
+      const hero = section('Hoy en Shifty')
+      const pillOf = (label: string) => within(hero.getByText(label).parentElement as HTMLElement)
+      expect(pillOf('Cobros online').getByText('No disponible')).toBeInTheDocument()
+      expect(pillOf('Cuentas pendientes').getByText('No disponible')).toBeInTheDocument()
+      expect(screen.queryByText('deshabilitados')).not.toBeInTheDocument()
+      expect(screen.queryByText('desactivadas')).not.toBeInTheDocument()
+
+      expect(
+        screen.getByText('No pudimos confirmar qué módulos están activos.')
+      ).toBeInTheDocument()
+      fireEvent.click(screen.getByRole('button', { name: 'Reintentar funciones de la tienda' }))
+      expect(retryFlags).toHaveBeenCalledTimes(1)
+    })
+
+    it('conserva los modulos habilitados desde cache si falla una recarga de funciones', async () => {
+      Object.assign(mockScenario, {
+        flags: { data: { flags: { payments: true, ledger: true } }, isSuccess: false },
+        queryErrors: { featureFlags: true }
+      })
+      await renderDashboard()
+
+      const hero = section('Hoy en Shifty')
+      const pillOf = (label: string) => within(hero.getByText(label).parentElement as HTMLElement)
+      expect(pillOf('Cobros online').getByText('3 errores')).toBeInTheDocument()
+      expect(pillOf('Cuentas pendientes').getByText('2 clientes con deuda')).toBeInTheDocument()
+      expect(screen.queryByText('Cobros online desactivados')).not.toBeInTheDocument()
+      expect(screen.queryByText('Cuentas pendientes desactivadas')).not.toBeInTheDocument()
+      expect(
+        screen.getByText('No pudimos confirmar qué módulos están activos.')
+      ).toBeInTheDocument()
+    })
+
+    it('marca los reportes como no disponibles en vez de vacíos y permite reintentarlos', async () => {
+      const retryReports = jest.fn()
+      Object.assign(mockScenario, {
+        queryErrors: { reports: true },
+        refetches: { reports: retryReports }
+      })
+      await renderDashboard()
+
+      const cancellations = cardOf(section('Resumen del día'), 'Cancelaciones')
+      expect(cancellations.getByText('No disponible')).toBeInTheDocument()
+      expect(cancellations.queryByText('Sin cancelaciones')).not.toBeInTheDocument()
+      expect(
+        cardOf(section('Dinero'), 'Ticket promedio').getAllByText('No disponible')
+      ).toHaveLength(2)
+      expect(
+        section('Transacciones').getByText(
+          'Transacciones no disponibles. Reintentá desde el aviso del panel.'
+        )
+      ).toBeInTheDocument()
+      expect(screen.queryByText('No hay turnos registrados en el periodo.')).not.toBeInTheDocument()
+      expect(
+        screen.getByText('No se pudieron cargar los indicadores ni las transacciones del período.')
+      ).toBeInTheDocument()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Reintentar reportes del período' }))
+      expect(retryReports).toHaveBeenCalledTimes(1)
+    })
+
+    it('marca el estado del panel como consultando durante la carga inicial del administrador', async () => {
+      Object.assign(mockScenario, {
+        ...adminScenario(),
+        flags: { data: undefined, isSuccess: false },
+        reports: { data: undefined, isLoading: true },
+        loadingQueries: { featureFlags: true, reports: true }
+      })
+      await renderDashboard()
+
+      expect(section('Hoy en Shifty').getByText('consultando...')).toBeInTheDocument()
+      expect(screen.queryByText('estable')).not.toBeInTheDocument()
+    })
+
+    it('no interpreta una falla del resumen de cobros como ausencia de fallas', async () => {
+      const retryPayments = jest.fn()
+      Object.assign(mockScenario, {
+        queryErrors: { payments: true },
+        refetches: { payments: retryPayments }
+      })
+      await renderDashboard()
+
+      const hero = section('Hoy en Shifty')
+      expect(
+        within(hero.getByText('Cobros online').parentElement as HTMLElement).getByText(
+          'No disponible'
+        )
+      ).toBeInTheDocument()
+      expect(screen.queryByText('sin fallas')).not.toBeInTheDocument()
+      expect(screen.queryByText('3 errores')).not.toBeInTheDocument()
+      expect(screen.getByText('No se pudo consultar el estado de los cobros.')).toBeInTheDocument()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Reintentar resumen de cobros' }))
+      expect(retryPayments).toHaveBeenCalledTimes(1)
     })
   })
 
@@ -681,9 +970,8 @@ describe('Dashboard (red de seguridad de la extraccion F11b-09)', () => {
       expect(
         section('Acciones urgentes').getByText('No hay tareas criticas por resolver.')
       ).toBeInTheDocument()
-      expect(
-        section('Rendimiento semanal').getByText('Sin datos para este periodo.')
-      ).toBeInTheDocument()
+      expect(section('Rendimiento semanal').getByText('Clientes recurrentes')).toBeInTheDocument()
+      expect(section('Rendimiento semanal').getByText('0 nuevos en el periodo')).toBeInTheDocument()
       expect(section('Alertas del sistema').getByText('Sin alertas activas.')).toBeInTheDocument()
       expect(
         section('Oportunidades').getByText('Sin oportunidades destacadas por ahora.')
@@ -693,20 +981,89 @@ describe('Dashboard (red de seguridad de la extraccion F11b-09)', () => {
       ).toBeInTheDocument()
     })
 
-    it('marca el estado estable y las señales neutras sin pendientes ni deuda', async () => {
+    it('marca los estados fuera del permiso financiero como no disponibles', async () => {
+      Object.assign(mockScenario, receptionistScenario())
       await renderDashboard()
 
       const hero = section('Hoy en Shifty')
-      expect(hero.getByText('estable')).toBeInTheDocument()
+      expect(hero.getByText('vista parcial')).toBeInTheDocument()
       const pillOf = (label: string) => within(hero.getByText(label).parentElement as HTMLElement)
       expect(colorOf(pillOf('Agenda').getByText('al día'))).toBe(TONE.success)
-      expect(pillOf('Cobros online').getByText('sin fallas')).toBeInTheDocument()
-      expect(pillOf('Cuentas pendientes').getByText('sin deuda')).toBeInTheDocument()
+      expect(pillOf('Cobros online').getByText('Sin acceso')).toBeInTheDocument()
+      expect(colorOf(pillOf('Cobros online').getByText('Sin acceso'))).toBe(TONE.neutral)
+      expect(pillOf('Cuentas pendientes').getByText('Sin acceso')).toBeInTheDocument()
+      expect(colorOf(pillOf('Cuentas pendientes').getByText('Sin acceso'))).toBe(TONE.neutral)
+
+      const debt = cardOf(section('Dinero'), 'Saldo pendiente')
+      expect(debt.getByText('No disponible')).toBeInTheDocument()
+      expect(debt.queryByText('Sin deuda')).not.toBeInTheDocument()
+      expect(debt.queryByText(peso(0))).not.toBeInTheDocument()
+
+      const ticket = cardOf(section('Dinero'), 'Ticket promedio')
+      expect(ticket.getAllByText('Sin acceso')).toHaveLength(2)
+      expect(ticket.queryByText(peso(0))).not.toBeInTheDocument()
+
+      const clients = cardOf(section('Resumen del día'), 'Clientes nuevos')
+      expect(clients.getByText('Sin acceso')).toBeInTheDocument()
+      expect(clients.queryByText('0 recurrentes activos')).not.toBeInTheDocument()
+
+      const summaryCancellations = cardOf(section('Resumen del día'), 'Cancelaciones')
+      expect(summaryCancellations.getByText('No disponible')).toBeInTheDocument()
+      expect(summaryCancellations.getByText('Dato no disponible')).toBeInTheDocument()
+      expect(summaryCancellations.queryByText('Sin cancelaciones')).not.toBeInTheDocument()
+      expect(colorOf(summaryCancellations.getByText('Dato no disponible'))).toBe(TONE.neutral)
 
       const operation = section('Operación de hoy')
-      expect(operation.getByText('Sin lider claro')).toBeInTheDocument()
-      expect(operation.getByText('--')).toBeInTheDocument()
+      const featuredProfessional = within(
+        operation.getByText('Profesional destacado').parentElement as HTMLElement
+      )
+      expect(featuredProfessional.getAllByText('Sin acceso')).toHaveLength(2)
+      expect(featuredProfessional.queryByText('Sin lider claro')).not.toBeInTheDocument()
+      expect(featuredProfessional.queryByText('--')).not.toBeInTheDocument()
       expect(operation.getByText('No hay confirmaciones pendientes')).toBeInTheDocument()
+      const operationCancellations = within(
+        operation.getByText('Cancelaciones').parentElement as HTMLElement
+      )
+      expect(operationCancellations.getByText('No disponible')).toBeInTheDocument()
+      expect(operationCancellations.getByText('Dato no disponible')).toBeInTheDocument()
+      expect(colorOf(operationCancellations.getByText('No disponible'))).toBe(TONE.neutral)
+
+      expect(section('Rendimiento semanal').getByText('Sin acceso a reportes')).toBeInTheDocument()
+      expect(
+        section('Rendimiento semanal').queryByText('Sin datos para este periodo.')
+      ).not.toBeInTheDocument()
+      expect(
+        section('Alertas del sistema').getByText('Sin acceso a reportes para consultar alertas.')
+      ).toBeInTheDocument()
+      expect(
+        section('Alertas del sistema').queryByText('Sin alertas activas.')
+      ).not.toBeInTheDocument()
+      expect(
+        section('Oportunidades').getByText('Sin acceso a reportes para identificar oportunidades.')
+      ).toBeInTheDocument()
+      expect(
+        section('Oportunidades').queryByText('Sin oportunidades destacadas por ahora.')
+      ).not.toBeInTheDocument()
+      expect(section('Transacciones').getByText('Sin acceso a reportes')).toBeInTheDocument()
+      expect(
+        section('Transacciones').queryByText('No hay turnos registrados en el periodo.')
+      ).not.toBeInTheDocument()
+      expect(screen.getAllByText('Sin acceso a reportes')).toHaveLength(4)
+      expect(screen.queryByText(/Reintentá desde el aviso/)).not.toBeInTheDocument()
+      expect(
+        screen.queryByText('Grafico de tendencia: 0 puntos, cargando false')
+      ).not.toBeInTheDocument()
+      expect(
+        screen.queryByText('Grafico de ventas: 0 servicios, cargando false')
+      ).not.toBeInTheDocument()
+      expect(
+        section('Acciones urgentes').getByText(
+          'Sin acceso a cobros y deuda para consultar otras tareas.'
+        )
+      ).toBeInTheDocument()
+      expect(
+        section('Acciones urgentes').queryByText('No hay tareas criticas por resolver.')
+      ).not.toBeInTheDocument()
     })
   })
 })

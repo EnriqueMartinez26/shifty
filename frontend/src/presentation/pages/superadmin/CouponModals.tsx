@@ -7,7 +7,7 @@ import { formatCurrency } from '@shared/utils/currency'
 import {
   formGridClass,
   innerCardStyle,
-  scopeBadgeStyle,
+  statusBadgeStyle,
   storeScopedTitle,
   type CouponFormState,
   type PendingState,
@@ -225,7 +225,7 @@ export const CouponModals: React.FC<CouponModalsProps> = ({
       submitDisabled={!selectedStore || !hasSelectedStoreSubscription || !activeCoupons.length}
     >
       {!hasSelectedStoreSubscription ? (
-        <div className="rounded-2xl px-4 py-3 text-xs font-bold" style={scopeBadgeStyle('danger')}>
+        <div className="rounded-2xl px-4 py-3 text-xs font-bold" style={statusBadgeStyle('danger')}>
           Esta tienda no tiene suscripción activa. No se puede canjear un cupón todavía.
         </div>
       ) : null}

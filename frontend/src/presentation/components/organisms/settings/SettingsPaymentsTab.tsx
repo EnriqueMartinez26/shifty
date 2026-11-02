@@ -195,16 +195,22 @@ export const SettingsPaymentsTab: React.FC<SettingsPaymentsTabProps> = ({
           Condiciones de la seña
         </h4>
 
-        <label className="flex items-start gap-3 text-xs font-bold cursor-pointer select-none">
+        <label className="flex w-full min-w-0 min-h-11 items-start gap-3 text-xs font-bold cursor-pointer select-none">
           <input
             type="checkbox"
             checked={value.allow_manual_coordination}
             onChange={(e) => onChange({ allow_manual_coordination: e.target.checked })}
             className="mt-0.5 w-4 h-4 accent-orange-500 cursor-pointer"
           />
-          <span style={{ color: colors2000s.text.secondary }}>
+          <span
+            className="min-w-0 flex-1 break-words"
+            style={{ color: colors2000s.text.secondary }}
+          >
             Permitir coordinar el pago por fuera (WhatsApp).
-            <span className="block font-medium mt-1" style={{ color: colors2000s.text.secondary }}>
+            <span
+              className="block min-w-0 break-words font-medium mt-1"
+              style={{ color: colors2000s.text.secondary }}
+            >
               Si lo desactivás, los servicios con seña obligatoria solo se van a poder reservar
               pagando con Mercado Pago.
             </span>
@@ -226,11 +232,16 @@ export const SettingsPaymentsTab: React.FC<SettingsPaymentsTabProps> = ({
             maxLength={2000}
             value={value.deposit_policy}
             onChange={(e) => onChange({ deposit_policy: e.target.value })}
+            aria-describedby="deposit-policy-help"
             placeholder="Ej: La seña equivale al 30% del servicio y se descuenta del total. Se devuelve si cancelás con 24 horas de anticipación."
             className="w-full rounded-2xl px-5 py-3.5 font-bold outline-none"
             style={createSettingsInputStyle()}
           />
-          <p className="text-[11px] font-medium" style={{ color: colors2000s.text.secondary }}>
+          <p
+            id="deposit-policy-help"
+            className="text-[11px] font-medium"
+            style={{ color: colors2000s.text.secondary }}
+          >
             Se le muestra al cliente antes de reservar y queda registrada su aceptación. Es tu
             respaldo ante un reclamo, así que conviene ser concreto.
           </p>
