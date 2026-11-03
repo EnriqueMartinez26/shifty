@@ -322,6 +322,17 @@ describe('PublicBooking: diseño previo al volver de Mercado Pago', () => {
     expect(screen.queryByRole('link', { name: BOTON })).not.toBeInTheDocument()
   })
 
+  // 2026-11-02 (#285): el resumen ya no queda guardado al salir de la vuelta.
+  it('"Volver a la tienda" borra el resumen guardado', () => {
+    guardarResumen()
+    renderEn('/booking/sol?payment_id=p1')
+    expect(screen.getByRole('link', { name: BOTON })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Volver a la tienda' }))
+
+    expect(window.sessionStorage.getItem('shifty:prior-design:store-1')).toBeNull()
+  })
+
   it('sin storage no muestra el bloque y el estado del pago sigue igual', () => {
     jest.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
       throw new DOMException('bloqueado', 'SecurityError')
