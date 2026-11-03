@@ -140,7 +140,7 @@ async def test_un_dominio_internacional_se_guarda_en_ascii(
     """B1 (verificacion, 2026-11-03): un dominio IDN se guarda en punycode.
 
     EmailStr devolvia la forma Unicode y el sink la mandaba como encoded-word
-    dentro de la direccion (``hola@=?utf-8?q?b=C3=BCcher?=.com``): la
+    dentro de la direccion (RFC 2047 en lugar del dominio): la
     respuesta no llegaba a ningun lado.
     """
     store, token = await register_and_login(

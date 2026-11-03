@@ -125,7 +125,7 @@ def _reply_to_header(value: str | None) -> str | None:
 
     Solo ASCII y sin los especiales de RFC 5322 (verificacion, 2026-11-03):
     con un dominio Unicode ``email`` escribia un encoded-word DENTRO de la
-    direccion (``hola@=?utf-8?q?b=C3=BCcher?=.com``) y la respuesta no
+    direccion (RFC 2047 en lugar del dominio) y la respuesta no
     llegaba; un ``<`` o una comilla sueltos cambian lo que lee el cliente.
     """
     limpio = _header_safe(value or "")

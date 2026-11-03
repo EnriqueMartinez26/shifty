@@ -159,7 +159,7 @@ async def test_el_sink_solo_pone_una_direccion_ascii_simple(
 ) -> None:
     """B1/A1 (verificacion, 2026-11-03): la API ya rechaza o normaliza estos
     valores; el sink tampoco los deja pasar. Un dominio Unicode salia como
-    encoded-word dentro de la direccion (``hola@=?utf-8?q?b=C3=BCcher?=.com``).
+    encoded-word dentro de la direccion (RFC 2047 en lugar del dominio).
     """
     detalles = {**_detalles(None), "reply_to": contacto}
 
