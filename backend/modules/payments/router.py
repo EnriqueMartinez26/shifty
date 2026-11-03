@@ -15,6 +15,7 @@ from fastapi.responses import RedirectResponse
 from redis.asyncio import Redis
 from sqlalchemy import and_, case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import flag_modified
 
 from core.uow import AsyncSqlAlchemyUnitOfWork
 from modules.payments.application import PaymentService
@@ -589,6 +590,10 @@ async def upsert_gateway_config(
             config.oauth_user_id = None
             config.oauth_scope = None
             config.oauth_connected_at = None
+            config.connection_broken_at = None
+            # Sin esto, None sobre None no se escribe y una marca concurrente
+            # quedaria sobre el token nuevo (#279).
+            flag_modified(config, "connection_broken_at")
         if "public_key" in provided_fields:
             config.public_key = data.public_key
         if "webhook_secret" in provided_fields:
