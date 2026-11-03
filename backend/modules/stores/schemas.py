@@ -1,8 +1,10 @@
 from datetime import date, datetime, time
 from typing import Dict, List, Literal, Optional
 
+from email_validator import EmailNotValidError, validate_email
 from pydantic import (
     BaseModel,
+    EmailStr,
     Field,
     field_serializer,
     field_validator,
@@ -16,6 +18,7 @@ from core.validation import (
     reject_payload_control_chars,
     reject_unsafe_url,
 )
+from modules.auth.service import normalize_email
 from modules.stores.media import validate_image_url
 from modules.stores.model import CoverPosition
 
@@ -28,6 +31,8 @@ MAX_HORAS_ANIO = 8760  # un anio
 MAX_MINUTOS_DIA = 1440  # un dia
 MAX_ELEMENTOS_PLAN = 10_000
 MAX_USOS_CUPON = 1_000_000
+# Largo maximo de una direccion (RFC 5321) y de la columna stores.contact_email.
+CONTACT_EMAIL_MAX_LENGTH = 254
 
 
 CUSTOM_FIELD_KEY_PATTERN = r"^[a-z][a-z0-9_]{1,39}$"
@@ -113,6 +118,40 @@ class StoreUpdate(BaseModel):
 
     send_email_confirmation: Optional[bool] = None
     send_email_reminders: Optional[bool] = None
+    # Reply-To de los mails al cliente (#283). Vacio o null lo borra.
+    contact_email: Optional[EmailStr] = Field(None, max_length=CONTACT_EMAIL_MAX_LENGTH)
+
+    @field_validator("contact_email", mode="before")
+    @classmethod
+    def normalize_contact_email(cls, value: object) -> object:
+        # Antes de EmailStr: la regla 19 mira el texto crudo, un vacio es
+        # "sin contacto" y el guardado va en minusculas, como los emails de
+        # las cuentas (regla 16).
+        if not isinstance(value, str):
+            return value
+        limpio = reject_control_chars(value.strip())
+        return normalize_email(limpio) if limpio else None
+
+    @field_validator("contact_email", mode="after")
+    @classmethod
+    def contact_email_in_ascii(cls, value: str | None) -> str | None:
+        # Se guarda la forma ASCII (verificacion, 2026-11-03): EmailStr
+        # devuelve el dominio en Unicode y el Reply-To salia con un
+        # encoded-word dentro de la direccion. Un dominio IDN queda en
+        # punycode; un local con tildes o ñ no tiene forma ASCII y es 422.
+        if value is None:
+            return None
+        try:
+            ascii_email = validate_email(
+                value, check_deliverability=False, allow_smtputf8=False
+            ).ascii_email
+        except EmailNotValidError:
+            raise ValueError(
+                "El mail de contacto no puede llevar tildes ni ñ"
+            ) from None
+        if ascii_email is None or len(ascii_email) > CONTACT_EMAIL_MAX_LENGTH:
+            raise ValueError("El mail de contacto no es valido")
+        return normalize_email(ascii_email)
 
     @field_validator("instagram_url", "facebook_url", "website_url")
     @classmethod
@@ -232,6 +271,7 @@ class StoreResponse(BaseModel):
     business_hours: Dict[str, List[BusinessHourPeriod]]
     send_email_confirmation: bool
     send_email_reminders: bool
+    contact_email: Optional[str] = None
     feature_flags: StoreFeatureFlags
 
     class Config:

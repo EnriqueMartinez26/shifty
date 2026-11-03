@@ -176,6 +176,36 @@ describe('Settings - notificaciones', () => {
     expect(await screen.findByRole('button', { name: 'Guardado' })).toBeInTheDocument()
     expect(updateStore).toHaveBeenCalledWith({ send_email_reminders: true })
   })
+
+  // #283 (2026-11-02): el Reply-To de los mails a los clientes.
+  it('el mail de contacto se guarda por el PATCH de la tienda', async () => {
+    renderSettings()
+    openTab('Notificaciones')
+
+    expect(
+      screen.getByText('Las respuestas de tus clientas a los mails de Shifty llegan acá.')
+    ).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Mail de contacto'), {
+      target: { value: 'hola@tunegocio.com' }
+    })
+    saveChanges()
+
+    expect(await screen.findByRole('button', { name: 'Guardado' })).toBeInTheDocument()
+    expect(updateStore).toHaveBeenCalledWith({ contact_email: 'hola@tunegocio.com' })
+  })
+
+  it('un mail de contacto invalido se marca y apaga Guardar', () => {
+    renderSettings()
+    openTab('Notificaciones')
+
+    const campo = screen.getByLabelText('Mail de contacto')
+    fireEvent.change(campo, { target: { value: 'hola@' } })
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Ingresá un mail válido')
+    expect(campo).toHaveAttribute('aria-invalid', 'true')
+    expect(screen.getByRole('button', { name: 'Guardar Cambios' })).toBeDisabled()
+    expect(updateStore).not.toHaveBeenCalled()
+  })
 })
 
 describe('Settings - funciones', () => {

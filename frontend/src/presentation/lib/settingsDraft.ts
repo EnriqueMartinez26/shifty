@@ -70,6 +70,8 @@ export type SettingsFormData = {
   business_hours: Record<string, BusinessHoursPeriod[]>
   send_email_confirmation: boolean
   send_email_reminders: boolean
+  /** Vacio: sin mail de contacto (los mails a clientes no llevan Reply-To). */
+  contact_email: string
   feature_flags: StoreFeatureFlags
 }
 
@@ -117,6 +119,7 @@ export const buildSettingsBase = (
   business_hours: store.business_hours,
   send_email_confirmation: store.send_email_confirmation,
   send_email_reminders: store.send_email_reminders,
+  contact_email: store.contact_email || '',
   feature_flags: flags || store.feature_flags || DEFAULT_FEATURE_FLAGS
 })
 

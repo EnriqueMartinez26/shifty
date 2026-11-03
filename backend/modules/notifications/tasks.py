@@ -10,6 +10,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
+from email.utils import parseaddr
 from typing import Any
 
 import structlog
@@ -110,11 +111,44 @@ def _header_safe(value: str) -> str:
     return " ".join(value.split()) if value else value
 
 
-def _build_message(to: str, subject: str, body: str) -> EmailMessage:
+# Separadores de una lista y especiales de RFC 5322 que no van en una direccion
+# simple de ``Reply-To``.
+_REPLY_TO_FORBIDDEN = frozenset(' ,;<>"()[]\\')
+
+
+def _reply_to_header(value: str | None) -> str | None:
+    """La direccion para ``Reply-To``, o None si no va la cabecera (#283).
+
+    Una sola direccion entregable: el valor ya llega validado por
+    ``StoreUpdate``, pero el sink no confia en eso. Saneado como el Subject,
+    una direccion con espacios o comas (un CRLF colapsado, una lista) no va.
+
+    Solo ASCII y sin los especiales de RFC 5322 (verificacion, 2026-11-03):
+    con un dominio Unicode ``email`` escribia un encoded-word DENTRO de la
+    direccion (``hola@=?utf-8?q?b=C3=BCcher?=.com``) y la respuesta no
+    llegaba; un ``<`` o una comilla sueltos cambian lo que lee el cliente.
+    """
+    limpio = _header_safe(value or "")
+    if (
+        not limpio
+        or not limpio.isascii()
+        or any(sep in limpio for sep in _REPLY_TO_FORBIDDEN)
+        or parseaddr(limpio)[1] != limpio
+    ):
+        return None
+    return limpio if is_deliverable_email(limpio) else None
+
+
+def _build_message(
+    to: str, subject: str, body: str, reply_to: str | None = None
+) -> EmailMessage:
     message = EmailMessage()
     message["Subject"] = _header_safe(subject)
     message["From"] = settings.EMAILS_FROM_EMAIL
     message["To"] = _header_safe(to)
+    responder_a = _reply_to_header(reply_to)
+    if responder_a:
+        message["Reply-To"] = responder_a
     message.set_content(body)
     return message
 
@@ -204,13 +238,15 @@ class SmtpSession:
                 self._discard()
             raise
 
-    async def send(self, to: str, subject: str, body: str) -> bool:
+    async def send(
+        self, to: str, subject: str, body: str, reply_to: str | None = None
+    ) -> bool:
         try:
             # AUD2-B4-08: dentro del try. Afuera, un error del parser de
             # cabeceras se propagaba con el asunto o la direccion en el
             # texto, y en el recordatorio liberaba el reclamo, asi que el
             # mismo turno reintentaba cada 15 minutos hasta su hora.
-            message = _build_message(to, subject, body)
+            message = _build_message(to, subject, body, reply_to)
             await asyncio.to_thread(self._send_sync, message)
             return True
         except SoftTimeLimitExceeded:
@@ -252,7 +288,12 @@ async def smtp_session() -> AsyncIterator[SmtpSession]:
 
 
 async def _send_email(
-    to: str, subject: str, body: str, smtp: SmtpSession | None = None
+    to: str,
+    subject: str,
+    body: str,
+    smtp: SmtpSession | None = None,
+    *,
+    reply_to: str | None = None,
 ) -> bool:
     """Sink unico de correo: con la sesion del lote la reusa, sin ella abre
     y cierra la suya.
@@ -263,11 +304,34 @@ async def _send_email(
     mail nuevo en el outbox no reintroduce el handshake por mail. El parametro
     vive aca y no en un helper aparte para que el sink -y el punto donde los
     tests lo reemplazan- siga siendo uno solo.
+
+    ``reply_to`` lo pasan solo los mails al cliente (``_send_client_email``).
     """
     if smtp is not None:
-        return await smtp.send(to, subject, body)
+        return await smtp.send(to, subject, body, reply_to)
     async with smtp_session() as session:
-        return await session.send(to, subject, body)
+        return await session.send(to, subject, body, reply_to)
+
+
+async def _send_client_email(
+    to: str,
+    subject: str,
+    body: str,
+    smtp: SmtpSession | None,
+    details: dict[str, Any],
+) -> bool:
+    """Sink de los mails AL CLIENTE: la respuesta va a la tienda (#283).
+
+    ``details["reply_to"]`` lo pone ``build_client_details`` (o la oferta de
+    la lista de espera) solo si la tienda tiene un contacto entregable. Sin
+    contacto el llamado a ``_send_email`` es el de siempre, sin el argumento:
+    los dobles del sink en los tests mantienen su firma. El OTP, la clave y
+    los avisos al dueno no pasan por aca.
+    """
+    reply_to = _reply_to_header(details.get("reply_to"))
+    if reply_to is None:
+        return await _send_email(to, subject, body, smtp)
+    return await _send_email(to, subject, body, smtp, reply_to=reply_to)
 
 
 async def send_email(to: str, subject: str, body: str) -> bool:
@@ -399,7 +463,7 @@ def build_client_details(
     """Datos que necesitan todas las plantillas al cliente, en un solo lugar."""
     slug = getattr(store, "slug", None)
     base = settings.FRONTEND_URL.rstrip("/")
-    return {
+    return store_reply_to(store) | {
         "public_id": appointment.public_id,
         "client_name": getattr(appointment, "client_name", None) or "",
         # "Corte + Barba" en un turno de varios servicios (2026-10-16); el
@@ -419,6 +483,18 @@ def build_client_details(
         # Linea de adicionales (2026-10-14); vacia si el turno no los tiene.
         "addons_line": addons_line(appointment),
     }
+
+
+def store_reply_to(store: Any | None) -> dict[str, str]:
+    """``{"reply_to": ...}`` con el mail de contacto de la tienda, o vacio.
+
+    #283 (decision de Mateo, 2026-11-02): la respuesta de la clienta va a la
+    tienda. Se lee de la tienda que releyo quien arma el mail, asi que sale
+    el contacto vigente. Sin contacto entregable la clave no va y los
+    detalles quedan como antes.
+    """
+    contacto = _reply_to_header(getattr(store, "contact_email", None))
+    return {"reply_to": contacto} if contacto else {}
 
 
 def addons_line(appointment: Any) -> str:
@@ -593,8 +669,12 @@ async def send_reschedule_email(
         return {"status": "skipped", "reason": "no-deliverable"}
     assert email is not None
     try:
-        success = await _send_email(
-            email, _rescheduled_subject(details), _rescheduled_body(details), smtp
+        success = await _send_client_email(
+            email,
+            _rescheduled_subject(details),
+            _rescheduled_body(details),
+            smtp,
+            details,
         )
     except SoftTimeLimitExceeded:
         raise
@@ -686,8 +766,12 @@ async def send_appointment_confirmation(
         email=_mask_email(email),
         appointment=details.get("public_id"),
     )
-    success = await _send_email(
-        email, _confirmation_subject(details), _confirmation_body(details), smtp
+    success = await _send_client_email(
+        email,
+        _confirmation_subject(details),
+        _confirmation_body(details),
+        smtp,
+        details,
     )
     if not success:
         raise RuntimeError("SMTP send failed")
@@ -725,7 +809,9 @@ async def notify_client_reminder(
 
     if email:
         asunto = _reminder_subject(details)
-        enviado = await _send_email(email, asunto, _reminder_body(details), smtp)
+        enviado = await _send_client_email(
+            email, asunto, _reminder_body(details), smtp, details
+        )
         if enviado:
             logger.info(
                 "reminder_sent", canal="email", appointment=details.get("public_id")
@@ -749,8 +835,12 @@ async def send_appointment_registration(
         email=_mask_email(email),
         appointment=details.get("public_id"),
     )
-    success = await _send_email(
-        email, _registration_subject(details), _registration_body(details), smtp
+    success = await _send_client_email(
+        email,
+        _registration_subject(details),
+        _registration_body(details),
+        smtp,
+        details,
     )
     if not success:
         raise RuntimeError("SMTP send failed")
@@ -785,8 +875,12 @@ async def send_cancellation_email(
         return {"status": "skipped", "reason": "no-deliverable"}
     assert email is not None
     try:
-        success = await _send_email(
-            email, _cancellation_subject(details), _cancellation_body(details), smtp
+        success = await _send_client_email(
+            email,
+            _cancellation_subject(details),
+            _cancellation_body(details),
+            smtp,
+            details,
         )
     except SoftTimeLimitExceeded:
         raise
@@ -810,8 +904,8 @@ async def send_rebook_email(
         return {"status": "skipped", "reason": "no-deliverable"}
     assert email is not None
     try:
-        success = await _send_email(
-            email, _rebook_subject(details), _rebook_body(details), smtp
+        success = await _send_client_email(
+            email, _rebook_subject(details), _rebook_body(details), smtp, details
         )
     except SoftTimeLimitExceeded:
         raise
@@ -855,8 +949,12 @@ async def send_waitlist_offer_email(
         return {"status": "skipped", "reason": "no-deliverable"}
     assert email is not None
     try:
-        success = await _send_email(
-            email, _waitlist_offer_subject(details), _waitlist_offer_body(details), smtp
+        success = await _send_client_email(
+            email,
+            _waitlist_offer_subject(details),
+            _waitlist_offer_body(details),
+            smtp,
+            details,
         )
     except SoftTimeLimitExceeded:
         raise
