@@ -14,7 +14,9 @@ Trampas de nginx que el contrato vigila:
   `limit_req_zone` no pueden repetir nombre.
 """
 
+import ipaddress
 import json
+import random
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -439,11 +441,15 @@ def test_los_buffers_del_proxy_no_vuelcan_a_disco_una_respuesta_mediana(
 
 # --- F0-09: rate limit y conexiones por IP en el edge -------------------------
 
+# Clave de las zonas (#277): IPv4 por direccion, IPv6 por su /64. La arma el
+# `map $remote_addr $rate_limit_key` (ver la seccion de IPv6, abajo).
+CLAVE_DE_LIMITE = "$rate_limit_key"
+
 
 def _tasa_por_segundo(http: list[Directiva], zona: str) -> int:
     for d in todas(http, "limit_req_zone"):
         if f"zone={zona}:10m" in d.args:
-            assert d.args[0] == "$binary_remote_addr", d.args
+            assert d.args[0] == CLAVE_DE_LIMITE, d.args
             rate = next(a for a in d.args if a.startswith("rate="))
             match = re.fullmatch(r"rate=(\d+)r/s", rate)
             assert match, rate
@@ -484,10 +490,7 @@ def test_el_edge_corta_inundaciones_por_ip(ruta: Path) -> None:
     _tasa_por_segundo(http, "api")
     _tasa_por_segundo(http, "auth")
     _tasa_por_segundo(http, "webhooks")
-    assert una(http, "limit_conn_zone").args == (
-        "$binary_remote_addr",
-        "zone=perip:10m",
-    )
+    assert una(http, "limit_conn_zone").args == (CLAVE_DE_LIMITE, "zone=perip:10m")
     # 429 y no el 503 por defecto: el front y el backoff lo leen como limite.
     assert una(http, "limit_req_status").args == ("429",)
     assert una(http, "limit_conn_status").args == ("429",)
@@ -527,6 +530,198 @@ def test_desarrollo_no_limita_mas_que_produccion() -> None:
     assert _conexiones_por_ip(dev, server_de_la_app(dev)) >= _conexiones_por_ip(
         prod, server_de_la_app(prod)
     )
+
+
+# --- #277: IPv6 con la direccion real, agrupada por /64 -----------------------
+# 2026-11-02 (produccion): nginx no escuchaba en IPv6 dentro del contenedor y la
+# red de Docker no tenia IPv6, asi que docker-proxy le pasaba cada visitante
+# IPv6 con la IP del gateway del bridge (172.16.1.1): todos compartian una
+# cubeta en el edge y en la app. Ahora produccion escucha tambien en [::] (la
+# red `edge` del override tiene IPv6, test_compose_contract.py) y las zonas
+# cuentan una IPv6 por su /64, como la app (core/rate_limit.rate_limit_ip_key).
+
+BINARIA = "<binary_remote_addr>"
+
+
+def _mapa_de_la_clave(http: list[Directiva]) -> Directiva:
+    (mapa,) = [
+        d for d in todas(http, "map") if d.args == ("$remote_addr", CLAVE_DE_LIMITE)
+    ]
+    return mapa
+
+
+def _sustituir(valor: str, calce: re.Match[str] | None) -> str:
+    def variable(m: re.Match[str]) -> str:
+        if m.group(1) == "binary_remote_addr":
+            return BINARIA
+        assert calce is not None, m.group(1)
+        return str(calce.group(m.group(1)))
+
+    return re.sub(r"\$(\w+)", variable, valor)
+
+
+def _clave_de_nginx(mapa: Directiva, remote_addr: str) -> str:
+    """Evalua el map como nginx: regex en orden, sin anclar salvo `^`; si
+    ninguna calza, `default`. PCRE y `re` coinciden en estos patrones."""
+    default = None
+    for entrada in mapa.bloque:
+        clave, valor = entrada.nombre, entrada.args[0]
+        if clave == "default":
+            default = valor
+            continue
+        assert clave.startswith("~") and not clave.startswith("~*"), clave
+        calce = re.search(clave[1:].replace("(?<", "(?P<"), remote_addr)
+        if calce:
+            return _sustituir(valor, calce)
+    assert default is not None, "el map no tiene default"
+    return _sustituir(default, None)
+
+
+def _como_lo_escribe_nginx(ip: str) -> str:
+    """`$remote_addr` de una IPv6: port de ngx_inet6_ntop (src/core/ngx_inet.c).
+
+    Minusculas, sin ceros a la izquierda, `::` solo para la corrida de ceros
+    mas larga de DOS o mas grupos, y cola en decimal con puntos para las que
+    empiezan con cinco o mas grupos en cero (la IPv4 mapeada, entre otras).
+    """
+    p = ipaddress.IPv6Address(ip).packed
+    grupos = [p[i] * 256 + p[i + 1] for i in range(0, 16, 2)]
+    zero, maximo, n, ultimo = -1, 1, 0, -1
+    for i, grupo in enumerate(grupos):
+        if grupo:
+            if maximo < n:
+                zero, maximo = ultimo, n
+            n = 0
+            continue
+        if n == 0:
+            ultimo = i
+        n += 1
+    if maximo < n:
+        zero, maximo = ultimo, n
+    texto, fin = "", 8
+    if zero == 0:
+        if (
+            (maximo == 5 and grupos[5] == 0xFFFF)
+            or maximo == 6
+            or (maximo == 7 and p[14] != 0 and p[15] != 1)
+        ):
+            fin = 6
+        texto = ":"
+    i = 0
+    while i < fin:
+        if i == zero:
+            texto += ":"
+            i += maximo
+            continue
+        texto += f"{grupos[i]:x}"
+        if i < 7:
+            texto += ":"
+        i += 1
+    if fin == 6:
+        texto += ".".join(str(b) for b in p[12:])
+    return texto
+
+
+@pytest.mark.parametrize(
+    ("ip", "texto"),
+    [
+        ("2001:db8::1", "2001:db8::1"),
+        ("2001:db8:0:1:0:0:0:1", "2001:db8:0:1::1"),
+        # Un solo grupo en cero no se comprime.
+        ("2001:db8:0:1:1:1:1:1", "2001:db8:0:1:1:1:1:1"),
+        ("::", "::"),
+        ("::1", "::1"),
+        ("::ffff:203.0.113.7", "::ffff:203.0.113.7"),
+        ("::203.0.113.7", "::203.0.113.7"),
+        ("fe80::", "fe80::"),
+    ],
+)
+def test_el_port_de_ngx_inet6_ntop_escribe_como_nginx(ip: str, texto: str) -> None:
+    assert _como_lo_escribe_nginx(ip) == texto
+
+
+@EDGES
+def test_las_zonas_del_edge_cuentan_por_la_clave_agrupada(ruta: Path) -> None:
+    http = leer(ruta)
+    zonas = todas(http, "limit_req_zone") + todas(http, "limit_conn_zone")
+    assert zonas
+    for zona in zonas:
+        assert zona.args[0] == CLAVE_DE_LIMITE, zona.args
+    _mapa_de_la_clave(http)
+
+
+def test_dev_y_prod_agrupan_igual() -> None:
+    dev, prod = (_mapa_de_la_clave(leer(r)).bloque for r in (EDGE_DEV, EDGE_PROD))
+    assert [(d.nombre, d.args) for d in dev] == [(d.nombre, d.args) for d in prod]
+
+
+@pytest.mark.parametrize(
+    ("remote_addr", "clave"),
+    [
+        # IPv4: la direccion, en los 4 bytes de siempre.
+        ("203.0.113.7", BINARIA),
+        # Una IPv4 mapeada se queda con su direccion: no se junta con todas las
+        # demas en ::ffff:0:0/64.
+        ("::ffff:203.0.113.7", BINARIA),
+        ("2001:db8:1:2:aaaa:bbbb:cccc:dddd", "2001:db8:1:2"),
+        ("2001:db8:1:2::1", "2001:db8:1:2"),
+        ("2001:db8::1", "2001:db8:0:0"),
+        ("2001::1", "2001:0:0:0"),
+        ("::1", "0:0:0:0"),
+        # Formas con `::` de un solo grupo: nginx no las escribe, pero el map
+        # igual les da su /64.
+        ("2001:db8::5:6:7:8:9", "2001:db8:0:5"),
+        ("2001::5:6:7:8:9:a", "2001:0:5:6"),
+        ("::5:6:7:8:9:a:b", "0:5:6:7"),
+    ],
+)
+def test_la_clave_del_edge_es_la_ipv4_o_el_64(remote_addr: str, clave: str) -> None:
+    assert _clave_de_nginx(_mapa_de_la_clave(leer(EDGE_PROD)), remote_addr) == clave
+
+
+def _ipv6_de_prueba() -> list[str]:
+    """Direcciones con corridas de ceros en todas las posiciones."""
+    azar = random.Random(277)
+    direcciones = []
+    for _ in range(3000):
+        grupos = [
+            0
+            if azar.random() < 0.5
+            else azar.choice((1, 0xFFFF, azar.randrange(1, 1 << 16)))
+            for _ in range(8)
+        ]
+        direcciones.append(
+            str(ipaddress.IPv6Address(b"".join(g.to_bytes(2, "big") for g in grupos)))
+        )
+    return direcciones
+
+
+def test_el_edge_y_la_app_agrupan_en_el_mismo_64() -> None:
+    from core.rate_limit import rate_limit_ip_key
+
+    mapa = _mapa_de_la_clave(leer(EDGE_PROD))
+    for ip in _ipv6_de_prueba():
+        clave = _clave_de_nginx(mapa, _como_lo_escribe_nginx(ip))
+        de_la_app = rate_limit_ip_key(ip)
+        if ipaddress.IPv6Address(ip).ipv4_mapped is not None:
+            assert clave == BINARIA, ip
+            continue
+        assert ipaddress.ip_network(f"{clave}::/64") == ipaddress.ip_network(
+            de_la_app
+        ), (ip, clave, de_la_app)
+
+
+def test_produccion_escucha_tambien_en_ipv6() -> None:
+    # Sin `listen [::]`, la red con IPv6 entrega el paquete al contenedor y nadie
+    # lo atiende. ipv6only (el default) deja a IPv4 en su propio socket.
+    escuchas = {
+        frozenset(d.args for d in todas(server, "listen"))
+        for server in servidores(leer(EDGE_PROD))
+    }
+    assert escuchas == {
+        frozenset({("80",), ("[::]:80",)}),
+        frozenset({("443", "ssl"), ("[::]:443", "ssl")}),
+    }, escuchas
 
 
 # --- F0-10: errores del edge en JSON canonico ---------------------------------

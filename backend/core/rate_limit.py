@@ -161,6 +161,31 @@ def client_ip_from_request(request: Request) -> str:
     )
 
 
+_PREFIJO_IPV6 = 64
+_MASCARA_IPV6 = ((1 << _PREFIJO_IPV6) - 1) << (128 - _PREFIJO_IPV6)
+
+
+def rate_limit_ip_key(ip: str) -> str:
+    """Clave de una IP en los limites: IPv4 por direccion, IPv6 por su /64.
+
+    Un cliente IPv6 suele tener un /64 entero: por direccion exacta, rotar
+    dentro del prefijo evadia todo limite por IP (#277). Una IPv4 mapeada
+    (``::ffff:a.b.c.d``) cuenta como esa IPv4: si no, todas compartirian
+    ``::ffff:0:0/64``. Lo que no es IP (``unknown``) queda igual. Solo para
+    claves de limite: la IP del request sigue exacta en logs y auditoria.
+    """
+    try:
+        direccion = ipaddress.ip_address(ip)
+    except ValueError:
+        return ip
+    if isinstance(direccion, ipaddress.IPv4Address):
+        return str(direccion)
+    if direccion.ipv4_mapped is not None:
+        return str(direccion.ipv4_mapped)
+    red = ipaddress.IPv6Address(int(direccion) & _MASCARA_IPV6)
+    return f"{red}/{_PREFIJO_IPV6}"
+
+
 def _bucket_key(identifier: str, action: str, window_seconds: int) -> tuple[str, int]:
     """Clave de la cubeta vigente (ventana fija alineada a UTC) y cuantos
     segundos le quedan. Una sola forma para consumir y para leer."""
@@ -198,7 +223,7 @@ async def enforce_rate_limit(
         return
 
     window = window_seconds or settings.RATE_LIMIT_WINDOW_SECONDS
-    ip = client_ip_from_request(request)
+    ip = rate_limit_ip_key(client_ip_from_request(request))
     try:
         # Dos cubetas independientes: por IP y, si hay sujeto (email, telefono,
         # cuenta), por sujeto SOLO. Antes la clave era "ip:sujeto", que en la
@@ -356,7 +381,7 @@ class RedisRateLimitMiddleware:
         headers = _scope_headers(scope)
         client = scope.get("client") or ("unknown", 0)
         fallback_ip = str(client[0]) if client else "unknown"
-        ip = _client_ip(headers, fallback_ip)
+        ip = rate_limit_ip_key(_client_ip(headers, fallback_ip))
         action, limit = _policy_for_request(method, path)
 
         try:
