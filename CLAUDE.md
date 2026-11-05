@@ -807,7 +807,23 @@ Una instrucción en lenguaje natural no es una garantía.
   se descifra; no el `"pending"` de un OAuth a medias), el mismo de la
   preferencia; un token guardado que no se descifra (una
   `FIELD_ENCRYPTION_KEY` rota o rotada) avisa con ids y a Sentry en vez de
-  pasar en silencio a WhatsApp. Perder el
+  pasar en silencio a WhatsApp. Una conexión cuyo refresh OAuth MP rechazó
+  con `invalid_grant` (refresh token vencido o revocado; no 408, 429 ni 5xx)
+  tampoco cuenta (issue #279): `refresh_mercadopago_oauth_connection` la
+  marca con `payment_gateway_configs.connection_broken_at` por un UPDATE
+  condicional (`IS NULL` y el MISMO refresh token cifrado que se mandó: MP lo
+  rota, y el perdedor de dos refresh simultáneos no marca una fila ya
+  renovada), en un savepoint, y solo el que la marca publica
+  `store.mercadopago_connection_broken` al outbox ("Reconectá Mercado Pago",
+  panel y mail; el lote lo descarta si la marca ya se limpió) y avisa a
+  Sentry, a lo sumo uno por tienda y hora (`OncePer`). Otro 4xx
+  (`invalid_client`...) es la credencial de la plataforma: solo Sentry, sin
+  marca ni aviso. La reserva que se topa con el rechazo sigue siendo 502; las
+  siguientes cobran la seña por WhatsApp si hay, o son 409 sin canal. Un
+  token nuevo (callback de OAuth, refresh exitoso o token manual) la limpia
+  siempre (`flag_modified`: una copia leída sin marca también la borra); el
+  webhook y los jobs siguen consultando con el token guardado, sin cambio
+  (`test_conexion_de_mp_rota.py`, `test_pg_conexion_de_mp_rota.py`). Perder el
   último canal con servicios de seña obligatoria (borrar o romper el
   WhatsApp, apagar los cobros, desconectar MP) no se bloquea: avisa al dueño
   por el panel y por mail (`warn_if_deposit_channel_lost`, evento

@@ -12,12 +12,13 @@ from decimal import Decimal, ROUND_HALF_UP
 from json import JSONDecodeError
 from urllib.parse import urlencode, urlparse
 from collections.abc import Awaitable, Callable, Iterable, Mapping
-from typing import cast
+from typing import Any, cast
 
 import httpx
 import structlog
-from sqlalchemy import delete, select
+from sqlalchemy import CursorResult, delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import flag_modified, set_committed_value
 
 from core.circuit_breaker import AsyncCircuitBreaker, CircuitBreakerOpenError
 from core.config import Environment, settings
@@ -26,6 +27,7 @@ from core.database import _apply_tenant_context
 from core.exceptions import AppException
 from core.observability import OncePer, report_exception
 from modules.appointments.model import Appointment, AppointmentStatus
+from modules.notifications.model import NotificationType
 from modules.payments.model import (
     PAYMENT_PROVIDER_MERCADOPAGO,
     JsonValue,
@@ -483,14 +485,17 @@ def _resolve_access_token(config: PaymentGatewayConfig | None) -> str | None:
 
 
 def gateway_has_usable_token(config: PaymentGatewayConfig | None) -> bool:
-    """ "MP conectado": hay config y su token se puede descifrar.
+    """ "MP conectado": hay config, no esta rota y su token se puede descifrar.
 
     Unico predicado: lo usan ``prepare_mercadopago_preference`` (sin token no
     hay preferencia) y el canal de la sena (``deposit_channels``), para que la
     tienda que el backend da por conectada sea la que puede pedir un link. Un
     token vacio, el ``"pending"`` que deja un alta de OAuth sin terminar
-    (``payments/router.py``) o uno cifrado con otra clave no cuentan.
+    (``payments/router.py``), uno cifrado con otra clave o una conexion cuyo
+    refresh MP rechazo (``connection_broken_at``, issue #279) no cuentan.
     """
+    if config is not None and config.connection_broken_at is not None:
+        return False
     return _resolve_access_token(config) is not None
 
 
@@ -563,6 +568,12 @@ async def _mercadopago_oauth_token_request(
 
     if response.status_code >= 400:
         detail = response.text[:400] or f"HTTP {response.status_code}"
+        if _oauth_rejection_is_final(response.status_code):
+            raise MercadoPagoOAuthRejectedError(
+                f"Mercado Pago rechazo OAuth: {detail}",
+                status_code=response.status_code,
+                error_code=_oauth_error_code(response),
+            )
         raise RuntimeError(f"Mercado Pago rechazo OAuth: {detail}")
 
     try:
@@ -571,6 +582,160 @@ async def _mercadopago_oauth_token_request(
         raise RuntimeError(
             "Mercado Pago devolvio una respuesta OAuth invalida"
         ) from exc
+
+
+class MercadoPagoOAuthRejectedError(RuntimeError):
+    """MP rechazo el pedido de token con un 4xx definitivo. Reintentar no lo
+    arregla. ``error_code`` es el ``error`` del cuerpo de MP: ``invalid_grant``
+    es el refresh token de la tienda (vencido o revocado: hay que reconectar);
+    otro (``invalid_client``...) es la credencial de la plataforma. Sigue
+    siendo ``RuntimeError``, asi que cada llamador lo maneja como cualquier
+    falla de OAuth de antes."""
+
+    def __init__(
+        self, message: str, *, status_code: int, error_code: str | None = None
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.error_code = error_code
+
+
+def _oauth_rejection_is_final(status_code: int) -> bool:
+    """Un 4xx salvo 408 y 429 (demora o cuota: se reintenta). Un 5xx es MP
+    caido, no la conexion de la tienda."""
+    return 400 <= status_code < 500 and status_code not in {408, 429}
+
+
+def _oauth_error_code(response: httpx.Response) -> str | None:
+    """El ``error`` del cuerpo JSON de un rechazo de OAuth, si lo hay."""
+    try:
+        cuerpo = response.json()
+    except ValueError:
+        return None
+    if not isinstance(cuerpo, dict):
+        return None
+    codigo = cuerpo.get("error")
+    return codigo.strip() if isinstance(codigo, str) and codigo.strip() else None
+
+
+# El unico rechazo que es de la tienda: su refresh token ya no sirve.
+OAUTH_INVALID_GRANT = "invalid_grant"
+
+# Una conexion rota avisa a Sentry a lo sumo una vez por tienda y hora: cada
+# webhook o corrida que se topa con el mismo rechazo no suma un evento.
+_conexiones_rotas = OncePer(3600.0)
+# Un rechazo de la credencial de la plataforma les pasa a todas las tiendas a
+# la vez: un evento por codigo y hora, no uno por tienda.
+_rechazos_de_la_plataforma = OncePer(3600.0)
+
+
+class MercadoPagoConnectionBroken(RuntimeError):
+    """Para Sentry: MP rechazo renovar la conexion OAuth de una tienda."""
+
+
+class MercadoPagoOAuthPlatformRejected(RuntimeError):
+    """Para Sentry: MP rechazo la credencial OAuth de la plataforma."""
+
+
+def _report_platform_rejection(
+    config: PaymentGatewayConfig, exc: MercadoPagoOAuthRejectedError
+) -> None:
+    """Sin marca ni aviso al dueno: reconectar la tienda no lo arregla."""
+    codigo = exc.error_code or "sin_codigo"
+    contexto = {
+        "store_id": str(config.store_id),
+        "provider_status": exc.status_code,
+        "oauth_error": codigo,
+    }
+    logger.warning("mercadopago_oauth_platform_rejected", **contexto)
+    if _rechazos_de_la_plataforma.allow(codigo):
+        report_exception(
+            MercadoPagoOAuthPlatformRejected("Mercado Pago rechazo la app"),
+            **contexto,
+        )
+
+
+async def _claim_broken_mark(
+    db: AsyncSession,
+    config: PaymentGatewayConfig,
+    refresh_cifrado: str | None,
+    ahora: datetime,
+) -> bool:
+    """El UPDATE condicional de la marca; True si esta llamada la puso.
+
+    Solo marca la fila sin marca y con el MISMO refresh token que se mando:
+    MP lo rota en cada refresh, asi que si otro actor ya lo renovo la fila
+    tiene otro y el ``invalid_grant`` del perdedor no toca nada. Bajo el lock
+    de fila del UPDATE, el que espera re-evalua el WHERE con lo commiteado.
+    """
+    marcada = await db.execute(
+        update(PaymentGatewayConfig)
+        .where(
+            PaymentGatewayConfig.id == config.id,
+            PaymentGatewayConfig.connection_broken_at.is_(None),
+            PaymentGatewayConfig.encrypted_refresh_token == refresh_cifrado,
+        )
+        .values(connection_broken_at=ahora)
+        .execution_options(synchronize_session=False)
+    )
+    return cast(CursorResult[Any], marcada).rowcount == 1
+
+
+async def _mark_connection_broken(
+    db: AsyncSession,
+    config: PaymentGatewayConfig,
+    persist: PersistRefresh | None,
+    refresh_cifrado: str | None,
+) -> None:
+    """Marca la conexion como rota y avisa al dueno, una sola vez (issue #279).
+
+    ``_claim_broken_mark`` es la guarda contra dos rechazos simultaneos y
+    contra el perdedor de una carrera de refresh: solo el que cambia la fila
+    publica ``store.mercadopago_connection_broken`` al outbox, en la misma
+    transaccion, y avisa a Sentry. Se persiste como el refresh exitoso
+    (``persist``: transaccion corta propia, sin lock ni red de por medio).
+    El UPDATE y el outbox van en un savepoint: si fallan, la sesion queda
+    usable para la compensacion del llamador y el resto del lote. Un error se
+    registra y el llamador ve el rechazo de MP de siempre.
+    """
+    if config.connection_broken_at is not None:
+        return
+    store_id = str(config.store_id)
+    ahora = datetime.now(timezone.utc)
+    try:
+        await _apply_tenant_context(db)
+        async with db.begin_nested():
+            marco = await _claim_broken_mark(db, config, refresh_cifrado, ahora)
+            if marco:
+                db.add(
+                    OutboxMessage(
+                        store_id=store_id,
+                        event_type=NotificationType.MERCADOPAGO_CONNECTION_BROKEN.value,
+                        payload={"store_id": store_id},
+                    )
+                )
+        if persist is None:
+            await db.flush()
+        else:
+            await persist(config)
+    except Exception as error:
+        logger.warning(
+            "mercadopago_connection_broken_not_saved",
+            store_id=store_id,
+            error_type=type(error).__name__,
+        )
+        return
+    if not marco:
+        return
+    # Sin ensuciar la fila: el UPDATE ya la escribio.
+    set_committed_value(config, "connection_broken_at", ahora)
+    contexto = {"store_id": store_id, "gateway_config_id": config.id}
+    logger.warning("mercadopago_connection_broken", **contexto)
+    if _conexiones_rotas.allow(store_id):
+        report_exception(
+            MercadoPagoConnectionBroken("Mercado Pago rechazo renovar la conexion"),
+            **contexto,
+        )
 
 
 async def exchange_mercadopago_oauth_code(
@@ -597,15 +762,25 @@ async def refresh_mercadopago_oauth_connection(
     refresh_token = _resolve_refresh_token(config)
     if not refresh_token:
         raise RuntimeError("La conexion OAuth de Mercado Pago no tiene refresh token")
+    # El refresh token que se manda, como esta en la fila: si MP lo rechaza,
+    # solo se marca la fila que todavia tiene este (``_claim_broken_mark``).
+    refresh_cifrado = config.encrypted_refresh_token
 
-    token_payload = await _mercadopago_oauth_token_request(
-        {
-            "client_id": settings.MERCADOPAGO_OAUTH_CLIENT_ID or "",
-            "client_secret": settings.MERCADOPAGO_OAUTH_CLIENT_SECRET or "",
-            "grant_type": "refresh_token",
-            "refresh_token": refresh_token,
-        }
-    )
+    try:
+        token_payload = await _mercadopago_oauth_token_request(
+            {
+                "client_id": settings.MERCADOPAGO_OAUTH_CLIENT_ID or "",
+                "client_secret": settings.MERCADOPAGO_OAUTH_CLIENT_SECRET or "",
+                "grant_type": "refresh_token",
+                "refresh_token": refresh_token,
+            }
+        )
+    except MercadoPagoOAuthRejectedError as exc:
+        if exc.error_code == OAUTH_INVALID_GRANT:
+            await _mark_connection_broken(db, config, persist, refresh_cifrado)
+        else:
+            _report_platform_rejection(config, exc)
+        raise
     apply_mercadopago_oauth_payload(config, token_payload)
     if persist is None:
         await db.flush()
@@ -701,6 +876,12 @@ def apply_mercadopago_oauth_payload(
 
     config.connection_mode = "oauth"
     config.oauth_connected_at = datetime.now(timezone.utc)
+    # Un token nuevo (callback o refresh exitoso) repara la conexion rota. Se
+    # escribe SIEMPRE: si esta copia la leyo sin marca y otro actor la marco
+    # despues (perdio la carrera del refresh), asignar None sobre None no
+    # emitiria nada y la marca quedaria puesta sobre tokens sanos.
+    config.connection_broken_at = None
+    flag_modified(config, "connection_broken_at")
 
 
 async def _mercadopago_api_request_for_store(
