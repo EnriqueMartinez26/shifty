@@ -491,7 +491,11 @@ const SettingsPage: React.FC = () => {
         {activeTab === 'policies' && <SettingsPoliciesTab value={formData} onChange={patch} />}
 
         {activeTab === 'notifications' && (
-          <SettingsNotificationsTab value={formData} onChange={patch} />
+          <SettingsNotificationsTab
+            value={formData}
+            onChange={patch}
+            contactEmailError={draftErrors.contact_email}
+          />
         )}
 
         {activeTab === 'features' && (
