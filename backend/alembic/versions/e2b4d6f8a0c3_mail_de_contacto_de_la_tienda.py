@@ -14,7 +14,7 @@ cambian nada. Sin indice: nadie busca tiendas por este campo.
 El downgrade borra la columna: los mails vuelven a salir sin ``Reply-To``.
 
 Revision ID: e2b4d6f8a0c3
-Revises: 733220bbf66e
+Revises: a9c1e3f5b7d9
 Create Date: 2026-11-02
 """
 
@@ -24,7 +24,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "e2b4d6f8a0c3"
-down_revision: Union[str, Sequence[str], None] = "733220bbf66e"
+down_revision: Union[str, Sequence[str], None] = "a9c1e3f5b7d9"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
