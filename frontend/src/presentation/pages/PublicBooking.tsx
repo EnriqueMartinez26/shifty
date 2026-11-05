@@ -14,7 +14,7 @@ import { StoreHeader } from '@presentation/components/organisms/storefront/Store
 import { useBookingStepParam } from '@presentation/hooks/useBookingStepParam'
 import { brandCssVariables, brandCtaStyle, resolveBrandTheme } from '@presentation/lib/brandTheme'
 
-import { readPriorDesignHandoff } from '@shared/utils/priorDesignHandoff'
+import { clearPriorDesignHandoff, readPriorDesignHandoff } from '@shared/utils/priorDesignHandoff'
 
 import { colors2000s } from '../../theme/colors'
 import LegalFooterLinks from '../components/navigation/LegalFooterLinks'
@@ -226,7 +226,11 @@ const PublicBooking: React.FC = () => {
               type="button"
               // Sin payment_id en la URL se monta un wizard nuevo (estado y clave de
               // idempotencia nuevos) sin recargar la SPA (F11b-20).
-              onClick={() => void navigate(`/booking/${slug}`)}
+              // Al salir se borra el resumen del diseño previo (#285).
+              onClick={() => {
+                clearPriorDesignHandoff(store.public_id)
+                void navigate(`/booking/${slug}`)
+              }}
               className="w-full min-h-11 py-4 rounded-xl border font-black uppercase tracking-widest text-xs"
               style={brandCtaStyle}
             >

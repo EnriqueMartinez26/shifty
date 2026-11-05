@@ -1,4 +1,5 @@
 import {
+  clearPriorDesignHandoff,
   type PriorDesignHandoff,
   readPriorDesignHandoff,
   savePriorDesignHandoff
@@ -54,6 +55,45 @@ describe('priorDesignHandoff', () => {
     window.sessionStorage.setItem('shifty:prior-design:store-1', valor)
 
     expect(readPriorDesignHandoff('store-1', 'apt-9')).toBeNull()
+  })
+
+  // 2026-11-02 (#285, alerta CodeQL #9): el resumen quedaba en sessionStorage
+  // hasta cerrar la pestaña. Lo que ya no sirve se borra.
+  it.each([
+    ['de otro turno', JSON.stringify(resumen({ appointmentPublicId: 'apt-1' }))],
+    ['ilegible', '{no es json'],
+    ['con otra forma', JSON.stringify({ appointmentPublicId: 'apt-9' })]
+  ])('leer un resumen %s lo borra', (_caso, valor) => {
+    window.sessionStorage.setItem('shifty:prior-design:store-1', valor)
+
+    expect(readPriorDesignHandoff('store-1', 'apt-9')).toBeNull()
+    expect(window.sessionStorage.getItem('shifty:prior-design:store-1')).toBeNull()
+  })
+
+  it('leer el resumen del mismo turno lo conserva: la vuelta lo relee en cada consulta', () => {
+    savePriorDesignHandoff('store-1', resumen())
+
+    readPriorDesignHandoff('store-1', 'apt-9')
+
+    expect(readPriorDesignHandoff('store-1', 'apt-9')).toEqual(resumen())
+  })
+
+  it('clearPriorDesignHandoff borra el resumen de la tienda y deja el de otra', () => {
+    savePriorDesignHandoff('store-1', resumen())
+    savePriorDesignHandoff('store-2', resumen())
+
+    clearPriorDesignHandoff('store-1')
+
+    expect(window.sessionStorage.getItem('shifty:prior-design:store-1')).toBeNull()
+    expect(readPriorDesignHandoff('store-2', 'apt-9')).toEqual(resumen())
+  })
+
+  it('sin storage, borrar no tira', () => {
+    jest.spyOn(Storage.prototype, 'removeItem').mockImplementation(() => {
+      throw new DOMException('bloqueado', 'SecurityError')
+    })
+
+    expect(() => clearPriorDesignHandoff('store-1')).not.toThrow()
   })
 
   it('sin storage no tira: guardar no hace nada y leer da null', () => {
