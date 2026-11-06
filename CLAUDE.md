@@ -132,7 +132,12 @@ Una instrucción en lenguaje natural no es una garantía.
   (`core/rate_limit.py`) es un middleware por IP con política propia solo
   para `/auth/` y `/public/` (el resto, `/payments/*` incluido, cae en la
   global), más `enforce_rate_limit` puntual en `auth/router.py`,
-  `public_api/router.py` y `waitlist/public_router.py`.
+  `public_api/router.py` y `waitlist/public_router.py`. La clave agrupa IPv6
+  por su /64 y deja IPv4 por dirección, igual en la app
+  (`rate_limit_ip_key`) y en las zonas de nginx (`$rate_limit_key`); la IP
+  exacta sigue yendo a la auditoría legal (#277,
+  `test_rate_limit_clave_por_prefijo.py`). nginx recibe IPv6 con la dirección
+  real solo por la red `edge` (`docs/DEPLOY_RUNBOOK.md` §4c).
 - Todos los modelos ORM están en `core/model_registry.py`; el worker,
   `alembic/env.py`, los scripts y el conftest de integración cargan desde
   ahí. `test_model_registry` falla si aparece un `__tablename__` fuera de
@@ -991,7 +996,9 @@ Una instrucción en lenguaje natural no es una garantía.
     listas (2026-09-24, `test_compose_contract`). Por lo mismo, lo que el
     override quita del base va con `!reset []` (así se despublican los puertos
     internos; en producción solo nginx publica) y el servidor necesita Docker
-    Compose >= 2.24.
+    Compose >= 2.24. Desde #277 el borde usa `gw_priority` (red `edge`), que
+    pide Compose >= 2.33.1 y Engine >= 28; el preflight de `deploy.sh`
+    todavía verifica 2.24 (el VPS corre Compose v5).
 23. **`redirect_slashes=False`**: detrás de nginx el 307 pierde `/api` y el
     front recibe HTML. Cada `apiClient` usa la ruta exacta;
     `test_frontend_routes_contract` lo audita. Los errores propios del borde
