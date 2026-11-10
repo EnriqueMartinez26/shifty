@@ -252,6 +252,12 @@ def _booking_return_url(store: Store, payment: Payment) -> str:
     return f"{base_url}/booking/{store.slug}?{query}"
 
 
+def _back_urls(store: Store, payment: Payment) -> dict[str, JsonValue]:
+    """Las tres vueltas del checkout llevan a la misma pantalla de la reserva."""
+    url = _booking_return_url(store, payment)
+    return {"success": url, "failure": url, "pending": url}
+
+
 def _notification_url(store: Store) -> str:
     base_url = settings.PUBLIC_API_URL.rstrip("/")
     return f"{base_url}/payments/webhooks/mercadopago?store_id={store.public_id}"
@@ -977,7 +983,11 @@ async def prepare_mercadopago_preference(
     ``link_ref``: nonce del link que se pide; va en la ``external_reference``
     (``external_reference_for``) para que el webhook sepa de que link es cada
     pago sin depender de ``preference_id``, que el pago de MP no trae.
+
+    Un importe ``<= 0`` corta antes de leer nada (#278).
     """
+    if amount <= 0:
+        raise NonPositivePreferenceAmountError(amount)
     config = await _get_gateway_config(db, store_id)
     if config is None or not gateway_has_usable_token(config):
         return None
@@ -1017,11 +1027,7 @@ async def prepare_mercadopago_preference(
                 },
                 "external_reference": external_reference_for(appointment.id, link_ref),
                 "notification_url": _notification_url(store),
-                "back_urls": {
-                    "success": _booking_return_url(store, payment),
-                    "failure": _booking_return_url(store, payment),
-                    "pending": _booking_return_url(store, payment),
-                },
+                "back_urls": _back_urls(store, payment),
                 "auto_return": "approved",
                 "binary_mode": True,
                 "expires": True,
@@ -1385,6 +1391,22 @@ class ProviderPreferenceWithoutLinkError(RuntimeError):
     def __init__(self, preference_id: str) -> None:
         super().__init__("Mercado Pago no devolvio una preferencia valida")
         self.preference_id = preference_id
+
+
+class NonPositivePreferenceAmountError(RuntimeError):
+    """Se pidio una preferencia de MP por un importe ``<= 0`` (#278).
+
+    Se corta antes de toda lectura y de la red: un cobro en cero o negativo
+    nunca llega al proveedor. Es ``RuntimeError`` para que el llamador la
+    trate como cualquier falla del proveedor (el link del panel responde 502
+    ``PAYMENT_LINK_CREATION_FAILED``, la reserva publica compensa).
+    """
+
+    def __init__(self, amount: Decimal) -> None:
+        super().__init__(
+            "No se crea una preferencia por un importe menor o igual a cero"
+        )
+        self.amount = amount
 
 
 async def _attach_provider_link(
