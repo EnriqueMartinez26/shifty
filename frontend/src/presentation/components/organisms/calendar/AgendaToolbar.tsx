@@ -74,7 +74,7 @@ export const AgendaToolbar: React.FC<AgendaToolbarProps> = ({
           className="text-[10px] font-black uppercase tracking-widest"
           style={{ color: colors2000s.text.secondary }}
         >
-          {mobileList ? 'Vista de lista móvil' : 'Vistas día, semana, mes y lista'}
+          {mobileList ? 'Día, semana, mes y lista' : 'Vistas día, semana, mes y lista'}
         </p>
       </div>
     </div>
@@ -116,23 +116,60 @@ export const AgendaToolbar: React.FC<AgendaToolbarProps> = ({
 
     <div className="flex w-full min-w-0 flex-wrap items-center justify-between gap-2 2xl:w-auto 2xl:justify-end">
       {mobileList ? (
-        <div className="flex flex-wrap items-center gap-2">
-          <span
-            role="status"
-            className="px-3 py-2 rounded-md text-xs font-bold"
-            style={{ color: colors2000s.text.secondary, background: 'white' }}
-          >
-            Lista en móvil · {mobileSingleDay ? '1 día' : '14 días'}
-          </span>
-          {onToggleMobileRange && (
+        <div className="flex w-full flex-col gap-2">
+          <div className="grid grid-cols-2 gap-2">
             <button
               type="button"
-              onClick={onToggleMobileRange}
-              className="min-h-11 px-3 py-2 rounded-md text-xs font-bold"
-              style={buttonStyles2000s.default}
+              onClick={() => onViewChange('list')}
+              aria-pressed={view === 'list'}
+              className="min-h-11 px-3 py-2 text-sm font-bold"
+              style={view === 'list' ? buttonStyles2000s.selected : buttonStyles2000s.default}
             >
-              {mobileSingleDay ? 'Ver 14 días' : 'Ver solo este día'}
+              Lista
             </button>
+            <button
+              type="button"
+              onClick={() => onViewChange('day')}
+              aria-pressed={view === 'day'}
+              className="min-h-11 px-3 py-2 text-sm font-bold"
+              style={view === 'day' ? buttonStyles2000s.selected : buttonStyles2000s.default}
+            >
+              Día
+            </button>
+          </div>
+          <select
+            aria-label="Vista de agenda"
+            value={view}
+            onChange={(event) => onViewChange(event.target.value as CalendarView)}
+            className="min-h-11 w-full px-3 text-sm font-bold"
+            style={buttonStyles2000s.default}
+          >
+            {(Object.keys(VIEW_LABELS) as CalendarView[]).map((viewKey) => (
+              <option key={viewKey} value={viewKey}>
+                {VIEW_LABELS[viewKey]}
+              </option>
+            ))}
+          </select>
+          {view === 'list' && (
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span
+                role="status"
+                className="px-3 py-2 rounded-md text-xs font-bold"
+                style={{ color: colors2000s.text.secondary, background: 'white' }}
+              >
+                Lista en móvil · {mobileSingleDay ? '1 día' : '14 días'}
+              </span>
+              {onToggleMobileRange && (
+                <button
+                  type="button"
+                  onClick={onToggleMobileRange}
+                  className="min-h-11 px-3 py-2 rounded-md text-xs font-bold"
+                  style={buttonStyles2000s.default}
+                >
+                  {mobileSingleDay ? 'Ver 14 días' : 'Ver solo este día'}
+                </button>
+              )}
+            </div>
           )}
         </div>
       ) : (
