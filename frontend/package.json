@@ -15,7 +15,7 @@
   },
   "scripts": {
     "dev": "vite --configLoader runner",
-    "build": "tsc && vite build --configLoader runner",
+    "build": "tsc && vite build --configLoader runner && node scripts/build-share-shell.mjs",
     "preview": "vite preview",
     "test": "jest",
     "test:watch": "jest --watch",
