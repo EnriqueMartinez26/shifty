@@ -49,5 +49,6 @@ def to_store_response(store: Store) -> StoreResponse:
         },
         send_email_confirmation=store.send_email_confirmation,
         send_email_reminders=store.send_email_reminders,
+        contact_email=store.contact_email,
         feature_flags=StoreFeatureFlags.model_validate(store.normalized_feature_flags),
     )

@@ -212,7 +212,9 @@ def test_el_enmascarado_de_telefonos_tapa_el_numero_y_deja_el_resto() -> None:
 async def test_un_fallo_al_armar_el_mensaje_queda_contenido_en_el_sink(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def explota(to: str, subject: str, body: str) -> EmailMessage:
+    def explota(
+        to: str, subject: str, body: str, reply_to: str | None = None
+    ) -> EmailMessage:
         raise ValueError(f"cabecera invalida: <{to}> / {subject}")
 
     monkeypatch.setattr(tasks, "_build_message", explota)

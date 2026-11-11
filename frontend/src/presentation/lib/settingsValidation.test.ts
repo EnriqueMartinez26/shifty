@@ -50,6 +50,31 @@ describe('validateSettingsDraft', () => {
     ).toMatch(/El Lunes tiene 2 horarios/)
   })
 
+  // #283: el Reply-To de los mails a los clientes. Vacio lo borra.
+  it.each(['hola@', 'sin-arroba', 'hola @tienda.com', `${'a'.repeat(250)}@tienda.com`])(
+    'rechaza el mail de contacto %p',
+    (contact_email) => {
+      expect(validateSettingsDraft({ contact_email }).contact_email).toBeDefined()
+    }
+  )
+
+  // Verificacion 2026-11-03: sin forma ASCII el Reply-To no sirve.
+  it.each(['ñandú@tienda.com', 'hola@bücher.com'])(
+    'rechaza el mail de contacto con tildes o ñ %p',
+    (contact_email) => {
+      expect(validateSettingsDraft({ contact_email }).contact_email).toBe(
+        'Usá un mail sin tildes ni ñ.'
+      )
+    }
+  )
+
+  it.each(['', '  ', 'hola@tunegocio.com', ' Hola@TuNegocio.com '])(
+    'acepta el mail de contacto %p',
+    (contact_email) => {
+      expect(validateSettingsDraft({ contact_email })).toEqual({})
+    }
+  )
+
   it('acepta un dia cerrado y uno con apertura antes del cierre', () => {
     expect(
       validateSettingsDraft({

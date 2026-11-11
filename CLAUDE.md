@@ -578,6 +578,20 @@ Una instrucción en lenguaje natural no es una garantía.
   `test_mails_del_panel_sin_transaccion.py`) Los helpers de `notifications/tasks.py` que
   mandan SMTP en línea se llaman `send_*`; una función `enqueue_*` tiene que
   encolar de verdad (`test_enqueue_encola_de_verdad.py`).
+  **La respuesta del cliente va a la tienda** (#283, decisión de Mateo,
+  2026-11-02): todo mail al cliente (reserva, confirmación, recordatorios,
+  reprogramación, cancelación, invitación a volver y oferta de la lista de
+  espera) lleva `Reply-To` con el "Mail de contacto" de la tienda
+  (`stores.contact_email`, opcional, `PATCH /stores/me`) cuando está cargado
+  y pasa `is_deliverable_email`; si no, sin la cabecera. Se guarda en ASCII
+  (dominio IDN en punycode; un local con tildes o ñ es 422) y el sink
+  (`_send_client_email` → `_build_message`) solo pone una dirección ASCII
+  simple. Al mandar la leen solo el worker de la reserva pública y los
+  recordatorios; los eventos del outbox (panel, cancelación por bloqueo,
+  filas `email.send`) y la oferta de la lista de espera la congelan en su
+  payload al planear el evento. El OTP, la recuperación de clave y los avisos al
+  dueño no la llevan nunca. (`test_reply_to_de_los_mails_al_cliente.py`,
+  `test_mail_de_contacto_de_la_tienda.py`)
 - **Una reserva pública sin cobro nace confirmada** (propuesta por Mateo,
   adoptada por el dueño el 2026-10-21, D-20261020-01). Sin cobro es
   `payment_required` falso: sin seña, seña opcional sin MP elegido o seña

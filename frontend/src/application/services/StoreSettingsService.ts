@@ -68,6 +68,8 @@ export interface StoreSettings {
   business_hours: Record<string, BusinessHourPeriod[]>
   send_email_confirmation: boolean
   send_email_reminders: boolean
+  /** Reply-To de los mails a los clientes (#283). Opcional: un backend anterior no lo manda. */
+  contact_email?: string | null
   feature_flags?: StoreFeatureFlags
 }
 
@@ -108,6 +110,8 @@ export interface StoreUpdatePayload {
   business_hours?: Record<string, BusinessHourPeriod[]>
   send_email_confirmation?: boolean
   send_email_reminders?: boolean
+  /** Vacio o `null` lo borra. */
+  contact_email?: string | null
 }
 
 export interface StoreMediaUploadResult {
