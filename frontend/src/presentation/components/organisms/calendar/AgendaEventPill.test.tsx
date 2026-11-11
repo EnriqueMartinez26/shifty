@@ -1,6 +1,7 @@
 import { render, screen } from '@testing-library/react'
 
 import { AgendaEventPill } from './AgendaEventPill'
+import { colors2000s } from '../../../../theme/colors'
 import type { UnifiedCalendarEvent } from '../../../lib/calendarEvents'
 
 // 2026-09-30: la pastilla de un evento salio de CalendarContainer (F11c-08).
@@ -49,6 +50,11 @@ describe('AgendaEventPill', () => {
     render(<AgendaEventPill event={block} compact actions={null} />)
     expect(screen.getByText('Bloqueo')).toBeInTheDocument()
     expect(screen.getByText('Almuerzo')).toBeInTheDocument()
+    const card = screen.getByText('Almuerzo').parentElement
+    if (!card) throw new Error('Falta la tarjeta del bloqueo')
+    const whiteSurface = document.createElement('div')
+    whiteSurface.style.background = colors2000s.surface.white
+    expect(card.style.background).toBe(whiteSurface.style.background)
     expect(screen.queryByRole('button')).not.toBeInTheDocument()
   })
 })

@@ -27,7 +27,7 @@ export const AgendaEventPill: React.FC<AgendaEventPillProps> = ({
     event.type === 'block'
       ? {
           accent: colors2000s.status.warning.accent,
-          background: `linear-gradient(180deg, ${colors2000s.status.warning.bg} 0%, ${colors2000s.status.warning.border} 100%)`,
+          background: colors2000s.surface.white,
           text: colors2000s.status.warning.text
         }
       : statusStyle(event.status)
@@ -41,13 +41,13 @@ export const AgendaEventPill: React.FC<AgendaEventPillProps> = ({
       }}
     >
       <p
-        className={`${compact ? 'text-[8px]' : 'text-[9px]'} font-black uppercase tracking-widest`}
+        className={`${compact ? 'text-[8px]' : 'text-[10px] md:text-[9px]'} font-black uppercase tracking-widest`}
         style={{ color: style.text }}
       >
         {event.type === 'block' ? 'Bloqueo' : bookingStatusLabel(event.status)}
       </p>
       <p
-        className={`${compact ? 'text-[11px]' : 'text-xs'} font-black`}
+        className={`${compact ? 'text-[11px]' : 'text-sm md:text-xs'} font-black`}
         style={{ color: colors2000s.text.primary }}
       >
         {event.title}
@@ -60,7 +60,10 @@ export const AgendaEventPill: React.FC<AgendaEventPillProps> = ({
           + {event.addonsLabel}
         </p>
       )}
-      <p className="text-[10px] font-bold" style={{ color: colors2000s.text.secondary }}>
+      <p
+        className={`${compact ? 'text-[10px]' : 'text-xs md:text-[10px]'} font-bold`}
+        style={{ color: colors2000s.text.secondary }}
+      >
         {formatArgentinaTime(toInstantIso(event.startsAt))} -{' '}
         {formatArgentinaTime(toInstantIso(event.endsAt))} · {event.staffName}
       </p>

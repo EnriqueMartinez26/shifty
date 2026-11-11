@@ -3793,7 +3793,7 @@ Type: `enum("efectivo", "transferencia", "mercadopago", "otro")`
 
 | field | type | required | constraints |
 |---|---|---|---|
-| `amount` | number \| string \| null | no | minimum=0.0, maximum=10000000.0, pattern="^(?!^[-+.]*$)[+-]?0*(?:\\d{0,10}\|(?=[\\d.]{1,13}0*$)\\d{0,10}\\.\\d{0,2}0*$)" |
+| `amount` | number \| string \| null | no | maximum=10000000.0, exclusiveMinimum=0.0, pattern="^(?!^[-+.]*$)[+-]?0*(?:\\d{0,10}\|(?=[\\d.]{1,13}0*$)\\d{0,10}\\.\\d{0,2}0*$)" |
 | `notes` | string \| null | no | maxLength=500 |
 
 ### MercadoPagoOAuthStartResponse
@@ -4753,6 +4753,7 @@ Type: `enum("efectivo", "transferencia", "mercadopago", "otro")`
 | `business_hours` | object<string, array<BusinessHourPeriod-Output>> | yes |  |
 | `send_email_confirmation` | boolean | yes |  |
 | `send_email_reminders` | boolean | yes |  |
+| `contact_email` | string \| null | no |  |
 | `feature_flags` | StoreFeatureFlags | yes |  |
 
 ### StoreSubscriptionCreate
@@ -4893,6 +4894,7 @@ Type: `enum("efectivo", "transferencia", "mercadopago", "otro")`
 | `business_hours` | object<string, array<BusinessHourPeriod-Input>> \| null | no |  |
 | `send_email_confirmation` | boolean \| null | no |  |
 | `send_email_reminders` | boolean \| null | no |  |
+| `contact_email` | string \| null | no | maxLength=254, format="email" |
 
 ### StoreUsersOverviewResponse
 
@@ -5083,4 +5085,4 @@ Type: `enum("admin", "staff", "receptionist", "client")`
 | `terms_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 | `privacy_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 
-Generado desde app.openapi() el 2026-10-22, commit f2d03380
+Generado desde app.openapi() el 2026-11-11, commit d619702f
