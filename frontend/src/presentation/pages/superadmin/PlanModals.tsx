@@ -197,6 +197,20 @@ export const PlanModals: React.FC<PlanModalsProps> = ({
         </div>
       ) : null}
 
+      {selectedStore?.has_subscription ? (
+        <ToggleRow
+          label="Renovación confirmada"
+          description="Marcala después de confirmar el pago y extendé el vencimiento; al guardar, la suscripción queda Activa."
+          checked={subscriptionForm.confirmed_renewal}
+          onToggle={() =>
+            setSubscriptionForm((current) => ({
+              ...current,
+              confirmed_renewal: !current.confirmed_renewal
+            }))
+          }
+        />
+      ) : null}
+
       <div className={formGridClass}>
         <div>
           <FieldLabel htmlFor="subscription-plan">Plan</FieldLabel>
@@ -220,7 +234,8 @@ export const PlanModals: React.FC<PlanModalsProps> = ({
           <FieldLabel htmlFor="subscription-status">Status</FieldLabel>
           <SelectInput
             id="subscription-status"
-            value={subscriptionForm.status}
+            value={subscriptionForm.confirmed_renewal ? 'active' : subscriptionForm.status}
+            disabled={subscriptionForm.confirmed_renewal}
             onChange={(event) =>
               setSubscriptionForm((current) => ({ ...current, status: event.target.value }))
             }

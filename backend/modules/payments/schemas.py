@@ -42,9 +42,11 @@ class PaymentPreferenceResponse(BaseModel):
 
 # Techo alineado con services.price (le=10_000_000) y con Numeric(12, 2) en la
 # base: un monto sin limite superior desborda la columna y termina en un 500.
+# Mayor a cero como el front (``amountInput.ts``) y el resto del turno: con
+# ``ge=0`` un importe en cero respondia 200 y registraba otro (#278).
 class ManualPaymentRequest(BaseModel):
     amount: Decimal | None = Field(
-        None, ge=0, le=10_000_000, max_digits=12, decimal_places=2
+        None, gt=0, le=10_000_000, max_digits=12, decimal_places=2
     )
     notes: str | None = Field(None, max_length=500)
 

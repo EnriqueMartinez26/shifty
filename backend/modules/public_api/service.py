@@ -52,7 +52,11 @@ from core.exceptions import (
     ValidationException,
 )
 from core.feature_flags import is_store_feature_enabled
-from core.rate_limit import subject_quota_allows, subject_quota_exhausted
+from core.rate_limit import (
+    rate_limit_ip_key,
+    subject_quota_allows,
+    subject_quota_exhausted,
+)
 from core.utils import (
     BOOKING_HORIZON_DAYS,
     ensure_utc_aware,
@@ -324,7 +328,8 @@ PUBLIC_BOOKING_DAILY_WINDOW_SECONDS = 24 * 60 * 60
 
 
 def _daily_quota_subject(store_id: str, client_ip: str) -> str:
-    return f"{store_id}:{client_ip}"
+    # IPv6 por su /64, como todo limite por IP (#277).
+    return f"{store_id}:{rate_limit_ip_key(client_ip)}"
 
 
 async def require_daily_booking_quota(store_id: str, client_ip: str) -> None:

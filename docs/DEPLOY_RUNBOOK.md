@@ -14,6 +14,8 @@ bash scripts/deploy.sh edge                       # only when nginx's image or n
 
 The VPS has no `make`. Where it is installed, `make deploy APP_VERSION=<sha>`, `make rollback` and `make deploy-edge` are the same commands; the rest of this runbook names them either way.
 
+To create and prepare a store before announcing it, follow the [store onboarding runbook](ALTA_TIENDA_RUNBOOK.md).
+
 ## 1. One-time server setup
 
 | Prerequisite | How to check |
@@ -113,6 +115,8 @@ sudo ufw status verbose      # Status: active; Default: deny (incoming); only 22
   APP_VERSION=$(cat .deploy/current) docker compose ps --format '{{.Service}}: {{.Ports}}'   # only nginx shows 0.0.0.0:80 and :443
   sudo ss -tlnp     # on public addresses only sshd (22) and docker-proxy (80, 443); the rest on 127.0.0.x or ::1
   ```
+
+- IPv6 reaches nginx with the client's address only through the `edge` network (section 4c).
 
 **4. Automatic security updates, without automatic reboot.**
 
@@ -379,6 +383,56 @@ WHERE u.role <> 'client'
 ```
 
 `alembic downgrade` past `4b6d8f0a2c13` restores the global unique only if no email is in two rows; otherwise it stops with the count and changes nothing (it never picks which row keeps the email). The rows to fix by hand: `SELECT email, count(*) FROM users GROUP BY email HAVING count(*) > 1;`
+
+## 4c. IPv6 at the edge (#277)
+
+**Why.** On 2026-11-02 the edge log showed `172.16.1.1`, the Docker bridge gateway, as the second most frequent client IP, carrying real portal traffic. `shifty_network` has no IPv6, so Docker publishes host port 80/443 on IPv6 through `docker-proxy` to the container's IPv4 address, and nginx sees the gateway instead of the client: every IPv6 visitor shared one bucket of every per-IP limit (the 10 bookings per IP, store and day, `public-write`, OTP and the nginx zones).
+
+**What changes.** `docker-compose.prod.yml` adds a network `edge` (`enable_ipv6: true`, no fixed subnet) used only by nginx, with `gw_priority: 1`; nginx stays on `shifty_network` to reach backend and frontend. `nginx/nginx.prod.conf` also listens on `[::]:80` and `[::]:443`. `shifty_network` does not change, so db, redis and rabbitmq are not recreated. Per-IP keys group IPv6 by its /64, IPv4 stays per address, in the app (`core/rate_limit.py::rate_limit_ip_key`) and in the edge zones (`map $remote_addr $rate_limit_key`); thresholds are unchanged. Clients sharing a /64 share the per-IP buckets, still per store. After the deploy the IPv6 counters start empty (new keys); IPv4 keys are the same as before.
+
+**What the documentation says (checked 2026-11-02) and what only the VPS can tell.** From the Docker docs: a Compose network with `enable_ipv6: true` and no subnet gets a ULA `/64` when the daemon has no IPv6 pools, with no `daemon.json` change ([IPv6](https://docs.docker.com/engine/daemon/ipv6/)); `ip6tables` is on by default and provides IPv6 port mapping (same page); with an IPv4-only bridge and the userland proxy, host IPv6 ports map to the container's IPv4 ([port publishing](https://docs.docker.com/engine/network/port-publishing/)), which is the current bug; `gw_priority` picks the network that provides the default gateway ([Compose services](https://docs.docker.com/reference/compose-file/services/), Docker 28+). In the Moby source (`daemon/libnetwork/default_gateway.go::getGatewayEndpoint`, `drivers/bridge/bridge_linux.go::ProgramExternalConnectivity`) the IPv4 and IPv6 gateway endpoints are chosen separately and IPv6 host ports are programmed on the IPv6 gateway endpoint, which with this change is `edge`. Docker enables `net.ipv6.conf.all.forwarding` on startup if it is off ([packet filtering](https://docs.docker.com/engine/network/packet-filtering-firewalls/)). Not verified anywhere but on the server: that the daemon config does not disable `ip6tables`, what the forwarding change does to the host's own IPv6 route, and that external IPv6 traffic really arrives with its source address. The steps below check exactly that, first on staging (a separate host, section 6), then on production.
+
+**Pre-checks (read-only).** Stop at any one that fails and bring it back as an operations decision: host Docker or firewall changes are outside this change.
+
+```bash
+docker version --format '{{.Server.Version}}'      # 28 or later (gw_priority)
+docker compose version                             # 2.33.1 or later: older Compose rejects gw_priority and `config` fails
+sudo cat /etc/docker/daemon.json 2>/dev/null       # no "ip6tables": false; IPv6 entries in default-address-pools are fine
+sysctl net.ipv6.conf.all.forwarding                # must already be 1; 0 = stop (see below)
+ip -6 route show default                           # "proto ra" makes the forwarding change riskier (see below)
+```
+
+If `net.ipv6.conf.all.forwarding` is 0, stop, whatever the route type: Docker turns it on when it creates the IPv6 network, and also sets the IPv6 FORWARD policy to DROP unless `ip-forward-no-drop` is configured ([packet filtering](https://docs.docker.com/engine/network/packet-filtering-firewalls/)). Both are host changes. With a default route learned from router advertisements (`proto ra`) it is worse: once forwarding is on, the kernel ignores router advertisements unless `accept_ra` is 2 ([kernel ip-sysctl](https://docs.kernel.org/networking/ip-sysctl.html)), and the host can lose its IPv6 route when it expires. Do not roll out until that operations decision is taken.
+
+**Do not run `deploy.sh edge` before these pre-checks pass.** Once this change is in `/opt/shifty`, the edge config hash differs from `.deploy/edge-conf.sha256`. So the next `edge` run, for any reason (an nginx image bump, for example), recreates nginx on the `edge` network and creates the IPv6 network.
+
+**Rollout.** With the release that carries this change already deployed (`scripts/deploy.sh deploy` as usual):
+
+```bash
+cd /opt/shifty
+APP_VERSION=$(cat .deploy/current) docker compose config --quiet                     # exits 0
+APP_VERSION=$(cat .deploy/current) docker compose config | sed -n '/^networks:/,/^[a-z]/p'   # edge: enable_ipv6: true
+bash scripts/deploy.sh edge
+```
+
+`edge` recreates nginx because `nginx/nginx.prod.conf` changed (its sha256 differs from `.deploy/edge-conf.sha256`), and `up --no-deps nginx` creates the missing `shifty_edge` network; it touches nothing else. If only `docker-compose.prod.yml` changed, `edge` would just reload: recreate by hand with `APP_VERSION=$(cat .deploy/current) docker compose up -d --no-deps --no-build --force-recreate --wait nginx`. Recreating the edge drops connections for a moment; do it outside peak hours.
+
+**Verify.**
+
+```bash
+docker network inspect shifty_edge --format '{{.EnableIPv6}} {{range .IPAM.Config}}{{.Subnet}} {{end}}'
+#   true <an IPv4 subnet> fdxx:...::/64
+docker inspect "$(APP_VERSION=$(cat .deploy/current) docker compose ps -q nginx)" \
+  --format '{{range $n, $v := .NetworkSettings.Networks}}{{$n}} {{$v.GlobalIPv6Address}} gw_priority={{$v.GwPriority}}{{"\n"}}{{end}}'
+#   shifty_edge with an fdxx:: address and gw_priority=1; shifty_shifty_network with none
+sudo ip6tables -t nat -S 2>/dev/null | grep -E 'dport (80|443)' || sudo nft list ruleset | grep -E 'dport (80|443)'
+#   DNAT of 80 and 443 to the container's IPv6 address
+APP_VERSION=$(cat .deploy/current) docker compose exec -T nginx nginx -t
+```
+
+Then, from a machine OUTSIDE the VPS with IPv6 and with IPv4: `curl -6 -sS -o /dev/null -w '%{http_code}\n' https://<domain>/` and the same with `curl -4`. On the VPS, `APP_VERSION=$(cat .deploy/current) docker compose logs --no-log-prefix --since 5m nginx | grep -o '"ip":"[^"]*"' | sort | uniq -c | sort -rn` must show that machine's public IPv6 and IPv4, not `172.16.1.1`. The app receives the same address: nginx overwrites `X-Forwarded-For` and `X-Real-IP` with `$remote_addr`. A day later, the count from the issue (`--since 24h`) should no longer show `172.x` addresses with portal traffic.
+
+**Rollback.** Revert the commit, `git pull` and `bash scripts/deploy.sh edge` (the conf changes back, so nginx is recreated on `shifty_network` only). The `shifty_edge` network stays until `docker network rm shifty_edge`. The /64 keys in the app are independent of the edge and do not need a rollback. The `listen [::]` lines do not depend on the network: on Docker 29.8 (checked locally, 2026-11-02) nginx with this conf also starts and listens on `:::80`/`:::443` in a container on an IPv4-only network, so reverting only the compose file still leaves a working edge.
 
 ## 5. Migrations: expand/contract
 
