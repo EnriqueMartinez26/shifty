@@ -26,6 +26,7 @@ from core.exceptions import (
     RateLimitedException,
     UserNotFoundException,
 )
+from core.observability import report_mail_failure
 from core.redis import REDIS_UNAVAILABLE_ERRORS, get_redis
 from core.roles import (
     ROLE_CLIENT,
@@ -241,7 +242,8 @@ def _send_email(message: EmailMessage, *, event: str) -> None:
     except Exception as exc:
         # Nunca romper el flujo por el mail, pero tampoco fallar en silencio:
         # un SMTP caido deja a los usuarios sin recuperacion de cuenta.
-        logger.warning(event, error=str(exc), error_type=type(exc).__name__)
+        logger.warning(event, error_type=type(exc).__name__)
+        report_mail_failure(component="auth", error_type=type(exc).__name__)
 
 
 def send_password_reset_email(email_to: str, reset_url: str) -> None:
