@@ -18,6 +18,7 @@ import ipaddress
 import json
 import random
 import re
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -1263,7 +1264,7 @@ def test_toda_location_de_la_spa_con_headers_propios_incluye_los_de_seguridad() 
 # --- metadata social por tienda ----------------------------------------------
 
 
-def _directivas_recursivas(bloque: list[Directiva]):
+def _directivas_recursivas(bloque: list[Directiva]) -> Iterator[Directiva]:
     for directiva in bloque:
         yield directiva
         if directiva.hijos is not None:
