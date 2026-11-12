@@ -1353,6 +1353,22 @@ def test_el_shell_usa_ssi_con_fallback_y_proxy_backend_interno() -> None:
     [metadata_proxy] = proxy_interno
     assert una(metadata_proxy, "proxy_connect_timeout").args == ("2s",)
     assert una(metadata_proxy, "proxy_read_timeout").args == ("2s",)
+    assert una(metadata_proxy, "proxy_intercept_errors").args == ("on",)
+    assert una(metadata_proxy, "error_page").args == (
+        "400",
+        "404",
+        "429",
+        "500",
+        "502",
+        "503",
+        "504",
+        "=",
+        "/_internal/share-metadata-fallback",
+    )
+
+    fallback = location(server, "=", "/_internal/share-metadata-fallback")
+    assert una(fallback, "internal").args == ()
+    assert una(fallback, "return").args == ("204",)
 
 
 def test_el_shell_dinamico_no_se_cachea_y_docker_valida_nginx() -> None:

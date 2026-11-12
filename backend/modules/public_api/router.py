@@ -260,8 +260,13 @@ def _share_metadata_fragment(
         ("name", "twitter:image", image),
     )
     return "\n".join(
-        f'<meta {attribute}="{html.escape(key, quote=True)}" content="{html.escape(value, quote=True)}">'
-        for attribute, key, value in tags
+        (
+            f"<title>{html.escape(title, quote=True)}</title>",
+            *(
+                f'<meta {attribute}="{html.escape(key, quote=True)}" content="{html.escape(value, quote=True)}">'
+                for attribute, key, value in tags
+            ),
+        )
     )
 
 

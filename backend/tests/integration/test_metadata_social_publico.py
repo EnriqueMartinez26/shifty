@@ -46,6 +46,10 @@ async def test_metadata_por_slug_escapa_datos_y_resuelve_media_publica(
     assert response.headers["cache-control"] == "no-store"
     assert response.headers["content-type"].startswith("text/html")
     assert "<script>alert" not in response.text
+    assert (
+        "<title>Taller &lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt; "
+        "&amp; Co | Shifty</title>" in response.text
+    )
     assert "&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt; &amp; Co" in response.text
     assert (
         "Cortes &amp; color &lt;b&gt;para vos&lt;/b&gt; &quot;hoy&quot;"
@@ -86,6 +90,7 @@ async def test_metadata_de_otra_tienda_es_independiente_y_usa_fallback_seguro(
     response = await client.get("/public/share-metadata/metadata-dos")
 
     assert response.status_code == 200, response.text
+    assert "<title>Tienda metadata-dos | Shifty</title>" in response.text
     assert 'property="og:title" content="Tienda metadata-dos | Shifty"' in response.text
     assert (
         'property="og:description" content="Reservá turnos online en Tienda metadata-dos."'
@@ -128,6 +133,7 @@ async def test_metadata_sin_portada_usa_la_imagen_general_y_conserva_el_nombre(
     response = await client.get("/public/share-metadata/metadata-sin-portada")
 
     assert response.status_code == 200, response.text
+    assert "<title>Tienda metadata-sin-portada | Shifty</title>" in response.text
     assert (
         'property="og:title" content="Tienda metadata-sin-portada | Shifty"'
         in response.text
