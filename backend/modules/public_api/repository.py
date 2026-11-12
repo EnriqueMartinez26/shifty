@@ -115,6 +115,17 @@ class StoreRef:
     cancellation_hours: int
 
 
+@dataclass(frozen=True)
+class StoreShareMetadata:
+    """Campos minimos que puede publicar el shell de enlaces compartidos."""
+
+    id: str
+    slug: str
+    name: str
+    description: str | None
+    cover_url: str | None
+
+
 class RangeRejection(str, Enum):
     """Por que un profesional no puede tomar un rango (``staff_can_take_range``)."""
 
@@ -150,6 +161,35 @@ class PublicRepository:
         if row is None:
             return None
         return row[0], row[1]
+
+    async def get_store_share_metadata_by_slug(
+        self, slug: str
+    ) -> StoreShareMetadata | None:
+        """Lee solo los campos que necesita el preview HTML del enlace.
+
+        ``description`` y ``cover_url`` viven dentro de ``theme_config``; no
+        cargar la entidad completa evita traer horarios y otras relaciones del
+        portal para una respuesta que solo contiene etiquetas sociales.
+        """
+        row = (
+            await self.db.execute(
+                select(Store.id, Store.slug, Store.name, Store.theme_config).where(
+                    Store.slug == slug, *_visible_en_el_portal()
+                )
+            )
+        ).one_or_none()
+        if row is None:
+            return None
+        theme = row.theme_config if isinstance(row.theme_config, dict) else {}
+        description = theme.get("description")
+        cover_url = theme.get("cover_url")
+        return StoreShareMetadata(
+            id=str(row.id),
+            slug=str(row.slug),
+            name=str(row.name),
+            description=description if isinstance(description, str) else None,
+            cover_url=cover_url if isinstance(cover_url, str) else None,
+        )
 
     async def get_store_ref_by_slug(self, slug: str) -> tuple[str, str, str] | None:
         """``(id, public_id, name)`` de una tienda activa por slug, en columnas.

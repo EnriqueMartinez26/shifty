@@ -18,6 +18,7 @@ import ipaddress
 import json
 import random
 import re
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -1258,6 +1259,129 @@ def test_toda_location_de_la_spa_con_headers_propios_incluye_los_de_seguridad() 
         if todas(loc.bloque, "add_header"):
             incluidos = [d.args for d in todas(loc.bloque, "include")]
             assert ("/etc/nginx/security-headers.conf",) in incluidos, loc.args
+
+
+# --- metadata social por tienda ----------------------------------------------
+
+
+def _directivas_recursivas(bloque: list[Directiva]) -> Iterator[Directiva]:
+    for directiva in bloque:
+        yield directiva
+        if directiva.hijos is not None:
+            yield from _directivas_recursivas(directiva.hijos)
+
+
+def _texto_directivas(bloque: list[Directiva]) -> str:
+    return " ".join(
+        " ".join((directiva.nombre, *directiva.args))
+        for directiva in _directivas_recursivas(bloque)
+    )
+
+
+def _locations_de_share(server: list[Directiva]) -> list[Directiva]:
+    """Locations regex que reconocen las dos URLs públicas compartibles."""
+    encontradas: list[Directiva] = []
+    for loc in locations(server):
+        if len(loc.args) < 2 or loc.args[0] not in {"~", "~*"}:
+            continue
+        patron = loc.args[-1]
+        reconoce_b = re.search(r"(?:^|[(/|])b(?:[/)|]|$)", patron)
+        reconoce_booking = re.search(r"(?:^|[(/|])booking(?:[/)|]|$)", patron)
+        if reconoce_b or reconoce_booking:
+            encontradas.append(loc)
+    return encontradas
+
+
+def test_el_home_conserva_el_shell_estatico_del_spa() -> None:
+    """El metadata dinámico solo se aplica a rutas de tienda compartidas."""
+    server = _server_spa()
+    raiz = location(server, "/")
+    assert una(raiz, "try_files").args == ("$uri", "$uri/", "/index.html")
+    index = (RAIZ / "frontend" / "index.html").read_text(encoding="utf-8")
+    assert '<meta property="og:title"' in index
+    assert 'content="https://shifty-ar.tech/og-shifty.jpg"' in index
+
+
+def test_las_dos_rutas_de_tienda_sirven_el_shell_con_metadata() -> None:
+    server = _server_spa()
+    matches = _locations_de_share(server)
+    assert matches, "faltan locations para /b/{slug} y /booking/{slug}"
+    # Nginx/PCRE nombra capturas como `(?<slug>...)`; normalizar esa forma
+    # para que Python pueda verificar que los dos aliases alcanzan el shell.
+    patrones = [
+        re.compile(re.sub(r"\(\?<([A-Za-z_]\w*)>", r"(?P<\1>", loc.args[-1]))
+        for loc in matches
+    ]
+    assert any(p.fullmatch("/b/demo-store") for p in patrones)
+    assert any(p.fullmatch("/booking/demo-store") for p in patrones)
+    assert any("store.html" in _texto_directivas(loc.bloque) for loc in matches), (
+        "las rutas de tienda deben entregar el shell generado con metadata"
+    )
+
+
+def test_el_shell_usa_ssi_con_fallback_y_proxy_backend_interno() -> None:
+    server = _server_spa()
+    directives = list(_directivas_recursivas(server))
+    assert any(d.nombre == "ssi" and d.args == ("on",) for d in directives)
+    assert any(
+        d.nombre == "ssi_silent_errors" and d.args == ("on",) for d in directives
+    )
+
+    shell = RAIZ / "frontend" / "store.html"
+    assert shell.is_file(), "falta la plantilla store.html del shell de tienda"
+    html = shell.read_text(encoding="utf-8")
+    assert re.search(r"<!--\s*#\s*include\s+virtual=", html)
+    assert re.search(r"\bstub=\"default_store_metadata\"", html), (
+        "el include SSI debe enlazar el fallback Shifty"
+    )
+    assert re.search(
+        r'<!--\s*#\s*block\s+name="default_store_metadata"\s*-->'
+        r"[\s\S]*?<meta\s+property=\"og:title\""
+        r"[\s\S]*?<meta\s+property=\"og:image\""
+        r"[\s\S]*?<!--\s*#\s*endblock\s*-->",
+        html,
+    ), "el bloque SSI debe contener Open Graph genérico para fallos del lookup"
+    assert "slug=$share_store_slug" in html
+
+    proxy_interno = [
+        loc.bloque
+        for loc in locations(server)
+        if todas(loc.bloque, "internal") and todas(loc.bloque, "proxy_pass")
+    ]
+    assert proxy_interno, "el endpoint metadata debe usar una location interna"
+    assert any("backend" in _texto_directivas(loc) for loc in proxy_interno)
+    [metadata_proxy] = proxy_interno
+    assert una(metadata_proxy, "proxy_connect_timeout").args == ("2s",)
+    assert una(metadata_proxy, "proxy_read_timeout").args == ("2s",)
+    assert una(metadata_proxy, "proxy_intercept_errors").args == ("on",)
+    assert una(metadata_proxy, "error_page").args == (
+        "400",
+        "404",
+        "429",
+        "500",
+        "502",
+        "503",
+        "504",
+        "=",
+        "/_internal/share-metadata-fallback",
+    )
+
+    fallback = location(server, "=", "/_internal/share-metadata-fallback")
+    assert una(fallback, "internal").args == ()
+    assert una(fallback, "return").args == ("204",)
+
+
+def test_el_shell_dinamico_no_se_cachea_y_docker_valida_nginx() -> None:
+    server = _server_spa()
+    shell = location(server, "=", "/store.html")
+    assert any("no-store" in value.lower() for value in _cache_control(shell)), (
+        "el HTML con metadata por tienda debe evitar cache compartido"
+    )
+
+    dockerfile = (RAIZ / "frontend" / "Dockerfile").read_text(encoding="utf-8")
+    assert re.search(r"^RUN\s+nginx\s+-t(?:\s|$)", dockerfile, re.M), (
+        "la imagen de frontend debe validar disponibilidad/sintaxis de SSI"
+    )
 
 
 # --- paridad dev/prod -----------------------------------------------------------
