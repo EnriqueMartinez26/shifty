@@ -1357,10 +1357,9 @@ def test_el_shell_usa_ssi_con_fallback_y_proxy_backend_interno() -> None:
 def test_el_shell_dinamico_no_se_cachea_y_docker_valida_nginx() -> None:
     server = _server_spa()
     shell = location(server, "=", "/store.html")
-    assert any(
-        "no-store" in value.lower()
-        for value in _cache_control(shell)
-    ), "el HTML con metadata por tienda debe evitar cache compartido"
+    assert any("no-store" in value.lower() for value in _cache_control(shell)), (
+        "el HTML con metadata por tienda debe evitar cache compartido"
+    )
 
     dockerfile = (RAIZ / "frontend" / "Dockerfile").read_text(encoding="utf-8")
     assert re.search(r"^RUN\s+nginx\s+-t(?:\s|$)", dockerfile, re.M), (
