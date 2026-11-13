@@ -17,6 +17,8 @@ from modules.billing.model import Plan, StoreSubscription
 from modules.stores.model import Store
 from modules.notifications.model import Notification
 from modules.payments.jobs import process_outbox_batch
+from modules.payments.model import OutboxMessage
+from modules.users.model import User
 from tests.integration.test_feature_flags_finance_and_public_privacy import (
     auth_headers,
     create_service,
@@ -163,6 +165,109 @@ async def test_el_job_avisa_una_vez_vence_y_suspende(
     estable = await billing_tasks.run_subscription_lifecycle()
     assert estable["suspended"] == 0 and estable["past_due"] == 0
     assert store
+
+
+@pytest.mark.asyncio
+async def test_avisa_a_superadmins_al_vencer_y_dos_dias_antes_de_suspender(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    buzon = Buzon()
+    monkeypatch.setattr(tasks, "_send_email", buzon)
+    monkeypatch.setattr(
+        billing_tasks, "AsyncSessionFactory", lambda: _SesionCompartida(test_session)
+    )
+    _store, _token, subscription = await _con_suscripcion(
+        client, test_session, "susc-superadmin-aviso", vence_en_dias=10
+    )
+    superadmin = (
+        await test_session.execute(
+            select(User).where(User.email == "susc-superadmin-aviso@example.com")
+        )
+    ).scalar_one()
+    superadmin.is_global_admin = True
+    otro_superadmin_activo = User(
+        email="global-activo-2@example.com",
+        hashed_password="not-used-by-this-test",
+        first_name="Global",
+        last_name="Activo",
+        role="admin",
+        store_id=superadmin.store_id,
+        is_global_admin=True,
+        is_active=True,
+    )
+    superadmin_inactivo = User(
+        email="global-inactivo@example.com",
+        hashed_password="not-used-by-this-test",
+        first_name="Global",
+        last_name="Inactivo",
+        role="admin",
+        store_id=superadmin.store_id,
+        is_global_admin=True,
+        is_active=False,
+    )
+    test_session.add_all([otro_superadmin_activo, superadmin_inactivo])
+
+    ahora = datetime(2026, 9, 10, 15, tzinfo=timezone.utc)
+    subscription.current_period_end = ahora - timedelta(days=1)
+    await test_session.commit()
+    vencida = await billing_tasks.run_subscription_lifecycle(now=ahora)
+    repetida = await billing_tasks.run_subscription_lifecycle(now=ahora)
+    assert vencida["past_due"] == 1 and vencida["admin_notices"] == 1
+    assert repetida["admin_notices"] == 0
+
+    subscription.current_period_end = ahora - timedelta(days=6)
+    await test_session.commit()
+    pre_suspension = await billing_tasks.run_subscription_lifecycle(now=ahora)
+    repetida_pre_suspension = await billing_tasks.run_subscription_lifecycle(now=ahora)
+    assert pre_suspension["admin_notices"] == 1
+    assert repetida_pre_suspension["admin_notices"] == 0
+
+    filas = list(
+        (
+            await test_session.execute(
+                select(OutboxMessage).where(
+                    OutboxMessage.event_type == "email.send",
+                    OutboxMessage.payload["source_event"].as_string()
+                    == billing_tasks.SUBSCRIPTION_ADMIN_NOTICE,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(filas) == 4
+    destinatarios = [fila.payload["args"]["email"] for fila in filas]
+    assert set(destinatarios) == {superadmin.email, otro_superadmin_activo.email}
+    assert destinatarios.count(superadmin.email) == 2
+    assert destinatarios.count(otro_superadmin_activo.email) == 2
+    assert superadmin_inactivo.email not in destinatarios
+    assert {fila.payload["args"]["title"] for fila in filas} == {
+        "Suscripción vencida",
+        "La página de reservas se suspende en 2 días",
+    }
+    await process_outbox_batch(test_session)
+    assert len(buzon.enviados) == 4
+    enviados_por_destinatario = {
+        email: [asunto for destino, asunto, _body in buzon.enviados if destino == email]
+        for email in (superadmin.email, otro_superadmin_activo.email)
+    }
+    assert all(
+        sorted(asuntos)
+        == sorted(
+            [
+                "Shifty - Suscripción vencida",
+                "Shifty - La página de reservas se suspende en 2 días",
+            ]
+        )
+        for asuntos in enviados_por_destinatario.values()
+    )
+    assert superadmin_inactivo.email not in {
+        destino for destino, _asunto, _body in buzon.enviados
+    }
+    assert {asunto for _email, asunto, _body in buzon.enviados} == {
+        "Shifty - Suscripción vencida",
+        "Shifty - La página de reservas se suspende en 2 días",
+    }
 
 
 @pytest.mark.asyncio
