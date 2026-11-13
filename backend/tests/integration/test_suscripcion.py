@@ -236,12 +236,24 @@ async def test_avisa_a_superadmins_al_vencer_y_dos_dias_antes_de_suspender(
         .all()
     )
     assert len(filas) == 4
-    destinatarios = [fila.payload["args"]["email"] for fila in filas]
+
+    def datos_email(fila: OutboxMessage) -> tuple[str, str]:
+        assert isinstance(fila.payload, dict)
+        args = fila.payload.get("args")
+        assert isinstance(args, dict)
+        destinatario = args.get("email")
+        asunto = args.get("title")
+        assert isinstance(destinatario, str)
+        assert isinstance(asunto, str)
+        return destinatario, asunto
+
+    avisos = [datos_email(fila) for fila in filas]
+    destinatarios = [destinatario for destinatario, _asunto in avisos]
     assert set(destinatarios) == {superadmin.email, otro_superadmin_activo.email}
     assert destinatarios.count(superadmin.email) == 2
     assert destinatarios.count(otro_superadmin_activo.email) == 2
     assert superadmin_inactivo.email not in destinatarios
-    assert {fila.payload["args"]["title"] for fila in filas} == {
+    assert {asunto for _destinatario, asunto in avisos} == {
         "Suscripción vencida",
         "La página de reservas se suspende en 2 días",
     }

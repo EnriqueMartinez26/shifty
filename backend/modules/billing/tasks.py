@@ -59,15 +59,12 @@ async def run_subscription_lifecycle(*, now: datetime | None = None) -> dict[str
                         )
                     ).scalars()
                 )
-                stores = dict(
-                    (
-                        await db.execute(
-                            select(Store.id, Store.name).where(
-                                Store.id.in_({notice[0] for notice in run.admin_notices})
-                            )
-                        )
-                    ).all()
+                store_rows = await db.execute(
+                    select(Store.id, Store.name).where(
+                        Store.id.in_({notice[0] for notice in run.admin_notices})
+                    )
                 )
+                stores = dict(store_rows.tuples().all())
                 for admin_notice in list(run.admin_notices):
                     store_id, subscription_id, notice, period_end = admin_notice
                     marker_payload = {
@@ -118,7 +115,11 @@ async def run_subscription_lifecycle(*, now: datetime | None = None) -> dict[str
                                 event_type="email.send",
                                 payload={
                                     "mail": "store_notification",
-                                    "args": {"email": email, "title": title, "body": body},
+                                    "args": {
+                                        "email": email,
+                                        "title": title,
+                                        "body": body,
+                                    },
                                     "source_event": SUBSCRIPTION_ADMIN_NOTICE,
                                     "appointment_id": None,
                                 },
