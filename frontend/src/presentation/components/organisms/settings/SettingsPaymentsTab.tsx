@@ -211,8 +211,9 @@ export const SettingsPaymentsTab: React.FC<SettingsPaymentsTabProps> = ({
               className="block min-w-0 break-words font-medium mt-1"
               style={{ color: colors2000s.text.secondary }}
             >
-              Si lo desactivás, los servicios con seña obligatoria solo se van a poder reservar
-              pagando con Mercado Pago.
+              Si lo desactivás, cuando Mercado Pago esté disponible, las reservas con seña
+              obligatoria deben pagarse online. Si no está disponible, puede usarse WhatsApp si la
+              tienda lo tiene configurado.
             </span>
           </span>
         </label>

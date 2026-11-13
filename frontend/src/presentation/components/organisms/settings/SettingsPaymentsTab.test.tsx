@@ -86,6 +86,16 @@ describe('SettingsPaymentsTab', () => {
     expect(props.onSave).toHaveBeenCalledTimes(1)
   })
 
+  it('explica el pago online con Mercado Pago y la alternativa por WhatsApp', () => {
+    renderTab()
+
+    expect(
+      screen.getByText(/Si lo desactivás, cuando Mercado Pago esté disponible/)
+    ).toHaveTextContent(
+      'Si lo desactivás, cuando Mercado Pago esté disponible, las reservas con seña obligatoria deben pagarse online. Si no está disponible, puede usarse WhatsApp si la tienda lo tiene configurado.'
+    )
+  })
+
   it('la etiqueta de coordinacion tiene un target tactil completo y admite wrapping', () => {
     const props = renderTab()
 
