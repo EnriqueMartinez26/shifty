@@ -193,6 +193,48 @@ async def test_el_reuso_dentro_de_la_ventana_no_cierra_las_demas_sesiones(
         assert sigue.status_code == 200, sigue.text
 
 
+@pytest.mark.parametrize(
+    "revoked_reason",
+    [
+        pytest.param(None, id="legacy-null"),
+        pytest.param("legacy_unknown", id="unknown"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_reusar_un_refresh_con_motivo_legacy_no_revoca_sesiones_vivas(
+    revoked_reason: str | None,
+    client: AsyncClient,
+    test_session: AsyncSession,
+) -> None:
+    email = f"reuso-{revoked_reason or 'null'}@test.com"
+    await register_and_login(client, slug="reuso-motivo-legacy", email=email)
+    viejo = client.cookies.get(REFRESH_COOKIE)
+    assert viejo
+
+    # Un motivo desconocido, incluso fuera de la gracia, no prueba que haya
+    # ocurrido una rotación y no debe invalidar una sesión creada después.
+    hace_rato = datetime.now(timezone.utc) - timedelta(
+        seconds=REFRESH_REUSE_GRACE_SECONDS + 5
+    )
+    await test_session.execute(
+        update(AuthSession)
+        .where(AuthSession.refresh_token_hash == hash_token(viejo))
+        .values(revoked_at=hace_rato, revoked_reason=revoked_reason)
+    )
+    await test_session.commit()
+    posterior = await _otro_dispositivo(client, email)
+
+    _usar(client, viejo)
+    reuso = await client.post("/auth/refresh")
+    assert reuso.status_code == 401, reuso.text
+    assert "set-cookie" not in reuso.headers
+    assert await _motivo_revocacion(test_session, viejo) == revoked_reason
+    assert await _vivas(test_session) == 1
+
+    _usar(client, posterior)
+    assert (await client.post("/auth/refresh")).status_code == 200
+
+
 @pytest.mark.asyncio
 async def test_reusar_un_refresh_cerrado_por_logout_no_revoca_sesiones_nuevas(
     client: AsyncClient, test_session: AsyncSession
