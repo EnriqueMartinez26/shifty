@@ -210,6 +210,7 @@ celery_app.conf.update(
         "modules.waitlist.tasks",
         "modules.billing.tasks",
         "modules.housekeeping.tasks",
+        "modules.ops.tasks",
     ],
     # ----------------------------------------------------------------
     # Celery Beat — Tareas periódicas
@@ -275,6 +276,11 @@ celery_app.conf.update(
             "task": "process_subscription_lifecycle",
             "schedule": crontab(minute=0, hour=9),
             "options": _EXPIRES_DIARIO,
+        },
+        "monitor-ops-slo-every-5-minutes": {
+            "task": "monitor_ops_slo",
+            "schedule": crontab(minute="*/5"),
+            "options": {"expires": 295},
         },
     },
 )

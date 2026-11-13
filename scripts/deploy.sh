@@ -401,19 +401,6 @@ imagenes_locales() {
 # `alarms` presente y vacia y `result` (si viene) "ok". Cualquier otra cosa
 # (una alarma, una clave desconocida, texto, vacio) cuenta como alarma: la
 # compuerta falla cerrada.
-rabbitmq_sin_alarmas() {
-  local salida="$1" clave
-  local miembro='("alarms":\[\]|"node":"[^"\\]*"|"result":"ok")'
-  local objeto="^\{${miembro}(,${miembro})*\}$"
-  [[ "$salida" =~ $objeto ]] || return 1
-  case "$salida" in *'"alarms":[]'*) ;; *) return 1 ;; esac
-  # Cada clave a lo sumo una vez (un valor de node no puede tener comillas).
-  for clave in '"alarms":' '"node":' '"result":'; do
-    case "${salida#*"$clave"}" in *"$clave"*) return 1 ;; esac
-  done
-  return 0
-}
-
 compuerta() {
   local fallos=0 i url
   for ((i = 1; i <= DEPLOY_GATE_CHECKS; i++)); do

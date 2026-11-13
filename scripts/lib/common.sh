@@ -74,6 +74,20 @@ json_escape() {
   printf '%s' "$s"
 }
 
+# Acepta solo la respuesta conocida de RabbitMQ 3.13.7 sin alarmas. Se usa
+# tanto en la compuerta de deploy como en el chequeo horario del host.
+rabbitmq_sin_alarmas() {
+  local salida="$1" clave
+  local miembro='("alarms":\[\]|"node":"[^"\\]*"|"result":"ok")'
+  local objeto="^\{${miembro}(,${miembro})*\}$"
+  [[ "$salida" =~ $objeto ]] || return 1
+  case "$salida" in *'"alarms":[]'*) ;; *) return 1 ;; esac
+  for clave in '"alarms":' '"node":' '"result":'; do
+    case "${salida#*"$clave"}" in *"$clave"*) return 1 ;; esac
+  done
+  return 0
+}
+
 # alert <asunto> <detalle> [clave] [minutos]
 #
 # Avisa por webhook (ALERT_WEBHOOK_URL: Slack/Discord/cualquier receptor de
