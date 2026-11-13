@@ -20,12 +20,12 @@ from decimal import Decimal
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import modules.notifications.tasks as tasks
 from modules.audit.model import AuditLog
-from modules.payments.model import Payment, PaymentStatus
+from modules.payments.model import OutboxMessage, Payment, PaymentStatus
 from modules.payments.service import (
     NonPositivePreferenceAmountError,
     prepare_mercadopago_preference,
@@ -185,3 +185,98 @@ async def test_no_se_prepara_una_preferencia_por_un_importe_no_positivo(
             amount=importe,
             link_ref=None,
         )
+
+
+@pytest.mark.asyncio
+async def test_confirmar_a_mano_un_cobro_reembolsado_responde_409_sin_mutaciones(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(tasks, "_send_email", Buzon())
+    _stub_preference(monkeypatch)
+    token, turno, pago = await _turno_con_sena(
+        client, test_session, "aud-299-reembolsado", 14
+    )
+    assert pago.apply_status(PaymentStatus.APPROVED.value)
+    assert pago.apply_status(PaymentStatus.REFUNDED.value)
+    pago.original_amount = Decimal("12000.00")
+    pago.discount_amount = Decimal("1500.00")
+    pago.promotion_code = "PROMO299"
+    pago.link_ref = "refund-link-299"
+    pago.external_payment_id = "mp-refund-299"
+    pago.transaction_id = "txn-refund-299"
+    await test_session.commit()
+
+    async def snapshot() -> tuple[
+        dict[str, object], tuple[tuple[str, object], ...], int
+    ]:
+        test_session.expire_all()
+        current = (
+            await test_session.execute(
+                select(Payment).where(Payment.appointment_id == turno)
+            )
+        ).scalar_one()
+        outbox_rows = (
+            await test_session.execute(
+                select(OutboxMessage.event_type, OutboxMessage.payload).order_by(
+                    OutboxMessage.id
+                )
+            )
+        ).all()
+        outbox = tuple((row.event_type, row.payload) for row in outbox_rows)
+        audits = await test_session.scalar(
+            select(func.count(AuditLog.id)).where(
+                AuditLog.resource_type == "Payment", AuditLog.resource_id == current.id
+            )
+        )
+        return (
+            {
+                "status": current.status,
+                "amount": current.amount,
+                "original_amount": current.original_amount,
+                "discount_amount": current.discount_amount,
+                "promotion_code": current.promotion_code,
+                "preference_id": current.preference_id,
+                "payment_link": current.payment_link,
+                "link_ref": current.link_ref,
+                "external_payment_id": current.external_payment_id,
+                "transaction_id": current.transaction_id,
+                "deposit_rule": current.deposit_rule,
+            },
+            outbox,
+            audits or 0,
+        )
+
+    before = await snapshot()
+    for _ in range(2):
+        respuesta = await client.post(
+            f"/payments/{turno}/manual-confirm",
+            headers=auth_headers(token),
+            json={"amount": "5000.00", "notes": "no debe registrarse"},
+        )
+
+        assert respuesta.status_code == 409, respuesta.text
+        assert respuesta.json()["error_code"] == (
+            "PAYMENT_REFUNDED_CANNOT_BE_MANUALLY_CONFIRMED"
+        )
+        assert await snapshot() == before
+
+
+@pytest.mark.asyncio
+async def test_confirmar_a_mano_un_cobro_vencido_sigue_permitido(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(tasks, "_send_email", Buzon())
+    _stub_preference(monkeypatch)
+    token, turno, pago = await _turno_con_sena(
+        client, test_session, "aud-299-vencido", 15
+    )
+    assert pago.apply_status(PaymentStatus.EXPIRED.value)
+    await test_session.commit()
+
+    respuesta = await client.post(
+        f"/payments/{turno}/manual-confirm", headers=auth_headers(token), json={}
+    )
+
+    assert respuesta.status_code == 200, respuesta.text
+    cobro = await _cobro(test_session, turno)
+    assert cobro.status == PaymentStatus.MANUAL_CONFIRMED.value

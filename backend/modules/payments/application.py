@@ -50,6 +50,17 @@ from modules.users.model import User
 _ACCREDITED = {PaymentStatus.APPROVED.value, PaymentStatus.MANUAL_CONFIRMED.value}
 
 
+class PaymentRefundedCannotBeManuallyConfirmedError(AppException):
+    """409: a refunded payment cannot be manually confirmed again."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            message="Un cobro reembolsado no se puede confirmar a mano",
+            http_status=409,
+            error_code="PAYMENT_REFUNDED_CANNOT_BE_MANUALLY_CONFIRMED",
+        )
+
+
 def _manual_amount(
     appointment: Appointment, service: Service, amount: Decimal | None
 ) -> Decimal:
@@ -174,6 +185,11 @@ def _sin_resto() -> AppException:
     )
 
 
+def _rechazar_pago_reembolsado(payment: Payment | None) -> None:
+    if payment is not None and payment.status == PaymentStatus.REFUNDED.value:
+        raise PaymentRefundedCannotBeManuallyConfirmedError()
+
+
 class PaymentService:
     def __init__(self, uow: AbstractUnitOfWork) -> None:
         self.uow = uow
@@ -192,12 +208,10 @@ class PaymentService:
         El monto por defecto es el precio congelado del turno (no el de lista de
         hoy); recien despues cae al calculo por servicio para turnos historicos.
 
-        Un cobro que nacio con la regla de sena (snapshot ``deposit_rule``) NO
-        se re-tarifa: registrarlo a mano pasaba su importe de la sena al total,
-        borraba ``promotion_code``, dejaba el snapshot mintiendo y pisaba el
-        ``preference_id`` real con el placeholder, dejando vivo en Mercado Pago
-        un checkout que Shifty ya no podia reconocer (AUD2-B2-01, 2026-09-19).
-        El ``amount`` explicito del pedido es el unico que re-tarifa.
+        Un cobro con snapshot de sena (``deposit_rule``) no se re-tarifa: tocar
+        el importe borra la promocion/preferencia real y puede dejar vivo un
+        checkout irreconocible en Mercado Pago (AUD2-B2-01, 2026-09-19). Solo
+        ``amount`` explicito re-tarifa.
 
         El link real que se conserva se manda a vencer en Mercado Pago
         (``_expire_live_checkout``): la plata ya entro por otro lado.
@@ -217,6 +231,7 @@ class PaymentService:
         cliente recibe "turno confirmado" (``_publish_confirmed_mail``).
         """
         actual = await self._lock_for_manual_confirm(appointment, actor)
+        _rechazar_pago_reembolsado(actual)
         if actual is not None and actual.is_accredited:
             # Ya entro la plata: no-op 200 con el cobro tal como se acredito,
             # sin re-tarifar aunque el pedido traiga importe (decision del
