@@ -38,6 +38,7 @@ jest.mock('../hooks/usePublic', () => ({
   usePublicClientAppointments: (...args: unknown[]) => mockAppointments(...args),
   usePublicAvailability: (...args: unknown[]) => mockAvailability(...args),
   usePublicStaff: (...args: unknown[]) => mockStaff(...args),
+  usePublicDepositPreview: () => ({ data: undefined, isError: false, isFetching: false }),
   useJoinWaitlist: () => ({ mutateAsync: jest.fn(), isPending: false, isSuccess: false }),
   useCancelClientAppointment: () => ({ mutateAsync: mockCancel, isPending: false }),
   useRescheduleClientAppointment: () => ({ mutateAsync: mockReschedule, isPending: false }),
