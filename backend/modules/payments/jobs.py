@@ -36,6 +36,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession
 from core.availability_cache import invalidate_availability
 from core.config import settings
 from core.database import _apply_tenant_context
+from core.mail_budget import MailPriority, mail_delivery_context
 from core.observability import OncePer, report_exception
 from core.redis import REDIS_UNAVAILABLE_ERRORS, get_availability_cache
 from core.utils import ensure_utc_aware, format_ars
@@ -681,6 +682,7 @@ async def _dispatch_pending_emails(
     deadline = time.monotonic() + OUTBOX_EMAIL_BUDGET_SECONDS
     fallados: list[tuple[OutboxMessage, str]] = []
     intentados = 0
+    diferido_por_cuota = False
     async with smtp_session() as smtp:
         while True:
             if time.monotonic() >= deadline:
@@ -695,13 +697,35 @@ async def _dispatch_pending_emails(
                 break
             intentados += 1
             motivo = await _send_one_pending_email(fila, smtp)
+            decision_cuota = getattr(smtp, "last_budget_decision", None)
+            if decision_cuota in {"deferred", "unavailable"}:
+                # El límite temporal o la caída de Redis impiden saber si hay
+                # cupo. Liberar el reclamo conserva la fila para otro tick y no
+                # consume un intento; en ambos casos el SMTP no fue llamado.
+                fila.processed_at = None
+                diferido_por_cuota = True
+                logger.info(
+                    "outbox_email_deferred_by_provider_budget",
+                    admission_decision=decision_cuota,
+                    **_contexto_del_mail(fila),
+                )
+                break
+            if decision_cuota == "dropped":
+                # Los correos de prioridad baja se descartan por decisión de
+                # presupuesto; no son fallos SMTP ni deben volver a la cola.
+                logger.warning(
+                    "outbox_email_dropped_by_provider_budget",
+                    **_contexto_del_mail(fila),
+                )
+                continue
             if motivo is not None:
                 fallados.append((fila, motivo))
-    if not fallados:
+    if not fallados and not diferido_por_cuota:
         return
-    await _apply_tenant_context(db)
-    for fila, motivo in fallados:
-        fila.register_failure(motivo)
+    if fallados or diferido_por_cuota:
+        await _apply_tenant_context(db)
+        for fila, motivo in fallados:
+            fila.register_failure(motivo)
     await AsyncSession.commit(db)
 
 
@@ -741,13 +765,19 @@ async def _send_one_pending_email(fila: OutboxMessage, smtp: Any) -> str | None:
     """Manda el mail de una fila ``email.send``. Devuelve el motivo si no salio."""
     contexto = _contexto_del_mail(fila)
     payload = fila.payload if isinstance(fila.payload, dict) else {}
-    enviar = _sender(str(payload.get("mail") or ""))
+    mail_kind = str(payload.get("mail") or "")
+    enviar = _sender(mail_kind)
     argumentos = payload.get("args")
     if enviar is None or not isinstance(argumentos, dict):
         logger.warning("outbox_email_skipped", error_type="unknown_mail", **contexto)
         return "unknown_mail"
     try:
-        resultado = await enviar(smtp=smtp, **argumentos)
+        priority: MailPriority = "low" if mail_kind == "rebook" else "high"
+        message_id = f"outbox:{getattr(fila, 'id', None) or getattr(fila, 'public_id', 'unknown')}"
+        if hasattr(smtp, "last_budget_decision"):
+            smtp.last_budget_decision = None
+        with mail_delivery_context(priority=priority, message_id=message_id):
+            resultado = await enviar(smtp=smtp, **argumentos)
     except SoftTimeLimitExceeded:
         raise
     except Exception as exc:
