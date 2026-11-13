@@ -2,7 +2,7 @@
 #
 # With "Require review from Code Owners" enabled on `main`, a PR that touches
 # any of these paths needs an approval from one of the listed owners other
-# than its author. Everything else merges on the 15 required checks alone
+# than its author. Everything else merges on the 13 required checks alone
 # (Required approvals: 0). Money, login, the global admin key, the schema,
 # the production configuration, the deploy and the AI rules are the places
 # where a plausible-but-wrong change does the most damage and CI is not

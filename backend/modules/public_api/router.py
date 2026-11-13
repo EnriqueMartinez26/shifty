@@ -5,10 +5,14 @@ Rutas sin autenticación para reservas, OTP y autogestión del cliente.
 """
 
 import hashlib
+import html
+import ipaddress
 import re
+import unicodedata
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Annotated
+from urllib.parse import quote, urlsplit, urlunsplit
 
 import structlog
 from pydantic import StringConstraints
@@ -22,6 +26,7 @@ from fastapi import (
     Response,
     status,
 )
+from fastapi.responses import HTMLResponse
 from core.router import CanonicalAPIRouter
 from redis.asyncio import Redis
 from sqlalchemy import select
@@ -110,6 +115,7 @@ from modules.services.selection_errors import (
     require_selection_size,
 )
 from modules.services.schemas import ServiceAddonResponse
+from modules.stores.media import absolute_media_url
 from modules.stores.model import Store
 from modules.stores.schemas import StoreCustomField
 
@@ -156,6 +162,112 @@ ClientTokenHeader = Annotated[str | None, Header(alias=CLIENT_TOKEN_HEADER)]
 SlugPath = Annotated[
     str, Path(min_length=2, max_length=100, pattern=r"^[A-Za-z0-9][A-Za-z0-9-]{0,98}$")
 ]
+
+SHARE_FALLBACK_IMAGE = "https://shifty-ar.tech/og-shifty.jpg"
+SHARE_METADATA_CACHE_CONTROL = "no-store"
+
+
+def _safe_share_text(value: str | None, *, limit: int) -> str:
+    """Normaliza texto de tienda antes de incrustarlo en etiquetas HTML."""
+    if not value:
+        return ""
+    visible = "".join(
+        char for char in value if unicodedata.category(char) not in {"Cc", "Cf", "Cs"}
+    )
+    return re.sub(r"\s+", " ", visible).strip()[:limit]
+
+
+def _share_canonical_url(slug: str) -> str:
+    """Construye una URL canónica desde config, nunca desde Host del request."""
+    configured = urlsplit(settings.FRONTEND_URL)
+    if (
+        configured.scheme not in {"http", "https"}
+        or not configured.hostname
+        or configured.username is not None
+        or configured.password is not None
+    ):
+        raise ValueError("FRONTEND_URL debe ser una URL HTTP(S) valida")
+    try:
+        configured.port
+    except ValueError as exc:
+        raise ValueError("FRONTEND_URL contiene un puerto invalido") from exc
+    origin = urlunsplit((configured.scheme, configured.netloc, "", "", ""))
+    return f"{origin}/b/{quote(slug, safe='')}"
+
+
+def _share_image_url(value: str | None) -> str:
+    """Resuelve medios internos sin solicitudes salientes y solo publica HTTPS."""
+    if (
+        not value
+        or len(value) > 2048
+        or any(
+            char.isspace() or unicodedata.category(char).startswith("C")
+            for char in value
+        )
+    ):
+        return SHARE_FALLBACK_IMAGE
+    candidate = absolute_media_url(value, settings.PUBLIC_API_URL)
+    if not candidate or len(candidate) > 2048:
+        return SHARE_FALLBACK_IMAGE
+    try:
+        parsed = urlsplit(candidate)
+        # Acceder a port también valida el formato, aunque no se use el valor.
+        parsed.port
+    except ValueError:
+        return SHARE_FALLBACK_IMAGE
+    hostname = (parsed.hostname or "").rstrip(".").lower()
+    try:
+        address = ipaddress.ip_address(hostname)
+    except ValueError:
+        address = None
+    if (
+        parsed.scheme.lower() != "https"
+        or not hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or any(char.isspace() for char in parsed.netloc)
+        or hostname == "localhost"
+        or hostname.endswith((".localhost", ".local", ".internal"))
+        or (address is not None and not address.is_global)
+    ):
+        return SHARE_FALLBACK_IMAGE
+    return urlunsplit(("https", parsed.netloc, parsed.path, parsed.query, ""))
+
+
+def _share_metadata_fragment(
+    *, name: str, description: str | None, slug: str, cover_url: str | None
+) -> str:
+    safe_name = _safe_share_text(name, limit=160) or "Shifty"
+    title = _safe_share_text(f"{safe_name} | Shifty", limit=180)
+    safe_description = _safe_share_text(description, limit=300)
+    if not safe_description:
+        safe_description = _safe_share_text(
+            f"Reservá turnos online en {safe_name}.", limit=300
+        )
+    canonical = _share_canonical_url(slug)
+    image = _share_image_url(cover_url)
+
+    tags = (
+        ("property", "og:title", title),
+        ("property", "og:description", safe_description),
+        ("property", "og:type", "website"),
+        ("property", "og:url", canonical),
+        ("property", "og:image", image),
+        ("property", "og:site_name", "Shifty"),
+        ("name", "twitter:card", "summary_large_image"),
+        ("name", "twitter:title", title),
+        ("name", "twitter:description", safe_description),
+        ("name", "twitter:image", image),
+    )
+    return "\n".join(
+        (
+            f"<title>{html.escape(title, quote=True)}</title>",
+            *(
+                f'<meta {attribute}="{html.escape(key, quote=True)}" content="{html.escape(value, quote=True)}">'
+                for attribute, key, value in tags
+            ),
+        )
+    )
 
 
 def _public_booking_idempotency_key(data: PublicBookingCreate) -> str:
@@ -252,6 +364,39 @@ async def get_store_by_slug(
                 deposit_channels_from(store, gateway)
             ),
         )
+
+
+@router.get(
+    "/share-metadata/{slug}",
+    response_class=HTMLResponse,
+    include_in_schema=False,
+)
+async def get_store_share_metadata(
+    slug: SlugPath, response: Response, db: AsyncSession = Depends(get_db)
+) -> HTMLResponse:
+    """Fragmento privado de implementacion para el shell SSI del frontend.
+
+    Solo devuelve datos de una tienda que ya puede verse en el portal publico.
+    Los errores usan el mismo 404 neutro que la ficha publica de la tienda.
+    """
+    response.headers["Cache-Control"] = SHARE_METADATA_CACHE_CONTROL
+    async with tenant_bypass(db):
+        metadata = await PublicRepository(db).get_store_share_metadata_by_slug(
+            slug.lower()
+        )
+        if metadata is None or await store_is_suspended(db, metadata.id):
+            raise StoreNotFoundException(identifier=slug)
+
+    fragment = _share_metadata_fragment(
+        name=metadata.name,
+        description=metadata.description,
+        slug=metadata.slug,
+        cover_url=metadata.cover_url,
+    )
+    return HTMLResponse(
+        content=fragment,
+        headers={"Cache-Control": SHARE_METADATA_CACHE_CONTROL},
+    )
 
 
 @router.get("/stores/{slug}/ref", response_model=PublicStoreRefResponse)

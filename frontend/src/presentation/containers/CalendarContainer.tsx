@@ -83,6 +83,30 @@ const isPhoneViewport = (): boolean =>
   typeof window.matchMedia === 'function' &&
   window.matchMedia(MOBILE_CALENDAR_QUERY).matches
 
+const truncatedAgendaMessage = (
+  shown: number,
+  total: number,
+  view: CalendarView,
+  isPhone: boolean,
+  mobileSingleDay: boolean
+): string => {
+  if (!isPhone) {
+    return `Se muestran ${shown} de ${total} turnos de este rango. Pasá a día o semana para reducir el rango y consultar los demás.`
+  }
+  if (view === 'list') {
+    return mobileSingleDay
+      ? `Se muestran ${shown} de ${total} turnos de este día. El día también supera el límite; usá Anterior o Siguiente para revisar otros días.`
+      : `Se muestran ${shown} de ${total} turnos de este rango. Usá “Ver solo este día” para reducirlo y consultar el resto.`
+  }
+  if (view === 'day') {
+    return `Se muestran ${shown} de ${total} turnos de este día. El día también supera el límite; usá Anterior o Siguiente para revisar otros días.`
+  }
+  if (view === 'week') {
+    return `Se muestran ${shown} de ${total} turnos de esta semana. Usá Anterior o Siguiente para revisar otras semanas.`
+  }
+  return `Se muestran ${shown} de ${total} turnos de este mes. Usá Anterior o Siguiente para revisar otros meses.`
+}
+
 export const CalendarContainer: React.FC = () => {
   const { confirm, confirmDialog } = useConfirm()
   const { user } = useAuth()
@@ -115,10 +139,11 @@ export const CalendarContainer: React.FC = () => {
   const [selectedDate, setSelectedDate] = useState(new Date())
   const [isPhone, setIsPhone] = useState(isPhoneViewport)
   const [mobileSingleDay, setMobileSingleDay] = useState(false)
-  // La preferencia de escritorio se conserva por usuario; en teléfonos la
-  // agenda usa lista aunque la última vista guardada haya sido día/semana/mes.
+  // La preferencia persistida sigue siendo la de escritorio; en el teléfono
+  // cada instancia arranca en lista y permite elegir cualquiera de las vistas.
   const [view, setView] = useState<CalendarView>(() => initialAgendaView(user?.public_id))
-  const activeView: CalendarView = isPhone ? 'list' : view
+  const [mobileView, setMobileView] = useState<CalendarView>('list')
+  const activeView: CalendarView = isPhone ? mobileView : view
 
   useEffect(() => {
     if (typeof window.matchMedia !== 'function') return
@@ -141,9 +166,12 @@ export const CalendarContainer: React.FC = () => {
   }, [isPhone, selectedDate, view])
 
   const changeView = (next: CalendarView) => {
-    if (isPhone) return
-    if (next === 'month' && view !== 'month') monthAnchorDay.current = selectedDate.getDate()
+    if (next === 'month' && activeView !== 'month') monthAnchorDay.current = selectedDate.getDate()
     else if (next !== 'month') monthAnchorDay.current = null
+    if (isPhone) {
+      setMobileView(next)
+      return
+    }
     setView(next)
     saveAgendaView(user?.public_id, next)
   }
@@ -180,7 +208,7 @@ export const CalendarContainer: React.FC = () => {
   const rangeKeyFrom = format(rangeStart, 'yyyy-MM-dd')
   const rangeKeyTo = format(rangeEnd, 'yyyy-MM-dd')
   const dateStr = format(selectedDate, 'yyyy-MM-dd')
-  const nudgeScope = `${view}:${dateStr}`
+  const nudgeScope = `${activeView}:${dateStr}`
 
   const { data: staffMembers, isLoading: loadingStaff, error: staffError } = useManagedStaff()
   // Nombre y slug de la tienda para el texto de WhatsApp y el deep-link.
@@ -578,11 +606,13 @@ export const CalendarContainer: React.FC = () => {
             color: colors2000s.status.warning.text
           }}
         >
-          {isPhone
-            ? mobileSingleDay
-              ? `Se muestran ${truncatedAgenda.shown} de ${truncatedAgenda.total} turnos de este día. El día también supera el límite; usá Anterior o Siguiente para revisar otros días.`
-              : `Se muestran ${truncatedAgenda.shown} de ${truncatedAgenda.total} turnos de este rango. Usá “Ver solo este día” para reducirlo y consultar el resto.`
-            : `Se muestran ${truncatedAgenda.shown} de ${truncatedAgenda.total} turnos de este rango. Pasá a día o semana para reducir el rango y consultar los demás.`}
+          {truncatedAgendaMessage(
+            truncatedAgenda.shown,
+            truncatedAgenda.total,
+            activeView,
+            isPhone,
+            mobileSingleDay
+          )}
         </div>
       )}
 
@@ -656,7 +686,12 @@ export const CalendarContainer: React.FC = () => {
         />
       )}
       {!isRangeLoading && !hasAgendaLoadError && activeView === 'list' && (
-        <AgendaListView eventsByDay={eventsByDay} renderEvent={(event) => renderEventPill(event)} />
+        <AgendaListView
+          eventsByDay={eventsByDay}
+          selectedDateKey={dateStr}
+          rangeKey={`${rangeKeyFrom}:${rangeKeyTo}`}
+          renderEvent={(event) => renderEventPill(event)}
+        />
       )}
 
       <div

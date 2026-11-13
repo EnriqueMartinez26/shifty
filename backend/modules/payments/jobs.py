@@ -513,6 +513,8 @@ async def _plan_outbox_message(
 
     if message.event_type in _MAILS_DEL_PANEL:
         return await _panel_client_mail(db, message, contexto_del_lote)
+    if not await _connection_still_broken(db, message):
+        return []
 
     notification = (
         _replaced_link_notification(message)
@@ -1111,6 +1113,25 @@ def _booked_online_notification(message: OutboxMessage) -> Notification | None:
     )
 
 
+async def _connection_still_broken(db: AsyncSession, message: OutboxMessage) -> bool:
+    """False si es el aviso de conexion de MP rota y la tienda ya no la tiene
+    rota: un refresh que gano la carrera (o una reconexion) la limpio entre el
+    evento y el lote, y "Reconecta Mercado Pago" ya no seria cierto. Cualquier
+    otro evento pasa. Una consulta, solo para ese evento (es raro)."""
+    if (
+        message.event_type != NotificationType.MERCADOPAGO_CONNECTION_BROKEN.value
+        or not message.store_id
+    ):
+        return True
+    rota = await db.scalar(
+        select(PaymentGatewayConfig.connection_broken_at).where(
+            PaymentGatewayConfig.store_id == message.store_id,
+            PaymentGatewayConfig.provider == PAYMENT_PROVIDER_MERCADOPAGO,
+        )
+    )
+    return rota is not None
+
+
 def _deposit_notification(message: OutboxMessage) -> Notification | None:
     """Avisos de la sena obligatoria (decision de Mateo, 2026-10-03).
 
@@ -1121,6 +1142,9 @@ def _deposit_notification(message: OutboxMessage) -> Notification | None:
     - ``store.deposit_channel_lost``: la tienda perdio su ultimo canal de
       cobro con servicios de sena obligatoria
       (``deposit_channels.warn_if_deposit_channel_lost``).
+    - ``store.mercadopago_connection_broken``: MP rechazo renovar la conexion
+      OAuth (``service._mark_connection_broken``, issue #279); la sena pasa a
+      WhatsApp si la tienda lo tiene.
 
     Aparte de ``_build_store_notification`` (deuda de la regla 29).
     """
@@ -1157,6 +1181,19 @@ def _deposit_notification(message: OutboxMessage) -> Notification | None:
                 "WhatsApp válido del negocio. Mientras tanto, los servicios con "
                 "seña obligatoria no se pueden reservar. Conectá Mercado Pago o "
                 "cargá en Configuración un WhatsApp con código de área."
+            ),
+        )
+    if message.event_type == NotificationType.MERCADOPAGO_CONNECTION_BROKEN.value:
+        return Notification(
+            store_id=message.store_id,
+            type=message.event_type,
+            title="Reconectá Mercado Pago",
+            body=(
+                "Mercado Pago no renovó la conexión con tu cuenta, así que no "
+                "podemos generar links de pago. Mientras tanto, las señas "
+                "obligatorias se cobran por WhatsApp si tenés uno válido "
+                "cargado; si no, esos servicios no se pueden reservar. Volvé a "
+                "conectar Mercado Pago desde Configuración, en Cobros."
             ),
         )
     return None

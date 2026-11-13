@@ -66,6 +66,8 @@ class Presupuesto:
 # En el panel la primera consulta es la identidad (sesion + usuario, F1-01).
 PRESUPUESTOS: dict[str, Presupuesto] = {
     "GET /public/stores/{slug}": Presupuesto(consultas=2, set_config=3),  # (3)
+    # Metadatos al compartir el link: 2 consultas, medido en Postgres real.
+    "GET /public/share-metadata/{slug}": Presupuesto(consultas=2, set_config=3),
     # FF-16 (2026-09-24): referencia para "Mis turnos", medida al nacer.
     "GET /public/stores/{slug}/ref": Presupuesto(consultas=2, set_config=3),
     "GET /public/services": Presupuesto(consultas=2, set_config=3),  # (3)
@@ -436,6 +438,15 @@ async def test_los_endpoints_calientes_no_pasan_su_presupuesto(
             "GET /public/stores/{slug}",
             "GET",
             f"/public/stores/{SLUG}",
+            {},
+            None,
+            {},
+            200,
+        ),
+        (
+            "GET /public/share-metadata/{slug}",
+            "GET",
+            f"/public/share-metadata/{SLUG}",
             {},
             None,
             {},

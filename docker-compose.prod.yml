@@ -253,6 +253,17 @@ services:
     ports:
       - "80:80"
       - "443:443"
+    # #277: en `shifty_network` (sin IPv6) Docker publicaba el 80/443 del host
+    # en IPv6 con docker-proxy hacia la IPv4 del contenedor, y nginx veia el
+    # gateway del bridge (172.16.1.1) en vez del cliente. La red `edge` tiene
+    # IPv6: Docker mapea esos puertos a la IPv6 del contenedor con ip6tables,
+    # que conserva el origen. gw_priority la hace la ruta por defecto en IPv4
+    # e IPv6, que es por donde Docker programa los puertos publicados. Sigue en
+    # shifty_network para llegar a backend y frontend.
+    networks:
+      shifty_network: {}
+      edge:
+        gw_priority: 1
     volumes:
       - ./nginx/nginx.prod.conf:/etc/nginx/conf.d/default.conf:ro
       - ./nginx/certs:/etc/nginx/certs:ro
@@ -260,6 +271,15 @@ services:
       # ./nginx/acme (--webroot) y el borde lo sirve en
       # /.well-known/acme-challenge/ desde /var/www/acme.
       - ./nginx/acme:/var/www/acme:ro
+
+networks:
+  # #277: red solo del borde, con IPv6. Sin subred fija: Docker le asigna un
+  # /64 ULA propio. Es nueva a proposito: activar IPv6 en shifty_network
+  # obligaria a recrearla con db, redis y rabbitmq adentro. Pasos y
+  # verificacion en el VPS: docs/DEPLOY_RUNBOOK.md, seccion 4c.
+  edge:
+    driver: bridge
+    enable_ipv6: true
 
 volumes:
   # F0-20: directorio del host para los backups de la base. Tiene que existir

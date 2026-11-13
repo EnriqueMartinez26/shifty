@@ -87,7 +87,9 @@ describe('LegalPage', () => {
     expect(main).toHaveTextContent(/sin el nombre de la tienda ni la página de origen/)
     expect(main).toHaveTextContent(/indicación de no personalizar anuncios/)
     expect(main).toHaveTextContent(/Google puede tratar estos datos fuera de Argentina/)
-    expect(main).toHaveTextContent(/desde el botón "Preferencias de analítica"/)
+    expect(main).toHaveTextContent(
+      /desde el enlace "Preferencias de analítica", al pie del portal de reservas/
+    )
     expect(main).toHaveTextContent(/Retirar el consentimiento detiene las mediciones siguientes/)
     expect(main).toHaveTextContent(/no borra los datos que Google ya recibió/)
     expect(main).not.toHaveTextContent(/no (usa|utiliza|usamos|utilizamos)[^.]*analítica/i)

@@ -270,6 +270,7 @@ const SuperAdminPage: React.FC = () => {
     setSubscriptionForm({
       plan_id: overview?.subscription?.plan_id || activePlans[0]?.public_id || '',
       status: overview?.subscription?.status || 'active',
+      confirmed_renewal: false,
       base_amount: overview?.subscription?.base_amount
         ? String(overview.subscription.base_amount)
         : '',
@@ -471,15 +472,37 @@ const SuperAdminPage: React.FC = () => {
     setModalError(null)
 
     try {
+      const currentPeriodEnd = overview?.subscription?.current_period_end
+      const nextPeriodEnd = fromDateTimeInput(subscriptionForm.current_period_end)
+      const nextPeriodEndMs = nextPeriodEnd ? Date.parse(nextPeriodEnd) : NaN
+      const currentPeriodEndMs = currentPeriodEnd ? Date.parse(currentPeriodEnd) : null
+
+      if (
+        subscriptionForm.confirmed_renewal &&
+        (!Number.isFinite(nextPeriodEndMs) ||
+          nextPeriodEndMs <= Date.now() ||
+          (currentPeriodEnd &&
+            (currentPeriodEndMs === null ||
+              !Number.isFinite(currentPeriodEndMs) ||
+              nextPeriodEndMs <= currentPeriodEndMs)))
+      ) {
+        setModalError(
+          'Para confirmar la renovación, indicá un vencimiento futuro posterior al actual.'
+        )
+        return
+      }
+
       await assignSubscriptionMutation.mutateAsync({
         storePublicId: selectedStore.public_id,
         payload: {
           plan_id: subscriptionForm.plan_id,
-          status: subscriptionForm.status.trim() || 'active',
+          status: subscriptionForm.confirmed_renewal
+            ? 'active'
+            : subscriptionForm.status.trim() || 'active',
           base_amount: subscriptionForm.base_amount.trim() || null,
           currency: subscriptionForm.currency.trim() || null,
           current_period_start: fromDateTimeInput(subscriptionForm.current_period_start),
-          current_period_end: fromDateTimeInput(subscriptionForm.current_period_end)
+          current_period_end: nextPeriodEnd
         }
       })
       setFeedback({ tone: 'success', text: `Suscripción actualizada para ${selectedStore.name}` })

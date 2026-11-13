@@ -4,6 +4,8 @@
  * siendo el backend y cada regla cita de donde sale.
  */
 
+import { Email } from '@domain/value-objects/Email'
+
 import type { BusinessHoursPeriod, SettingsFormData } from './settingsDraft'
 
 /** `StoreUpdate` en `backend/modules/stores/schemas.py` (MAX_HORAS_ANIO, MAX_MINUTOS_DIA). */
@@ -52,7 +54,12 @@ export const DAYS = [
   { id: 'sun', label: 'Domingo' }
 ]
 
-type SettingsDraftErrors = Partial<Record<'slug' | 'business_hours', string>>
+type SettingsDraftErrors = Partial<Record<'slug' | 'business_hours' | 'contact_email', string>>
+
+/** `StoreUpdate.contact_email` en `backend/modules/stores/schemas.py` (RFC 5321). */
+const CONTACT_EMAIL_MAX_LENGTH = 254
+// eslint-disable-next-line no-control-regex -- el rango ASCII completo es la regla
+const NON_ASCII = /[^\x00-\x7F]/
 
 /**
  * Solo se valida lo que esta en el borrador: un valor que viene del servidor
@@ -63,6 +70,17 @@ export const validateSettingsDraft = (draft: Partial<SettingsFormData>): Setting
   if (draft.slug !== undefined && !SLUG_PATTERN.test(draft.slug)) {
     errors.slug =
       'El enlace lleva de 2 a 100 letras minúsculas, números o guiones, sin guion al principio ni al final.'
+  }
+  // Vacio es valido: borra el mail de contacto. Solo ASCII: un Reply-To con
+  // tildes o ñ no llega (el backend da 422 si no tiene forma ASCII).
+  const contactEmail = draft.contact_email?.trim()
+  if (contactEmail && NON_ASCII.test(contactEmail)) {
+    errors.contact_email = 'Usá un mail sin tildes ni ñ.'
+  } else if (
+    contactEmail &&
+    (contactEmail.length > CONTACT_EMAIL_MAX_LENGTH || !Email.isValid(contactEmail))
+  ) {
+    errors.contact_email = 'Ingresá un mail válido, por ejemplo hola@tunegocio.com.'
   }
   const hours = draft.business_hours
   if (hours === undefined) return errors

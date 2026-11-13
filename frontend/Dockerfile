@@ -55,6 +55,9 @@ COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /app/security-headers.generated.conf /etc/nginx/security-headers.conf
 COPY --from=build /app/dist /usr/share/nginx/html
 
+# Verifica tambien los modulos y directivas usados por la configuracion final.
+RUN nginx -t
+
 EXPOSE 3000
 
 CMD ["nginx", "-g", "daemon off;"]

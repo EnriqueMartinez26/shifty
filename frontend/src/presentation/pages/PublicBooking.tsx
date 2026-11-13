@@ -236,7 +236,10 @@ const PublicBooking: React.FC = () => {
             >
               Volver a la tienda
             </button>
-            <LegalFooterLinks className={`pt-2 ${LEGAL_FOOTER_TARGET_CLASSES}`} />
+            <LegalFooterLinks
+              analyticsPreferences
+              className={`pt-2 ${LEGAL_FOOTER_TARGET_CLASSES}`}
+            />
           </section>
         </div>
       </main>
@@ -294,6 +297,7 @@ const PublicBooking: React.FC = () => {
         <div className="max-w-2xl mx-auto mt-12 text-center space-y-3">
           <LegalFooterLinks
             depositPolicy={bookingStep.step === STEP_CONFIRMATION ? null : store.deposit_policy}
+            analyticsPreferences
             className={LEGAL_FOOTER_TARGET_CLASSES}
           />
           <p

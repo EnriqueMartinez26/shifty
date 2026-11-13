@@ -1,6 +1,8 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
 
+import { isAnalyticsConfigured } from '@infrastructure/analytics/bookingAnalytics'
+
 import { NetworkError, NotFoundError, ServiceUnavailableError } from '@shared/errors'
 import { savePriorDesignHandoff } from '@shared/utils/priorDesignHandoff'
 
@@ -59,6 +61,11 @@ jest.mock('../hooks/usePublic', () => ({
   usePublicServices: () => ({ data: undefined, isLoading: false }),
   useRefreshPublicServices: () => jest.fn(),
   usePublicStaff: () => ({ data: undefined, isLoading: false })
+}))
+
+jest.mock('@infrastructure/analytics/bookingAnalytics', () => ({
+  ...jest.requireActual('@infrastructure/analytics/bookingAnalytics'),
+  isAnalyticsConfigured: jest.fn(() => false)
 }))
 
 jest.mock('@presentation/components/organisms/booking/BookingWizardContainer', () => ({
@@ -491,6 +498,31 @@ describe('PublicBooking: objetivos táctiles', () => {
 
     expect(screen.getByRole('main')).not.toHaveClass('pb-[calc(8rem+env(safe-area-inset-bottom))]')
     expect(screen.getByRole('main')).toHaveClass('pb-8')
+  })
+})
+
+// 2026-11-02 (#273): "Preferencias de analitica" dejo de flotar sobre el
+// portal y paso al pie. Tiene que estar en el portal y tambien al volver del
+// pago, donde la clienta puede querer cambiar su eleccion.
+describe('PublicBooking: preferencias de analítica en el pie', () => {
+  beforeEach(() => {
+    mockTienda = TIENDA_SOL
+    jest.mocked(isAnalyticsConfigured).mockReturnValue(true)
+  })
+
+  afterEach(() => {
+    jest.mocked(isAnalyticsConfigured).mockReturnValue(false)
+  })
+
+  it.each([
+    ['en el portal', '/booking/sol'],
+    ['al volver del pago', '/booking/sol?payment_id=p1']
+  ])('%s el pie ofrece cambiar la eleccion de analitica', (_caso, ruta) => {
+    renderEn(ruta)
+
+    expect(screen.getByRole('button', { name: 'Preferencias de analítica' })).toHaveClass(
+      'min-h-11'
+    )
   })
 })
 

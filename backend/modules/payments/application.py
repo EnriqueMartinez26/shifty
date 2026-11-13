@@ -95,6 +95,13 @@ def _importes_a_registrar(
     )
 
 
+def _estado_del_cobro(payment: Payment | None) -> dict[str, str | None] | None:
+    """Estado e importe del cobro antes de confirmarlo a mano (auditoria)."""
+    if payment is None:
+        return None
+    return {"status": payment.status, "amount": str(payment.amount)}
+
+
 class AppointmentHoldExpiredError(AppException):
     """409 al confirmar a mano un turno que ya vencio (revision 4R de la PR
     #108): el personal tiene que saber por que no se puede y como seguir. El
@@ -218,6 +225,8 @@ class PaymentService:
             await self.uow.commit()
             return actual
         importes = _importes_a_registrar(actual, appointment, service, amount)
+        esperado = _importes_a_registrar(actual, appointment, service, None).amount
+        antes = _estado_del_cobro(actual)
         payment = await ensure_payment_preference(
             self.uow.session,
             appointment=appointment,
@@ -244,8 +253,47 @@ class PaymentService:
         # del link sale una sola vez, con la primera confirmacion real.
         if aplicada and not ya_confirmado:
             self._expire_live_checkout(payment)
+        await self._audit_manual_confirm(
+            payment, actor, antes=antes, esperado=esperado, amount=amount, notes=notes
+        )
         await self.uow.commit()
         return payment
+
+    async def _audit_manual_confirm(
+        self,
+        payment: Payment,
+        actor: User,
+        *,
+        antes: dict[str, str | None] | None,
+        esperado: Decimal,
+        amount: Decimal | None,
+        notes: str | None,
+    ) -> None:
+        """Quien confirmo a mano, el importe esperado y el registrado, en la
+        misma transaccion (#278), como el resto del turno (``_audit_remainder``).
+
+        ``esperado`` es lo que se registraria sin importe explicito. De las
+        notas va el hecho y su largo, nunca el texto: ``audit_logs`` no se
+        purga (L3-02, BE-15); el texto queda en ``raw_payload`` del cobro. El
+        no-op sobre un cobro acreditado no llega aca: no escribe nada.
+        """
+        await self.uow.audit.log(
+            action=AuditAction.STATUS_CHANGE,
+            resource_type="Payment",
+            resource_id=payment.id,
+            store_id=payment.store_id,
+            actor=actor,
+            payload_before=antes,
+            payload_after={
+                "appointment_id": payment.appointment_id,
+                "status": payment.status,
+                "expected_amount": str(esperado),
+                "recorded_amount": str(payment.amount),
+                "amount_overridden": amount is not None,
+                "notes_present": bool(notes),
+                "notes_length": len(notes or ""),
+            },
+        )
 
     async def record_remaining_payment(
         self,

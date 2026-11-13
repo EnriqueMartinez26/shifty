@@ -35,6 +35,7 @@ from modules.notifications.tasks import (
     format_local_datetime,
     is_deliverable_email,
     rebook_url,
+    store_reply_to,
 )
 from modules.services.model import Service
 from modules.staff.model import Staff
@@ -323,6 +324,8 @@ class _StoreInfo:
     slug: str | None
     name: str | None
     whatsapp_number: str | None
+    # Reply-To del mail de la oferta (#283).
+    contact_email: str | None
 
 
 @dataclass(frozen=True)
@@ -355,6 +358,7 @@ async def _store_and_staff(
                 Store.min_booking_notice_hours,
                 Store.slug,
                 Store.name,
+                Store.contact_email,
                 # ``Store.whatsapp_number`` es una propiedad sobre theme_config.
                 Store.theme_config,
                 Staff.id,
@@ -375,6 +379,7 @@ async def _store_and_staff(
         slug=row.slug,
         name=row.name,
         whatsapp_number=(row.theme_config or {}).get("whatsapp_number"),
+        contact_email=row.contact_email,
     )
     staff = (
         _StaffInfo(id=row.id, display_name=row.display_name, kind=row.kind)
@@ -413,7 +418,8 @@ def _offer_email(
             "booking_url": f"{base}/b/{slug}" if slug else "",
             "offer_url": f"{link}&date={fecha_iso}" if link else "",
             "offer_minutes": settings.WAITLIST_OFFER_MINUTES,
-        },
+        }
+        | store_reply_to(store),
     )
 
 
