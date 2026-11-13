@@ -326,6 +326,37 @@ def test_checks_le_pregunta_a_redis_desde_el_clon_con_la_version_en_curso(
     assert Path(cwd).resolve() == host.repo.resolve()
 
 
+def test_checks_avisa_alarma_de_rabbitmq_sin_reiniciarlo(host: Host) -> None:
+    resultado = _correr_checks(
+        host,
+        FAKE_RABBIT_ALARMS=(
+            '{"alarms":[{"resource":"memory"}],"node":"rabbit@rabbitmq","result":"ok"}'
+        ),
+    )
+
+    assert resultado.returncode != 0
+    assert "rabbitmq: hay alarmas activas" in resultado.stderr
+    assert _hay(
+        host.llamadas(),
+        r"docker compose exec -T rabbitmq rabbitmq-diagnostics -q alarms --formatter json",
+    )
+    assert not _hay(host.llamadas(), r"docker restart .*rabbitmq")
+
+
+def test_checks_avisa_si_no_puede_consultar_alarmas_de_rabbitmq(host: Host) -> None:
+    resultado = _correr_checks(host, FAKE_RABBIT_EXIT="1")
+
+    assert resultado.returncode != 0
+    assert "rabbitmq: no se pudieron consultar las alarmas" in resultado.stderr
+
+
+def test_checks_avisa_respuesta_ilegible_de_alarmas_de_rabbitmq(host: Host) -> None:
+    resultado = _correr_checks(host, FAKE_RABBIT_ALARMS="unexpected output")
+
+    assert resultado.returncode != 0
+    assert "rabbitmq: hay alarmas activas o una respuesta ilegible" in resultado.stderr
+
+
 def test_checks_corre_el_chequeo_de_endurecimiento(host: Host) -> None:
     (host.fake / "sshd_T").write_text(
         SSHD_SANO.replace("passwordauthentication no", "passwordauthentication yes"),

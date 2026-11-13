@@ -19,6 +19,8 @@
 # - redis_state (`INFO memory`): aviso si used_memory pasa
 #   REDIS_STATE_MEM_MAX_PERCENT (80 %) de su maxmemory. Con noeviction, lleno
 #   es 503 en auth, OTP y la reserva publica.
+# - RabbitMQ: alerta ante alarmas activas de memoria/disco, o si no se pueden
+#   consultar. No reinicia el broker; reiniciarlo corta las conexiones.
 # - Endurecimiento del host (scripts/host-hardening-check.sh): sshd solo con
 #   clave, ufw activo con 22/80/443, unattended-upgrades solo de seguridad y
 #   sin reinicio automatico, fail2ban y reinicio pendiente.
@@ -42,6 +44,7 @@ set -euo pipefail
 : "${HOST_SWAP_MAX_PERCENT:=50}"
 : "${REDIS_STATE_SERVICE:=redis_state}"
 : "${REDIS_STATE_MEM_MAX_PERCENT:=80}"
+: "${RABBITMQ_SERVICE:=rabbitmq}"
 
 problemas=0
 problema() {
@@ -204,6 +207,28 @@ chequear_redis_state() {
   fi
 }
 
+# RabbitMQ puede bloquear publicadores por alarmas de memoria/disco aunque el
+# contenedor siga healthy. La compuerta de deploy ya consulta este mismo
+# comando; aca se monitorea cada hora y se alerta sin tomar acciones de repair.
+chequear_rabbitmq() {
+  local salida
+  if ! salida="$(cd "$SHIFTY_DIR" && usar_version_en_curso &&
+    docker compose exec -T "$RABBITMQ_SERVICE" rabbitmq-diagnostics -q alarms --formatter json 2>&1)"; then
+    problema "rabbitmq: no se pudieron consultar las alarmas" \
+      "docker compose exec -T $RABBITMQ_SERVICE rabbitmq-diagnostics -q alarms --formatter json: ${salida:0:200}" \
+      rabbitmq-alarms 60
+    return
+  fi
+  salida="$(printf '%s' "$salida" | tr -d '[:space:]')"
+  if ! rabbitmq_sin_alarmas "$salida"; then
+    problema "rabbitmq: hay alarmas activas o una respuesta ilegible" \
+      "Revisar memoria/disco del broker; el guard no reinicia RabbitMQ. Respuesta: ${salida:0:200}" \
+      rabbitmq-alarms 60
+    return
+  fi
+  log "checks: rabbitmq sin alarmas"
+}
+
 # Avisa por su cuenta (alertas con clave propia); aca solo cuenta si hubo
 # problemas.
 chequear_endurecimiento() {
@@ -218,6 +243,7 @@ chequear_disco
 chequear_contenedores
 chequear_memoria_host
 chequear_redis_state
+chequear_rabbitmq
 chequear_endurecimiento
 
 if [ "$problemas" -gt 0 ]; then
