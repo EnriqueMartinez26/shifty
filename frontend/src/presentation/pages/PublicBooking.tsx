@@ -35,10 +35,39 @@ const PublicBooking: React.FC = () => {
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
   const paymentId = searchParams.get('payment_id') || undefined
+  const handoffCleanupTimers = React.useRef(new Map<string, ReturnType<typeof setTimeout>>())
   const storeQuery = usePublicStore(slug)
   const { data: store, isLoading, isError } = storeQuery
   useDocumentTitle(store ? `${store.name} · Reservá tu turno` : null)
   const paymentStatus = usePublicPaymentStatus(store?.public_id, paymentId)
+
+  React.useEffect(() => {
+    if (!paymentId || !store?.public_id) return
+
+    const storePublicId = store.public_id
+    const cleanupKey = `${storePublicId}:${paymentId}`
+    const cleanupTimers = handoffCleanupTimers.current
+    const pendingCleanup = cleanupTimers.get(cleanupKey)
+    if (pendingCleanup !== undefined) {
+      window.clearTimeout(pendingCleanup)
+      cleanupTimers.delete(cleanupKey)
+    }
+
+    const clearOnPageHide = () => clearPriorDesignHandoff(storePublicId)
+    window.addEventListener('pagehide', clearOnPageHide)
+
+    return () => {
+      window.removeEventListener('pagehide', clearOnPageHide)
+      // StrictMode replays effect cleanup/setup on mount. Deferring by one tick
+      // lets the replay cancel this timer while a real exit still clears storage.
+      const timer = window.setTimeout(() => {
+        clearPriorDesignHandoff(storePublicId)
+        cleanupTimers.delete(cleanupKey)
+      }, 0)
+      cleanupTimers.set(cleanupKey, timer)
+    }
+  }, [paymentId, store?.public_id])
+
   // Deep-link "reserva de nuevo" (?service=&staff=): se validan los ids contra
   // las listas publicas antes de montar el wizard. Sin parametros no se
   // consulta nada extra.
