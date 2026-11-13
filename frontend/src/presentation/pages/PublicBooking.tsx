@@ -14,7 +14,7 @@ import { StoreHeader } from '@presentation/components/organisms/storefront/Store
 import { useBookingStepParam } from '@presentation/hooks/useBookingStepParam'
 import { brandCssVariables, brandCtaStyle, resolveBrandTheme } from '@presentation/lib/brandTheme'
 
-import { readPriorDesignHandoff } from '@shared/utils/priorDesignHandoff'
+import { clearPriorDesignHandoff, readPriorDesignHandoff } from '@shared/utils/priorDesignHandoff'
 
 import { colors2000s } from '../../theme/colors'
 import LegalFooterLinks from '../components/navigation/LegalFooterLinks'
@@ -35,10 +35,35 @@ const PublicBooking: React.FC = () => {
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
   const paymentId = searchParams.get('payment_id') || undefined
+  const handoffCleanupTimers = React.useRef(new Map<string, ReturnType<typeof setTimeout>>())
   const storeQuery = usePublicStore(slug)
   const { data: store, isLoading, isError } = storeQuery
   useDocumentTitle(store ? `${store.name} · Reservá tu turno` : null)
   const paymentStatus = usePublicPaymentStatus(store?.public_id, paymentId)
+
+  React.useEffect(() => {
+    if (!paymentId || !store?.public_id) return
+
+    const storePublicId = store.public_id
+    const cleanupKey = `${storePublicId}:${paymentId}`
+    const cleanupTimers = handoffCleanupTimers.current
+    const pendingCleanup = cleanupTimers.get(cleanupKey)
+    if (pendingCleanup !== undefined) {
+      window.clearTimeout(pendingCleanup)
+      cleanupTimers.delete(cleanupKey)
+    }
+
+    return () => {
+      // StrictMode replays effect cleanup/setup on mount. Deferring by one tick
+      // lets the replay cancel this timer while an in-app route exit clears storage.
+      const timer = window.setTimeout(() => {
+        clearPriorDesignHandoff(storePublicId)
+        cleanupTimers.delete(cleanupKey)
+      }, 0)
+      cleanupTimers.set(cleanupKey, timer)
+    }
+  }, [paymentId, store?.public_id])
+
   // Deep-link "reserva de nuevo" (?service=&staff=): se validan los ids contra
   // las listas publicas antes de montar el wizard. Sin parametros no se
   // consulta nada extra.
@@ -226,7 +251,11 @@ const PublicBooking: React.FC = () => {
               type="button"
               // Sin payment_id en la URL se monta un wizard nuevo (estado y clave de
               // idempotencia nuevos) sin recargar la SPA (F11b-20).
-              onClick={() => void navigate(`/booking/${slug}`)}
+              // Al salir se borra el resumen del diseño previo (#285).
+              onClick={() => {
+                clearPriorDesignHandoff(store.public_id)
+                void navigate(`/booking/${slug}`)
+              }}
               className="w-full min-h-11 py-4 rounded-xl border font-black uppercase tracking-widest text-xs"
               style={brandCtaStyle}
             >
