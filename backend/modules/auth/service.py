@@ -58,7 +58,12 @@ __all__ = [
     "PasswordResetEmail",
     "PasswordResetOutcome",
     "REFRESH_REUSE_GRACE_SECONDS",
+    "REVOKED_BY_ADMIN",
+    "REVOKED_BY_LOGOUT",
+    "REVOKED_BY_OWNER",
+    "REVOKED_BY_PASSWORD",
     "REVOKED_BY_ROTATION",
+    "REVOKED_BY_REUSE",
     "RevokedSessionsResult",
     "SessionClientContext",
     "access_token_for_user",
@@ -152,6 +157,11 @@ logger = structlog.get_logger()
 REFRESH_REUSE_GRACE_SECONDS = 10
 # Valor de ``auth_sessions.revoked_reason`` que escribe la rotacion.
 REVOKED_BY_ROTATION = "rotated"
+REVOKED_BY_LOGOUT = "logout"
+REVOKED_BY_ADMIN = "admin"
+REVOKED_BY_PASSWORD = "password"
+REVOKED_BY_OWNER = "owner"
+REVOKED_BY_REUSE = "reuse_detected"
 
 # "Redis no esta" es el criterio unico de core.redis (AUD2-B7-14); ValueError
 # suma el contador ilegible, que se trata igual que no poder leerlo.
@@ -279,6 +289,7 @@ async def revoke_sessions_for_user(
     db: AsyncSession,
     user_id: str,
     *,
+    revoked_reason: str = REVOKED_BY_ADMIN,
     preserve_refresh_token: str | None = None,
 ) -> int:
     """Revoca todas las sesiones vivas de un usuario.
@@ -294,10 +305,14 @@ async def revoke_sessions_for_user(
         condiciones.append(
             AuthSession.refresh_token_hash != hash_token(preserve_refresh_token)
         )
-    return await _revoke_sessions(db, *condiciones)
+    return await _revoke_sessions(db, *condiciones, revoked_reason=revoked_reason)
 
 
-async def _revoke_sessions(db: AsyncSession, *conditions: ColumnElement[bool]) -> int:
+async def _revoke_sessions(
+    db: AsyncSession,
+    *conditions: ColumnElement[bool],
+    revoked_reason: str,
+) -> int:
     """Revoca con un solo UPDATE las sesiones vivas que cumplen ``conditions``.
 
     Las cuatro revocaciones hacian SELECT de todas las sesiones vivas, asignaban
@@ -309,7 +324,7 @@ async def _revoke_sessions(db: AsyncSession, *conditions: ColumnElement[bool]) -
     result = await db.execute(
         update(AuthSession)
         .where(AuthSession.revoked_at.is_(None), *conditions)
-        .values(revoked_at=datetime.now(timezone.utc))
+        .values(revoked_at=datetime.now(timezone.utc), revoked_reason=revoked_reason)
     )
     return int(getattr(result, "rowcount", 0) or 0)
 
@@ -386,8 +401,10 @@ async def login_user(
         return AuthTokenPair(access_token=access_token, refresh_token=refresh_token)
 
 
-async def _rotated_moments_ago(db: AsyncSession, session_id: str) -> bool:
-    """La sesion la revoco la ROTACION hace menos de la ventana de gracia.
+async def _revocation_was_recent_rotation(
+    db: AsyncSession, session_id: str
+) -> tuple[bool, str | None]:
+    """Indica si la revocacion fue una rotacion reciente y devuelve su motivo.
 
     Lee de la base y no del objeto cargado: el perdedor de la carrera lo cargo
     vivo y la rotacion ganadora recien se hizo visible despues de su UPDATE.
@@ -399,16 +416,18 @@ async def _rotated_moments_ago(db: AsyncSession, session_id: str) -> bool:
             )
         )
     ).one_or_none()
-    if fila is None or fila.revoked_at is None:
-        return False
+    if fila is None:
+        return False, None
+    if fila.revoked_at is None:
+        return False, fila.revoked_reason
     if fila.revoked_reason != REVOKED_BY_ROTATION:
-        return False
+        return False, fila.revoked_reason
     revoked_at: datetime = fila.revoked_at
     if revoked_at.tzinfo is None:
         # SQLite (tests) devuelve naive; Postgres aware.
         revoked_at = revoked_at.replace(tzinfo=timezone.utc)
     ventana = timedelta(seconds=REFRESH_REUSE_GRACE_SECONDS)
-    return datetime.now(timezone.utc) - revoked_at < ventana
+    return datetime.now(timezone.utc) - revoked_at < ventana, fila.revoked_reason
 
 
 async def _handle_refresh_reuse(
@@ -423,18 +442,32 @@ async def _handle_refresh_reuse(
     Devuelve ``NoReturn`` para que mypy impida el ``return`` donde va un
     ``raise``.
 
-    D-20260928-01 (2026-09-28): si la sesion la revoco la ROTACION hace menos
-    de ``REFRESH_REUSE_GRACE_SECONDS``, es la carrera de dos pestanas o el
-    reintento tras una respuesta perdida: 401 sin tocar las demas sesiones y
-    sin emitir tokens. Revocar la familia ahi deslogueaba al usuario en todos
-    sus dispositivos. Fuera de la ventana, o si la revoco otra cosa (logout,
-    admin, cambio de clave), sigue siendo la senal de robo y la regla 15 no
-    cambia: se revoca la familia entera.
+    D-20261113-01 revisa D-20260928-01: solo reutilizar un refresh revocado por
+    rotacion fuera de la ventana de gracia revoca las sesiones vivas restantes.
+    Un token revocado por logout, admin o cambio de clave ya esta muerto; su
+    repeticion no debe cerrar sesiones creadas despues de esa revocacion.
     """
-    if await _rotated_moments_ago(db, session.id):
+    recent_rotation, revoked_reason = await _revocation_was_recent_rotation(
+        db, session.id
+    )
+    if recent_rotation:
         logger.info("refresh_token_reuse_within_grace", user_id=session.user_id, ip=ip)
         raise AuthenticationException(message="Sesion expirada")
-    revoked = await revoke_sessions_for_user(db, session.user_id)
+
+    # NULL/otro motivo incluye revocaciones historicas anteriores al registro
+    # del motivo; sin evidencia de rotacion no se corta una sesion mas nueva.
+    if revoked_reason != REVOKED_BY_ROTATION:
+        logger.info(
+            "refresh_token_reuse_after_non_rotation_revocation",
+            user_id=session.user_id,
+            revoked_reason=revoked_reason,
+            ip=ip,
+        )
+        raise AuthenticationException(message="Sesion expirada")
+
+    revoked = await revoke_sessions_for_user(
+        db, session.user_id, revoked_reason=REVOKED_BY_REUSE
+    )
     await db.commit()
     logger.warning(
         "refresh_token_reuse_detected",
@@ -523,6 +556,7 @@ async def logout_session(refresh_token: str | None, db: AsyncSession) -> None:
         session = result.scalar_one_or_none()
         if session and session.revoked_at is None:
             session.revoked_at = datetime.now(timezone.utc)
+            session.revoked_reason = REVOKED_BY_LOGOUT
             await db.commit()
 
 
@@ -552,7 +586,9 @@ async def revoke_store_sessions(
                     select(User.id).where(User.is_global_admin.is_(True))
                 )
             )
-        affected = await _revoke_sessions(db, *condiciones)
+        affected = await _revoke_sessions(
+            db, *condiciones, revoked_reason=REVOKED_BY_ADMIN
+        )
         await db.commit()
         return {"revoked_sessions": affected}
 
@@ -580,7 +616,9 @@ async def revoke_user_sessions(
         target = (await db.execute(consulta)).scalar_one_or_none()
         if not target:
             raise UserNotFoundException(identifier=user_public_id)
-        affected = await _revoke_sessions(db, AuthSession.user_id == target.id)
+        affected = await _revoke_sessions(
+            db, AuthSession.user_id == target.id, revoked_reason=REVOKED_BY_ADMIN
+        )
         await db.commit()
         return {"revoked_sessions": affected}
 
@@ -592,7 +630,7 @@ async def revoke_all_sessions(
         raise PermissionDeniedException(action="Operacion exclusiva para superadmin")
 
     async with tenant_bypass(db):
-        affected = await _revoke_sessions(db)
+        affected = await _revoke_sessions(db, revoked_reason=REVOKED_BY_ADMIN)
         await db.commit()
         return {"revoked_sessions": affected}
 
@@ -634,6 +672,7 @@ async def revoke_own_session(session_id: str, user: User, db: AsyncSession) -> N
         raise ResourceNotFoundException(resource="Sesión", identifier=session_id)
     if session.revoked_at is None:
         session.revoked_at = datetime.now(timezone.utc)
+        session.revoked_reason = REVOKED_BY_OWNER
         await db.commit()
 
 
@@ -697,7 +736,7 @@ async def reset_password(
         user.password_reset_expires_at = None
         # Un reset suele venir despues de un compromiso: si no se cierran las
         # sesiones vivas, el atacante conserva su refresh 30 dias mas.
-        await revoke_sessions_for_user(db, user.id)
+        await revoke_sessions_for_user(db, user.id, revoked_reason=REVOKED_BY_PASSWORD)
         await db.commit()
 
         return PasswordResetOutcome(
@@ -733,7 +772,10 @@ async def change_password(
     user.password_reset_expires_at = None
     # Cerrar las demas sesiones; la actual (cookie de refresh) se conserva.
     await revoke_sessions_for_user(
-        db, user.id, preserve_refresh_token=preserve_refresh_token
+        db,
+        user.id,
+        preserve_refresh_token=preserve_refresh_token,
+        revoked_reason=REVOKED_BY_PASSWORD,
     )
     await db.commit()
     return {"message": "Contraseña actualizada correctamente"}

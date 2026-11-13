@@ -13,7 +13,6 @@ from core.router import CanonicalAPIRouter
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.config import settings
-from core.exceptions import AuthenticationException
 from core.validation import PUBLIC_ID_PATTERN
 from core.database import get_db
 from core.rate_limit import enforce_rate_limit
@@ -120,16 +119,10 @@ async def refresh_session(
     db: AsyncSession = Depends(get_db),
 ) -> TokenResponse:
     refresh_token = request.cookies.get(REFRESH_COOKIE)
-    try:
-        tokens = await refresh_session_service(
-            refresh_token, db, _session_context(request)
-        )
-    except AuthenticationException as exc:
-        if refresh_token:
-            clear_response = Response()
-            clear_response.delete_cookie(REFRESH_COOKIE, **_cookie_options())
-            exc.headers["set-cookie"] = clear_response.headers["set-cookie"]
-        raise
+    # No borramos la cookie ante un 401. La respuesta puede llegar despues de
+    # otra rotacion o login exitoso y un Set-Cookie Max-Age=0 borraria el token
+    # nuevo: HTTP no permite condicionar el borrado al valor que envio el request.
+    tokens = await refresh_session_service(refresh_token, db, _session_context(request))
     _set_auth_cookies(response, tokens.refresh_token)
     return TokenResponse(access_token=tokens.access_token)
 

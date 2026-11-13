@@ -24,9 +24,8 @@ class AuthSessionModel(Base):
     revoked_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    # D-20260928-01: "rotated" cuando la revoco la rotacion del refresh; NULL
-    # para cualquier otra revocacion (logout, admin, cambio de clave). Solo la
-    # rotacion reciente habilita la ventana de gracia del reuso.
+    # D-20261113-01: distingue rotacion, logout, admin, cambio de clave y reuso.
+    # Solo una rotacion vieja habilita revocar las sesiones vivas por reuso.
     revoked_reason: Mapped[str | None] = mapped_column(String(16), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
