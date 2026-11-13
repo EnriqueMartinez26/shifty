@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 from email.utils import parseaddr
-from typing import Any
+from typing import Any, Callable
 from uuid import uuid4
 
 import structlog
@@ -260,18 +260,26 @@ class SmtpSession:
                 self._last_pre_data_failure = _is_retryable_pre_data_error(exc)
                 raise
         smtp = self._smtp
-        data_started = False
-        original_data = smtp.data
-
-        def tracked_data(message_bytes: bytes | str) -> tuple[int, bytes]:
-            nonlocal data_started
-            data_started = True
-            return original_data(message_bytes)
+        original_data: Callable[[bytes | str], tuple[int, bytes]] | None = getattr(
+            smtp, "data", None
+        )
+        # If an SMTP test double omits smtplib's ``data`` method, treat any
+        # send_message error conservatively as ambiguous; production smtplib
+        # always exposes it, so stage tracking remains precise there.
+        data_started = original_data is None
 
         # smtplib.send_message calls this only after MAIL and RCPT have
         # succeeded. Once it starts, a transport failure may have been
         # accepted by the provider and must remain terminal.
-        setattr(smtp, "data", tracked_data)
+        if original_data is not None:
+            data_method = original_data
+
+            def tracked_data(message_bytes: bytes | str) -> tuple[int, bytes]:
+                nonlocal data_started
+                data_started = True
+                return data_method(message_bytes)
+
+            setattr(smtp, "data", tracked_data)
         try:
             smtp.send_message(message)
         except Exception as exc:
@@ -282,7 +290,8 @@ class SmtpSession:
                 self._discard()
             raise
         finally:
-            setattr(smtp, "data", original_data)
+            if original_data is not None:
+                setattr(smtp, "data", original_data)
 
     async def send(
         self,

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from datetime import datetime, timezone
 import smtplib
 from types import SimpleNamespace
@@ -65,7 +65,7 @@ class _ScriptedSMTP:
 def _wire_outbox_dispatch(
     monkeypatch: pytest.MonkeyPatch,
     row: _OutboxMailRow,
-    smtp_factory: Any,
+    smtp_factory: Callable[[], _ScriptedSMTP],
 ) -> list[_ScriptedSMTP]:
     connections: list[_ScriptedSMTP] = []
 
@@ -84,9 +84,13 @@ def _wire_outbox_dispatch(
     @asynccontextmanager
     async def smtp_session() -> AsyncIterator[tasks.SmtpSession]:
         session = tasks.SmtpSession()
-        connection = smtp_factory()
-        connections.append(connection)
-        monkeypatch.setattr(session, "_connect", lambda: connection)
+
+        def connect() -> _ScriptedSMTP:
+            connection = smtp_factory()
+            connections.append(connection)
+            return connection
+
+        monkeypatch.setattr(session, "_connect", connect)
         try:
             yield session
         finally:
