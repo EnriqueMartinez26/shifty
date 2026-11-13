@@ -11,7 +11,12 @@ import pytest
 
 from core import mail_budget
 from core.config import settings
-from core.mail_budget import MailReservation, current_mail_context
+from core.mail_budget import (
+    MailPriority,
+    MailReservation,
+    current_mail_context,
+    current_mail_pre_data_retry,
+)
 from modules.payments import jobs
 from modules.payments.model import WEBHOOK_INBOX_MAX_ATTEMPTS
 from modules.notifications import tasks
@@ -66,6 +71,8 @@ def _wire_outbox_dispatch(
     monkeypatch: pytest.MonkeyPatch,
     row: _OutboxMailRow,
     smtp_factory: Callable[[], _ScriptedSMTP],
+    *,
+    use_real_sender: bool = False,
 ) -> list[_ScriptedSMTP]:
     connections: list[_ScriptedSMTP] = []
 
@@ -100,10 +107,29 @@ def _wire_outbox_dispatch(
         delivered = await smtp.send(to, "Subject", "Body")
         return {"status": "sent" if delivered else "failed", "reason": "smtp"}
 
+    if use_real_sender:
+        row.payload = {
+            "mail": "confirmation",
+            "args": {
+                "email": "client@example.com",
+                "details": {"public_id": "appointment-1"},
+            },
+        }
+
+        def confirmation_subject(_details: dict[str, Any]) -> str:
+            return "Confirmation"
+
+        def confirmation_body(_details: dict[str, Any]) -> str:
+            return "Your appointment is confirmed."
+
+        monkeypatch.setattr(tasks, "_confirmation_subject", confirmation_subject)
+        monkeypatch.setattr(tasks, "_confirmation_body", confirmation_body)
+
     monkeypatch.setattr(jobs, "_claim_next_email", claim)
     monkeypatch.setattr(jobs, "_apply_tenant_context", apply_context)
     monkeypatch.setattr(jobs, "smtp_session", smtp_session)
-    monkeypatch.setattr(jobs, "_sender", lambda _kind: send)
+    if not use_real_sender:
+        monkeypatch.setattr(jobs, "_sender", lambda _kind: send)
     monkeypatch.setattr("modules.payments.jobs.AsyncSession.commit", commit)
     return connections
 
@@ -328,8 +354,21 @@ async def test_outbox_reintenta_fallo_pre_data_con_mismo_id_y_un_solo_cupo(
     row = _OutboxMailRow()
     outcomes = iter([first_outcome, "success"])
     connections = _wire_outbox_dispatch(
-        monkeypatch, row, lambda: _ScriptedSMTP(next(outcomes))
+        monkeypatch,
+        row,
+        lambda: _ScriptedSMTP(next(outcomes)),
+        use_real_sender=True,
     )
+    original_reserve_mail = mail_budget.reserve_mail
+    reservations: list[tuple[MailPriority, str, bool]] = []
+
+    async def record_reserve_mail(
+        *, priority: MailPriority, message_id: str
+    ) -> MailReservation:
+        reservations.append((priority, message_id, current_mail_pre_data_retry()))
+        return await original_reserve_mail(priority=priority, message_id=message_id)
+
+    monkeypatch.setattr(tasks, "reserve_mail", record_reserve_mail)
 
     await jobs._dispatch_pending_emails(object())  # type: ignore[arg-type]
     assert row.attempts == 1
@@ -347,6 +386,10 @@ async def test_outbox_reintenta_fallo_pre_data_con_mismo_id_y_un_solo_cupo(
     assert metrics["priority:high"] == 1
     assert metrics["failed"] == 1
     assert metrics["sent"] == 1
+    assert reservations == [
+        ("high", "outbox:outbox-retry-1", True),
+        ("high", "outbox:outbox-retry-1", True),
+    ]
 
 
 @pytest.mark.asyncio
@@ -356,7 +399,10 @@ async def test_fallos_pre_data_respetan_el_maximo_original_del_outbox(
     monkeypatch.setattr(settings, "MAIL_DAILY_BUDGET", 5)
     row = _OutboxMailRow()
     connections = _wire_outbox_dispatch(
-        monkeypatch, row, lambda: _ScriptedSMTP("connection-before-data")
+        monkeypatch,
+        row,
+        lambda: _ScriptedSMTP("connection-before-data"),
+        use_real_sender=True,
     )
 
     for _ in range(WEBHOOK_INBOX_MAX_ATTEMPTS):
@@ -392,7 +438,7 @@ async def test_fallos_tras_entrar_en_data_quedan_terminales(
     monkeypatch.setattr(settings, "MAIL_DAILY_BUDGET", 5)
     row = _OutboxMailRow()
     connections = _wire_outbox_dispatch(
-        monkeypatch, row, lambda: _ScriptedSMTP(data_error)
+        monkeypatch, row, lambda: _ScriptedSMTP(data_error), use_real_sender=True
     )
 
     await jobs._dispatch_pending_emails(object())  # type: ignore[arg-type]
@@ -404,6 +450,44 @@ async def test_fallos_tras_entrar_en_data_quedan_terminales(
     assert len(connections) == 1
     assert connections[0].send_message_calls == 1
     assert connections[0].data_calls == 1
+    assert metrics["admitted"] == 1
+    assert metrics["failed"] == 1
+    assert metrics["sent"] == 0
+
+
+@pytest.mark.asyncio
+async def test_sender_directo_no_habilita_retry_pre_data(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "MAIL_DAILY_BUDGET", 5)
+    monkeypatch.setattr(tasks, "_confirmation_subject", lambda _details: "Subject")
+    monkeypatch.setattr(tasks, "_confirmation_body", lambda _details: "Body")
+    smtp = tasks.SmtpSession()
+    connection = _ScriptedSMTP("connection-before-data")
+    monkeypatch.setattr(smtp, "_connect", lambda: connection)
+    retry_flags: list[bool] = []
+    original_reserve_mail = mail_budget.reserve_mail
+
+    async def record_reserve_mail(
+        *, priority: MailPriority, message_id: str
+    ) -> MailReservation:
+        retry_flags.append(current_mail_pre_data_retry())
+        return await original_reserve_mail(priority=priority, message_id=message_id)
+
+    monkeypatch.setattr(tasks, "reserve_mail", record_reserve_mail)
+
+    result = await tasks.send_confirmation_email(
+        email="client@example.com",
+        details={"public_id": "direct-confirmation"},
+        smtp=smtp,
+    )
+    metrics = await mail_budget.read_mail_budget_metrics()
+
+    assert result["status"] == "failed"
+    assert retry_flags == [False]
+    assert smtp.last_delivery_retryable is False
+    assert connection.send_message_calls == 1
+    assert connection.data_calls == 0
     assert metrics["admitted"] == 1
     assert metrics["failed"] == 1
     assert metrics["sent"] == 0

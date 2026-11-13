@@ -462,7 +462,9 @@ async def _send_client_email(
         message_id or _mail_message_id("client", details),
     )
     with mail_delivery_context(
-        priority=effective_context[0], message_id=effective_context[1]
+        priority=effective_context[0],
+        message_id=effective_context[1],
+        retry_pre_data=current_mail_pre_data_retry(),
     ):
         if reply_to is None:
             return await _send_email(to, subject, body, smtp)
