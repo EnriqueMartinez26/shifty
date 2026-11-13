@@ -13,10 +13,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.utils import ARGENTINA_TZ
 from modules.billing.model import StoreSubscription
 from modules.billing.subscription_rules import (
+    SUBSCRIPTION_PAST_DUE,
     SUBSCRIPTION_SUSPENDED,
     SubscriptionOutlook,
     apply_subscription_transition,
     daily_action,
+    local_day,
     outlook,
 )
 
@@ -84,6 +86,8 @@ class DailyRun:
     warned: int = 0
     # (store_id, dias restantes, nombre del plan) para el aviso al dueno.
     warnings: list[tuple[str, int, str]] = field(default_factory=list)
+    # (store_id, subscription_id, notice, period_end) para avisos globales.
+    admin_notices: list[tuple[str, str, str, str]] = field(default_factory=list)
 
     def counters(self) -> dict[str, int]:
         return {
@@ -91,6 +95,7 @@ class DailyRun:
             "past_due": self.past_due,
             "suspended": self.suspended,
             "warned": self.warned,
+            "admin_notices": len(self.admin_notices),
         }
 
 
@@ -199,6 +204,27 @@ def _aplicar_accion_diaria(
             run.suspended += 1
         else:
             run.past_due += 1
+            periodo = getattr(subscription, "current_period_end", None)
+            if periodo is not None:
+                run.admin_notices.append(
+                    (
+                        subscription.store_id,
+                        subscription.id,
+                        SUBSCRIPTION_PAST_DUE,
+                        local_day(periodo).isoformat(),
+                    )
+                )
+    elif accion.notify_suspension_soon:
+        periodo = getattr(subscription, "current_period_end", None)
+        if periodo is not None:
+            run.admin_notices.append(
+                (
+                    subscription.store_id,
+                    subscription.id,
+                    "suspension_soon",
+                    local_day(periodo).isoformat(),
+                )
+            )
     elif accion.send_warning:
         subscription.expiry_warning_sent_at = now
         vista = outlook(subscription, today=hoy)
