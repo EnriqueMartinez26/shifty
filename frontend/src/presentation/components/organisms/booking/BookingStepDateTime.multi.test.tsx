@@ -15,6 +15,7 @@ const bookingDate = formatArgentinaDate(new Date().toISOString())
 jest.mock('@presentation/hooks/usePublic', () => ({
   usePublicAvailability: (...args: unknown[]) => mockAvailability(...args),
   usePublicStaff: (...args: unknown[]) => mockStaff(...args),
+  usePublicDepositPreview: () => ({ data: undefined, isError: false, isFetching: false }),
   useJoinWaitlist: () => ({ mutateAsync: jest.fn(), isPending: false, isSuccess: false })
 }))
 
