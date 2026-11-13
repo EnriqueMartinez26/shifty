@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import json
 import time
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 import sentry_sdk
@@ -131,17 +131,15 @@ def _capture_slo_transition(transition: dict[str, Any]) -> bool:
     alert = transition["alert"]
     code = str(alert["code"])
     state = str(transition["state"])
-    level = (
-        {"critical": "error", "warning": "warning"}.get(
-            str(alert["severity"]), "warning"
-        )
-        if state == "active"
-        else "info"
-    )
+    level: Literal["error", "warning", "info"]
+    if state != "active":
+        level = "info"
+    elif alert["severity"] == "critical":
+        level = "error"
+    else:
+        level = "warning"
     message = (
-        "SLO threshold exceeded"
-        if state == "active"
-        else "SLO threshold recovered"
+        "SLO threshold exceeded" if state == "active" else "SLO threshold recovered"
     )
     if not settings.SENTRY_DSN:
         logger.warning(
@@ -178,7 +176,7 @@ def _capture_slo_transition(transition: dict[str, Any]) -> bool:
 
 
 async def _update_slo_alerts(
-    alerts: list[dict[str, str | int]], *, now: float | None = None
+    alerts: list[dict[str, Any]], *, now: float | None = None
 ) -> None:
     """Claim, send and ACK SLO transitions with shared cross-worker state."""
     redis = await get_redis()
@@ -266,7 +264,9 @@ def monitor_ops_slo(self: Task) -> dict[str, int]:
     except SoftTimeLimitExceeded:
         raise
     except Exception as exc:
-        logger.warning("ops_slo_monitor_failed", error_type=type(exc).__name__)
+        logger.warning(
+            "ops_slo_monitor_failed", extra={"error_type": type(exc).__name__}
+        )
         if _MONITOR_FAILURE_COOLDOWN.allow("ops_slo_monitor"):
             report_exception(
                 RuntimeError("Critical SLO monitor failed"),

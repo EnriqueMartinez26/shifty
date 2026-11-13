@@ -330,8 +330,7 @@ def test_checks_avisa_alarma_de_rabbitmq_sin_reiniciarlo(host: Host) -> None:
     resultado = _correr_checks(
         host,
         FAKE_RABBIT_ALARMS=(
-            '{"alarms":[{"resource":"memory"}],'
-            '"node":"rabbit@rabbitmq","result":"ok"}'
+            '{"alarms":[{"resource":"memory"}],"node":"rabbit@rabbitmq","result":"ok"}'
         ),
     )
 

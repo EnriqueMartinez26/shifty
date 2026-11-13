@@ -116,7 +116,9 @@ class _RedisClient:
                         previous["pending_until"] = now + lease
                         previous["alert"] = alert
                         transitions.append(
-                            json.dumps({"state": "active", "alert": alert, "token": claim})
+                            json.dumps(
+                                {"state": "active", "alert": alert, "token": claim}
+                            )
                         )
             else:
                 previous["alert"] = alert
@@ -126,10 +128,7 @@ class _RedisClient:
             previous = self.shared.active[code]
             if previous["reported"]:
                 pending_until = previous.get("pending_until", 0)
-                if (
-                    previous.get("pending_state") != "resolved"
-                    or pending_until <= now
-                ):
+                if previous.get("pending_state") != "resolved" or pending_until <= now:
                     previous["pending_state"] = "resolved"
                     previous["pending_token"] = claim
                     previous["pending_until"] = now + lease
@@ -142,15 +141,16 @@ class _RedisClient:
                             }
                         )
                     )
-            elif previous.get("pending_state") != "active" or previous.get(
-                "pending_until", 0
-            ) <= now:
+            elif (
+                previous.get("pending_state") != "active"
+                or previous.get("pending_until", 0) <= now
+            ):
                 del self.shared.active[code]
         return transitions
 
 
 def test_slo_monitor_deduplicates_across_workers_and_reports_recovery_recurrence(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(settings, "SENTRY_DSN", "https://sentry.invalid/1")
     scopes: list[_Scope] = []
@@ -208,7 +208,9 @@ def test_slo_monitor_deduplicates_across_workers_and_reports_recovery_recurrence
     assert all(event[2]["code"] == "pending_webhooks_high" for event in events)
 
 
-def test_slo_sentry_failure_releases_pending_transition_for_retry(monkeypatch) -> None:
+def test_slo_sentry_failure_releases_pending_transition_for_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     shared = _SharedRedisState()
     clients = [_RedisClient(shared), _RedisClient(shared)]
     client_index = [0]
@@ -247,7 +249,11 @@ def test_slo_sentry_failure_releases_pending_transition_for_retry(monkeypatch) -
     assert calls == 2
     assert shared.active["dead_letter_webhooks"]["reported"] is True
     assert shared.locks == {}
-def test_slo_monitor_reports_warning_severity_from_shared_alerts(monkeypatch) -> None:
+
+
+def test_slo_monitor_reports_warning_severity_from_shared_alerts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(settings, "SENTRY_DSN", "https://sentry.invalid/1")
     scope = _Scope()
     messages: list[tuple[str, str]] = []
@@ -277,7 +283,7 @@ def test_slo_monitor_reports_warning_severity_from_shared_alerts(monkeypatch) ->
 
 @pytest.mark.asyncio
 async def test_slo_alert_lua_executes_against_real_redis_when_configured(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     url = os.getenv("SLO_TEST_REDIS_URL")
     if not url:
@@ -294,7 +300,7 @@ async def test_slo_alert_lua_executes_against_real_redis_when_configured(
     monkeypatch.setattr(slo_tasks, "SLO_ALERT_STATE_KEY", state_key)
     monkeypatch.setattr(slo_tasks, "SLO_ALERT_LOCK_KEY", lock_key)
 
-    async def get_local_redis():
+    async def get_local_redis() -> Any:
         return client
 
     monkeypatch.setattr(slo_tasks, "get_redis", get_local_redis)
@@ -333,15 +339,18 @@ async def test_slo_alert_lua_executes_against_real_redis_when_configured(
         claims = [json.loads(event) for batch in concurrent_claims for event in batch]
         assert len(claims) == 1
         transition = claims[0]
-        assert await second_client.eval(
-            slo_tasks._ACK_SLO_ALERT_TRANSITION,
-            1,
-            state_key,
-            "pending_webhooks_high",
-            "active",
-            transition["token"],
-            "30000",
-        ) == 1
+        assert (
+            await second_client.eval(
+                slo_tasks._ACK_SLO_ALERT_TRANSITION,
+                1,
+                state_key,
+                "pending_webhooks_high",
+                "active",
+                transition["token"],
+                "30000",
+            )
+            == 1
+        )
         await client.delete(state_key)
 
         interrupted = json.dumps(
@@ -384,28 +393,41 @@ async def test_slo_alert_lua_executes_against_real_redis_when_configured(
         await client.delete(state_key)
 
         await slo_tasks._update_slo_alerts(alert, now=30_000)
-        state = json.loads(await client.get(state_key))
+        raw_state = await client.get(state_key)
+        assert raw_state is not None
+        state = json.loads(raw_state)
         assert state["active"]["pending_webhooks_high"]["reported"] is True
         assert state["last_active_at"]["pending_webhooks_high"] == 30_000
 
         await slo_tasks._update_slo_alerts(alert, now=30_100)
         await slo_tasks._update_slo_alerts([], now=30_200)
-        assert json.loads(await client.get(state_key))["active"] == {}
+        raw_state = await client.get(state_key)
+        assert raw_state is not None
+        assert json.loads(raw_state)["active"] == {}
 
         # Recovery resets the active state; recurrence is held until cooldown.
         await slo_tasks._update_slo_alerts(alert, now=30_300)
-        assert json.loads(await client.get(state_key))["active"][
-            "pending_webhooks_high"
-        ]["reported"] is False
+        raw_state = await client.get(state_key)
+        assert raw_state is not None
+        assert (
+            json.loads(raw_state)["active"]["pending_webhooks_high"]["reported"]
+            is False
+        )
         await slo_tasks._update_slo_alerts(alert, now=31_801)
-        assert json.loads(await client.get(state_key))["active"]["pending_webhooks_high"]["reported"] is True
+        raw_state = await client.get(state_key)
+        assert raw_state is not None
+        assert (
+            json.loads(raw_state)["active"]["pending_webhooks_high"]["reported"] is True
+        )
     finally:
         await client.delete(state_key, lock_key)
         await client.aclose()
         await second_client.aclose()
 
 
-def test_slo_monitor_uses_shared_global_metrics_and_thresholds(monkeypatch) -> None:
+def test_slo_monitor_uses_shared_global_metrics_and_thresholds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     calls: list[object] = []
 
     class FakeSession:
@@ -445,6 +467,7 @@ def test_slo_monitor_uses_shared_global_metrics_and_thresholds(monkeypatch) -> N
     monkeypatch.setattr(slo_tasks, "_slo_metrics", get_metrics)
     monkeypatch.setattr(slo_tasks, "_slo_thresholds", thresholds)
     monkeypatch.setattr(slo_tasks, "_slo_alerts", lambda metrics, limits: alerts)
+
     async def update_alerts(current: list[dict[str, str | int]]) -> None:
         calls.append(current)
 
