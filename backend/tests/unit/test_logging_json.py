@@ -62,24 +62,36 @@ def test_una_excepcion_queda_en_el_mismo_evento(salida: io.StringIO) -> None:
 def test_el_nivel_sale_de_la_configuracion(
     salida: io.StringIO, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    nivel_original = settings.LOG_LEVEL
     # El fixture ``salida`` vuelve a configurar structlog al terminar. Restaura
     # el nivel antes de ese teardown para que no quede filtrando INFO en otras
     # pruebas que comparten el logger global.
-    with monkeypatch.context() as nivel_temporal:
-        nivel_temporal.setattr(settings, "LOG_LEVEL", "WARNING")
+    try:
+        with monkeypatch.context() as nivel_base:
+            nivel_base.setattr(settings, "LOG_LEVEL", "INFO")
+            with monkeypatch.context() as nivel_temporal:
+                nivel_temporal.setattr(settings, "LOG_LEVEL", "WARNING")
+                configure_logging(stream=salida)
+
+                structlog.get_logger().info("ruido")
+                structlog.get_logger().warning("importa")
+
+        assert [e["event"] for e in _eventos(salida)] == ["importa"]
+        assert settings.LOG_LEVEL == "INFO"
+
+        # Reproduce la secuencia que sigue al test: configure_logging() con el
+        # nivel base restaurado debe volver a aceptar INFO.
         configure_logging(stream=salida)
+        structlog.get_logger().info("nivel_restaurado")
+        assert [e["event"] for e in _eventos(salida)] == [
+            "importa",
+            "nivel_restaurado",
+        ]
+    finally:
+        settings.LOG_LEVEL = nivel_original
+        configure_logging()
 
-        structlog.get_logger().info("ruido")
-        structlog.get_logger().warning("importa")
-
-    assert [e["event"] for e in _eventos(salida)] == ["importa"]
-    assert settings.LOG_LEVEL == "INFO"
-
-    # Reproduce la secuencia que sigue al test: el teardown de ``salida`` llama
-    # configure_logging() con el nivel ya restaurado, y debe volver a aceptar INFO.
-    configure_logging(stream=salida)
-    structlog.get_logger().info("nivel_restaurado")
-    assert [e["event"] for e in _eventos(salida)] == ["importa", "nivel_restaurado"]
+    assert settings.LOG_LEVEL == nivel_original
 
 
 def test_el_nivel_por_defecto_es_info() -> None:
