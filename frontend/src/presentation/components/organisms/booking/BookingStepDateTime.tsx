@@ -212,6 +212,8 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
   })
   const farBookingDepositBlocked =
     farBookingPreviewStartsAt !== null &&
+    !farBookingPreview.isFetching &&
+    !farBookingPreview.isError &&
     farBookingPreview.data?.booking_blocked_code === 'FAR_BOOKING_UNAVAILABLE'
   // La disponibilidad vacía puede deberse al límite de seña antes de que el
   // backend compruebe el horario comercial. Sin confirmación, no afirmar que

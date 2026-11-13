@@ -1100,8 +1100,30 @@ describe('límite de seña en fechas lejanas', () => {
     expect(screen.queryByText(/30 días de anticipación/i)).not.toBeInTheDocument()
   })
 
+  it('ignora el código bloqueante cacheado mientras el preview se refetchea', () => {
+    renderFarDate({
+      data: { booking_blocked_code: 'FAR_BOOKING_UNAVAILABLE' },
+      isFetching: true,
+      isError: false
+    })
+
+    expect(screen.getByText('No hay turnos disponibles.')).toBeInTheDocument()
+    expect(screen.queryByText(/30 días de anticipación/i)).not.toBeInTheDocument()
+  })
+
   it('usa un mensaje neutral si el preview falla o no devuelve datos', () => {
     renderFarDate({ data: undefined, isError: true })
+
+    expect(screen.getByText('No hay turnos disponibles.')).toBeInTheDocument()
+    expect(screen.queryByText(/30 días de anticipación/i)).not.toBeInTheDocument()
+  })
+
+  it('ignora el código bloqueante cacheado después de fallar el refetch', () => {
+    renderFarDate({
+      data: { booking_blocked_code: 'FAR_BOOKING_UNAVAILABLE' },
+      isFetching: false,
+      isError: true
+    })
 
     expect(screen.getByText('No hay turnos disponibles.')).toBeInTheDocument()
     expect(screen.queryByText(/30 días de anticipación/i)).not.toBeInTheDocument()
