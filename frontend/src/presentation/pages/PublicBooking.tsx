@@ -53,13 +53,9 @@ const PublicBooking: React.FC = () => {
       cleanupTimers.delete(cleanupKey)
     }
 
-    const clearOnPageHide = () => clearPriorDesignHandoff(storePublicId)
-    window.addEventListener('pagehide', clearOnPageHide)
-
     return () => {
-      window.removeEventListener('pagehide', clearOnPageHide)
       // StrictMode replays effect cleanup/setup on mount. Deferring by one tick
-      // lets the replay cancel this timer while a real exit still clears storage.
+      // lets the replay cancel this timer while an in-app route exit clears storage.
       const timer = window.setTimeout(() => {
         clearPriorDesignHandoff(storePublicId)
         cleanupTimers.delete(cleanupKey)

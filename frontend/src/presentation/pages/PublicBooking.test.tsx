@@ -385,6 +385,17 @@ describe('PublicBooking: diseño previo al volver de Mercado Pago', () => {
     expect(window.sessionStorage.getItem('shifty:prior-design:store-1')).not.toBeNull()
   })
 
+  it('conserva el handoff durante la ida y vuelta a Mercado Pago', () => {
+    guardarResumen()
+    renderEn('/booking/sol?payment_id=p1')
+
+    fireEvent(window, new Event('pagehide'))
+    fireEvent(window, new Event('pageshow'))
+
+    expect(window.sessionStorage.getItem('shifty:prior-design:store-1')).not.toBeNull()
+    expect(screen.getByRole('link', { name: BOTON })).toBeInTheDocument()
+  })
+
   it('conserva el handoff durante la repetición de efectos de StrictMode', () => {
     guardarResumen()
     render(<StrictMode>{arbolEn('/booking/sol?payment_id=p1')}</StrictMode>)
