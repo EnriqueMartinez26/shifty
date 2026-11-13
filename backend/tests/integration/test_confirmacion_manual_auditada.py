@@ -206,22 +206,23 @@ async def test_confirmar_a_mano_un_cobro_reembolsado_responde_409_sin_mutaciones
     pago.transaction_id = "txn-refund-299"
     await test_session.commit()
 
-    async def snapshot() -> tuple[dict[str, object], list[tuple[str, object]], int]:
+    async def snapshot() -> tuple[
+        dict[str, object], tuple[tuple[str, object], ...], int
+    ]:
         test_session.expire_all()
         current = (
             await test_session.execute(
                 select(Payment).where(Payment.appointment_id == turno)
             )
         ).scalar_one()
-        outbox = list(
-            (
-                await test_session.execute(
-                    select(OutboxMessage.event_type, OutboxMessage.payload).order_by(
-                        OutboxMessage.id
-                    )
+        outbox_rows = (
+            await test_session.execute(
+                select(OutboxMessage.event_type, OutboxMessage.payload).order_by(
+                    OutboxMessage.id
                 )
-            ).all()
-        )
+            )
+        ).all()
+        outbox = tuple((row.event_type, row.payload) for row in outbox_rows)
         audits = await test_session.scalar(
             select(func.count(AuditLog.id)).where(
                 AuditLog.resource_type == "Payment", AuditLog.resource_id == current.id
