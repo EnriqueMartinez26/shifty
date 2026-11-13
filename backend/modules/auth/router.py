@@ -118,9 +118,11 @@ async def refresh_session(
     response: Response,
     db: AsyncSession = Depends(get_db),
 ) -> TokenResponse:
-    tokens = await refresh_session_service(
-        request.cookies.get(REFRESH_COOKIE), db, _session_context(request)
-    )
+    refresh_token = request.cookies.get(REFRESH_COOKIE)
+    # No borramos la cookie ante un 401. La respuesta puede llegar despues de
+    # otra rotacion o login exitoso y un Set-Cookie Max-Age=0 borraria el token
+    # nuevo: HTTP no permite condicionar el borrado al valor que envio el request.
+    tokens = await refresh_session_service(refresh_token, db, _session_context(request))
     _set_auth_cookies(response, tokens.refresh_token)
     return TokenResponse(access_token=tokens.access_token)
 
