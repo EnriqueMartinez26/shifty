@@ -76,17 +76,17 @@ def test_el_nivel_sale_de_la_configuracion(
                 structlog.get_logger().info("ruido")
                 structlog.get_logger().warning("importa")
 
-        assert [e["event"] for e in _eventos(salida)] == ["importa"]
-        assert settings.LOG_LEVEL == "INFO"
+            assert [e["event"] for e in _eventos(salida)] == ["importa"]
+            assert settings.LOG_LEVEL == "INFO"
 
-        # Reproduce la secuencia que sigue al test: configure_logging() con el
-        # nivel base restaurado debe volver a aceptar INFO.
-        configure_logging(stream=salida)
-        structlog.get_logger().info("nivel_restaurado")
-        assert [e["event"] for e in _eventos(salida)] == [
-            "importa",
-            "nivel_restaurado",
-        ]
+            # Reproduce la secuencia que sigue al test: configure_logging() con
+            # el nivel base restaurado debe volver a aceptar INFO.
+            configure_logging(stream=salida)
+            structlog.get_logger().info("nivel_restaurado")
+            assert [e["event"] for e in _eventos(salida)] == [
+                "importa",
+                "nivel_restaurado",
+            ]
     finally:
         settings.LOG_LEVEL = nivel_original
         configure_logging()
