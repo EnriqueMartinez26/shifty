@@ -22,6 +22,7 @@ from core.enqueue import enqueue
 from core.mail_budget import (
     MailPriority,
     current_mail_context,
+    current_mail_pre_data_retry,
     finish_mail,
     mail_delivery_context,
     reserve_mail,
@@ -170,6 +171,19 @@ _SMTP_REPLIES: tuple[type[Exception], ...] = (
 )
 
 
+def _is_retryable_pre_data_error(exc: Exception) -> bool:
+    """Only transient SMTP/network failures before DATA can reuse a delivery ID."""
+    if isinstance(exc, smtplib.SMTPRecipientsRefused):
+        codes = [code for code, _response in exc.recipients.values()]
+        return bool(codes) and all(400 <= code < 500 for code in codes)
+    if isinstance(exc, smtplib.SMTPResponseException):
+        return 400 <= exc.smtp_code < 500
+    return isinstance(
+        exc,
+        (ConnectionError, TimeoutError, smtplib.SMTPServerDisconnected),
+    )
+
+
 class SmtpSession:
     """Una conexion SMTP (conexion + STARTTLS + LOGIN) para varios envios.
 
@@ -195,6 +209,8 @@ class SmtpSession:
     def __init__(self) -> None:
         self._smtp: smtplib.SMTP | None = None
         self.last_budget_decision: str | None = None
+        self.last_delivery_retryable = False
+        self._last_pre_data_failure = False
 
     def _connect(self) -> smtplib.SMTP:
         smtp = smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=10)
@@ -235,18 +251,38 @@ class SmtpSession:
             self._discard()
 
     def _send_sync(self, message: EmailMessage) -> None:
+        self._last_pre_data_failure = False
         self._probe()
         if self._smtp is None:
-            self._smtp = self._connect()
+            try:
+                self._smtp = self._connect()
+            except Exception as exc:
+                self._last_pre_data_failure = _is_retryable_pre_data_error(exc)
+                raise
+        smtp = self._smtp
+        data_started = False
+        original_data = smtp.data
+
+        def tracked_data(message_bytes: bytes | str) -> tuple[int, bytes]:
+            nonlocal data_started
+            data_started = True
+            return original_data(message_bytes)
+
+        # smtplib.send_message calls this only after MAIL and RCPT have
+        # succeeded. Once it starts, a transport failure may have been
+        # accepted by the provider and must remain terminal.
+        setattr(smtp, "data", tracked_data)
         try:
-            self._smtp.send_message(message)
+            smtp.send_message(message)
         except Exception as exc:
-            # Sin reintento: el DATA pudo haber llegado. Si el servidor
-            # respondio con un error la conversacion sigue coherente; si no,
-            # la conexion queda en estado incierto y se descarta.
+            self._last_pre_data_failure = (
+                not data_started and _is_retryable_pre_data_error(exc)
+            )
             if not isinstance(exc, _SMTP_REPLIES):
                 self._discard()
             raise
+        finally:
+            setattr(smtp, "data", original_data)
 
     async def send(
         self,
@@ -259,6 +295,7 @@ class SmtpSession:
         message_id: str | None = None,
     ) -> bool:
         self.last_budget_decision = None
+        self.last_delivery_retryable = False
         try:
             # AUD2-B4-08: dentro del try. Afuera, un error del parser de
             # cabeceras se propagaba con el asunto o la direccion en el
@@ -280,6 +317,7 @@ class SmtpSession:
             return False
 
         budget_context = current_mail_context()
+        retry_pre_data = current_mail_pre_data_retry()
         effective_priority, effective_message_id = budget_context or (
             "medium",
             f"smtp:{uuid4().hex}",
@@ -304,7 +342,14 @@ class SmtpSession:
             await finish_mail(reservation, sent=False)
             raise
         except Exception as exc:
-            await finish_mail(reservation, sent=False)
+            self.last_delivery_retryable = (
+                retry_pre_data and self._last_pre_data_failure
+            )
+            await finish_mail(
+                reservation,
+                sent=False,
+                retryable=self.last_delivery_retryable,
+            )
             logger.error(
                 "smtp_send_failed",
                 to=_mask_email(to),

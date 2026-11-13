@@ -24,10 +24,13 @@ class AtomicMailBudgetRedis:
                 token, priority, budget, reserve, alert_at, _ttl = values
                 state = messages.get(message_id)
                 admitted = int(counts.get("admitted", "0"))
-                if state and state != "deferred":
+                if state and state not in {"deferred", "retryable"}:
                     if state == f"reserved:{token}":
                         return [1, admitted, 0]
                     return [-1 if state == "dropped" else 2, admitted, 0]
+                if state == "retryable":
+                    messages[message_id] = f"reserved:{token}"
+                    return [1, admitted, 0]
                 budget = int(budget)
                 reserve = int(reserve)
                 alert_at = int(alert_at)
@@ -61,10 +64,10 @@ class AtomicMailBudgetRedis:
                 return [1, admitted, alert]
 
             assert script == mail_budget._FINISH_SCRIPT
-            token, outcome, _ttl = values
+            token, outcome, message_state, _ttl = values
             if messages.get(message_id) != f"reserved:{token}":
                 return [0]
-            messages[message_id] = outcome
+            messages[message_id] = message_state
             counts[outcome] = str(int(counts.get(outcome, "0")) + 1)
             return [1]
 

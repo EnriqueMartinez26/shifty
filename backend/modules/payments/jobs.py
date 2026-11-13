@@ -671,9 +671,11 @@ async def _dispatch_pending_emails(
     (``processed_at`` + commit plano, ``SKIP LOCKED``) -> envio. Lo que el
     presupuesto no alcanza queda pendiente, sin intento contado, y lo toma el
     tick siguiente: ya no se pierde. Toma tambien los que dejo un tick
-    anterior. Un envio fallido no se reintenta (el DATA pudo haber llegado):
-    su fila queda procesada con ``attempts`` y ``error``, anotados al final
-    en una transaccion nueva con el contexto reaplicado.
+    anterior. Un fallo transitorio identificado antes de ``DATA`` libera
+    la fila para el proximo tick, conserva el mismo idempotency key y cuenta
+    contra el tope original de intentos. Un error despues de entrar en
+    ``DATA`` queda terminal porque el proveedor pudo haber aceptado el mail.
+    Los intentos y errores se anotan al final en una transaccion nueva.
 
     Mientras se manda no hay transaccion abierta (regla 5): el reclamo
     commitea con ``AsyncSession.commit`` y no con el de ``TenantSession``,
@@ -719,7 +721,18 @@ async def _dispatch_pending_emails(
                 )
                 continue
             if motivo is not None:
+                retryable_pre_data = getattr(smtp, "last_delivery_retryable", False)
+                if retryable_pre_data:
+                    # Se reabre solo para el siguiente tick. No se vuelve a
+                    # tomar dentro de este lote ni se pierde el tope de intentos.
+                    fila.processed_at = None
+                    logger.info(
+                        "outbox_email_retry_scheduled_before_data",
+                        **_contexto_del_mail(fila),
+                    )
                 fallados.append((fila, motivo))
+                if retryable_pre_data:
+                    break
     if not fallados and not diferido_por_cuota:
         return
     if fallados or diferido_por_cuota:
@@ -776,7 +789,11 @@ async def _send_one_pending_email(fila: OutboxMessage, smtp: Any) -> str | None:
         message_id = f"outbox:{getattr(fila, 'id', None) or getattr(fila, 'public_id', 'unknown')}"
         if hasattr(smtp, "last_budget_decision"):
             smtp.last_budget_decision = None
-        with mail_delivery_context(priority=priority, message_id=message_id):
+        if hasattr(smtp, "last_delivery_retryable"):
+            smtp.last_delivery_retryable = False
+        with mail_delivery_context(
+            priority=priority, message_id=message_id, retry_pre_data=True
+        ):
             resultado = await enviar(smtp=smtp, **argumentos)
     except SoftTimeLimitExceeded:
         raise

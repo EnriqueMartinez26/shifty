@@ -30,6 +30,9 @@ _REDIS_RETRIES = 2
 _MAIL_CONTEXT: ContextVar[tuple[MailPriority, str] | None] = ContextVar(
     "mail_budget_context", default=None
 )
+_MAIL_PRE_DATA_RETRY: ContextVar[bool] = ContextVar(
+    "mail_pre_data_retry", default=False
+)
 
 logger = structlog.get_logger()
 
@@ -45,7 +48,7 @@ local alert_at = tonumber(ARGV[6])
 local ttl = tonumber(ARGV[7])
 local state = redis.call('HGET', messages, message_id)
 
-if state and state ~= 'deferred' then
+if state and state ~= 'deferred' and state ~= 'retryable' then
     if state == 'reserved:' .. token then
         return {1, tonumber(redis.call('HGET', counts, 'admitted') or '0'), 0}
     end
@@ -56,6 +59,14 @@ if state and state ~= 'deferred' then
 end
 
 local admitted = tonumber(redis.call('HGET', counts, 'admitted') or '0')
+if state == 'retryable' then
+    -- Reuse the logical message's existing admission; a bounded outbox retry
+    -- must not consume another slot or be denied after the cap was reached.
+    redis.call('HSET', messages, message_id, 'reserved:' .. token)
+    redis.call('EXPIRE', messages, ttl)
+    redis.call('EXPIRE', counts, ttl)
+    return {1, admitted, 0}
+end
 if budget > 0 then
     local normal_limit = budget - reserve
     if priority ~= 'critical' and admitted >= normal_limit then
@@ -102,11 +113,12 @@ local messages = KEYS[2]
 local message_id = ARGV[1]
 local token = ARGV[2]
 local outcome = ARGV[3]
-local ttl = tonumber(ARGV[4])
+local message_state = ARGV[4]
+local ttl = tonumber(ARGV[5])
 if redis.call('HGET', messages, message_id) ~= 'reserved:' .. token then
     return 0
 end
-redis.call('HSET', messages, message_id, outcome)
+redis.call('HSET', messages, message_id, message_state)
 redis.call('HINCRBY', counts, outcome, 1)
 redis.call('EXPIRE', messages, ttl)
 redis.call('EXPIRE', counts, ttl)
@@ -125,17 +137,25 @@ class MailReservation:
 
 
 @contextmanager
-def mail_delivery_context(*, priority: MailPriority, message_id: str) -> Iterator[None]:
-    """Carry priority and logical identity to the shared SMTP sink."""
+def mail_delivery_context(
+    *, priority: MailPriority, message_id: str, retry_pre_data: bool = False
+) -> Iterator[None]:
+    """Carry priority, logical identity and retry policy to the SMTP sink."""
     token = _MAIL_CONTEXT.set((priority, message_id))
+    retry_token = _MAIL_PRE_DATA_RETRY.set(retry_pre_data)
     try:
         yield
     finally:
+        _MAIL_PRE_DATA_RETRY.reset(retry_token)
         _MAIL_CONTEXT.reset(token)
 
 
 def current_mail_context() -> tuple[MailPriority, str] | None:
     return _MAIL_CONTEXT.get()
+
+
+def current_mail_pre_data_retry() -> bool:
+    return _MAIL_PRE_DATA_RETRY.get()
 
 
 def _window(now: datetime | None = None) -> tuple[str, int]:
@@ -198,7 +218,8 @@ async def reserve_mail(*, priority: MailPriority, message_id: str) -> MailReserv
 
     ``message_id`` must identify the logical delivery, not its recipient or
     content. A repeated task/outbox delivery is suppressed without another
-    count. Deferred messages can be reconsidered on the next outbox tick.
+    count. Deferred messages can be reconsidered on the next outbox tick;
+    bounded pre-DATA retries reuse the existing admission.
     """
     if priority not in _PRIORITIES:
         raise ValueError(f"invalid mail priority: {priority}")
@@ -281,12 +302,15 @@ async def reserve_mail(*, priority: MailPriority, message_id: str) -> MailReserv
     )
 
 
-async def finish_mail(reservation: MailReservation, *, sent: bool) -> None:
-    """Record the terminal send result once; SMTP itself is never retried here."""
+async def finish_mail(
+    reservation: MailReservation, *, sent: bool, retryable: bool = False
+) -> None:
+    """Record a send result; retryable pre-DATA failures retain their quota slot."""
     if not reservation.tracked or reservation.decision != "admitted":
         return
     counts_key, messages_key = _redis_keys(reservation.window_id)
     outcome = "sent" if sent else "failed"
+    message_state = "sent" if sent else "retryable" if retryable else "failed"
     _, ttl = _window()
     arguments = (
         2,
@@ -295,6 +319,7 @@ async def finish_mail(reservation: MailReservation, *, sent: bool) -> None:
         reservation.message_key,
         reservation.attempt_token,
         outcome,
+        message_state,
         ttl,
     )
     for attempt in range(_REDIS_RETRIES):

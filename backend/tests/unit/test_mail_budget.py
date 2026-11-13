@@ -128,6 +128,34 @@ async def test_el_fallo_no_se_cuenta_como_enviado_ni_reintenta_un_resultado_ambi
 
 
 @pytest.mark.asyncio
+async def test_fallo_pre_data_reusa_el_cupo_del_mismo_mensaje_logico(
+    redis: AtomicMailBudgetRedis,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "MAIL_DAILY_BUDGET", 5)
+    first = await mail_budget.reserve_mail(
+        priority="high", message_id="outbox:pre-data-retry"
+    )
+    await mail_budget.finish_mail(first, sent=False, retryable=True)
+
+    retry = await mail_budget.reserve_mail(
+        priority="high", message_id="outbox:pre-data-retry"
+    )
+    assert retry.decision == "admitted"
+    await mail_budget.finish_mail(retry, sent=True)
+    duplicate = await mail_budget.reserve_mail(
+        priority="high", message_id="outbox:pre-data-retry"
+    )
+    metrics = await mail_budget.read_mail_budget_metrics()
+
+    assert duplicate.decision == "duplicate"
+    assert metrics["admitted"] == 1
+    assert metrics["priority:high"] == 1
+    assert metrics["failed"] == 1
+    assert metrics["sent"] == 1
+
+
+@pytest.mark.asyncio
 async def test_un_mismo_id_logico_concurrente_solo_reserva_un_cupo(
     redis: AtomicMailBudgetRedis,
     monkeypatch: pytest.MonkeyPatch,

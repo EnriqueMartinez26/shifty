@@ -43,10 +43,15 @@ The noncritical limit is the total cap minus the critical reserve. Redis Lua
 scripts reserve each logical message atomically across API and Celery workers.
 Repeated outbox or Celery delivery IDs do not consume another slot. SMTP sends
 are not retried after an ambiguous result because the provider may already have
-accepted the message. Redis reservation checks use at most two attempts; when a
-cap is configured and Redis remains unavailable, mail admission fails closed.
-With no cap configured, mail remains uncapped and a Redis outage only loses
-budget metrics.
+accepted the message. An outbox send may retry a transient failure positively
+identified before DATA on a later tick, with the same logical ID, one budget
+admission, and the existing bounded outbox attempt limit. Once DATA starts,
+4xx responses, timeouts, and disconnects remain terminal. The `failed` metric
+counts SMTP attempts, so a pre-DATA attempt later delivered successfully can
+appear in both `failed` and `sent` while consuming one `admitted` slot. Redis
+reservation checks use at most two attempts; when a cap is configured and
+Redis remains unavailable, mail admission fails closed. With no cap configured,
+mail remains uncapped and a Redis outage only loses budget metrics.
 
 Outbox-backed high and medium messages stay pending when budget admission is
 deferred or Redis is unavailable; reminders release their durable claim and
