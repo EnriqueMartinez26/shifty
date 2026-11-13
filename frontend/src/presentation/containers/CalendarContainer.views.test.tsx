@@ -503,7 +503,75 @@ describe('CalendarContainer - vista inicial y preferencia', () => {
     render(<CalendarContainer />)
     expect(screen.getByRole('status')).toHaveTextContent('Lista en móvil · 14 días')
     expect(screen.getByRole('button', { name: 'Ver solo este día' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Lista' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('button', { name: 'Día' })).toHaveAttribute('aria-pressed', 'false')
+    expect(
+      (screen.getByRole('combobox', { name: 'Vista de agenda' }) as HTMLSelectElement).value
+    ).toBe('list')
     expect(screen.queryByRole('group', { name: 'Vista de agenda' })).not.toBeInTheDocument()
+  })
+
+  it('permite las cuatro vistas en móvil y conserva el rango acotado de la lista', () => {
+    setPhone(true)
+    render(<CalendarContainer />)
+    const select = screen.getByRole('combobox', { name: 'Vista de agenda' })
+
+    for (const view of ['day', 'week', 'month', 'list'] as const) {
+      fireEvent.change(select, { target: { value: view } })
+      expect((select as HTMLSelectElement).value).toBe(view)
+      if (view === 'day') {
+        expect(
+          screen.getByRole('region', {
+            name: 'Agenda diaria por profesional, desplazable horizontalmente'
+          })
+        ).toBeInTheDocument()
+      } else {
+        expect(
+          screen.queryByRole('region', {
+            name: 'Agenda diaria por profesional, desplazable horizontalmente'
+          })
+        ).not.toBeInTheDocument()
+      }
+    }
+
+    fireEvent.click(screen.getByRole('button', { name: 'Ver solo este día' }))
+    expect(screen.getByRole('status')).toHaveTextContent('Lista en móvil · 1 día')
+    fireEvent.change(select, { target: { value: 'day' } })
+    fireEvent.change(select, { target: { value: 'list' } })
+    expect(screen.getByRole('status')).toHaveTextContent('Lista en móvil · 1 día')
+    expect(window.localStorage.getItem('shifty.agenda.view:adm-1')).toBeNull()
+  })
+
+  it('describe el límite de resultados según la vista móvil activa', () => {
+    setPhone(true)
+    mockAppointments = [
+      appointmentOf(
+        'mobile-truncated',
+        'Alma Móvil',
+        '2026-09-21T13:00:00.000Z',
+        '2026-09-21T13:30:00.000Z'
+      )
+    ]
+    mockTotal = 5
+    render(<CalendarContainer />)
+    const select = screen.getByRole('combobox', { name: 'Vista de agenda' })
+    const status = () =>
+      screen.getAllByRole('status').find((item) => item.textContent?.startsWith('Se muestran'))
+
+    expect(status()).toHaveTextContent('de este rango.')
+    expect(status()).toHaveTextContent('Ver solo este día')
+
+    fireEvent.change(select, { target: { value: 'day' } })
+    expect(status()).toHaveTextContent('de este día.')
+    expect(status()).toHaveTextContent('revisar otros días')
+
+    fireEvent.change(select, { target: { value: 'week' } })
+    expect(status()).toHaveTextContent('de esta semana.')
+    expect(status()).toHaveTextContent('revisar otras semanas')
+
+    fireEvent.change(select, { target: { value: 'month' } })
+    expect(status()).toHaveTextContent('de este mes.')
+    expect(status()).toHaveTextContent('revisar otros meses')
   })
 
   it('en un telefono muestra turnos del rango en la lista, no la grilla diaria', () => {

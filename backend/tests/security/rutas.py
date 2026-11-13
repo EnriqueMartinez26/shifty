@@ -931,6 +931,10 @@ async def _vitrina(m: Mundo, a: Actor, t: Tienda) -> Llamada:
     return Llamada("GET", f"/public/stores/{t.slug}")
 
 
+async def _metadatos_sociales(m: Mundo, a: Actor, t: Tienda) -> Llamada:
+    return Llamada("GET", f"/public/share-metadata/{t.slug}")
+
+
 async def _referencia_de_tienda(m: Mundo, a: Actor, t: Tienda) -> Llamada:
     return Llamada("GET", f"/public/stores/{t.slug}/ref")
 
@@ -1844,6 +1848,13 @@ TABLA: tuple[Ruta, ...] = (
     ),
     # portal publico
     R("GET", "/public/stores/{slug}", TODOS, A.PUBLICA, _vitrina),
+    R(
+        "GET",
+        "/public/share-metadata/{slug}",
+        TODOS,
+        A.PUBLICA,
+        _metadatos_sociales,
+    ),
     # Versiones vigentes de los textos legales: sin datos de ninguna tienda.
     R(
         "GET",

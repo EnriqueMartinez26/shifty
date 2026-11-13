@@ -148,13 +148,22 @@ async def test_el_error_smtp_no_filtra_la_direccion_rechazada(
 ) -> None:
     """B4-07, ajuste (2026-09-18): ``smtp_send_failed`` logueaba ``str(exc)`` y
     ``SMTPRecipientsRefused`` lleva la direccion (dos veces) en ese texto."""
+    reportes: list[dict[str, str]] = []
     monkeypatch.setattr(smtplib, "SMTP", _SmtpRechaza)
+    monkeypatch.setattr(
+        tasks,
+        "report_mail_failure",
+        lambda **context: reportes.append(context),
+    )
     with capture_logs() as eventos:
         assert await tasks._send_email(EMAIL, "Asunto", "cuerpo") is False
 
     fallo = next(e for e in eventos if e["event"] == "smtp_send_failed")
     assert fallo["to"] == MASCARA
     assert fallo["error_type"] == "SMTPRecipientsRefused"
+    assert reportes == [
+        {"component": "notifications", "error_type": "SMTPRecipientsRefused"}
+    ]
     # El diagnostico se conserva (codigo y motivo), sin la direccion cruda.
     assert "550" in fallo["error"] and "Recipient address rejected" in fallo["error"]
     assert MASCARA in fallo["error"]
@@ -212,7 +221,9 @@ def test_el_enmascarado_de_telefonos_tapa_el_numero_y_deja_el_resto() -> None:
 async def test_un_fallo_al_armar_el_mensaje_queda_contenido_en_el_sink(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def explota(to: str, subject: str, body: str) -> EmailMessage:
+    def explota(
+        to: str, subject: str, body: str, reply_to: str | None = None
+    ) -> EmailMessage:
         raise ValueError(f"cabecera invalida: <{to}> / {subject}")
 
     monkeypatch.setattr(tasks, "_build_message", explota)
@@ -230,10 +241,17 @@ async def test_un_fallo_al_armar_el_mensaje_queda_contenido_en_el_sink(
 async def test_el_fallo_de_la_confirmacion_no_vuelca_el_texto_crudo(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    reportes: list[dict[str, str]] = []
+
     async def explota(*args: Any, **kwargs: Any) -> dict[str, str]:
         raise RuntimeError(f"rechazado {EMAIL} desde +5491155512345")
 
     monkeypatch.setattr(tasks, "send_appointment_confirmation", explota)
+    monkeypatch.setattr(
+        tasks,
+        "report_mail_failure",
+        lambda **context: reportes.append(context),
+    )
 
     with capture_logs() as eventos:
         resultado = await tasks.send_confirmation_email(
@@ -241,8 +259,52 @@ async def test_el_fallo_de_la_confirmacion_no_vuelca_el_texto_crudo(
         )
 
     assert resultado["status"] == "failed"
+    assert reportes == [{"component": "notifications", "error_type": "RuntimeError"}]
     _sin_email_crudo(eventos)
     assert all("5491155512345" not in repr(e) for e in eventos)
+
+
+@pytest.mark.parametrize(
+    ("function_name", "kwargs"),
+    [
+        (
+            "enqueue_otp_email",
+            {"to": EMAIL, "subject": "Código", "body": "123456"},
+        ),
+        (
+            "enqueue_registration_email",
+            {"store_id": "store-1", "appointment_id": "appt-1"},
+        ),
+        (
+            "enqueue_confirmation_email",
+            {"store_id": "store-1", "appointment_id": "appt-1"},
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_un_fallo_al_encolar_mail_se_reporta_a_sentry(
+    function_name: str,
+    kwargs: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reportes: list[dict[str, str]] = []
+
+    async def rechazar_encolado(*args: Any, **kwargs: Any) -> bool:
+        return False
+
+    monkeypatch.setattr(tasks, "enqueue", rechazar_encolado)
+    monkeypatch.setattr(
+        tasks,
+        "report_mail_failure",
+        lambda **context: reportes.append(context),
+    )
+
+    resultado = await getattr(tasks, function_name)(**kwargs)
+
+    assert resultado is False
+    assert reportes == [
+        {"component": "notifications", "error_type": "MailEnqueueFailed"}
+    ]
 
 
 @pytest.mark.asyncio

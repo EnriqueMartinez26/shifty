@@ -12,8 +12,8 @@ Para cada fila de ``TABLA`` y cada rol (``anon``, ``client-otp``,
 
 Segunda pasada: la tienda del admin SUSPENDIDA. Las lecturas siguen, las
 escrituras de ``SUSPENSION_ALLOWED_WRITES`` siguen, el resto responde 402;
-en el portal publico solo desaparecen la vitrina, la reserva y el alta en la
-lista de espera (404, como una tienda inexistente).
+en el portal publico solo desaparecen la vitrina, los metadatos sociales, la
+reserva y el alta en la lista de espera (404, como una tienda inexistente).
 
 En SQLite no hay RLS: esto prueba la capa de aplicacion sola (CLAUDE.md §2).
 """
@@ -52,6 +52,7 @@ pytestmark = pytest.mark.asyncio(loop_scope="module")
 # Portal publico de una tienda suspendida: mismo 404 que una inexistente.
 PUBLICAS_QUE_DESAPARECEN = {
     ("GET", "/public/stores/{slug}"),
+    ("GET", "/public/share-metadata/{slug}"),
     ("POST", "/public/appointments"),
     ("POST", "/public/waitlist"),
 }

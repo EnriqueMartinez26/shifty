@@ -740,6 +740,55 @@ def test_la_vista_fusionada_distingue_la_lista_vacia_del_reset() -> None:
     assert puertos_publicados(con_reset) == {}
 
 
+# --- El borde recibe IPv6 con la direccion del cliente (#277, 2026-11-02) ------
+#
+# Sintoma (log del borde en produccion): 172.16.1.1, el gateway del bridge, era
+# la segunda IP mas frecuente, con trafico real del portal. La red del compose
+# no tiene IPv6, asi que Docker publica el 80/443 del host en IPv6 con
+# docker-proxy hacia la IPv4 del contenedor, y nginx ve el gateway en vez del
+# cliente: todos los visitantes IPv6 compartian una cubeta de cada limite. Con
+# una red con IPv6 conectada a nginx, Docker mapea esos puertos a la IPv6 del
+# contenedor con ip6tables (DNAT), que conserva el origen. Es una red NUEVA y
+# solo del borde: activar IPv6 en `shifty_network` obligaria a recrearla con
+# db, redis y rabbitmq adentro.
+
+RED_DEL_BORDE = "edge"
+
+
+def _redes(servicio: dict[str, object]) -> dict[str, object]:
+    """`networks` de un servicio en forma de mapa (compose acepta lista o mapa)."""
+    redes = servicio.get("networks") or {}
+    if isinstance(redes, list):
+        return {str(nombre): None for nombre in redes}
+    assert isinstance(redes, dict), redes
+    return {str(nombre): config for nombre, config in redes.items()}
+
+
+def test_el_borde_de_produccion_tiene_su_red_con_ipv6() -> None:
+    redes = cargar_compose(COMPOSE_PROD.read_text(encoding="utf-8"))["networks"]
+    # Sin subred fija: Docker asigna un /64 ULA propio (fd00::/8).
+    assert redes == {RED_DEL_BORDE: {"driver": "bridge", "enable_ipv6": True}}, redes
+    # La red interna no cambia: cambiarla recrea todo lo que esta conectado.
+    base = cargar_compose(COMPOSE.read_text(encoding="utf-8"))["networks"]
+    assert base == {"shifty_network": {"driver": "bridge"}}, base
+
+
+def test_solo_nginx_esta_en_la_red_del_borde_y_sale_por_ella() -> None:
+    produccion = _servicios_de_produccion()
+    en_el_borde = sorted(
+        nombre
+        for nombre, servicio in produccion.items()
+        if RED_DEL_BORDE in _redes(servicio)
+    )
+    assert en_el_borde == ["nginx"], en_el_borde
+    redes = _redes(produccion["nginx"])
+    # Sigue en la red interna para llegar a backend y frontend.
+    assert set(redes) == {"shifty_network", RED_DEL_BORDE}, redes
+    # La red del borde da la ruta por defecto en IPv4 y en IPv6, asi que los
+    # puertos publicados se mapean por ella (gw_priority, Docker >= 28).
+    assert redes[RED_DEL_BORDE] == {"gw_priority": 1}, redes
+
+
 # --- La API escala por replicas de un proceso (F0-04, plan de rendimiento) ----
 #
 # Decision de Mateo (2026-09-24): replicas de UN proceso de uvicorn, no

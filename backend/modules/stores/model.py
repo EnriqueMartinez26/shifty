@@ -97,6 +97,10 @@ class Store(BaseEntity):
 
     send_email_confirmation: Mapped[bool] = mapped_column(Boolean, default=True)
     send_email_reminders: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Mail de contacto de la tienda (#283, decision de Mateo, 2026-11-02): el
+    # Reply-To de los mails al cliente, para que la respuesta le llegue a la
+    # tienda y no a Shifty. Opcional; ``StoreUpdate`` lo valida y normaliza.
+    contact_email: Mapped[str | None] = mapped_column(String(254), nullable=True)
 
     theme_config: Mapped[ThemeConfig] = mapped_column(JSON, default=dict)
     feature_flags: Mapped[FeatureFlags] = mapped_column(JSON, default=dict)
