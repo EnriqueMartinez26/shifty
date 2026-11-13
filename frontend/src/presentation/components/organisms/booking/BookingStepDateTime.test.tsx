@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { addDays, format, parseISO } from 'date-fns'
 
-import { formatArgentinaDate } from '@shared/utils/argentinaTime'
+import { argentinaLocalToUtcIso, formatArgentinaDate } from '@shared/utils/argentinaTime'
 
 import { BookingStepDateTime } from './BookingStepDateTime'
 import { colors2000s } from '../../../../theme/colors'
@@ -12,10 +12,12 @@ const asRgb = (hex: string): string =>
 const mockAvailability = jest.fn()
 const mockStaff = jest.fn()
 const mockJoinWaitlist = jest.fn()
+const mockDepositPreview = jest.fn()
 
 jest.mock('@presentation/hooks/usePublic', () => ({
   usePublicAvailability: (...args: unknown[]) => mockAvailability(...args),
   usePublicStaff: (...args: unknown[]) => mockStaff(...args),
+  usePublicDepositPreview: (...args: unknown[]) => mockDepositPreview(...args),
   useJoinWaitlist: () => ({ mutateAsync: mockJoinWaitlist, isPending: false, isSuccess: false })
 }))
 
@@ -24,7 +26,9 @@ describe('BookingStepDateTime', () => {
     mockAvailability.mockReset()
     mockStaff.mockReset()
     mockJoinWaitlist.mockReset()
+    mockDepositPreview.mockReset()
     mockStaff.mockReturnValue({ data: [], isLoading: false })
+    mockDepositPreview.mockReturnValue({ data: undefined, isError: false })
   })
 
   it('permite revisar horarios y reintentar si falla la lista de profesionales', () => {
@@ -1009,12 +1013,109 @@ describe('BookingStepDateTime', () => {
   })
 })
 
+describe('límite de seña en fechas lejanas', () => {
+  beforeEach(() => {
+    mockAvailability.mockReset()
+    mockStaff.mockReset()
+    mockDepositPreview.mockReset()
+    mockStaff.mockReturnValue({ data: [], isLoading: false })
+    mockDepositPreview.mockReturnValue({ data: undefined, isError: false })
+  })
+
+  const renderFarDate = (preview: unknown) => {
+    const today = parseISO(formatArgentinaDate(new Date().toISOString()))
+    const date = format(addDays(today, 31), 'yyyy-MM-dd')
+    mockAvailability.mockReturnValue({ isLoading: false, isFetching: false, data: [] })
+    mockDepositPreview.mockReturnValue(preview)
+
+    render(
+      <BookingStepDateTime
+        storePublicId="store-1"
+        serviceId="svc-1"
+        extraServiceIds={['svc-extra']}
+        checkFarBookingDepositLimit
+        staffId={null}
+        selectedDate={date}
+        selectedTime={null}
+        onSelect={() => undefined}
+        onBack={() => undefined}
+      />
+    )
+
+    return date
+  }
+
+  it('explica el límite cuando el preview confirma FAR_BOOKING_UNAVAILABLE', () => {
+    const date = renderFarDate({
+      data: { booking_blocked_code: 'FAR_BOOKING_UNAVAILABLE' },
+      isError: false
+    })
+
+    expect(screen.getByText('No encontramos horarios para esta fecha.')).toBeInTheDocument()
+    expect(
+      screen.getByText(/se pueden realizar con hasta 30 días de anticipación/i)
+    ).toBeInTheDocument()
+    expect(screen.queryByText('Este día no hay atención.')).not.toBeInTheDocument()
+    expect(mockDepositPreview).toHaveBeenCalledWith({
+      storePublicId: 'store-1',
+      serviceId: 'svc-1',
+      startsAt: argentinaLocalToUtcIso(date, '00:00'),
+      extraServiceIds: ['svc-extra']
+    })
+  })
+
+  it('mantiene el mensaje de día cerrado si el preview no confirma el bloqueo', () => {
+    renderFarDate({ data: { booking_blocked_code: null }, isError: false })
+
+    expect(screen.getByText('Este día no hay atención.')).toBeInTheDocument()
+    expect(screen.queryByText(/30 días de anticipación/i)).not.toBeInTheDocument()
+  })
+
+  it('mantiene el mensaje neutral para servicios sin bloqueo de seña', () => {
+    renderFarDate({ data: { booking_blocked_code: null, far_booking: true }, isError: false })
+
+    expect(screen.getByText('Este día no hay atención.')).toBeInTheDocument()
+    expect(screen.queryByText(/30 días de anticipación/i)).not.toBeInTheDocument()
+  })
+
+  it('mantiene el mensaje neutral cuando el preview permite la reserva lejana', () => {
+    renderFarDate({
+      data: {
+        booking_blocked_code: null,
+        far_booking: true,
+        payments_enabled: true,
+        online_payment_mandatory: true
+      },
+      isError: false
+    })
+
+    expect(screen.getByText('Este día no hay atención.')).toBeInTheDocument()
+    expect(screen.queryByText(/30 días de anticipación/i)).not.toBeInTheDocument()
+  })
+
+  it('mantiene el mensaje neutral si el preview falla o no devuelve datos', () => {
+    renderFarDate({ data: undefined, isError: true })
+
+    expect(screen.getByText('Este día no hay atención.')).toBeInTheDocument()
+    expect(screen.queryByText(/30 días de anticipación/i)).not.toBeInTheDocument()
+  })
+
+  it('mantiene el mensaje neutral ante un código de bloqueo distinto', () => {
+    renderFarDate({ data: { booking_blocked_code: 'OTHER_BLOCK' }, isError: false })
+
+    expect(screen.getByText('Este día no hay atención.')).toBeInTheDocument()
+    expect(screen.queryByText(/30 días de anticipación/i)).not.toBeInTheDocument()
+  })
+})
+
 // S3 (2026-10-21): el dia y el horario elegidos usan el color de la tienda.
 describe('BookingStepDateTime con el color de la tienda', () => {
   beforeEach(() => {
     mockAvailability.mockReset()
     mockStaff.mockReset()
+    mockDepositPreview.mockReset()
     mockStaff.mockReturnValue({ data: [], isLoading: false })
+    mockDepositPreview.mockReturnValue({ data: undefined, isError: false })
   })
 
   it('el dia y el horario elegidos usan el relleno y el texto de marca', () => {

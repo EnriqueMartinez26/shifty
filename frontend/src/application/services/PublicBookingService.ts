@@ -294,6 +294,10 @@ export interface DepositPreview {
   extra_services_amount?: number
   payments_enabled: boolean
   online_payment_mandatory: boolean
+  /** Regla del canal que impediria reservar la fecha, si aplica. */
+  booking_blocked_code?: string | null
+  /** Si el día local cae después del límite de reserva lejana. */
+  far_booking?: boolean
 }
 
 export interface ClientAppointmentItem {
