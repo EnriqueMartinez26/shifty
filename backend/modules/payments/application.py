@@ -50,6 +50,17 @@ from modules.users.model import User
 _ACCREDITED = {PaymentStatus.APPROVED.value, PaymentStatus.MANUAL_CONFIRMED.value}
 
 
+class PaymentRefundedCannotBeManuallyConfirmedError(AppException):
+    """409: a refunded payment cannot be manually confirmed again."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            message="Un cobro reembolsado no se puede confirmar a mano",
+            http_status=409,
+            error_code="PAYMENT_REFUNDED_CANNOT_BE_MANUALLY_CONFIRMED",
+        )
+
+
 def _manual_amount(
     appointment: Appointment, service: Service, amount: Decimal | None
 ) -> Decimal:
@@ -217,6 +228,8 @@ class PaymentService:
         cliente recibe "turno confirmado" (``_publish_confirmed_mail``).
         """
         actual = await self._lock_for_manual_confirm(appointment, actor)
+        if actual is not None and actual.status == PaymentStatus.REFUNDED.value:
+            raise PaymentRefundedCannotBeManuallyConfirmedError()
         if actual is not None and actual.is_accredited:
             # Ya entro la plata: no-op 200 con el cobro tal como se acredito,
             # sin re-tarifar aunque el pedido traiga importe (decision del
