@@ -355,4 +355,28 @@ class OncePer:
         return True
 
 
-__all__ = ["OncePer", "init_observability", "report_exception"]
+_MAIL_FAILURE_ALERTS = OncePer(seconds=300)
+
+
+def report_mail_failure(*, component: str, error_type: str) -> None:
+    """Reporta a Sentry un fallo de correo sin adjuntar datos del mensaje.
+
+    Los errores SMTP suelen repetir el destinatario y pueden contener otros
+    datos del mensaje. Se informa una excepcion sintetica y se limita a un
+    evento por componente cada cinco minutos y proceso.
+    """
+    if not _MAIL_FAILURE_ALERTS.allow(component):
+        return
+    report_exception(
+        RuntimeError("Mail delivery failed"),
+        component=component,
+        error_type=error_type,
+    )
+
+
+__all__ = [
+    "OncePer",
+    "init_observability",
+    "report_exception",
+    "report_mail_failure",
+]

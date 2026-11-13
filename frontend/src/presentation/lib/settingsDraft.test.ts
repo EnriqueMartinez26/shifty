@@ -50,6 +50,10 @@ describe('base que arma el formulario desde el servidor', () => {
     expect(base.logo_url).toBe('')
     expect(base.description).toBe('')
     expect(base.deposit_policy).toBe('')
+    expect(base.contact_email).toBe('')
+    expect(
+      buildSettingsBase({ ...store, contact_email: 'hola@tunegocio.com' }, undefined).contact_email
+    ).toBe('hola@tunegocio.com')
   })
 
   // S10.1 (2026-10-22): el encuadre de la portada. Un backend que todavia no

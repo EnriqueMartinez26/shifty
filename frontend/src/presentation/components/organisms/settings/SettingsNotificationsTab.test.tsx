@@ -6,7 +6,11 @@ import { SettingsNotificationsTab } from './SettingsNotificationsTab'
 // Cada interruptor devuelve solo su campo, invertido.
 
 describe('SettingsNotificationsTab', () => {
-  const value = { send_email_confirmation: true, send_email_reminders: false }
+  const value = {
+    send_email_confirmation: true,
+    send_email_reminders: false,
+    contact_email: ''
+  }
 
   it('muestra el estado de cada interruptor', () => {
     render(<SettingsNotificationsTab value={value} onChange={jest.fn()} />)
@@ -30,5 +34,41 @@ describe('SettingsNotificationsTab', () => {
 
     expect(onChange).toHaveBeenNthCalledWith(1, { send_email_confirmation: false })
     expect(onChange).toHaveBeenNthCalledWith(2, { send_email_reminders: true })
+  })
+
+  // #283 (2026-11-02): el Reply-To de los mails a los clientes.
+  it('el mail de contacto se ve con su ayuda y devuelve solo su campo', () => {
+    const onChange = jest.fn()
+    render(
+      <SettingsNotificationsTab
+        value={{ ...value, contact_email: 'hola@tunegocio.com' }}
+        onChange={onChange}
+      />
+    )
+
+    const campo = screen.getByLabelText<HTMLInputElement>('Mail de contacto')
+    expect(campo.value).toBe('hola@tunegocio.com')
+    const ayuda = screen.getByText(
+      'Las respuestas de tus clientas a los mails de Shifty llegan acá.'
+    )
+    expect(campo).toHaveAttribute('aria-describedby', ayuda.id)
+    expect(campo).toHaveAttribute('aria-invalid', 'false')
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+
+    fireEvent.change(campo, { target: { value: 'otro@tunegocio.com' } })
+    expect(onChange).toHaveBeenCalledWith({ contact_email: 'otro@tunegocio.com' })
+  })
+
+  it('muestra el error del mail de contacto que le pasa la pagina', () => {
+    render(
+      <SettingsNotificationsTab
+        value={{ ...value, contact_email: 'hola@' }}
+        onChange={jest.fn()}
+        contactEmailError="Ingresá un mail válido, por ejemplo hola@tunegocio.com."
+      />
+    )
+
+    expect(screen.getByLabelText('Mail de contacto')).toHaveAttribute('aria-invalid', 'true')
+    expect(screen.getByRole('alert')).toHaveTextContent('Ingresá un mail válido')
   })
 })

@@ -123,7 +123,7 @@ const PRIVACY_SECTIONS: LegalSection[] = [
       'La integración no envía los datos que se completan al reservar (nombre, teléfono, correo, notas o respuestas) ni identificadores de turnos, tiendas, servicios o profesionales.',
       'Las funciones publicitarias están desactivadas: Google signals y la personalización de anuncios no se habilitan, las mediciones se envían con la indicación de no personalizar anuncios y el almacenamiento con fines publicitarios queda denegado. Las cookies de esta integración, cuyo nombre empieza con "shifty_ga", vencen a los 30 días de su última actualización.',
       'Google puede tratar estos datos fuera de Argentina, conforme a sus propias políticas.',
-      'La analítica es opcional: se puede rechazar y reservar igual. La elección se guarda en el navegador y se puede cambiar en cualquier momento desde el botón "Preferencias de analítica" del portal de reservas. Retirar el consentimiento detiene las mediciones siguientes y borra del navegador las cookies de esta integración; no borra los datos que Google ya recibió.'
+      'La analítica es opcional: se puede rechazar y reservar igual. La elección se guarda en el navegador y se puede cambiar en cualquier momento desde el enlace "Preferencias de analítica", al pie del portal de reservas. Retirar el consentimiento detiene las mediciones siguientes y borra del navegador las cookies de esta integración; no borra los datos que Google ya recibió.'
     ]
   },
   {

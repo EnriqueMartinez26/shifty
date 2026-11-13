@@ -40,6 +40,9 @@ class NotificationType(str, enum.Enum):
     # La tienda perdio su ultimo canal para cobrar una sena obligatoria
     # (``payments.deposit_channels.warn_if_deposit_channel_lost``).
     DEPOSIT_CHANNEL_LOST = "store.deposit_channel_lost"
+    # MP rechazo renovar el token OAuth de la tienda: hay que reconectarla
+    # (``payments.service.refresh_mercadopago_oauth_connection``, issue #279).
+    MERCADOPAGO_CONNECTION_BROKEN = "store.mercadopago_connection_broken"
     # Reserva publica sin cobro: nace confirmada (decision de Mateo,
     # 2026-10-20) y el dueno solo se entera, sin nada que confirmar.
     APPOINTMENT_BOOKED_ONLINE = "appointment.booked_online"

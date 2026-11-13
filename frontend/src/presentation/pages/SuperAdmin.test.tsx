@@ -238,6 +238,11 @@ const openModalForm = (): HTMLFormElement => {
 describe('SuperAdminPage', () => {
   beforeEach(() => {
     mockStores = [mockStoreUno]
+    mockStoreUno.subscription_status = 'active'
+    if (mockOverview.subscription) {
+      mockOverview.subscription.status = 'active'
+      mockOverview.subscription.current_period_end = null
+    }
     mockOverviewFor.mockReset()
     mockStoresFor.mockReset()
     mockStoresPage.total = null
@@ -585,6 +590,110 @@ describe('SuperAdminPage', () => {
         }
       })
     })
+  })
+
+  it('reactiva una suscripción al marcar una renovación confirmada', async () => {
+    mockStoreUno.subscription_status = 'past_due'
+    if (mockOverview.subscription) mockOverview.subscription.status = 'past_due'
+    render(<SuperAdminPage />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Asignar plan' }))
+    const renewalSwitch = screen.getByRole('switch', { name: 'Renovación confirmada' })
+    const statusField = screen.getByLabelText('Status') as HTMLSelectElement
+
+    fireEvent.click(renewalSwitch)
+    expect(statusField.value).toBe('active')
+    expect(statusField.disabled).toBe(true)
+
+    fireEvent.click(renewalSwitch)
+    expect(statusField.value).toBe('past_due')
+    expect(statusField.disabled).toBe(false)
+
+    fireEvent.click(renewalSwitch)
+    fireEvent.change(screen.getByLabelText('Período hasta'), {
+      target: { value: '2999-12-01T00:00' }
+    })
+    fireEvent.submit(openModalForm())
+
+    await waitFor(() => {
+      expect(mockMutations.assignSubscription).toHaveBeenCalledWith({
+        storePublicId: 'store-1',
+        payload: expect.objectContaining({ status: 'active' })
+      })
+    })
+  })
+
+  it('no reactiva al editar el período sin confirmar una renovación', async () => {
+    mockStoreUno.subscription_status = 'past_due'
+    if (mockOverview.subscription) mockOverview.subscription.status = 'past_due'
+    render(<SuperAdminPage />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Asignar plan' }))
+    fireEvent.change(screen.getByLabelText('Período hasta'), {
+      target: { value: '2999-12-01T00:00' }
+    })
+    fireEvent.submit(openModalForm())
+
+    await waitFor(() => {
+      expect(mockMutations.assignSubscription).toHaveBeenCalledWith({
+        storePublicId: 'store-1',
+        payload: expect.objectContaining({ status: 'past_due' })
+      })
+    })
+  })
+
+  it('preserva un estado distinto elegido explícitamente', async () => {
+    mockStoreUno.subscription_status = 'past_due'
+    if (mockOverview.subscription) mockOverview.subscription.status = 'past_due'
+    render(<SuperAdminPage />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Asignar plan' }))
+    fireEvent.change(screen.getByLabelText('Status'), { target: { value: 'suspended' } })
+    fireEvent.submit(openModalForm())
+
+    await waitFor(() => {
+      expect(mockMutations.assignSubscription).toHaveBeenCalledWith({
+        storePublicId: 'store-1',
+        payload: expect.objectContaining({ status: 'suspended' })
+      })
+    })
+  })
+
+  it('no confirma una renovación sin indicar un vencimiento futuro', async () => {
+    mockStoreUno.subscription_status = 'past_due'
+    if (mockOverview.subscription) mockOverview.subscription.status = 'past_due'
+    render(<SuperAdminPage />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Asignar plan' }))
+    fireEvent.click(screen.getByRole('switch', { name: 'Renovación confirmada' }))
+    fireEvent.submit(openModalForm())
+
+    expect(
+      await screen.findByText(
+        'Para confirmar la renovación, indicá un vencimiento futuro posterior al actual.'
+      )
+    ).toBeInTheDocument()
+    expect(mockMutations.assignSubscription).not.toHaveBeenCalled()
+  })
+
+  it('exige extender el vencimiento existente para confirmar una renovación', async () => {
+    mockStoreUno.subscription_status = 'past_due'
+    if (mockOverview.subscription) {
+      mockOverview.subscription.status = 'past_due'
+      mockOverview.subscription.current_period_end = '2999-12-01T03:00:00Z'
+    }
+    render(<SuperAdminPage />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Asignar plan' }))
+    fireEvent.click(screen.getByRole('switch', { name: 'Renovación confirmada' }))
+    fireEvent.submit(openModalForm())
+
+    expect(
+      await screen.findByText(
+        'Para confirmar la renovación, indicá un vencimiento futuro posterior al actual.'
+      )
+    ).toBeInTheDocument()
+    expect(mockMutations.assignSubscription).not.toHaveBeenCalled()
   })
 
   it('canjea un cupon sobre la tienda seleccionada', async () => {

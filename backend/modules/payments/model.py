@@ -148,6 +148,12 @@ class PaymentGatewayConfig(BaseEntity):
     oauth_connected_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Cuando MP rechazo renovar el token OAuth (issue #279): la conexion no
+    # sirve hasta reconectar. ``gateway_has_usable_token`` la da por no
+    # usable; un token nuevo (callback o refresh exitoso) la limpia.
+    connection_broken_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     __table_args__ = (
         UniqueConstraint(

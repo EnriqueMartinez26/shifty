@@ -132,7 +132,12 @@ Una instrucción en lenguaje natural no es una garantía.
   (`core/rate_limit.py`) es un middleware por IP con política propia solo
   para `/auth/` y `/public/` (el resto, `/payments/*` incluido, cae en la
   global), más `enforce_rate_limit` puntual en `auth/router.py`,
-  `public_api/router.py` y `waitlist/public_router.py`.
+  `public_api/router.py` y `waitlist/public_router.py`. La clave agrupa IPv6
+  por su /64 y deja IPv4 por dirección, igual en la app
+  (`rate_limit_ip_key`) y en las zonas de nginx (`$rate_limit_key`); la IP
+  exacta sigue yendo a la auditoría legal (#277,
+  `test_rate_limit_clave_por_prefijo.py`). nginx recibe IPv6 con la dirección
+  real solo por la red `edge` (`docs/DEPLOY_RUNBOOK.md` §4c).
 - Todos los modelos ORM están en `core/model_registry.py`; el worker,
   `alembic/env.py`, los scripts y el conftest de integración cargan desde
   ahí. `test_model_registry` falla si aparece un `__tablename__` fuera de
@@ -573,6 +578,20 @@ Una instrucción en lenguaje natural no es una garantía.
   `test_mails_del_panel_sin_transaccion.py`) Los helpers de `notifications/tasks.py` que
   mandan SMTP en línea se llaman `send_*`; una función `enqueue_*` tiene que
   encolar de verdad (`test_enqueue_encola_de_verdad.py`).
+  **La respuesta del cliente va a la tienda** (#283, decisión de Mateo,
+  2026-11-02): todo mail al cliente (reserva, confirmación, recordatorios,
+  reprogramación, cancelación, invitación a volver y oferta de la lista de
+  espera) lleva `Reply-To` con el "Mail de contacto" de la tienda
+  (`stores.contact_email`, opcional, `PATCH /stores/me`) cuando está cargado
+  y pasa `is_deliverable_email`; si no, sin la cabecera. Se guarda en ASCII
+  (dominio IDN en punycode; un local con tildes o ñ es 422) y el sink
+  (`_send_client_email` → `_build_message`) solo pone una dirección ASCII
+  simple. Al mandar la leen solo el worker de la reserva pública y los
+  recordatorios; los eventos del outbox (panel, cancelación por bloqueo,
+  filas `email.send`) y la oferta de la lista de espera la congelan en su
+  payload al planear el evento. El OTP, la recuperación de clave y los avisos al
+  dueño no la llevan nunca. (`test_reply_to_de_los_mails_al_cliente.py`,
+  `test_mail_de_contacto_de_la_tienda.py`)
 - **Una reserva pública sin cobro nace confirmada** (propuesta por Mateo,
   adoptada por el dueño el 2026-10-21, D-20261020-01). Sin cobro es
   `payment_required` falso: sin seña, seña opcional sin MP elegido o seña
@@ -793,7 +812,23 @@ Una instrucción en lenguaje natural no es una garantía.
   se descifra; no el `"pending"` de un OAuth a medias), el mismo de la
   preferencia; un token guardado que no se descifra (una
   `FIELD_ENCRYPTION_KEY` rota o rotada) avisa con ids y a Sentry en vez de
-  pasar en silencio a WhatsApp. Perder el
+  pasar en silencio a WhatsApp. Una conexión cuyo refresh OAuth MP rechazó
+  con `invalid_grant` (refresh token vencido o revocado; no 408, 429 ni 5xx)
+  tampoco cuenta (issue #279): `refresh_mercadopago_oauth_connection` la
+  marca con `payment_gateway_configs.connection_broken_at` por un UPDATE
+  condicional (`IS NULL` y el MISMO refresh token cifrado que se mandó: MP lo
+  rota, y el perdedor de dos refresh simultáneos no marca una fila ya
+  renovada), en un savepoint, y solo el que la marca publica
+  `store.mercadopago_connection_broken` al outbox ("Reconectá Mercado Pago",
+  panel y mail; el lote lo descarta si la marca ya se limpió) y avisa a
+  Sentry, a lo sumo uno por tienda y hora (`OncePer`). Otro 4xx
+  (`invalid_client`...) es la credencial de la plataforma: solo Sentry, sin
+  marca ni aviso. La reserva que se topa con el rechazo sigue siendo 502; las
+  siguientes cobran la seña por WhatsApp si hay, o son 409 sin canal. Un
+  token nuevo (callback de OAuth, refresh exitoso o token manual) la limpia
+  siempre (`flag_modified`: una copia leída sin marca también la borra); el
+  webhook y los jobs siguen consultando con el token guardado, sin cambio
+  (`test_conexion_de_mp_rota.py`, `test_pg_conexion_de_mp_rota.py`). Perder el
   último canal con servicios de seña obligatoria (borrar o romper el
   WhatsApp, apagar los cobros, desconectar MP) no se bloquea: avisa al dueño
   por el panel y por mail (`warn_if_deposit_channel_lost`, evento
@@ -975,7 +1010,9 @@ Una instrucción en lenguaje natural no es una garantía.
     listas (2026-09-24, `test_compose_contract`). Por lo mismo, lo que el
     override quita del base va con `!reset []` (así se despublican los puertos
     internos; en producción solo nginx publica) y el servidor necesita Docker
-    Compose >= 2.24.
+    Compose >= 2.24. Desde #277 el borde usa `gw_priority` (red `edge`), que
+    pide Compose >= 2.33.1 y Engine >= 28; el preflight de `deploy.sh`
+    todavía verifica 2.24 (el VPS corre Compose v5).
 23. **`redirect_slashes=False`**: detrás de nginx el 307 pierde `/api` y el
     front recibe HTML. Cada `apiClient` usa la ruta exacta;
     `test_frontend_routes_contract` lo audita. Los errores propios del borde

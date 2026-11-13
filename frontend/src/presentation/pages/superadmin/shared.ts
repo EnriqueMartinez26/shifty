@@ -84,6 +84,7 @@ export interface PlanFormState {
 export interface SubscriptionFormState {
   plan_id: string
   status: string
+  confirmed_renewal: boolean
   base_amount: string
   currency: string
   current_period_start: string
@@ -170,6 +171,7 @@ export const createEmptyPlanForm = (): PlanFormState => ({
 export const createEmptySubscriptionForm = (): SubscriptionFormState => ({
   plan_id: '',
   status: 'active',
+  confirmed_renewal: false,
   base_amount: '',
   currency: 'ARS',
   current_period_start: '',
