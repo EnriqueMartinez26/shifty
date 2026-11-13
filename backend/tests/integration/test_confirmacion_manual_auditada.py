@@ -216,8 +216,9 @@ async def test_confirmar_a_mano_un_cobro_reembolsado_responde_409_sin_mutaciones
         outbox = list(
             (
                 await test_session.execute(
-                    select(OutboxMessage.event_type, OutboxMessage.payload)
-                    .order_by(OutboxMessage.id)
+                    select(OutboxMessage.event_type, OutboxMessage.payload).order_by(
+                        OutboxMessage.id
+                    )
                 )
             ).all()
         )
