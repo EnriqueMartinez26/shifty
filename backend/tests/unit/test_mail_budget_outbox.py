@@ -22,6 +22,14 @@ from modules.payments.model import WEBHOOK_INBOX_MAX_ATTEMPTS
 from modules.notifications import tasks
 from modules.notifications.reminders import STAGE_24H
 
+_CLIENT_MAIL_BUILDERS = {
+    "cancellation": ("_cancellation_subject", "_cancellation_body"),
+    "confirmation": ("_confirmation_subject", "_confirmation_body"),
+    "rebook": ("_rebook_subject", "_rebook_body"),
+    "reschedule": ("_rescheduled_subject", "_rescheduled_body"),
+    "waitlist_offer": ("_waitlist_offer_subject", "_waitlist_offer_body"),
+}
+
 
 class _OutboxMailRow:
     def __init__(self) -> None:
@@ -73,6 +81,7 @@ def _wire_outbox_dispatch(
     smtp_factory: Callable[[], _ScriptedSMTP],
     *,
     use_real_sender: bool = False,
+    real_sender_kind: str = "confirmation",
 ) -> list[_ScriptedSMTP]:
     connections: list[_ScriptedSMTP] = []
 
@@ -108,22 +117,28 @@ def _wire_outbox_dispatch(
         return {"status": "sent" if delivered else "failed", "reason": "smtp"}
 
     if use_real_sender:
-        row.payload = {
-            "mail": "confirmation",
-            "args": {
-                "email": "client@example.com",
-                "details": {"public_id": "appointment-1"},
-            },
-        }
-
-        def confirmation_subject(_details: dict[str, Any]) -> str:
-            return "Confirmation"
-
-        def confirmation_body(_details: dict[str, Any]) -> str:
-            return "Your appointment is confirmed."
-
-        monkeypatch.setattr(tasks, "_confirmation_subject", confirmation_subject)
-        monkeypatch.setattr(tasks, "_confirmation_body", confirmation_body)
+        if real_sender_kind == "store_notification":
+            row.payload = {
+                "mail": real_sender_kind,
+                "args": {
+                    "email": "store@example.com",
+                    "title": "New appointment",
+                    "body": "A client booked a time.",
+                },
+            }
+        else:
+            builders = _CLIENT_MAIL_BUILDERS.get(real_sender_kind)
+            if builders is None:
+                raise AssertionError(f"unknown real sender kind: {real_sender_kind}")
+            row.payload = {
+                "mail": real_sender_kind,
+                "args": {
+                    "email": "client@example.com",
+                    "details": {"public_id": "appointment-1"},
+                },
+            }
+            monkeypatch.setattr(tasks, builders[0], lambda _details: "Subject")
+            monkeypatch.setattr(tasks, builders[1], lambda _details: "Body")
 
     monkeypatch.setattr(jobs, "_claim_next_email", claim)
     monkeypatch.setattr(jobs, "_apply_tenant_context", apply_context)
@@ -344,11 +359,24 @@ def test_cada_reoferta_de_lista_de_espera_tiene_idempotencia_propia() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("real_sender_kind", "expected_priority"),
+    [
+        ("cancellation", "high"),
+        ("confirmation", "high"),
+        ("rebook", "low"),
+        ("reschedule", "high"),
+        ("store_notification", "high"),
+        ("waitlist_offer", "high"),
+    ],
+)
 @pytest.mark.parametrize("first_outcome", ["connection-before-data", "4xx-before-data"])
 @pytest.mark.asyncio
 async def test_outbox_reintenta_fallo_pre_data_con_mismo_id_y_un_solo_cupo(
     monkeypatch: pytest.MonkeyPatch,
     first_outcome: str,
+    real_sender_kind: str,
+    expected_priority: MailPriority,
 ) -> None:
     monkeypatch.setattr(settings, "MAIL_DAILY_BUDGET", 5)
     row = _OutboxMailRow()
@@ -358,6 +386,7 @@ async def test_outbox_reintenta_fallo_pre_data_con_mismo_id_y_un_solo_cupo(
         row,
         lambda: _ScriptedSMTP(next(outcomes)),
         use_real_sender=True,
+        real_sender_kind=real_sender_kind,
     )
     original_reserve_mail = mail_budget.reserve_mail
     reservations: list[tuple[MailPriority, str, bool]] = []
@@ -383,18 +412,20 @@ async def test_outbox_reintenta_fallo_pre_data_con_mismo_id_y_un_solo_cupo(
     assert [connection.send_message_calls for connection in connections] == [1, 1]
     assert [connection.data_calls for connection in connections] == [0, 1]
     assert metrics["admitted"] == 1
-    assert metrics["priority:high"] == 1
+    assert metrics[f"priority:{expected_priority}"] == 1
     assert metrics["failed"] == 1
     assert metrics["sent"] == 1
     assert reservations == [
-        ("high", "outbox:outbox-retry-1", True),
-        ("high", "outbox:outbox-retry-1", True),
+        (expected_priority, "outbox:outbox-retry-1", True),
+        (expected_priority, "outbox:outbox-retry-1", True),
     ]
 
 
+@pytest.mark.parametrize("real_sender_kind", ["confirmation", "store_notification"])
 @pytest.mark.asyncio
 async def test_fallos_pre_data_respetan_el_maximo_original_del_outbox(
     monkeypatch: pytest.MonkeyPatch,
+    real_sender_kind: str,
 ) -> None:
     monkeypatch.setattr(settings, "MAIL_DAILY_BUDGET", 5)
     row = _OutboxMailRow()
@@ -403,6 +434,7 @@ async def test_fallos_pre_data_respetan_el_maximo_original_del_outbox(
         row,
         lambda: _ScriptedSMTP("connection-before-data"),
         use_real_sender=True,
+        real_sender_kind=real_sender_kind,
     )
 
     for _ in range(WEBHOOK_INBOX_MAX_ATTEMPTS):
@@ -421,6 +453,7 @@ async def test_fallos_pre_data_respetan_el_maximo_original_del_outbox(
     assert metrics["sent"] == 0
 
 
+@pytest.mark.parametrize("real_sender_kind", ["confirmation", "store_notification"])
 @pytest.mark.parametrize(
     "data_error",
     [
@@ -434,11 +467,16 @@ async def test_fallos_pre_data_respetan_el_maximo_original_del_outbox(
 async def test_fallos_tras_entrar_en_data_quedan_terminales(
     monkeypatch: pytest.MonkeyPatch,
     data_error: Exception,
+    real_sender_kind: str,
 ) -> None:
     monkeypatch.setattr(settings, "MAIL_DAILY_BUDGET", 5)
     row = _OutboxMailRow()
     connections = _wire_outbox_dispatch(
-        monkeypatch, row, lambda: _ScriptedSMTP(data_error), use_real_sender=True
+        monkeypatch,
+        row,
+        lambda: _ScriptedSMTP(data_error),
+        use_real_sender=True,
+        real_sender_kind=real_sender_kind,
     )
 
     await jobs._dispatch_pending_emails(object())  # type: ignore[arg-type]
@@ -455,13 +493,16 @@ async def test_fallos_tras_entrar_en_data_quedan_terminales(
     assert metrics["sent"] == 0
 
 
+@pytest.mark.parametrize("direct_sender_kind", ["confirmation", "store_notification"])
 @pytest.mark.asyncio
 async def test_sender_directo_no_habilita_retry_pre_data(
     monkeypatch: pytest.MonkeyPatch,
+    direct_sender_kind: str,
 ) -> None:
     monkeypatch.setattr(settings, "MAIL_DAILY_BUDGET", 5)
-    monkeypatch.setattr(tasks, "_confirmation_subject", lambda _details: "Subject")
-    monkeypatch.setattr(tasks, "_confirmation_body", lambda _details: "Body")
+    if direct_sender_kind == "confirmation":
+        monkeypatch.setattr(tasks, "_confirmation_subject", lambda _details: "Subject")
+        monkeypatch.setattr(tasks, "_confirmation_body", lambda _details: "Body")
     smtp = tasks.SmtpSession()
     connection = _ScriptedSMTP("connection-before-data")
     monkeypatch.setattr(smtp, "_connect", lambda: connection)
@@ -476,11 +517,19 @@ async def test_sender_directo_no_habilita_retry_pre_data(
 
     monkeypatch.setattr(tasks, "reserve_mail", record_reserve_mail)
 
-    result = await tasks.send_confirmation_email(
-        email="client@example.com",
-        details={"public_id": "direct-confirmation"},
-        smtp=smtp,
-    )
+    if direct_sender_kind == "confirmation":
+        result = await tasks.send_confirmation_email(
+            email="client@example.com",
+            details={"public_id": "direct-confirmation"},
+            smtp=smtp,
+        )
+    else:
+        result = await tasks.send_store_notification_email(
+            email="store@example.com",
+            title="New appointment",
+            body="A client booked a time.",
+            smtp=smtp,
+        )
     metrics = await mail_budget.read_mail_budget_metrics()
 
     assert result["status"] == "failed"

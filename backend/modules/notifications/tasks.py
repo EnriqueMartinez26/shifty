@@ -1667,7 +1667,9 @@ async def send_store_notification_email(
             f"store-notification:{uuid4().hex}",
         )
         with mail_delivery_context(
-            priority=effective_context[0], message_id=effective_context[1]
+            priority=effective_context[0],
+            message_id=effective_context[1],
+            retry_pre_data=current_mail_pre_data_retry(),
         ):
             delivered = await _send_email(
                 email,
