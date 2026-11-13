@@ -1064,17 +1064,17 @@ describe('límite de seña en fechas lejanas', () => {
     })
   })
 
-  it('mantiene el mensaje de día cerrado si el preview no confirma el bloqueo', () => {
+  it('usa un mensaje neutral para disponibilidad vacía aunque el día pueda estar cerrado', () => {
     renderFarDate({ data: { booking_blocked_code: null }, isError: false })
 
-    expect(screen.getByText('Este día no hay atención.')).toBeInTheDocument()
+    expect(screen.getByText('No hay turnos disponibles.')).toBeInTheDocument()
     expect(screen.queryByText(/30 días de anticipación/i)).not.toBeInTheDocument()
   })
 
   it('mantiene el mensaje neutral para servicios sin bloqueo de seña', () => {
     renderFarDate({ data: { booking_blocked_code: null, far_booking: true }, isError: false })
 
-    expect(screen.getByText('Este día no hay atención.')).toBeInTheDocument()
+    expect(screen.getByText('No hay turnos disponibles.')).toBeInTheDocument()
     expect(screen.queryByText(/30 días de anticipación/i)).not.toBeInTheDocument()
   })
 
@@ -1089,22 +1089,51 @@ describe('límite de seña en fechas lejanas', () => {
       isError: false
     })
 
-    expect(screen.getByText('Este día no hay atención.')).toBeInTheDocument()
+    expect(screen.getByText('No hay turnos disponibles.')).toBeInTheDocument()
     expect(screen.queryByText(/30 días de anticipación/i)).not.toBeInTheDocument()
   })
 
-  it('mantiene el mensaje neutral si el preview falla o no devuelve datos', () => {
+  it('usa un mensaje neutral mientras el preview está pendiente', () => {
+    renderFarDate({ data: undefined, isLoading: true, isError: false })
+
+    expect(screen.getByText('No hay turnos disponibles.')).toBeInTheDocument()
+    expect(screen.queryByText(/30 días de anticipación/i)).not.toBeInTheDocument()
+  })
+
+  it('usa un mensaje neutral si el preview falla o no devuelve datos', () => {
     renderFarDate({ data: undefined, isError: true })
 
-    expect(screen.getByText('Este día no hay atención.')).toBeInTheDocument()
+    expect(screen.getByText('No hay turnos disponibles.')).toBeInTheDocument()
     expect(screen.queryByText(/30 días de anticipación/i)).not.toBeInTheDocument()
   })
 
   it('mantiene el mensaje neutral ante un código de bloqueo distinto', () => {
     renderFarDate({ data: { booking_blocked_code: 'OTHER_BLOCK' }, isError: false })
 
-    expect(screen.getByText('Este día no hay atención.')).toBeInTheDocument()
+    expect(screen.getByText('No hay turnos disponibles.')).toBeInTheDocument()
     expect(screen.queryByText(/30 días de anticipación/i)).not.toBeInTheDocument()
+  })
+
+  it('conserva el mensaje de día cerrado para fechas dentro del límite', () => {
+    const today = parseISO(formatArgentinaDate(new Date().toISOString()))
+    const date = format(addDays(today, 1), 'yyyy-MM-dd')
+    mockAvailability.mockReturnValue({ isLoading: false, isFetching: false, data: [] })
+    mockDepositPreview.mockReturnValue({ data: undefined, isError: false })
+
+    render(
+      <BookingStepDateTime
+        storePublicId="store-1"
+        serviceId="svc-1"
+        checkFarBookingDepositLimit
+        staffId={null}
+        selectedDate={date}
+        selectedTime={null}
+        onSelect={() => undefined}
+        onBack={() => undefined}
+      />
+    )
+
+    expect(screen.getByText('Este día no hay atención.')).toBeInTheDocument()
   })
 })
 

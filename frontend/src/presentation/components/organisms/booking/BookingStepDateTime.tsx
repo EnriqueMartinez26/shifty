@@ -213,6 +213,11 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
   const farBookingDepositBlocked =
     farBookingPreviewStartsAt !== null &&
     farBookingPreview.data?.booking_blocked_code === 'FAR_BOOKING_UNAVAILABLE'
+  // La disponibilidad vacía puede deberse al límite de seña antes de que el
+  // backend compruebe el horario comercial. Sin confirmación, no afirmar que
+  // la tienda está cerrada.
+  const farBookingPreviewUnconfirmed =
+    farBookingPreviewStartsAt !== null && !farBookingDepositBlocked
 
   const visibleSlots = useMemo(() => {
     if (!availability) return []
@@ -634,9 +639,11 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
                 >
                   {farBookingDepositBlocked
                     ? 'No encontramos horarios para esta fecha.'
-                    : diaSinAtencion
-                      ? 'Este día no hay atención.'
-                      : 'No hay turnos disponibles.'}
+                    : farBookingPreviewUnconfirmed
+                      ? 'No hay turnos disponibles.'
+                      : diaSinAtencion
+                        ? 'Este día no hay atención.'
+                        : 'No hay turnos disponibles.'}
                 </p>
                 <p
                   className="text-xs mt-2 font-medium"
@@ -644,9 +651,11 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
                 >
                   {farBookingDepositBlocked
                     ? 'Las reservas con seña se pueden realizar con hasta 30 días de anticipación.'
-                    : diaSinAtencion
-                      ? 'Probá con otro día.'
-                      : 'Probá seleccionando otro día.'}
+                    : farBookingPreviewUnconfirmed
+                      ? 'Probá seleccionando otro día.'
+                      : diaSinAtencion
+                        ? 'Probá con otro día.'
+                        : 'Probá seleccionando otro día.'}
                 </p>
                 {waitlistAvailable && !diaSinAtencion && (
                   <div className="px-4 text-left">
