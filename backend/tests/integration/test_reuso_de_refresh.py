@@ -198,6 +198,15 @@ async def test_reusar_un_refresh_cerrado_por_logout_revoca_todo(
     _usar(client, cerrado)
     reuso = await client.post("/auth/refresh")
     assert reuso.status_code == 401, reuso.text
+    assert reuso.json() == {
+        "success": False,
+        "error_code": "AUTHENTICATION_FAILED",
+        "message": "Sesion expirada",
+        "detail": {},
+    }
+    assert "refresh_token" in reuso.headers["set-cookie"]
+    assert "Max-Age=0" in reuso.headers["set-cookie"]
+    assert REFRESH_COOKIE not in reuso.cookies
     assert await _vivas(test_session) == 0
     _usar(client, otro)
     assert (await client.post("/auth/refresh")).status_code == 401
