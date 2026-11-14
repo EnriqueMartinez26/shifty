@@ -189,13 +189,19 @@ async def test_la_corrida_persiste_el_mail_y_el_dispatch_va_despues_del_commit(
     commit_original = test_session.commit
 
     async def commit_espiado() -> None:
-        filas_email = [
-            fila
-            for fila in test_session.new
-            if isinstance(fila, OutboxMessage)
-            and fila.event_type == "email.send"
-            and fila.payload.get("args", {}).get("email") == "marta@example.com"
-        ]
+        filas_email: list[OutboxMessage] = []
+        for fila in test_session.new:
+            if not isinstance(fila, OutboxMessage) or fila.event_type != "email.send":
+                continue
+            payload = fila.payload
+            if not isinstance(payload, dict):
+                continue
+            argumentos = payload.get("args")
+            if (
+                isinstance(argumentos, dict)
+                and argumentos.get("email") == "marta@example.com"
+            ):
+                filas_email.append(fila)
         assert len(filas_email) == 1, filas_email
         assert any(
             isinstance(entrada, WaitlistEntry) and entrada.status == "offered"
