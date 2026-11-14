@@ -588,6 +588,22 @@ class Settings(BaseSettings):
                 "y no sirve en produccion"
             )
 
+    def _validate_mail_budget_configuration(self) -> None:
+        if self.MAIL_DAILY_BUDGET is not None and (
+            self.MAIL_BUDGET_TIMEZONE is None or self.MAIL_BUDGET_RESET_HOUR is None
+        ):
+            raise ValueError(
+                "MAIL_BUDGET_TIMEZONE y MAIL_BUDGET_RESET_HOUR son obligatorios "
+                "si MAIL_DAILY_BUDGET esta configurado"
+            )
+        if self.MAIL_BUDGET_TIMEZONE is not None:
+            try:
+                ZoneInfo(self.MAIL_BUDGET_TIMEZONE)
+            except (ZoneInfoNotFoundError, ValueError) as exc:
+                raise ValueError(
+                    "MAIL_BUDGET_TIMEZONE debe ser una zona IANA valida"
+                ) from exc
+
     def _validate_operational_limits(self) -> None:
         """Limites que valen en cualquier entorno, desarrollo incluido."""
         for field, minimum, message in _MINIMOS_OPERATIVOS:
@@ -606,20 +622,6 @@ class Settings(BaseSettings):
             raise ValueError(
                 "MAX_REQUEST_BODY_BYTES no debe superar 1MB sin revision de seguridad"
             )
-        if self.MAIL_DAILY_BUDGET is not None and (
-            self.MAIL_BUDGET_TIMEZONE is None or self.MAIL_BUDGET_RESET_HOUR is None
-        ):
-            raise ValueError(
-                "MAIL_BUDGET_TIMEZONE y MAIL_BUDGET_RESET_HOUR son obligatorios "
-                "si MAIL_DAILY_BUDGET esta configurado"
-            )
-        if self.MAIL_BUDGET_TIMEZONE is not None:
-            try:
-                ZoneInfo(self.MAIL_BUDGET_TIMEZONE)
-            except (ZoneInfoNotFoundError, ValueError) as exc:
-                raise ValueError(
-                    "MAIL_BUDGET_TIMEZONE debe ser una zona IANA valida"
-                ) from exc
 
     @model_validator(mode="after")
     def validate_production_security(self) -> "Settings":
@@ -641,6 +643,7 @@ class Settings(BaseSettings):
             self._validate_production_hardening()
             self._validate_production_integrations()
         self._validate_operational_limits()
+        self._validate_mail_budget_configuration()
         return self
 
     model_config = SettingsConfigDict(
