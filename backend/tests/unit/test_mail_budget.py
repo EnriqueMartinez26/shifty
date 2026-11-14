@@ -13,6 +13,8 @@ from core.config import Settings, settings
 from modules.notifications import tasks
 from tests.redis_mail_budget_double import AtomicMailBudgetRedis
 
+_real_budget_window = mail_budget._window
+
 
 @pytest.fixture
 def redis(monkeypatch: pytest.MonkeyPatch) -> AtomicMailBudgetRedis:
@@ -24,6 +26,7 @@ def redis(monkeypatch: pytest.MonkeyPatch) -> AtomicMailBudgetRedis:
     monkeypatch.setattr(mail_budget, "get_redis", fake_get_redis)
     monkeypatch.setattr(mail_budget, "_window", lambda now=None: ("test-window", 3600))
     monkeypatch.setattr(settings, "MAIL_BUDGET_TIMEZONE", "UTC")
+    monkeypatch.setattr(settings, "MAIL_BUDGET_RESET_HOUR", 0)
     return double
 
 
@@ -74,6 +77,45 @@ async def test_prioriza_criticos_y_difiere_o_descarta_el_resto(
     assert metrics["dropped"] == 2
     assert metrics["priority:critical"] == 2
     assert redis.hashes
+
+
+@pytest.mark.asyncio
+async def test_cupo_brevo_aprobado_reserva_50_y_alerta_en_200(
+    redis: AtomicMailBudgetRedis,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "MAIL_DAILY_BUDGET", 250)
+    monkeypatch.setattr(settings, "MAIL_CRITICAL_RESERVE_PERCENT", 20)
+    monkeypatch.setattr(settings, "MAIL_BUDGET_ALERT_PERCENT", 80)
+    alerts: list[tuple[str, int, int]] = []
+    monkeypatch.setattr(
+        mail_budget, "_report_threshold", lambda *args: alerts.append(args)
+    )
+
+    ordinary = [
+        await mail_budget.reserve_mail(priority="high", message_id=f"high:{i}")
+        for i in range(200)
+    ]
+    ordinary_at_limit = await mail_budget.reserve_mail(
+        priority="medium", message_id="reminder:201"
+    )
+    critical = [
+        await mail_budget.reserve_mail(priority="critical", message_id=f"otp:{i}")
+        for i in range(50)
+    ]
+    critical_at_cap = await mail_budget.reserve_mail(
+        priority="critical", message_id="otp:at-cap"
+    )
+
+    assert all(item.decision == "admitted" for item in ordinary)
+    assert ordinary_at_limit.decision == "deferred"
+    assert all(item.decision == "admitted" for item in critical)
+    assert critical_at_cap.decision == "dropped"
+    assert alerts == [("test-window", 200, 250)]
+    metrics = await mail_budget.read_mail_budget_metrics()
+    assert metrics["admitted"] == 250
+    assert metrics["deferred"] == 1
+    assert metrics["priority:critical"] == 50
 
 
 @pytest.mark.asyncio
@@ -156,6 +198,54 @@ async def test_fallo_pre_data_reusa_el_cupo_del_mismo_mensaje_logico(
 
 
 @pytest.mark.asyncio
+async def test_retry_pre_data_tras_reset_admite_el_mismo_id_en_la_nueva_ventana(
+    redis: AtomicMailBudgetRedis,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "MAIL_DAILY_BUDGET", 5)
+    monkeypatch.setattr(
+        settings, "MAIL_BUDGET_TIMEZONE", "America/Argentina/Buenos_Aires"
+    )
+    monkeypatch.setattr(settings, "MAIL_BUDGET_RESET_HOUR", 6)
+    zone = ZoneInfo("America/Argentina/Buenos_Aires")
+    instant = [datetime(2026, 11, 13, 5, tzinfo=zone)]
+    monkeypatch.setattr(
+        mail_budget,
+        "_window",
+        lambda now=None: _real_budget_window(now or instant[0]),
+    )
+
+    first = await mail_budget.reserve_mail(
+        priority="high", message_id="outbox:retry-crossing-reset"
+    )
+    await mail_budget.finish_mail(first, sent=False, retryable=True)
+    same_window_retry = await mail_budget.reserve_mail(
+        priority="high", message_id="outbox:retry-crossing-reset"
+    )
+    await mail_budget.finish_mail(same_window_retry, sent=False, retryable=True)
+
+    instant[0] = datetime(2026, 11, 13, 6, 1, tzinfo=zone)
+    next_window_retry = await mail_budget.reserve_mail(
+        priority="high", message_id="outbox:retry-crossing-reset"
+    )
+    await mail_budget.finish_mail(next_window_retry, sent=True)
+
+    old_counts, _ = mail_budget._redis_keys(first.window_id)
+    new_counts, _ = mail_budget._redis_keys(next_window_retry.window_id)
+    old_metrics = await redis.hgetall(old_counts)
+    new_metrics = await redis.hgetall(new_counts)
+
+    assert same_window_retry.decision == "admitted"
+    assert same_window_retry.window_id == first.window_id
+    assert next_window_retry.decision == "admitted"
+    assert next_window_retry.window_id != first.window_id
+    assert old_metrics["admitted"] == "1"
+    assert old_metrics["failed"] == "2"
+    assert new_metrics["admitted"] == "1"
+    assert new_metrics["sent"] == "1"
+
+
+@pytest.mark.asyncio
 async def test_un_mismo_id_logico_concurrente_solo_reserva_un_cupo(
     redis: AtomicMailBudgetRedis,
     monkeypatch: pytest.MonkeyPatch,
@@ -175,6 +265,7 @@ async def test_un_mismo_id_logico_concurrente_solo_reserva_un_cupo(
 def test_la_ventana_respeta_zona_y_hora_de_reset(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(settings, "MAIL_DAILY_BUDGET", 250)
     monkeypatch.setattr(
         settings, "MAIL_BUDGET_TIMEZONE", "America/Argentina/Buenos_Aires"
     )
@@ -191,8 +282,37 @@ def test_la_ventana_respeta_zona_y_hora_de_reset(
 def test_rechaza_zona_que_no_sea_iana() -> None:
     with pytest.raises(ValueError, match="MAIL_BUDGET_TIMEZONE"):
         Settings.model_validate(
-            {**settings.model_dump(), "MAIL_BUDGET_TIMEZONE": "No/Existe"}
+            {
+                **settings.model_dump(),
+                "MAIL_DAILY_BUDGET": None,
+                "MAIL_BUDGET_TIMEZONE": "No/Existe",
+            }
         )
+
+
+def test_la_ventana_sin_tope_no_asume_hora_de_reset_del_proveedor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "MAIL_DAILY_BUDGET", None)
+    monkeypatch.setattr(
+        settings, "MAIL_BUDGET_TIMEZONE", "America/Argentina/Buenos_Aires"
+    )
+    monkeypatch.setattr(settings, "MAIL_BUDGET_RESET_HOUR", 5)
+
+    assert mail_budget._window(datetime(2026, 11, 13, 12, tzinfo=timezone.utc))[0] == (
+        "20261113T00+0000"
+    )
+
+
+def test_la_ventana_con_tope_rechaza_reset_no_confirmado(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "MAIL_DAILY_BUDGET", 250)
+    monkeypatch.setattr(settings, "MAIL_BUDGET_TIMEZONE", None)
+    monkeypatch.setattr(settings, "MAIL_BUDGET_RESET_HOUR", None)
+
+    with pytest.raises(ValueError, match="MAIL_BUDGET_RESET_HOUR"):
+        mail_budget._window(datetime(2026, 11, 13, 12, tzinfo=timezone.utc))
 
 
 @pytest.mark.asyncio
@@ -209,6 +329,8 @@ async def test_redis_falla_cerrado_solo_cuando_el_cap_esta_configurado(
     monkeypatch.setattr(mail_budget, "get_redis", unavailable)
     monkeypatch.setattr(mail_budget, "report_mail_failure", lambda **_kwargs: None)
     monkeypatch.setattr(settings, "MAIL_DAILY_BUDGET", 25)
+    monkeypatch.setattr(settings, "MAIL_BUDGET_TIMEZONE", "UTC")
+    monkeypatch.setattr(settings, "MAIL_BUDGET_RESET_HOUR", 0)
     closed = await mail_budget.reserve_mail(
         priority="critical", message_id="otp:closed"
     )

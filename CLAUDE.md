@@ -713,15 +713,32 @@ Una instrucción en lenguaje natural no es una garantía.
   genera (F2-03, 2026-09-24). El despacho la reclama de a una
   (`processed_at` + commit plano, `SKIP LOCKED`) y recién después manda; lo
   que excede `OUTBOX_EMAIL_BUDGET_SECONDS` queda pendiente y sale en el tick
-  siguiente (cada 20 s): ningún mail se pierde por presupuesto y
-  `processed_at` no se reabre nunca. La entrega es **a lo sumo una vez**: un
-  proceso que muere entre el reclamo y el DATA pierde ese mail, y un envío
-  fallido no se reintenta (el DATA pudo haber llegado): queda con `attempts`
-  y `error` en su fila. El estado del turno se relee al planificar el mail,
-  no al mandarlo: un mail diferido por presupuesto puede salir después de
+  siguiente (cada 20 s). Una admisión de cuota diferida libera el reclamo sin
+  gastar un intento. Un fallo transitorio identificado positivamente antes de
+  SMTP DATA también reabre la fila para el siguiente tick, con el mismo id de
+  mensaje y la admisión original dentro de esa ventana, hasta
+  `WEBHOOK_INBOX_MAX_ATTEMPTS`. Si el retry cruza el reset, puede consumir una
+  nueva admisión de la ventana siguiente. Una vez iniciado DATA, el resultado
+  queda terminal porque el proveedor pudo aceptar
+  el mail; no se reintenta. El reclamo se commitea antes del SMTP: si el proceso
+  muere entre el reclamo y el intento, ese mail puede perderse. No se promete
+  entrega exactly-once; `processed_at`, `attempts` y `error` describen el
+  despacho, no la recepción en el buzón. El estado del turno se relee al
+  planificar el mail, no al mandarlo: un mail diferido puede salir después de
   una cancelación ocurrida entre medio.
   (`test_lista_de_espera_concurrencia.py`, `test_pg_outbox_mails.py`,
   `test_outbox_mails_diferidos.py`)
+- **Presupuesto SMTP (#313)**: el límite queda apagado por defecto. El objetivo
+  aprobado es 250 admisiones diarias, con 20% (50) reservado para OTP y
+  recuperación de contraseña, no críticos hasta 200 y alerta al llegar a 200
+  admisiones totales. Es best-effort: emisores externos a Shifty no se cuentan
+  y una restauración de Redis puede perder admisiones recientes. No activar el
+  cap hasta confirmar la hora y zona de reset de la cuenta; si se configura,
+  ambas deben declararse explícitamente. La cuota limita admisiones de Shifty,
+  no garantiza aceptación SMTP ni entrega final. OTP, recuperación/cambio de
+  clave y confirmaciones de reserva pública siguen fuera del outbox SQL; no
+  persistir códigos OTP ni tokens de recuperación en el outbox sin un diseño
+  de seguridad aprobado. (`docs/MAIL_BUDGET.md`)
 - **Un teléfono sin OTP no es de nadie.** No adopta el contacto de un cliente
   existente (`get_or_create_client(adopt_contact=...)`) ni trae su historial
   para la seña (`UNKNOWN_HISTORY`, que NO es "cliente nuevo"). Sin esa

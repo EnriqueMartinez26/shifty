@@ -210,9 +210,11 @@ OUTBOX_EMAIL_BUDGET_SECONDS = 45
 # del commit): si el worker muere despues del commit, el mail sigue en la base.
 # El despacho reclama esas filas de a una (``processed_at`` + commit, con
 # ``SKIP LOCKED``) y recien despues manda; lo que no entra en el presupuesto
-# queda pendiente y sale en el tick siguiente (20 s). ``processed_at`` nunca se
-# reabre: el reclamo va antes del envio y un envio fallido no se reintenta (el
-# DATA pudo haber llegado), queda con ``attempts`` y ``error``.
+# queda pendiente y sale en el tick siguiente (20 s). El reclamo se reabre si
+# la cuota difiere el envio o si se identifico positivamente un fallo transitorio
+# antes de DATA. Ese reintento acotado conserva el id y la admision originales.
+# Los fallos desde DATA son terminales porque el proveedor pudo haber aceptado
+# el mensaje; quedan anotados en ``attempts`` y ``error``.
 EVENT_EMAIL_SEND = "email.send"
 
 
@@ -601,8 +603,8 @@ async def process_outbox_batch(
     # Commit plano de AsyncSession, no el de TenantSession (ver docstring).
     await AsyncSession.commit(db)
     # Recien ahora, con la transaccion cerrada y processed_at persistido, se
-    # mandan los mails. Un SMTP caido no revierte nada, no marca el evento
-    # como fallido ni duplica envios.
+    # mandan los mails. Un SMTP caido no revierte el evento de negocio; el
+    # dispatcher anota el intento y solo reabre fallos seguros pre-DATA.
     await _dispatch_pending_emails(db, store_id=store_id)
     # El commit plano dejo la conexion sin contexto: se reaplica antes de
     # volver a leer, o la RLS le esconderia los eventos al job.
@@ -748,8 +750,9 @@ async def _claim_next_email(
     """Reclama el mail pendiente mas viejo y commitea ANTES de mandarlo.
 
     Con ``SKIP LOCKED`` dos despachos (el tick y el endpoint del panel) nunca
-    toman la misma fila; con el reclamo commiteado antes del envio, un mail
-    sale a lo sumo una vez.
+    toman la misma fila. El reclamo se commitea antes del envio; solo se libera
+    para una admision diferida o un fallo transitorio confirmado antes de DATA.
+    Un resultado ambiguo despues de DATA queda sellado para evitar duplicar.
     """
     await _apply_tenant_context(db)
     filtros: list[ColumnElement[bool]] = [

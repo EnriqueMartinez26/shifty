@@ -86,6 +86,8 @@ def _wire_outbox_dispatch(
     real_sender_kind: str = "confirmation",
 ) -> list[_ScriptedSMTP]:
     connections: list[_ScriptedSMTP] = []
+    monkeypatch.setattr(settings, "MAIL_BUDGET_TIMEZONE", "UTC")
+    monkeypatch.setattr(settings, "MAIL_BUDGET_RESET_HOUR", 0)
 
     async def claim(*_args: Any, **_kwargs: Any) -> Any:
         if row.processed_at is not None:
@@ -647,6 +649,8 @@ async def test_sender_directo_no_habilita_retry_pre_data(
     direct_sender_kind: str,
 ) -> None:
     monkeypatch.setattr(settings, "MAIL_DAILY_BUDGET", 5)
+    monkeypatch.setattr(settings, "MAIL_BUDGET_TIMEZONE", "UTC")
+    monkeypatch.setattr(settings, "MAIL_BUDGET_RESET_HOUR", 0)
     if direct_sender_kind == "confirmation":
         monkeypatch.setattr(tasks, "_confirmation_subject", lambda _details: "Subject")
         monkeypatch.setattr(tasks, "_confirmation_body", lambda _details: "Body")

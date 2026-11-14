@@ -3,10 +3,17 @@
 Shifty applies an optional best-effort budget at the shared SMTP sink. This
 does not guarantee the provider's account quota: it counts sends made through
 Shifty, while other apps or manual sends using the same account are outside
-the counter. The application does not assume a provider plan or a fixed cap:
-`MAIL_DAILY_BUDGET` is unset by default. Before setting it, verify the
-configured account's current quota, reset time, and timezone in provider
-documentation or account settings.
+the counter. `MAIL_DAILY_BUDGET` remains unset by default. The owner-approved
+initial target is 250 admissions per day for the Brevo Free account reported
+at 300 emails per day. That leaves a 50-message margin for traffic Shifty
+cannot count; it is not a hard provider limit.
+
+With a 250-message target, the 20% critical reserve is 50 messages, the
+noncritical ceiling is 200 admissions, and the 80% alert begins at 200 total
+admissions. These values are implemented and tested but are not activated in
+the production environment. The exact account reset hour and timezone are
+unconfirmed. Do not set the cap until the operator confirms both from the
+Brevo counter or support.
 
 ## Configuration
 
@@ -15,13 +22,15 @@ documentation or account settings.
 | `MAIL_DAILY_BUDGET` | unset | Maximum admitted messages in one provider calendar window. Must be a positive integer when set. |
 | `MAIL_BUDGET_ALERT_PERCENT` | `80` | Emit one Sentry warning when admitted messages first reach this percentage. |
 | `MAIL_CRITICAL_RESERVE_PERCENT` | `20` | Keep this fraction of the cap available to critical messages. |
-| `MAIL_BUDGET_TIMEZONE` | `UTC` | IANA timezone used for the provider's calendar reset. |
-| `MAIL_BUDGET_RESET_HOUR` | `0` | Local hour, 0–23, when the provider quota window resets. |
+| `MAIL_BUDGET_TIMEZONE` | unset | IANA timezone used for the provider's calendar reset. Required with an enabled cap. |
+| `MAIL_BUDGET_RESET_HOUR` | unset | Local hour, 0–23, when the provider quota window resets. Required with an enabled cap. |
 
-The cap, timezone, and reset hour must match the provider's actual quota
-window. The control only covers messages sent by Shifty processes that share
-the same non-evicting Redis instance. An incorrect window or sends from outside
-Shifty can still exceed the provider's quota.
+When `MAIL_DAILY_BUDGET` is set, the application refuses to start unless both
+the timezone and reset hour are provided. With the cap unset, UTC midnight is
+used only to group internal metrics; it does not represent a provider reset.
+The control only covers messages sent by Shifty processes that share the same
+non-evicting Redis instance. An incorrect window or sends from outside Shifty
+can still exceed the provider's quota.
 
 The repository's `redis_state` Compose service uses RDB snapshots every 60
 seconds and disables AOF. After an abrupt Redis loss, its last successful
@@ -41,17 +50,27 @@ provider limit.
 
 The noncritical limit is the total cap minus the critical reserve. Redis Lua
 scripts reserve each logical message atomically across API and Celery workers.
-Repeated outbox or Celery delivery IDs do not consume another slot. SMTP sends
-are not retried after an ambiguous result because the provider may already have
-accepted the message. An outbox send may retry a transient failure positively
-identified before DATA on a later tick, with the same logical ID, one budget
-admission, and the existing bounded outbox attempt limit. Once DATA starts,
+Repeated outbox or Celery delivery IDs do not consume another slot within the
+same quota window. If a retry crosses the provider reset, the same logical
+message can be admitted once in the new window and consume that window's slot.
+SMTP sends are not retried after an ambiguous result because the provider may
+already have accepted the message. An outbox send may retry a transient
+failure positively identified before DATA on a later tick, with the same
+logical ID and the same budget admission within that quota window, subject to
+the existing bounded outbox attempt limit. Once DATA starts,
 4xx responses, timeouts, and disconnects remain terminal. The `failed` metric
 counts SMTP attempts, so a pre-DATA attempt later delivered successfully can
-appear in both `failed` and `sent` while consuming one `admitted` slot. Redis
+appear in both `failed` and `sent` while consuming one `admitted` slot in that
+window. Redis
 reservation checks use at most two attempts; when a cap is configured and
 Redis remains unavailable, mail admission fails closed. With no cap configured,
 mail remains uncapped and a Redis outage only loses budget metrics.
+
+There is no exactly-once delivery guarantee. `admitted` means Shifty reserved
+an internal slot; `sent` means the SMTP call returned success, not that the
+recipient's inbox accepted or displayed the message. Provider acceptance can
+be ambiguous after DATA, and a process can fail between the database claim and
+the SMTP attempt. Repeating an idempotent admission does not prove delivery.
 
 Outbox-backed high and medium messages stay pending when budget admission is
 deferred or Redis is unavailable; reminders release their durable claim and
@@ -85,3 +104,21 @@ Redis stores current-window counters for `admitted`, `sent`, `failed`,
 unique logical messages deferred in that window; a message later admitted in
 the same window can appear in both counters. The internal reader is
 `core.mail_budget.read_mail_budget_metrics()`.
+
+## Authentication delivery boundary
+
+The OTP task currently receives `to`, `subject`, and `body` as Celery
+arguments; the OTP code is in the body serialized to the RabbitMQ broker.
+The repository sets late acknowledgements and rejects tasks when a worker is
+lost, but does not set an OTP task expiry or queue TTL. The actual RabbitMQ
+retention policy cannot be confirmed from this repository. This is a
+preexisting sensitive-payload exposure, not a security guarantee approved by
+this budget change. The PR does not add OTP or password-reset material to the
+SQL outbox; do not add durable auth delivery or retries until a separate
+security design validates storage, access, expiry, and redelivery behavior.
+
+Password-reset email is currently scheduled with web-process background tasks
+after the token hash is committed. The raw reset URL is not sent through the
+Celery broker or written to the outbox, but a process failure can lose the
+email. Password-change notices and public booking emails also remain outside
+the durable SQL outbox in this PR.

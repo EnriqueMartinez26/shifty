@@ -187,17 +187,32 @@ def _window(now: datetime | None = None) -> tuple[str, int]:
     """Return this provider calendar window and its remaining TTL.
 
     The quota resets at the configured wall-clock hour in the configured IANA
-    timezone. Redis keeps the counters through the reset plus one day for
+    timezone. An enabled cap requires both values. When the cap is disabled,
+    UTC midnight is only a metrics bucket, not a claim about the provider's
+    reset. Redis keeps the counters through the reset plus one day for
     diagnostics.
     """
-    zone = ZoneInfo(settings.MAIL_BUDGET_TIMEZONE)
+    reset_hour: int
+    if settings.MAIL_DAILY_BUDGET is None:
+        # Un bucket estable para metricas internas; no usar configuracion de
+        # reset del proveedor mientras el control de cuota siga apagado.
+        zone = ZoneInfo("UTC")
+        reset_hour = 0
+    else:
+        timezone_name = settings.MAIL_BUDGET_TIMEZONE
+        configured_reset_hour = settings.MAIL_BUDGET_RESET_HOUR
+        if timezone_name is None or configured_reset_hour is None:
+            raise ValueError(
+                "MAIL_BUDGET_TIMEZONE y MAIL_BUDGET_RESET_HOUR son obligatorios "
+                "si MAIL_DAILY_BUDGET esta configurado"
+            )
+        reset_hour = configured_reset_hour
+        zone = ZoneInfo(timezone_name)
     instant = now or datetime.now(timezone.utc)
     if instant.tzinfo is None:
         raise ValueError("mail budget window requires an aware datetime")
     local = instant.astimezone(zone)
-    boundary = datetime.combine(
-        local.date(), time(hour=settings.MAIL_BUDGET_RESET_HOUR), tzinfo=zone
-    )
+    boundary = datetime.combine(local.date(), time(hour=reset_hour), tzinfo=zone)
     if local < boundary:
         boundary -= timedelta(days=1)
     next_boundary = boundary + timedelta(days=1)
@@ -243,9 +258,10 @@ async def reserve_mail(*, priority: MailPriority, message_id: str) -> MailReserv
 
     ``message_id`` must identify the logical delivery, not its recipient or
     content. A repeated task/outbox delivery is suppressed without another
-    count. Deferred messages can be reconsidered on the next outbox tick;
-    bounded pre-DATA retries and safe outbox reclaims reuse the existing
-    admission.
+    count within the same quota window. Deferred messages can be reconsidered
+    on the next outbox tick; bounded pre-DATA retries and safe outbox reclaims
+    reuse the admission in that window. A retry after reset can be admitted in
+    the new window.
     """
     if priority not in _PRIORITIES:
         raise ValueError(f"invalid mail priority: {priority}")
