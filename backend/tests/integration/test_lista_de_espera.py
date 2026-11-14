@@ -7,6 +7,8 @@ dueno reserva a mano desde el panel.
 """
 
 from datetime import datetime, timedelta, timezone
+from typing import Any, cast
+from unittest.mock import AsyncMock
 
 import pytest
 from httpx import AsyncClient
@@ -14,12 +16,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import modules.notifications.tasks as tasks
+import modules.waitlist.tasks as waitlist_tasks
 from modules.notifications.model import Notification
-from modules.payments.jobs import process_outbox_batch
+from modules.payments.jobs import EVENT_EMAIL_SEND, process_outbox_batch
 from modules.payments.model import OutboxMessage
 from modules.waitlist.events import EVENT_SLOT_RELEASED
 from modules.waitlist.model import WaitlistEntry
-from modules.waitlist.offers import expire_lapsed_offers
+from modules.waitlist.offers import LapseResult, PendingOfferEmail, expire_lapsed_offers
 from tests.integration.test_feature_flags_finance_and_public_privacy import (
     add_staff_schedule,
     auth_headers,
@@ -94,6 +97,50 @@ async def _entrada(session: AsyncSession, entry_id: str) -> WaitlistEntry:
     return (
         await session.execute(select(WaitlistEntry).where(WaitlistEntry.id == entry_id))
     ).scalar_one()
+
+
+@pytest.mark.asyncio
+async def test_task_persiste_reofertas_antes_del_commit(
+    test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pendiente = PendingOfferEmail(
+        store_id="store-reoffer-test",
+        email="marta@example.com",
+        details={"public_id": "entry-reoffer-test"},
+    )
+    resultado_esperado = LapseResult(reoffered=1, pending_emails=[pendiente])
+
+    class BorrowedSession:
+        async def __aenter__(self) -> AsyncSession:
+            return test_session
+
+        async def __aexit__(self, *_: object) -> None:
+            return None
+
+    monkeypatch.setattr(
+        waitlist_tasks, "AsyncSessionFactory", lambda: BorrowedSession()
+    )
+    monkeypatch.setattr(
+        waitlist_tasks,
+        "expire_lapsed_offers",
+        AsyncMock(return_value=resultado_esperado),
+    )
+
+    counters = await waitlist_tasks.process_waitlist_offers_once()
+
+    assert counters == {"lapsed": 0, "reoffered": 1, "expired": 0}
+    fila = (
+        await test_session.execute(
+            select(OutboxMessage).where(
+                OutboxMessage.event_type == EVENT_EMAIL_SEND,
+                OutboxMessage.store_id == pendiente.store_id,
+            )
+        )
+    ).scalar_one()
+    payload = cast(dict[str, Any], fila.payload)
+    assert payload["mail"] == "waitlist_offer"
+    assert payload["args"]["email"] == pendiente.email
+    assert payload["args"]["details"] == pendiente.details
 
 
 @pytest.mark.asyncio
@@ -238,16 +285,31 @@ async def test_el_cupo_se_ofrece_a_una_sola_persona_y_pasa_a_la_siguiente(
     # Vence la ventana sin reservar: la oferta pasa a la segunda.
     vencido = datetime.now(timezone.utc) + timedelta(minutes=30)
     resumen = await expire_lapsed_offers(test_session, now=vencido)
-    await test_session.commit()
     assert resumen.lapsed == 1 and resumen.reoffered == 1
+    assert [p.email for p in resumen.pending_emails] == ["marta@example.com"]
+    waitlist_tasks.persist_pending_offer_emails(test_session, resumen.pending_emails)
+    await test_session.flush()
     assert (await _entrada(test_session, id_primera)).status == "waiting"
     assert (await _entrada(test_session, id_segunda)).status == "offered"
-    # El mail vuelve pendiente: se manda FUERA de la transaccion (regla 5).
-    assert [p.email for p in resumen.pending_emails] == ["marta@example.com"]
-    for pendiente in resumen.pending_emails:
-        await tasks.send_waitlist_offer_email(
-            email=pendiente.email, details=pendiente.details
+    # El mail queda durable en el outbox, en la misma transaccion de la reoferta.
+    pendiente = (
+        await test_session.execute(
+            select(OutboxMessage).where(
+                OutboxMessage.event_type == EVENT_EMAIL_SEND,
+                OutboxMessage.processed_at.is_(None),
+            )
         )
+    ).scalar_one()
+    store_id_pendiente = pendiente.store_id
+    payload = cast(dict[str, Any], pendiente.payload)
+    assert payload["mail"] == "waitlist_offer"
+    assert payload["args"]["email"] == "marta@example.com"
+    assert payload["args"]["details"]["public_id"] == id_segunda
+    assert store_id_pendiente == (await _entrada(test_session, id_segunda)).store_id
+    assert not any(e[0] == "marta@example.com" for e in buzon.enviados)
+    await test_session.commit()
+    envio = await process_outbox_batch(test_session)
+    assert envio["failed"] == 0
     assert any(e[0] == "marta@example.com" for e in buzon.enviados)
 
     # Marta reserva el cupo: su entrada se cierra sola.
