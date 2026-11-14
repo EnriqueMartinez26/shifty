@@ -56,14 +56,21 @@ mail remains uncapped and a Redis outage only loses budget metrics.
 Outbox-backed high and medium messages stay pending when budget admission is
 deferred or Redis is unavailable; reminders release their durable claim and
 retry on a later tick. Low-priority rebook invitations are intentionally
-discarded at saturation. OTP tasks have no automatic retry, and password reset
-or password-change emails are sent through request background tasks. Public
+discarded at saturation. OTP uses a Celery task without automatic retry;
+password reset and password-change emails use request background tasks. Public
 booking registration/confirmation emails use a separate Celery task with no
 retry; budget denials return a failure result and the task finishes. Re-offers
-from `waitlist.tasks` commit the `OFFERED` state and expiry before sending, then
-ignore a failed result; at saturation, an offer can expire without reaching
-the customer. These paths need durable outbox/state handling before the budget
-can promise that those messages are deferred.
+from `waitlist.tasks` now commit the `OFFERED` state, expiry, and `email.send`
+row together. The normal outbox dispatcher sends after commit and retries only
+failures positively identified before SMTP DATA, within the existing attempt
+limit. Ambiguous results after DATA remain terminal. Offer expiry starts when
+the offer is created, so a long dispatch delay can reduce the customer's
+remaining time to accept it.
+
+OTP, password reset/change, and public booking registration/confirmation still
+use direct delivery paths without durable outbox retries. This PR does not
+promise that those messages will be deferred or recovered after a process or
+broker failure.
 
 If Redis is unavailable with a cap configured, OTP and password reset fail
 closed; users can request another OTP or reset email, but password-change
