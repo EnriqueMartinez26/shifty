@@ -49,12 +49,12 @@ from modules.auth.schemas import (
     ResetPasswordRequest,
 )
 from modules.auth.session_model import AuthSession
+from modules.notifications.outbox import encrypted_email_outbox_message
 from modules.users.model import User
 
 __all__ = [
     "AuthTokenPair",
     "MessageResult",
-    "PasswordResetEmail",
     "PasswordResetOutcome",
     "REFRESH_REUSE_GRACE_SECONDS",
     "REVOKED_BY_ROTATION",
@@ -78,7 +78,6 @@ __all__ = [
     "revoke_store_sessions",
     "revoke_user_sessions",
     "send_password_changed_email",
-    "send_password_reset_email",
     "settings",
 ]
 
@@ -101,12 +100,6 @@ class SessionClientContext:
 class AuthTokenPair:
     access_token: str
     refresh_token: str
-
-
-@dataclass(frozen=True)
-class PasswordResetEmail:
-    email_to: str
-    reset_url: str
 
 
 @dataclass(frozen=True)
@@ -256,24 +249,6 @@ async def _send_email(
     if not sent:
         logger.warning(event, error_type="MailDeliveryRejected")
         report_mail_failure(component="auth", error_type="MailDeliveryRejected")
-
-
-async def send_password_reset_email(email_to: str, reset_url: str) -> None:
-    message = EmailMessage()
-    message["Subject"] = "Restablecer contraseña - Shifty"
-    message["From"] = settings.EMAILS_FROM_EMAIL
-    message["To"] = email_to
-    message.set_content(
-        "Recibimos una solicitud para restablecer tu contraseña en Shifty. "
-        f"Usa este enlace: {reset_url}\n\n"
-        f"El enlace vence en {settings.PASSWORD_RESET_TOKEN_EXPIRE_MINUTES} minutos."
-    )
-    await _send_email(
-        message,
-        event="password_reset_email_failed",
-        priority="critical",
-        message_id=f"auth:password-reset:{uuid.uuid4().hex}",
-    )
 
 
 async def send_password_changed_email(email_to: str) -> None:
@@ -659,9 +634,7 @@ async def revoke_own_session(session_id: str, user: User, db: AsyncSession) -> N
         await db.commit()
 
 
-async def request_password_reset(
-    data: ForgotPasswordRequest, db: AsyncSession
-) -> PasswordResetEmail | None:
+async def request_password_reset(data: ForgotPasswordRequest, db: AsyncSession) -> None:
     normalized_email = normalize_email(str(data.email))
     async with tenant_bypass(db):
         result = await db.execute(
@@ -685,14 +658,29 @@ async def request_password_reset(
         user.password_reset_expires_at = datetime.now(timezone.utc) + timedelta(
             minutes=settings.PASSWORD_RESET_TOKEN_EXPIRE_MINUTES
         )
-        await db.commit()
-
         base_url = settings.FRONTEND_URL.rstrip("/")
         reset_path = settings.FRONTEND_RESET_PASSWORD_PATH
-        return PasswordResetEmail(
-            email_to=user.email,
-            reset_url=f"{base_url}{reset_path}?token={token}",
+        reset_url = f"{base_url}{reset_path}?token={token}"
+        body = (
+            "Recibimos una solicitud para restablecer tu contraseña en Shifty. "
+            f"Usa este enlace: {reset_url}\n\n"
+            f"El enlace vence en {settings.PASSWORD_RESET_TOKEN_EXPIRE_MINUTES} minutos."
         )
+        db.add(
+            encrypted_email_outbox_message(
+                store_id=user.store_id,
+                to=user.email,
+                subject="Restablecer contraseña - Shifty",
+                body=body,
+                priority="critical",
+                guard={
+                    "kind": "password_reset",
+                    "user_id": user.id,
+                    "token_hash": token_hash,
+                },
+            )
+        )
+        await db.commit()
 
 
 async def reset_password(

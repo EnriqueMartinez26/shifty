@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+import json
 from types import SimpleNamespace
 from typing import Any, Generator, cast
 
@@ -7,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 import core.database as database
 from core.exceptions import AppException, AuthenticationException
+from core.crypto import decrypt_secret
 from modules.auth import service
 from modules.auth.schemas import ChangePasswordRequest, ForgotPasswordRequest
 from modules.users.model import User
@@ -270,18 +272,20 @@ async def test_request_password_reset_returns_email_and_persists_token(
         raising=False,
     )
 
-    reset_email = await service.request_password_reset(
+    await service.request_password_reset(
         ForgotPasswordRequest(email=" OWNER@example.com "), cast(AsyncSession, db)
     )
 
-    assert reset_email is not None
-    assert reset_email.email_to == "owner@example.com"
-    assert (
-        reset_email.reset_url
-        == "https://app.example.com/reset-password?token=reset-token"
-    )
     assert user.password_reset_token_hash == service.hash_password_reset_token(
         "reset-token"
     )
     assert user.password_reset_expires_at is not None
     assert db.commit_count == 1
+    assert len(db.added) == 1
+    outbox = db.added[0]
+    assert "reset-token" not in json.dumps(outbox.payload)
+    args = outbox.payload["args"]
+    assert isinstance(args, dict)
+    body = decrypt_secret(str(args["encrypted_body"]))
+    assert body is not None
+    assert "https://app.example.com/reset-password?token=reset-token" in body

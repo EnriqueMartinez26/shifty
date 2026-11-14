@@ -29,6 +29,7 @@ from core.mail_budget import (
 )
 from core.worker_loop import run_in_worker_loop
 from core.config import settings
+from core.crypto import decrypt_secret
 from core.utils import ARGENTINA_TZ, format_ars
 from modules.services.addons import lines_from_snapshot
 from modules.services.selection import services_label
@@ -490,6 +491,29 @@ async def send_email(
         priority=priority, message_id=message_id or f"smtp:{uuid4().hex}"
     ):
         return await _send_email(to, subject, body)
+
+
+async def send_encrypted_outbox_email(
+    *,
+    smtp: SmtpSession,
+    to: str,
+    subject: str,
+    encrypted_body: str,
+) -> dict[str, str]:
+    """Descifra un cuerpo durable solo durante el despacho SMTP."""
+    try:
+        body = decrypt_secret(encrypted_body)
+    except SoftTimeLimitExceeded:
+        raise
+    except Exception as exc:
+        logger.warning("outbox_email_payload_invalid", error_type=type(exc).__name__)
+        return {"status": "failed", "reason": "invalid_payload"}
+    if body is None:
+        logger.warning("outbox_email_payload_invalid", error_type="missing_payload")
+        return {"status": "failed", "reason": "invalid_payload"}
+
+    sent = await _send_email(to, subject, body, smtp)
+    return {"status": "sent" if sent else "failed", "reason": "smtp"}
 
 
 async def deliver_otp_email(

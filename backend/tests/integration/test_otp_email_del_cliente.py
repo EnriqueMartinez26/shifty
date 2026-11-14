@@ -22,6 +22,7 @@ from __future__ import annotations
 import re
 import statistics
 import time
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -31,9 +32,11 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from structlog.testing import capture_logs
 
 import modules.notifications.tasks as tasks
+import modules.payments.jobs as jobs
 from core.config import settings
 from core.exceptions import OTPException
 from modules.otp.model import OtpVerification
+from modules.payments.model import EVENT_EMAIL_SEND, OutboxMessage
 from modules.otp.service import OtpService
 from modules.stores.model import Store
 from modules.users.model import User, UserRole
@@ -108,7 +111,6 @@ async def test_email_coincidente_recibe_el_codigo_y_verifica(
     client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cola = Cola()
-    monkeypatch.setattr(tasks, "send_otp_email", cola)
     tienda, store_id = await _tienda_con_cliente(
         client, test_session, "otp-cliente-ok", email_cliente=EMAIL_CLIENTE
     )
@@ -133,7 +135,6 @@ async def test_email_distinto_respuesta_neutra_y_el_codigo_solo_va_a_la_ficha(
     client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cola = Cola()
-    monkeypatch.setattr(tasks, "send_otp_email", cola)
     tienda, store_id = await _tienda_con_cliente(
         client, test_session, "otp-cliente-ajeno", email_cliente=EMAIL_CLIENTE
     )
@@ -187,7 +188,6 @@ async def test_email_distinto_el_debug_code_es_un_senuelo(
     vuelve a clavar.
     """
     cola = Cola()
-    monkeypatch.setattr(tasks, "send_otp_email", cola)
     tienda, store_id = await _tienda_con_cliente(
         client, test_session, "otp-cliente-senuelo", email_cliente=EMAIL_CLIENTE
     )
@@ -245,7 +245,7 @@ async def test_canal_sin_email_no_loguea_una_falsa_falta_de_coincidencia(
             channel="whatsapp",
             email=None,
             store_name="Demo",
-            schedule_dispatch=_Cola(),
+            schedule_dispatch=lambda *_args: True,
         )
     with capture_logs() as con_email_distinto:
         await servicio.request_code(
@@ -254,7 +254,7 @@ async def test_canal_sin_email_no_loguea_una_falsa_falta_de_coincidencia(
             channel="email",
             email="atacante@example.com",
             store_name="Demo",
-            schedule_dispatch=_Cola(),
+            schedule_dispatch=lambda *_args: True,
         )
 
     evento = "otp_request_email_mismatch_for_known_client"
@@ -283,7 +283,7 @@ async def test_sin_email_tipeado_el_debug_code_tambien_es_un_senuelo(
     """
     monkeypatch.setattr(settings, "OTP_DEBUG_EXPOSE_CODE", True)
     store_id = await _store_con_cliente_directo(test_session, "otp-senuelo-sin-email")
-    cola = _Cola()
+    cola = Cola()
     servicio = OtpService(test_session)
 
     respuesta = await servicio.request_code(
@@ -292,14 +292,14 @@ async def test_sin_email_tipeado_el_debug_code_tambien_es_un_senuelo(
         channel="email",
         email="   ",
         store_name="Demo",
-        schedule_dispatch=cola,
+        schedule_dispatch=lambda *_args: True,
     )
     senuelo = str(respuesta["debug_code"])
     assert re.fullmatch(r"\d{6}", senuelo), "misma forma que un codigo real"
 
     # El codigo real salio SOLO al email de la ficha, y es OTRO.
-    assert [destino for destino, _, _ in cola.encolados] == [EMAIL_CLIENTE]
-    real = _CODIGO.search(cola.encolados[0][2])
+    assert [destino for destino, _, _ in cola.enviados] == [EMAIL_CLIENTE]
+    real = _CODIGO.search(cola.enviados[0][2])
     assert real is not None
     assert real.group(0) != senuelo
 
@@ -327,7 +327,7 @@ async def test_email_distinto_tarda_lo_mismo_que_el_exito(
     """Hace el mismo trabajo de base (invalidar + guardar + commit) que el
     exito. Con el SMTP falso instantaneo, los tiempos quedan en el mismo orden;
     el costo del SMTP real queda documentado en el commit."""
-    monkeypatch.setattr(tasks, "send_otp_email", Cola())
+    Cola()
     tienda, _ = await _tienda_con_cliente(
         client, test_session, "otp-cliente-tiempo", email_cliente=EMAIL_CLIENTE
     )
@@ -352,7 +352,6 @@ async def test_telefono_nuevo_sigue_como_siempre(
     client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cola = Cola()
-    monkeypatch.setattr(tasks, "send_otp_email", cola)
     tienda, _ = await register_and_login(
         client, slug="otp-telefono-nuevo", email="otp-telefono-nuevo@example.com"
     )
@@ -366,7 +365,6 @@ async def test_cliente_sin_email_entregable_sigue_como_siempre(
     client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cola = Cola()
-    monkeypatch.setattr(tasks, "send_otp_email", cola)
     tienda, _ = await _tienda_con_cliente(
         client,
         test_session,
@@ -386,26 +384,6 @@ async def test_cliente_sin_email_entregable_sigue_como_siempre(
 # tiempo volvia a decir si un numero es cliente. El envio sale del request en
 # todos los caminos: la respuesta no espera al SMTP.
 # ---------------------------------------------------------------------------
-
-
-class _Cola:
-    """Hace de cola: guarda lo que el servicio manda entregar (AUD2-B4-06).
-
-    ``correr`` entrega lo encolado como lo haria el worker, por el cuerpo
-    real de la tarea, asi el test sigue viendo el mail y no solo la
-    intencion de mandarlo.
-    """
-
-    def __init__(self) -> None:
-        self.encolados: list[tuple[str, str, str]] = []
-
-    def __call__(self, to: str, subject: str, body: str) -> bool:
-        self.encolados.append((to, subject, body))
-        return True
-
-    async def correr(self) -> None:
-        for to, subject, body in self.encolados:
-            await tasks.deliver_otp_email(to, subject, body)
 
 
 async def _store_con_cliente_directo(session: AsyncSession, slug: str) -> str:
@@ -434,7 +412,7 @@ async def test_el_request_devuelve_sin_llamar_al_smtp_y_el_envio_va_despues(
     buzon = Buzon()
     monkeypatch.setattr(tasks, "_send_email", buzon)
     store_id = await _store_con_cliente_directo(test_session, "otp-diferido")
-    cola = _Cola()
+    cola = Cola()
 
     respuesta = await OtpService(test_session).request_code(
         store_id=store_id,
@@ -442,12 +420,12 @@ async def test_el_request_devuelve_sin_llamar_al_smtp_y_el_envio_va_despues(
         channel="email",
         email=EMAIL_CLIENTE,
         store_name="Demo",
-        schedule_dispatch=cola,
+        schedule_dispatch=lambda *_args: True,
     )
 
     # Al volver el request: codigo guardado y commiteado, SMTP sin tocar.
     assert buzon.enviados == []
-    assert len(cola.encolados) == 1
+    assert len(cola.enviados) == 1
     guardado = await test_session.scalar(
         select(OtpVerification.id).where(
             OtpVerification.store_id == store_id,
@@ -456,7 +434,15 @@ async def test_el_request_devuelve_sin_llamar_al_smtp_y_el_envio_va_despues(
     )
     assert guardado is not None
 
-    await cola.correr()
+    mensaje = await test_session.scalar(
+        select(OutboxMessage).where(OutboxMessage.event_type == EVENT_EMAIL_SEND)
+    )
+    assert mensaje is not None
+    await jobs._send_one_pending_email(
+        mensaje,
+        SimpleNamespace(last_budget_decision=None, last_delivery_retryable=False),
+        db=test_session,
+    )
     assert [destino for destino, _, _ in buzon.enviados] == [EMAIL_CLIENTE]
     assert str(respuesta["debug_code"]) in buzon.enviados[0][2]
 
@@ -480,7 +466,7 @@ async def test_los_tres_caminos_hacen_el_mismo_trabajo_sincronico(
         ) -> None:
             sentencias.append(statement.split()[0].upper())
 
-        cola = _Cola()
+        cola = Cola()
         event.listen(test_engine.sync_engine, "before_cursor_execute", registrar)
         try:
             await servicio.request_code(
@@ -489,11 +475,11 @@ async def test_los_tres_caminos_hacen_el_mismo_trabajo_sincronico(
                 channel="email",
                 email=email,
                 store_name="Demo",
-                schedule_dispatch=cola,
+                schedule_dispatch=lambda *_args: True,
             )
         finally:
             event.remove(test_engine.sync_engine, "before_cursor_execute", registrar)
-        return sentencias, len(cola.encolados)
+        return sentencias, len(cola.enviados)
 
     coincide, envios_ok = await trabajo(TELEFONO_CLIENTE, EMAIL_CLIENTE)
     distinto, envios_neutros = await trabajo(TELEFONO_CLIENTE, "atacante@example.com")
@@ -535,7 +521,6 @@ async def test_el_cliente_guardado_con_00_se_encuentra_en_cualquier_forma(
     tipeado: str,
 ) -> None:
     cola = Cola()
-    monkeypatch.setattr(tasks, "send_otp_email", cola)
     publica, _ = await register_and_login(
         client, slug="otp-00-prefijo", email="otp-00-prefijo@example.com"
     )
