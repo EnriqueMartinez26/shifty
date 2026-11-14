@@ -33,11 +33,13 @@ const mockRequestOtp = jest.fn()
 const mockVerifyOtp = jest.fn()
 const mockAvailability = jest.fn()
 const mockStaff = jest.fn()
+const mockDepositPreview = jest.fn()
 
 jest.mock('../hooks/usePublic', () => ({
   usePublicClientAppointments: (...args: unknown[]) => mockAppointments(...args),
   usePublicAvailability: (...args: unknown[]) => mockAvailability(...args),
   usePublicStaff: (...args: unknown[]) => mockStaff(...args),
+  usePublicDepositPreview: (...args: unknown[]) => mockDepositPreview(...args),
   useJoinWaitlist: () => ({ mutateAsync: jest.fn(), isPending: false, isSuccess: false }),
   useCancelClientAppointment: () => ({ mutateAsync: mockCancel, isPending: false }),
   useRescheduleClientAppointment: () => ({ mutateAsync: mockReschedule, isPending: false }),
@@ -94,6 +96,11 @@ describe('ClientAppointmentsContainer', () => {
     mockReschedule.mockReset()
     mockAvailability.mockReset().mockReturnValue({ isLoading: false, data: [] })
     mockStaff.mockReset().mockReturnValue({ isLoading: false, data: [] })
+    mockDepositPreview.mockReset().mockReturnValue({
+      data: { booking_blocked_code: 'FAR_BOOKING_UNAVAILABLE' },
+      isError: false,
+      isFetching: false
+    })
     mockRequestOtp.mockReset().mockResolvedValue({ expires_at: '', debug_code: '' })
     mockVerifyOtp
       .mockReset()
@@ -365,6 +372,32 @@ describe('ClientAppointmentsContainer', () => {
       expect(screen.queryByRole('button', { name: /17:00/ })).not.toBeInTheDocument()
       // Sin lista de espera: el cliente ya tiene turno.
       expect(screen.queryByRole('button', { name: /Avisame si se libera/ })).not.toBeInTheDocument()
+    })
+
+    it('"Cambiar" no consulta ni muestra el límite de seña al elegir una fecha lejana', async () => {
+      await abrirGrilla()
+
+      fireEvent.click(
+        screen.getByRole('button', { name: 'Siguiente: mostrar los 14 días siguientes' })
+      )
+      await screen.findByText('Días 15–28 de 121')
+      fireEvent.click(
+        screen.getByRole('button', { name: 'Siguiente: mostrar los 14 días siguientes' })
+      )
+      await screen.findByText('Días 29–42 de 121')
+
+      const dates = within(
+        screen.getByRole('group', {
+          name: 'Fechas disponibles. Deslizá horizontalmente para ver más días'
+        })
+      ).getAllByRole('button')
+      fireEvent.click(dates[2]!) // Día 31: supera el horizonte de 30 días.
+
+      await waitFor(() => {
+        const preview = mockDepositPreview.mock.calls.at(-1)?.[0] as
+          { startsAt?: string | null } | undefined
+        expect(preview?.startsAt === null && screen.queryByText(/30 días/) === null).toBe(true)
+      })
     })
 
     it('"Cambiar" expone su estado cerrado y permite cerrar la grilla', async () => {

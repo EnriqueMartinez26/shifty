@@ -5,7 +5,8 @@ import { BookingStepDateTime } from './BookingStepDateTime'
 const mockAvailability = jest.fn()
 jest.mock('@presentation/hooks/usePublic', () => ({
   usePublicStaff: () => ({ data: [], isLoading: false }),
-  usePublicAvailability: () => mockAvailability()
+  usePublicAvailability: () => mockAvailability(),
+  usePublicDepositPreview: () => ({ data: undefined, isError: false, isFetching: false })
 }))
 jest.mock('./WaitlistJoinForm', () => ({ WaitlistJoinForm: () => null }))
 

@@ -14,10 +14,18 @@ import {
 
 import { staffForAllServices } from '@application/mappers/PublicServiceOptionMapper'
 
-import { usePublicAvailability, usePublicStaff } from '@presentation/hooks/usePublic'
+import {
+  usePublicAvailability,
+  usePublicDepositPreview,
+  usePublicStaff
+} from '@presentation/hooks/usePublic'
 
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
-import { formatArgentinaDate, formatArgentinaTime } from '@shared/utils/argentinaTime'
+import {
+  argentinaLocalToUtcIso,
+  formatArgentinaDate,
+  formatArgentinaTime
+} from '@shared/utils/argentinaTime'
 
 import { BookingBackButton } from './BookingBackButton'
 import type { BookingSlotStaff } from './types'
@@ -54,6 +62,8 @@ interface BookingStepDateTimeProps {
   lockedStaffId?: string
   /** En false no se monta la lista de espera (quien reprograma ya tiene turno). */
   showWaitlist?: boolean
+  /** Consulta si el límite de seña bloquea una fecha lejana sin horarios. */
+  checkFarBookingDepositLimit?: boolean
   heading?: string
   onEmptyAvailability?: () => void
   /** Invalida el horario elegido cuando se navega a otra página de fechas. */
@@ -62,6 +72,7 @@ interface BookingStepDateTimeProps {
 
 const NO_EXTRA_SERVICES: readonly string[] = []
 const PUBLIC_AVAILABILITY_DAYS_AHEAD = 120
+const FAR_BOOKING_DAYS = 30
 const PUBLIC_AVAILABILITY_DATE_COUNT = PUBLIC_AVAILABILITY_DAYS_AHEAD + 1
 const DATE_PAGE_SIZE = 14
 const DATE_PAGE_COUNT = Math.ceil(PUBLIC_AVAILABILITY_DATE_COUNT / DATE_PAGE_SIZE)
@@ -96,6 +107,7 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
   onBack,
   lockedStaffId,
   showWaitlist = true,
+  checkFarBookingDepositLimit = false,
   heading = 'Elegí fecha y hora',
   onEmptyAvailability,
   onDatePageChange
@@ -180,6 +192,34 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
     forceAll,
     extraServiceIds
   )
+
+  const isBeyondFarBookingHorizon =
+    activeDate !== null && differenceInCalendarDays(activeDate, today) > FAR_BOOKING_DAYS
+  const farBookingPreviewStartsAt =
+    checkFarBookingDepositLimit &&
+    isBeyondFarBookingHorizon &&
+    availability?.length === 0 &&
+    !isLoading &&
+    !isFetching &&
+    !isError
+      ? argentinaLocalToUtcIso(dateStr, '00:00')
+      : null
+  const farBookingPreview = usePublicDepositPreview({
+    storePublicId,
+    serviceId,
+    startsAt: farBookingPreviewStartsAt,
+    extraServiceIds
+  })
+  const farBookingDepositBlocked =
+    farBookingPreviewStartsAt !== null &&
+    !farBookingPreview.isFetching &&
+    !farBookingPreview.isError &&
+    farBookingPreview.data?.booking_blocked_code === 'FAR_BOOKING_UNAVAILABLE'
+  // La disponibilidad vacía puede deberse al límite de seña antes de que el
+  // backend compruebe el horario comercial. Sin confirmación, no afirmar que
+  // la tienda está cerrada.
+  const farBookingPreviewUnconfirmed =
+    farBookingPreviewStartsAt !== null && !farBookingDepositBlocked
 
   const visibleSlots = useMemo(() => {
     if (!availability) return []
@@ -599,13 +639,25 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
                   className="font-black uppercase tracking-widest text-xs"
                   style={{ color: colors2000s.text.secondary }}
                 >
-                  {diaSinAtencion ? 'Este día no hay atención.' : 'No hay turnos disponibles.'}
+                  {farBookingDepositBlocked
+                    ? 'No encontramos horarios para esta fecha.'
+                    : farBookingPreviewUnconfirmed
+                      ? 'No hay turnos disponibles.'
+                      : diaSinAtencion
+                        ? 'Este día no hay atención.'
+                        : 'No hay turnos disponibles.'}
                 </p>
                 <p
                   className="text-xs mt-2 font-medium"
                   style={{ color: colors2000s.text.secondary }}
                 >
-                  {diaSinAtencion ? 'Probá con otro día.' : 'Probá seleccionando otro día.'}
+                  {farBookingDepositBlocked
+                    ? 'Las reservas con seña se pueden realizar con hasta 30 días de anticipación.'
+                    : farBookingPreviewUnconfirmed
+                      ? 'Probá seleccionando otro día.'
+                      : diaSinAtencion
+                        ? 'Probá con otro día.'
+                        : 'Probá seleccionando otro día.'}
                 </p>
                 {waitlistAvailable && !diaSinAtencion && (
                   <div className="px-4 text-left">
