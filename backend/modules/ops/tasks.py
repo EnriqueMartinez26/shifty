@@ -21,6 +21,7 @@ from modules.ops.router import _slo_alerts, _slo_metrics, _slo_thresholds
 logger = logging.getLogger(__name__)
 
 SLO_ALERT_COOLDOWN_SECONDS = 1800.0
+SLO_ALERT_CAPTURE_RETRY_COOLDOWN_SECONDS = 300.0
 SLO_ALERT_DELIVERY_LEASE_SECONDS = 240.0
 SLO_ALERT_STATE_KEY = "shifty:ops:slo-alert-state:v1"
 SLO_ALERT_LOCK_KEY = "shifty:ops:slo-alert-dispatch-lock:v1"
@@ -47,12 +48,14 @@ for _, alert in ipairs(alerts) do
   end
   if not previous.reported then
     local pending_until = tonumber(previous.pending_until) or 0
-    if not previous.pending_token or pending_until <= now then
+    local next_attempt_at = tonumber(previous.next_attempt_at) or 0
+    if (not previous.pending_token or pending_until <= now) and next_attempt_at <= now then
       local last_active = tonumber(state.last_active_at[code]) or 0
       if now - last_active >= cooldown then
         previous.pending_state = 'active'
         previous.pending_token = claim
         previous.pending_until = lease_until
+        previous.next_attempt_at = nil
         table.insert(transitions, cjson.encode({state = 'active', alert = alert, token = claim}))
       end
     end
@@ -65,10 +68,12 @@ for code, previous in pairs(state.active) do
   if not present[code] then
     if previous.reported then
       local pending_until = tonumber(previous.pending_until) or 0
-      if previous.pending_state ~= 'resolved' or pending_until <= now then
+      local next_attempt_at = tonumber(previous.next_attempt_at) or 0
+      if (previous.pending_state ~= 'resolved' or pending_until <= now) and next_attempt_at <= now then
         previous.pending_state = 'resolved'
         previous.pending_token = claim
         previous.pending_until = lease_until
+        previous.next_attempt_at = nil
         table.insert(transitions, cjson.encode({state = 'resolved', alert = previous.alert, token = claim}))
       end
     elseif previous.pending_state == 'active' and (tonumber(previous.pending_until) or 0) > now then
@@ -116,6 +121,7 @@ if not previous or previous.pending_token ~= ARGV[2] then return 0 end
 previous.pending_state = nil
 previous.pending_token = nil
 previous.pending_until = nil
+previous.next_attempt_at = tonumber(ARGV[3]) + tonumber(ARGV[4])
 redis.call('SET', KEYS[1], cjson.encode(state), 'EX', 2592000)
 return 1
 """
@@ -168,7 +174,9 @@ def _capture_slo_transition(transition: dict[str, Any]) -> bool:
                 },
             )
             scope.fingerprint = ["ops-slo", code]
-            sentry_sdk.capture_message(message, level=level)
+            event_id = sentry_sdk.capture_message(message, level=level)
+            if not event_id:
+                raise RuntimeError("Sentry SDK did not capture the SLO transition")
     except Exception:
         logger.warning("ops_slo_sentry_report_failed", exc_info=True)
         raise
@@ -216,6 +224,8 @@ async def _update_slo_alerts(
                     SLO_ALERT_STATE_KEY,
                     code,
                     token,
+                    str(timestamp),
+                    str(SLO_ALERT_CAPTURE_RETRY_COOLDOWN_SECONDS),
                 )
                 raise
             await redis.eval(

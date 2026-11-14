@@ -84,12 +84,13 @@ class _RedisClient:
                 del self.shared.active[code]
             return []
         if script == slo_tasks._RELEASE_SLO_ALERT_TRANSITION:
-            _key, code, token = args
+            _key, code, token, raw_now, raw_cooldown = args
             current = self.shared.active.get(code)
             if current and current.get("pending_token") == token:
                 current.pop("pending_state", None)
                 current.pop("pending_token", None)
                 current.pop("pending_until", None)
+                current["next_attempt_at"] = float(raw_now) + float(raw_cooldown)
             return []
         assert script == slo_tasks._UPDATE_SLO_ALERT_STATE
         _key, serialized_alerts, raw_now, raw_cooldown, claim, raw_lease = args
@@ -108,12 +109,16 @@ class _RedisClient:
                 previous.pop("pending_until", None)
             if not previous["reported"]:
                 pending_until = previous.get("pending_until", 0)
-                if not previous.get("pending_token") or pending_until <= now:
+                next_attempt_at = previous.get("next_attempt_at", 0)
+                if (
+                    not previous.get("pending_token") or pending_until <= now
+                ) and next_attempt_at <= now:
                     last_active = self.shared.last_active_at.get(code, 0)
                     if now - last_active >= cooldown:
                         previous["pending_state"] = "active"
                         previous["pending_token"] = claim
                         previous["pending_until"] = now + lease
+                        previous.pop("next_attempt_at", None)
                         previous["alert"] = alert
                         transitions.append(
                             json.dumps(
@@ -128,10 +133,14 @@ class _RedisClient:
             previous = self.shared.active[code]
             if previous["reported"]:
                 pending_until = previous.get("pending_until", 0)
-                if previous.get("pending_state") != "resolved" or pending_until <= now:
+                next_attempt_at = previous.get("next_attempt_at", 0)
+                if (
+                    previous.get("pending_state") != "resolved" or pending_until <= now
+                ) and next_attempt_at <= now:
                     previous["pending_state"] = "resolved"
                     previous["pending_token"] = claim
                     previous["pending_until"] = now + lease
+                    previous.pop("next_attempt_at", None)
                     transitions.append(
                         json.dumps(
                             {
@@ -161,9 +170,10 @@ def test_slo_monitor_deduplicates_across_workers_and_reports_recovery_recurrence
         scopes.append(scope)
         return scope
 
-    def capture_message(message: str, *, level: str) -> None:
+    def capture_message(message: str, *, level: str) -> str:
         scope = scopes[-1]
         events.append((message, level, scope.context["slo"]))
+        return "captured-event-id"
 
     monkeypatch.setattr(sentry_sdk, "new_scope", new_scope)
     monkeypatch.setattr(sentry_sdk, "capture_message", capture_message)
@@ -242,12 +252,83 @@ def test_slo_sentry_failure_releases_pending_transition_for_retry(
     assert "pending_token" not in shared.active["dead_letter_webhooks"]
 
     client_index[0] = 1
-    asyncio.run(slo_tasks._update_slo_alerts(alert, now=20_001))
+    asyncio.run(
+        slo_tasks._update_slo_alerts(
+            alert,
+            now=20_000 + slo_tasks.SLO_ALERT_CAPTURE_RETRY_COOLDOWN_SECONDS,
+        )
+    )
     client_index[0] = 0
-    asyncio.run(slo_tasks._update_slo_alerts(alert, now=20_002))
+    asyncio.run(
+        slo_tasks._update_slo_alerts(
+            alert,
+            now=20_000 + slo_tasks.SLO_ALERT_CAPTURE_RETRY_COOLDOWN_SECONDS + 1,
+        )
+    )
 
     assert calls == 2
     assert shared.active["dead_letter_webhooks"]["reported"] is True
+    assert shared.locks == {}
+
+
+def test_slo_sentry_drop_releases_pending_transition_for_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "SENTRY_DSN", "https://sentry.invalid/1")
+    monkeypatch.setattr(sentry_sdk, "new_scope", _Scope)
+    captured: list[str | None] = [None]
+
+    def capture_message(_message: str, *, level: str) -> str | None:
+        assert level == "error"
+        return captured[0]
+
+    monkeypatch.setattr(sentry_sdk, "capture_message", capture_message)
+    shared = _SharedRedisState()
+
+    async def get_worker_redis() -> _RedisClient:
+        return _RedisClient(shared)
+
+    monkeypatch.setattr(slo_tasks, "get_redis", get_worker_redis)
+    alert = [
+        {
+            "code": "failed_webhooks_high",
+            "severity": "critical",
+            "value": 1,
+            "threshold": 0,
+        }
+    ]
+
+    with pytest.raises(RuntimeError, match="did not capture the SLO transition"):
+        asyncio.run(slo_tasks._update_slo_alerts(alert, now=25_000))
+
+    transition = shared.active["failed_webhooks_high"]
+    assert transition["reported"] is False
+    assert "pending_token" not in transition
+    assert transition["next_attempt_at"] == (
+        25_000 + slo_tasks.SLO_ALERT_CAPTURE_RETRY_COOLDOWN_SECONDS
+    )
+    assert shared.locks == {}
+
+    # Celery's shorter retry does not re-capture during the per-code cooldown.
+    asyncio.run(slo_tasks._update_slo_alerts(alert, now=25_001))
+    assert transition["reported"] is False
+
+    captured[0] = "captured-event-id"
+    asyncio.run(
+        slo_tasks._update_slo_alerts(
+            alert,
+            now=25_000 + slo_tasks.SLO_ALERT_CAPTURE_RETRY_COOLDOWN_SECONDS - 1,
+        )
+    )
+    assert transition["reported"] is False
+    asyncio.run(
+        slo_tasks._update_slo_alerts(
+            alert,
+            now=25_000 + slo_tasks.SLO_ALERT_CAPTURE_RETRY_COOLDOWN_SECONDS,
+        )
+    )
+
+    assert shared.active["failed_webhooks_high"]["reported"] is True
     assert shared.locks == {}
 
 
@@ -258,11 +339,12 @@ def test_slo_monitor_reports_warning_severity_from_shared_alerts(
     scope = _Scope()
     messages: list[tuple[str, str]] = []
     monkeypatch.setattr(sentry_sdk, "new_scope", lambda: scope)
-    monkeypatch.setattr(
-        sentry_sdk,
-        "capture_message",
-        lambda message, *, level: messages.append((message, level)),
-    )
+
+    def capture_message(message: str, *, level: str) -> str:
+        messages.append((message, level))
+        return "captured-event-id"
+
+    monkeypatch.setattr(sentry_sdk, "capture_message", capture_message)
     alert = {
         "code": "pending_outbox_high",
         "severity": "warning",
@@ -388,6 +470,53 @@ async def test_slo_alert_lua_executes_against_real_redis_when_configured(
         assert len(recovered_claim) == 1
         recovered_transition = json.loads(recovered_claim[0])
         assert recovered_transition["token"] == "replacement-worker"
+
+        await client.delete(state_key)
+        capture_failed = await client.eval(
+            slo_tasks._UPDATE_SLO_ALERT_STATE,
+            1,
+            state_key,
+            interrupted,
+            "31000",
+            str(slo_tasks.SLO_ALERT_COOLDOWN_SECONDS),
+            "capture-failed-worker",
+            str(slo_tasks.SLO_ALERT_DELIVERY_LEASE_SECONDS),
+        )
+        failed_transition = json.loads(capture_failed[0])
+        assert (
+            await client.eval(
+                slo_tasks._RELEASE_SLO_ALERT_TRANSITION,
+                1,
+                state_key,
+                "failed_webhooks_high",
+                failed_transition["token"],
+                "31000",
+                str(slo_tasks.SLO_ALERT_CAPTURE_RETRY_COOLDOWN_SECONDS),
+            )
+            == 1
+        )
+        too_soon = await client.eval(
+            slo_tasks._UPDATE_SLO_ALERT_STATE,
+            1,
+            state_key,
+            interrupted,
+            "31299",
+            str(slo_tasks.SLO_ALERT_COOLDOWN_SECONDS),
+            "early-retry-worker",
+            str(slo_tasks.SLO_ALERT_DELIVERY_LEASE_SECONDS),
+        )
+        assert too_soon == []
+        after_cooldown = await client.eval(
+            slo_tasks._UPDATE_SLO_ALERT_STATE,
+            1,
+            state_key,
+            interrupted,
+            "31300",
+            str(slo_tasks.SLO_ALERT_COOLDOWN_SECONDS),
+            "scheduled-retry-worker",
+            str(slo_tasks.SLO_ALERT_DELIVERY_LEASE_SECONDS),
+        )
+        assert len(after_cooldown) == 1
 
         # Start the ordinary monitor transitions with an empty state key.
         await client.delete(state_key)
