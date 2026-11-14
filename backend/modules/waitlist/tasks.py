@@ -6,11 +6,38 @@ from datetime import datetime, timezone
 from typing import Any, cast
 
 from celery.exceptions import SoftTimeLimitExceeded
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from core.celery_app import celery_app
 from core.database import AsyncSessionFactory, _apply_tenant_context, set_tenant_context
 from core.worker_loop import run_in_worker_loop
-from modules.notifications.tasks import send_waitlist_offer_email, smtp_session
-from modules.waitlist.offers import expire_lapsed_offers
+from modules.payments.model import OutboxMessage
+from modules.waitlist.offers import PendingOfferEmail, expire_lapsed_offers
+
+
+def persist_pending_offer_emails(
+    db: AsyncSession, pendientes: list[PendingOfferEmail]
+) -> None:
+    """Guarda las reofertas en el outbox, en la misma transaccion del estado."""
+    # Import local: payments.jobs consume waitlist.offers y su dispatcher es el
+    # encargado de reclamar email.send fuera de la transaccion.
+    from modules.payments.jobs import EVENT_EMAIL_SEND
+
+    for pendiente in pendientes:
+        db.add(
+            OutboxMessage(
+                store_id=pendiente.store_id,
+                event_type=EVENT_EMAIL_SEND,
+                payload={
+                    "mail": "waitlist_offer",
+                    "args": {
+                        "email": pendiente.email,
+                        "details": pendiente.details,
+                    },
+                    "source_event": "waitlist.offer.reoffered",
+                },
+            )
+        )
 
 
 async def process_waitlist_offers_once(
@@ -23,18 +50,12 @@ async def process_waitlist_offers_once(
         try:
             await _apply_tenant_context(db)
             resultado = await expire_lapsed_offers(db, now=now)
+            persist_pending_offer_emails(db, resultado.pending_emails)
             await db.commit()
         finally:
             set_tenant_context(None, False)
-    # Los mails salen con la transaccion ya cerrada (regla 5) y con UNA sola
-    # conexion SMTP para todo el lote (AUD2-B4-02, 2026-09-20): antes cada
-    # oferta pagaba conexion + STARTTLS + LOGIN contra el time limit de Celery.
-    if resultado.pending_emails:
-        async with smtp_session() as smtp:
-            for pendiente in resultado.pending_emails:
-                await send_waitlist_offer_email(
-                    email=pendiente.email, details=pendiente.details, smtp=smtp
-                )
+    # El dispatcher normal reclama y manda las filas fuera de esta transaccion.
+    # Si la captura SMTP cae antes de DATA, conserva la fila para el proximo tick.
     return resultado.counters()
 
 

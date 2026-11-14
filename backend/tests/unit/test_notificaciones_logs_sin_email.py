@@ -26,6 +26,7 @@ from typing import Any
 import pytest
 from structlog.testing import capture_logs
 
+from core.config import settings
 import modules.notifications.tasks as tasks
 from modules.notifications.reminders import STAGE_24H
 
@@ -54,7 +55,11 @@ class _SmtpOk:
         return None
 
     def send_message(self, message: EmailMessage) -> None:
+        self.data(message.as_bytes())
         _SmtpOk.enviados.append(message)
+
+    def data(self, _message: bytes | str) -> tuple[int, bytes]:
+        return 250, b"accepted"
 
 
 class _SmtpCaido:
@@ -71,6 +76,9 @@ def _sin_email_crudo(eventos: list[MutableMapping[str, Any]]) -> None:
 async def test_eventos_de_envio_y_fallo_loguean_el_email_enmascarado(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # This test covers log masking, not provider saturation. Keep its SMTP
+    # behavior independent of an optional deployment cap in the test env.
+    monkeypatch.setattr(settings, "MAIL_DAILY_BUDGET", None)
     monkeypatch.setattr(smtplib, "SMTP", _SmtpOk)
     with capture_logs() as eventos:
         await tasks.send_appointment_confirmation(EMAIL, dict(DETAILS))

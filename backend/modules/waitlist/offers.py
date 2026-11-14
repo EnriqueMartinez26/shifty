@@ -91,8 +91,9 @@ class ReleasedSlot:
 
 @dataclass(frozen=True)
 class PendingOfferEmail:
-    """Mail listo para mandar FUERA de la transaccion del outbox (regla 5)."""
+    """Mail que se persiste con la oferta y se despacha tras el commit."""
 
+    store_id: str
     email: str
     details: dict[str, Any]
 
@@ -405,6 +406,7 @@ def _offer_email(
     fecha_iso = slot.starts_at.astimezone(ARGENTINA_TZ).date().isoformat()
     link = rebook_url(base, slug, service, staff)
     return PendingOfferEmail(
+        store_id=entry.store_id,
         email=entry.client_email,
         details={
             "public_id": entry.id,
@@ -445,7 +447,8 @@ async def expire_lapsed_offers(
 
     Toma las filas con ``FOR UPDATE SKIP LOCKED``: sin eso, dos corridas
     solapadas del beat re-ofrecian el mismo cupo a dos personas. Los mails
-    vuelven en ``pending_emails`` y los manda la tarea despues del commit.
+    vuelven en ``pending_emails``; la tarea los persiste en el outbox en esta
+    transaccion y el dispatcher los manda despues del commit.
 
     El lote tiene tope (``limit``) y orden por vencimiento (B1-16): cada
     vencida cuesta varias consultas para re-ofrecer su cupo, todas con las

@@ -5,9 +5,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 import secrets
-import smtplib
-import ssl
-from typing import NoReturn, TypedDict
+from typing import Literal, NoReturn, TypedDict
+import uuid
 
 import structlog
 from fastapi import status
@@ -230,23 +229,36 @@ def access_token_for_user(user: User, session_id: str) -> str:
     )
 
 
-def _send_email(message: EmailMessage, *, event: str) -> None:
+async def _send_email(
+    message: EmailMessage,
+    *,
+    event: str,
+    priority: Literal["critical", "high"],
+    message_id: str,
+) -> None:
+    """Usa el sink SMTP compartido para aplicar cuota y registro central."""
+    # Import local para evitar acoplar la carga de auth a los módulos de correo.
+    from modules.notifications.tasks import send_email as send_notification_email
+
     try:
-        with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=10) as smtp:
-            # Sin context, starttls() no verifica certificado ni hostname
-            # (PV-06): el link de reset y las credenciales SMTP viajaban a
-            # quien se hiciera pasar por el servidor.
-            smtp.starttls(context=ssl.create_default_context())
-            smtp.login(settings.SMTP_USER, settings.SMTP_PASS)
-            smtp.send_message(message)
+        sent = await send_notification_email(
+            str(message["To"]),
+            str(message["Subject"]),
+            str(message.get_content()),
+            priority=priority,
+            message_id=message_id,
+        )
     except Exception as exc:
-        # Nunca romper el flujo por el mail, pero tampoco fallar en silencio:
-        # un SMTP caido deja a los usuarios sin recuperacion de cuenta.
+        # Nunca romper el flujo por el mail, pero tampoco fallar en silencio.
         logger.warning(event, error_type=type(exc).__name__)
         report_mail_failure(component="auth", error_type=type(exc).__name__)
+        return
+    if not sent:
+        logger.warning(event, error_type="MailDeliveryRejected")
+        report_mail_failure(component="auth", error_type="MailDeliveryRejected")
 
 
-def send_password_reset_email(email_to: str, reset_url: str) -> None:
+async def send_password_reset_email(email_to: str, reset_url: str) -> None:
     message = EmailMessage()
     message["Subject"] = "Restablecer contraseña - Shifty"
     message["From"] = settings.EMAILS_FROM_EMAIL
@@ -256,10 +268,15 @@ def send_password_reset_email(email_to: str, reset_url: str) -> None:
         f"Usa este enlace: {reset_url}\n\n"
         f"El enlace vence en {settings.PASSWORD_RESET_TOKEN_EXPIRE_MINUTES} minutos."
     )
-    _send_email(message, event="password_reset_email_failed")
+    await _send_email(
+        message,
+        event="password_reset_email_failed",
+        priority="critical",
+        message_id=f"auth:password-reset:{uuid.uuid4().hex}",
+    )
 
 
-def send_password_changed_email(email_to: str) -> None:
+async def send_password_changed_email(email_to: str) -> None:
     """Aviso fuera de banda: si el cambio no lo hizo el dueño de la cuenta,
     este mail es su unica señal temprana de compromiso."""
     message = EmailMessage()
@@ -272,7 +289,12 @@ def send_password_changed_email(email_to: str) -> None:
         "Si no fuiste vos, restablecela de inmediato desde 'Olvide mi "
         "contraseña' y contactanos."
     )
-    _send_email(message, event="password_changed_email_failed")
+    await _send_email(
+        message,
+        event="password_changed_email_failed",
+        priority="high",
+        message_id=f"auth:password-changed:{uuid.uuid4().hex}",
+    )
 
 
 async def revoke_sessions_for_user(
