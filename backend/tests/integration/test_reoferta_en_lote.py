@@ -27,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import modules.notifications.tasks as tasks
 import modules.waitlist.tasks as waitlist_tasks
 from modules.payments.jobs import process_outbox_batch
+from modules.payments.model import OutboxMessage
 from modules.waitlist.model import WaitlistEntry
 from modules.waitlist.offers import expire_lapsed_offers
 from tests.integration.test_feature_flags_finance_and_public_privacy import (
@@ -157,7 +158,7 @@ async def test_la_corrida_por_defecto_tambien_tiene_tope(
 
 
 @pytest.mark.asyncio
-async def test_la_corrida_commitea_una_vez_y_manda_los_mails_despues(
+async def test_la_corrida_persiste_el_mail_y_el_dispatch_va_despues_del_commit(
     client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Guarda del bloque "Lista de espera": ningun mail dentro de la transaccion."""
@@ -188,6 +189,18 @@ async def test_la_corrida_commitea_una_vez_y_manda_los_mails_despues(
     commit_original = test_session.commit
 
     async def commit_espiado() -> None:
+        filas_email = [
+            fila
+            for fila in test_session.new
+            if isinstance(fila, OutboxMessage)
+            and fila.event_type == "email.send"
+            and fila.payload.get("args", {}).get("email") == "marta@example.com"
+        ]
+        assert len(filas_email) == 1, filas_email
+        assert any(
+            isinstance(entrada, WaitlistEntry) and entrada.status == "offered"
+            for entrada in test_session.dirty
+        )
         eventos.append("commit")
         await commit_original()
 
@@ -210,6 +223,10 @@ async def test_la_corrida_commitea_una_vez_y_manda_los_mails_despues(
     )
 
     assert contadores["reoffered"] == 1, contadores
+    assert eventos == ["commit"], eventos
+
+    await process_outbox_batch(test_session, incluir_vencimientos=False)
+
     assert eventos == ["commit", "mail:marta@example.com"], eventos
 
 
