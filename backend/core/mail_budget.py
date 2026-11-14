@@ -33,6 +33,9 @@ _MAIL_CONTEXT: ContextVar[tuple[MailPriority, str] | None] = ContextVar(
 _MAIL_PRE_DATA_RETRY: ContextVar[bool] = ContextVar(
     "mail_pre_data_retry", default=False
 )
+_MAIL_RESERVED_RETRY: ContextVar[bool] = ContextVar(
+    "mail_reserved_retry", default=False
+)
 
 logger = structlog.get_logger()
 
@@ -46,10 +49,20 @@ local budget = tonumber(ARGV[4])
 local reserve = tonumber(ARGV[5])
 local alert_at = tonumber(ARGV[6])
 local ttl = tonumber(ARGV[7])
+local reclaim_reserved = ARGV[8] == '1'
 local state = redis.call('HGET', messages, message_id)
 
 if state and state ~= 'deferred' and state ~= 'retryable' then
     if state == 'reserved:' .. token then
+        return {1, tonumber(redis.call('HGET', counts, 'admitted') or '0'), 0}
+    end
+    if reclaim_reserved and string.sub(state, 1, 9) == 'reserved:' then
+        -- A claimed SQL outbox row is new, was deferred before SMTP, or was
+        -- reopened after a known pre-DATA failure. Ambiguous post-DATA rows
+        -- stay processed. Reuse this logical quota slot without re-admitting.
+        redis.call('HSET', messages, message_id, 'reserved:' .. token)
+        redis.call('EXPIRE', messages, ttl)
+        redis.call('EXPIRE', counts, ttl)
         return {1, tonumber(redis.call('HGET', counts, 'admitted') or '0'), 0}
     end
     if state == 'dropped' then
@@ -138,14 +151,22 @@ class MailReservation:
 
 @contextmanager
 def mail_delivery_context(
-    *, priority: MailPriority, message_id: str, retry_pre_data: bool = False
+    *,
+    priority: MailPriority,
+    message_id: str,
+    retry_pre_data: bool = False,
+    reclaim_reserved: bool | None = None,
 ) -> Iterator[None]:
     """Carry priority, logical identity and retry policy to the SMTP sink."""
     token = _MAIL_CONTEXT.set((priority, message_id))
     retry_token = _MAIL_PRE_DATA_RETRY.set(retry_pre_data)
+    reserved_retry_token = _MAIL_RESERVED_RETRY.set(
+        _MAIL_RESERVED_RETRY.get() if reclaim_reserved is None else reclaim_reserved
+    )
     try:
         yield
     finally:
+        _MAIL_RESERVED_RETRY.reset(reserved_retry_token)
         _MAIL_PRE_DATA_RETRY.reset(retry_token)
         _MAIL_CONTEXT.reset(token)
 
@@ -156,6 +177,10 @@ def current_mail_context() -> tuple[MailPriority, str] | None:
 
 def current_mail_pre_data_retry() -> bool:
     return _MAIL_PRE_DATA_RETRY.get()
+
+
+def current_mail_reserved_retry() -> bool:
+    return _MAIL_RESERVED_RETRY.get()
 
 
 def _window(now: datetime | None = None) -> tuple[str, int]:
@@ -219,7 +244,8 @@ async def reserve_mail(*, priority: MailPriority, message_id: str) -> MailReserv
     ``message_id`` must identify the logical delivery, not its recipient or
     content. A repeated task/outbox delivery is suppressed without another
     count. Deferred messages can be reconsidered on the next outbox tick;
-    bounded pre-DATA retries reuse the existing admission.
+    bounded pre-DATA retries and safe outbox reclaims reuse the existing
+    admission.
     """
     if priority not in _PRIORITIES:
         raise ValueError(f"invalid mail priority: {priority}")
@@ -246,6 +272,7 @@ async def reserve_mail(*, priority: MailPriority, message_id: str) -> MailReserv
         critical_reserve,
         _alert_threshold(budget) if budget else 0,
         ttl,
+        "1" if current_mail_reserved_retry() else "0",
     )
     redis_error: BaseException | None = None
     retries = _REDIS_RETRIES if budget else 1

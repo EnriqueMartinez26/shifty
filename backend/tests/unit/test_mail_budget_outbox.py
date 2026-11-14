@@ -16,11 +16,13 @@ from core.mail_budget import (
     MailReservation,
     current_mail_context,
     current_mail_pre_data_retry,
+    current_mail_reserved_retry,
 )
 from modules.payments import jobs
 from modules.payments.model import WEBHOOK_INBOX_MAX_ATTEMPTS
 from modules.notifications import tasks
 from modules.notifications.reminders import STAGE_24H
+from tests.redis_mail_budget_double import AtomicMailBudgetRedis
 
 _CLIENT_MAIL_BUILDERS = {
     "cancellation": ("_cancellation_subject", "_cancellation_body"),
@@ -421,6 +423,135 @@ async def test_outbox_reintenta_fallo_pre_data_con_mismo_id_y_un_solo_cupo(
     ]
 
 
+@pytest.mark.asyncio
+async def test_outbox_recupera_reserva_si_redis_falla_al_registrar_fallo_pre_data(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "MAIL_DAILY_BUDGET", 5)
+    row = _OutboxMailRow()
+    outcomes = iter(["connection-before-data", "success"])
+    connections = _wire_outbox_dispatch(
+        monkeypatch,
+        row,
+        lambda: _ScriptedSMTP(next(outcomes)),
+        use_real_sender=True,
+        real_sender_kind="confirmation",
+    )
+    redis = AtomicMailBudgetRedis()
+    original_eval = redis.eval
+    finish_failures = 2
+
+    async def eval_with_lost_finish_results(script: str, numkeys: int, *args: Any):
+        nonlocal finish_failures
+        if script == mail_budget._FINISH_SCRIPT and finish_failures:
+            finish_failures -= 1
+            raise ConnectionError("redis unavailable while recording result")
+        return await original_eval(script, numkeys, *args)
+
+    async def get_redis() -> Any:
+        return redis
+
+    monkeypatch.setattr(redis, "eval", eval_with_lost_finish_results)
+    monkeypatch.setattr(mail_budget, "get_redis", get_redis)
+    monkeypatch.setattr(mail_budget, "report_mail_failure", lambda **_kwargs: None)
+    original_reserve_mail = tasks.reserve_mail
+    reclaim_flags: list[bool] = []
+
+    async def record_reserve_mail(
+        *, priority: MailPriority, message_id: str
+    ) -> MailReservation:
+        reclaim_flags.append(current_mail_reserved_retry())
+        return await original_reserve_mail(priority=priority, message_id=message_id)
+
+    monkeypatch.setattr(tasks, "reserve_mail", record_reserve_mail)
+
+    await jobs._dispatch_pending_emails(object())  # type: ignore[arg-type]
+
+    assert row.attempts == 1
+    assert row.processed_at is None
+    assert connections[0].data_calls == 0
+    assert reclaim_flags == [True]
+
+    await jobs._dispatch_pending_emails(object())  # type: ignore[arg-type]
+    metrics = await mail_budget.read_mail_budget_metrics()
+
+    assert row.processed_at is not None
+    assert len(connections) == 2
+    assert [connection.send_message_calls for connection in connections] == [1, 1]
+    assert [connection.data_calls for connection in connections] == [0, 1]
+    assert reclaim_flags == [True, True]
+    assert metrics["admitted"] == 1
+    assert metrics["priority:high"] == 1
+    assert metrics["sent"] == 1
+    assert metrics["failed"] == 0
+
+
+@pytest.mark.asyncio
+async def test_outbox_recupera_reserva_ambigua_antes_de_smtp(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "MAIL_DAILY_BUDGET", 5)
+    row = _OutboxMailRow()
+    outcomes = iter(["success"])
+    connections = _wire_outbox_dispatch(
+        monkeypatch,
+        row,
+        lambda: _ScriptedSMTP(next(outcomes)),
+        use_real_sender=True,
+        real_sender_kind="confirmation",
+    )
+    redis = AtomicMailBudgetRedis()
+    original_eval = redis.eval
+    lost_responses = 2
+
+    async def eval_with_lost_reserve_responses(script: str, numkeys: int, *args: Any):
+        nonlocal lost_responses
+        result = await original_eval(script, numkeys, *args)
+        if script == mail_budget._RESERVE_SCRIPT and lost_responses:
+            lost_responses -= 1
+            raise ConnectionError("redis reply lost after reservation")
+        return result
+
+    async def get_redis() -> Any:
+        return redis
+
+    monkeypatch.setattr(redis, "eval", eval_with_lost_reserve_responses)
+    monkeypatch.setattr(mail_budget, "get_redis", get_redis)
+    monkeypatch.setattr(mail_budget, "report_mail_failure", lambda **_kwargs: None)
+    original_reserve_mail = tasks.reserve_mail
+    reclaim_flags: list[bool] = []
+
+    async def record_reserve_mail(
+        *, priority: MailPriority, message_id: str
+    ) -> MailReservation:
+        reclaim_flags.append(current_mail_reserved_retry())
+        return await original_reserve_mail(priority=priority, message_id=message_id)
+
+    monkeypatch.setattr(tasks, "reserve_mail", record_reserve_mail)
+
+    await jobs._dispatch_pending_emails(object())  # type: ignore[arg-type]
+
+    assert row.attempts == 0
+    assert row.processed_at is None
+    assert connections == []
+    assert reclaim_flags == [True]
+    metrics = await mail_budget.read_mail_budget_metrics()
+    assert metrics["admitted"] == 1
+    assert metrics["sent"] == 0
+
+    await jobs._dispatch_pending_emails(object())  # type: ignore[arg-type]
+    metrics = await mail_budget.read_mail_budget_metrics()
+
+    assert row.processed_at is not None
+    assert len(connections) == 1
+    assert connections[0].send_message_calls == 1
+    assert connections[0].data_calls == 1
+    assert reclaim_flags == [True, True]
+    assert metrics["admitted"] == 1
+    assert metrics["priority:high"] == 1
+    assert metrics["sent"] == 1
+
+
 @pytest.mark.parametrize("real_sender_kind", ["confirmation", "store_notification"])
 @pytest.mark.asyncio
 async def test_fallos_pre_data_respetan_el_maximo_original_del_outbox(
@@ -478,16 +609,28 @@ async def test_fallos_tras_entrar_en_data_quedan_terminales(
         use_real_sender=True,
         real_sender_kind=real_sender_kind,
     )
+    original_reserve_mail = tasks.reserve_mail
+    reclaim_flags: list[bool] = []
+
+    async def record_reserve_mail(
+        *, priority: MailPriority, message_id: str
+    ) -> MailReservation:
+        reclaim_flags.append(current_mail_reserved_retry())
+        return await original_reserve_mail(priority=priority, message_id=message_id)
+
+    monkeypatch.setattr(tasks, "reserve_mail", record_reserve_mail)
 
     await jobs._dispatch_pending_emails(object())  # type: ignore[arg-type]
     assert row.attempts == 1
     assert row.processed_at is not None
+    assert reclaim_flags == [True]
     await jobs._dispatch_pending_emails(object())  # type: ignore[arg-type]
     metrics = await mail_budget.read_mail_budget_metrics()
 
     assert len(connections) == 1
     assert connections[0].send_message_calls == 1
     assert connections[0].data_calls == 1
+    assert reclaim_flags == [True]
     assert metrics["admitted"] == 1
     assert metrics["failed"] == 1
     assert metrics["sent"] == 0

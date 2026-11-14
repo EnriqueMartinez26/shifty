@@ -21,11 +21,22 @@ class AtomicMailBudgetRedis:
             counts = self.hashes[counts_key]
             messages = self.hashes[messages_key]
             if script == mail_budget._RESERVE_SCRIPT:
-                token, priority, budget, reserve, alert_at, _ttl = values
+                (
+                    token,
+                    priority,
+                    budget,
+                    reserve,
+                    alert_at,
+                    _ttl,
+                    reclaim_reserved,
+                ) = values
                 state = messages.get(message_id)
                 admitted = int(counts.get("admitted", "0"))
                 if state and state not in {"deferred", "retryable"}:
                     if state == f"reserved:{token}":
+                        return [1, admitted, 0]
+                    if state.startswith("reserved:") and reclaim_reserved == "1":
+                        messages[message_id] = f"reserved:{token}"
                         return [1, admitted, 0]
                     return [-1 if state == "dropped" else 2, admitted, 0]
                 if state == "retryable":

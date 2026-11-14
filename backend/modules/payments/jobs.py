@@ -791,8 +791,14 @@ async def _send_one_pending_email(fila: OutboxMessage, smtp: Any) -> str | None:
             smtp.last_budget_decision = None
         if hasattr(smtp, "last_delivery_retryable"):
             smtp.last_delivery_retryable = False
+        # La fila solo se reclama cuando SQL la dejó pendiente. Eso cubre un
+        # envío nuevo, diferido antes de SMTP o reabierto por un fallo conocido
+        # pre-DATA; los resultados ambiguos después de DATA quedan sellados.
         with mail_delivery_context(
-            priority=priority, message_id=message_id, retry_pre_data=True
+            priority=priority,
+            message_id=message_id,
+            retry_pre_data=True,
+            reclaim_reserved=True,
         ):
             resultado = await enviar(smtp=smtp, **argumentos)
     except SoftTimeLimitExceeded:
