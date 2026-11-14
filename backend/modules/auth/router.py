@@ -45,7 +45,6 @@ from modules.auth.service import (
     list_user_sessions as list_user_sessions_service,
     revoke_own_session as revoke_own_session_service,
     send_password_changed_email,
-    send_password_reset_email,
 )
 from modules.users.model import User
 
@@ -203,7 +202,6 @@ async def revoke_all_sessions(
 async def forgot_password(
     request: Request,
     data: ForgotPasswordRequest,
-    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
 ) -> ForgotPasswordResponse:
     normalized_email = normalize_email(str(data.email))
@@ -213,11 +211,7 @@ async def forgot_password(
         settings.RATE_LIMIT_AUTH_PER_MINUTE,
         subject=normalized_email,
     )
-    reset_email = await request_password_reset(data, db)
-    if reset_email:
-        background_tasks.add_task(
-            send_password_reset_email, reset_email.email_to, reset_email.reset_url
-        )
+    await request_password_reset(data, db)
     return ForgotPasswordResponse(
         message="Si el email existe, recibiras un enlace para restablecer la contraseña."
     )

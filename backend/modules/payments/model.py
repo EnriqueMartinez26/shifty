@@ -24,6 +24,8 @@ from core.models import BaseEntity
 JsonPrimitive: TypeAlias = str | int | float | bool | None
 JsonValue: TypeAlias = JsonPrimitive | dict[str, "JsonValue"] | list["JsonValue"]
 
+EVENT_EMAIL_SEND = "email.send"
+
 # Reintentos antes de dar por perdido un webhook que no pudimos resolver.
 WEBHOOK_INBOX_MAX_ATTEMPTS = 10
 

@@ -7,42 +7,36 @@ es el unico canal con envio real; whatsapp/sms quedan para desarrollo.
 """
 
 from datetime import datetime, timezone, tzinfo
+from contextvars import ContextVar
 from typing import Any
 
 import pytest
 from httpx import AsyncClient
-from structlog.testing import capture_logs
+from sqlalchemy import event, select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 
 import modules.notifications.tasks as tasks
 import modules.otp.service as otp_service
 from core.config import settings
+from core.crypto import decrypt_secret
+from modules.payments.model import EVENT_EMAIL_SEND, OutboxMessage
 from tests.integration.test_feature_flags_finance_and_public_privacy import (
     register_and_login,
 )
 
 
-class Cola:
-    """Reemplaza la tarea de Celery ``send_otp_email``: guarda lo encolado.
-
-    AUD2-B4-06 (2026-09-20): el mail del OTP lo manda el worker, no el
-    proceso de la API. En los tests alcanza con ver QUE se encolo, y se
-    guarda con la misma forma (destino, asunto, cuerpo) que usa el sink SMTP,
-    asi las aserciones son las mismas de los dos lados.
-    """
-
-    def __init__(self) -> None:
-        self.enviados: list[tuple[str, str, str]] = []
-
-    def delay(self, to: str, subject: str, body: str) -> None:
-        self.enviados.append((to, subject, body))
+def _es_mail_otp(mensaje: OutboxMessage) -> bool:
+    argumentos = mensaje.payload.get("args")
+    return isinstance(argumentos, dict) and str(
+        argumentos.get("subject", "")
+    ).startswith("Tu código de verificación")
 
 
 @pytest.mark.asyncio
-async def test_el_codigo_llega_por_email_y_verifica(
-    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+async def test_el_codigo_se_guarda_cifrado_y_verifica(
+    client: AsyncClient, test_session: AsyncSession
 ) -> None:
-    cola = Cola()
-    monkeypatch.setattr(tasks, "send_otp_email", cola)
     store, _ = await register_and_login(
         client, slug="otp-mail", email="otp-mail@example.com"
     )
@@ -58,12 +52,21 @@ async def test_el_codigo_llega_por_email_y_verifica(
         },
     )
     assert pedido.status_code == 200, pedido.text
-    assert len(cola.enviados) == 1
-    destino, asunto, cuerpo = cola.enviados[0]
-    assert destino == "cliente@example.com"
-    assert "código" in asunto.lower()
     codigo = pedido.json()["data"]["debug_code"]  # solo en tests/desarrollo
-    assert codigo in cuerpo
+    mensajes = (
+        await test_session.scalars(
+            select(OutboxMessage).where(OutboxMessage.event_type == EVENT_EMAIL_SEND)
+        )
+    ).all()
+    mensajes_otp = [mensaje for mensaje in mensajes if _es_mail_otp(mensaje)]
+    assert len(mensajes_otp) == 1
+    argumentos = mensajes_otp[0].payload["args"]
+    assert isinstance(argumentos, dict)
+    assert argumentos.get("to") == "cliente@example.com"
+    assert argumentos.get("priority") == "critical"
+    cuerpo = decrypt_secret(str(argumentos.get("encrypted_body", "")))
+    assert cuerpo is not None and codigo in cuerpo
+    assert codigo not in str(mensajes_otp[0].payload)
 
     verificado = await client.post(
         "/public/otp/verify",
@@ -86,13 +89,6 @@ async def test_sin_email_el_canal_email_es_422(client: AsyncClient) -> None:
     assert pedido.status_code == 422, pedido.text
 
 
-class _ColaCaida:
-    """Broker caido: el unico fallo de envio que el request puede ver hoy."""
-
-    def delay(self, *_args: object) -> None:
-        raise RuntimeError("broker caido")
-
-
 class _RelojQuieto:
     """Solo ``now``: es lo unico del reloj que usa el camino del pedido."""
 
@@ -102,27 +98,18 @@ class _RelojQuieto:
 
 
 @pytest.mark.asyncio
-async def test_un_fallo_de_envio_responde_byte_a_byte_igual_que_el_camino_sano(
-    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+async def test_smtp_no_se_invoca_y_el_outbox_persiste_el_mail_cifrado(
+    client: AsyncClient,
+    test_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AUD2-B4-11 (2026-09-20): el test anterior ya no probaba lo que decia.
-
-    Sintoma: ``test_un_smtp_caido_responde_igual_que_uno_sano`` afirmaba
-    200 + ``ok: true`` con un ``Buzon`` que fallaba sobre ``_send_email``.
-    Desde B4-01 el envio salio del request y desde AUD2-B4-06 sale del
-    proceso, asi que esas dos aserciones eran verdaderas por construccion y
-    a su ``Buzon`` no lo llamaba nadie (se verifico haciendolo reventar: el
-    test seguia verde). Daba cobertura aparente al invariante "respuesta
-    neutra ante fallo de envio" sin discriminar nada.
-
-    Hoy el fallo de envio que SI puede ver el request es el del encolado.
-    Con el reloj y el codigo de debug quietos, lo unico que podria cambiar
-    entre las dos respuestas es lo que este test quiere vigilar: que el
-    sobre canonico sea identico byte a byte y que el fallo quede en el log
-    sin datos personales.
-    """
+    """El request confirma el outbox cifrado sin abrir SMTP ni depender del broker."""
     monkeypatch.setattr(otp_service, "datetime", _RelojQuieto)
     monkeypatch.setattr(settings, "OTP_DEBUG_EXPOSE_CODE", False)
+
+    async def smtp_en_request(*_args: Any, **_kwargs: Any) -> bool:
+        raise AssertionError("la API no debe abrir SMTP")
+
     store, _ = await register_and_login(
         client, slug="otp-caido", email="otp-caido@example.com"
     )
@@ -139,26 +126,89 @@ async def test_un_fallo_de_envio_responde_byte_a_byte_igual_que_el_camino_sano(
             },
         )
 
-    cola = Cola()
-    monkeypatch.setattr(tasks, "send_otp_email", cola)
-    sano = await pedir()
-    monkeypatch.setattr(tasks, "send_otp_email", _ColaCaida())
-    with capture_logs() as eventos:
-        caido = await pedir()
+    with monkeypatch.context() as parche:
+        parche.setattr(tasks, "_send_email", smtp_en_request)
+        primera = await pedir()
+        segunda = await pedir()
 
-    assert sano.status_code == 200, sano.text
-    assert sano.json()["data"]["ok"] is True
-    assert len(cola.enviados) == 1, "el camino sano encola exactamente un mail"
-    assert caido.status_code == sano.status_code, caido.text
-    assert caido.content == sano.content, "la respuesta cambia cuando falla el envio"
-    assert caido.headers["content-type"] == sano.headers["content-type"]
+    assert primera.status_code == 200, primera.text
+    assert primera.json()["data"]["ok"] is True
+    assert segunda.status_code == primera.status_code, segunda.text
+    assert segunda.content == primera.content, "el envio diferido cambio la respuesta"
+    assert segunda.headers["content-type"] == primera.headers["content-type"]
+    assert "debug_code" not in primera.json()["data"]
+    mensajes = (
+        await test_session.scalars(
+            select(OutboxMessage).where(OutboxMessage.event_type == EVENT_EMAIL_SEND)
+        )
+    ).all()
+    mensajes_otp = [mensaje for mensaje in mensajes if _es_mail_otp(mensaje)]
+    assert len(mensajes_otp) == 2
+    assert all(
+        "cliente@example.com" in str(mensaje.payload) for mensaje in mensajes_otp
+    )
 
-    assert any(e["event"] == "otp_email_enqueue_failed" for e in eventos)
-    # F1-03: el tipo de error lo registra el helper unico de encolado.
-    aviso = next(e for e in eventos if e["event"] == "enqueue_failed")
-    assert aviso["error_type"] == "RuntimeError"
-    assert "cliente@example.com" not in str(aviso)
-    assert "5555" not in str(aviso)
+
+class Cola:
+    """Colector de pruebas de mensajes OTP confirmados en el outbox."""
+
+    def __init__(self) -> None:
+        self.enviados: list[tuple[str, str, str]] = []
+        self._pendientes: dict[int, list[OutboxMessage]] = {}
+        self._vistos: set[str] = set()
+        _COLA_ACTIVA.set(self)
+
+
+_COLA_ACTIVA: ContextVar[Cola | None] = ContextVar("otp_outbox_test_sink", default=None)
+
+
+@event.listens_for(Session, "after_flush")
+def _registrar_outbox_otp(session: Session, *_args: Any) -> None:
+    cola = _COLA_ACTIVA.get()
+    if cola is None:
+        return
+    pendientes = cola._pendientes.setdefault(id(session), [])
+    for fila in session.new:
+        if (
+            isinstance(fila, OutboxMessage)
+            and fila.event_type == EVENT_EMAIL_SEND
+            and fila.id not in cola._vistos
+        ):
+            cola._vistos.add(fila.id)
+            pendientes.append(fila)
+
+
+@event.listens_for(Session, "after_commit")
+def _confirmar_outbox_otp(session: Session) -> None:
+    cola = _COLA_ACTIVA.get()
+    if cola is None:
+        return
+    for fila in cola._pendientes.pop(id(session), []):
+        argumentos = fila.payload.get("args")
+        if (
+            fila.payload.get("mail") != "encrypted_body"
+            or not isinstance(argumentos, dict)
+            or not str(argumentos.get("subject", "")).startswith(
+                "Tu código de verificación"
+            )
+        ):
+            continue
+        cuerpo = decrypt_secret(str(argumentos.get("encrypted_body", "")))
+        if cuerpo is not None:
+            cola.enviados.append(
+                (
+                    str(argumentos.get("to")),
+                    str(argumentos.get("subject")),
+                    cuerpo,
+                )
+            )
+
+
+@event.listens_for(Session, "after_rollback")
+def _descartar_outbox_otp(session: Session) -> None:
+    cola = _COLA_ACTIVA.get()
+    if cola is not None:
+        cola._pendientes.pop(id(session), None)
 
 
 @pytest.mark.asyncio

@@ -27,6 +27,7 @@ import pytest
 import modules.auth.service as auth_service
 import modules.notifications.tasks as tasks
 from core.config import settings
+from core.crypto import encrypt_secret
 
 CLIENTA = "clienta@example.com"
 CONTACTO = "hola@tienda-del-barrio.com"
@@ -65,6 +66,20 @@ def _detalles(contact_email: str | None) -> dict[str, Any]:
 
 
 Enviar = Callable[[dict[str, Any]], Awaitable[dict[str, str]]]
+
+
+async def _enviar_reset_cifrado() -> None:
+    encrypted_body = encrypt_secret("https://shifty.test/reset?t=x")
+    assert encrypted_body is not None
+    async with tasks.smtp_session() as smtp:
+        resultado = await tasks.send_encrypted_outbox_email(
+            smtp=smtp,
+            to=CLIENTA,
+            subject="Restablecer contraseña - Shifty",
+            encrypted_body=encrypted_body,
+        )
+    assert resultado["status"] == "sent"
+
 
 # Un caso por tipo de mail al cliente. El recordatorio va en sus dos etapas.
 MAILS_AL_CLIENTE: dict[str, Enviar] = {
@@ -212,9 +227,7 @@ async def test_el_aviso_al_dueno_nunca_lleva_reply_to(
 @pytest.mark.parametrize(
     "enviar",
     [
-        lambda: auth_service.send_password_reset_email(
-            CLIENTA, "https://shifty.test/reset?t=x"
-        ),
+        _enviar_reset_cifrado,
         lambda: auth_service.send_password_changed_email(CLIENTA),
     ],
     ids=["reset", "clave-cambiada"],
@@ -234,7 +247,19 @@ async def test_la_recuperacion_de_clave_nunca_lleva_reply_to(
     ) -> None:
         capturados.append(message)
 
+    async def _send_outbox_email(
+        to: str,
+        subject: str,
+        body: str,
+        _smtp: tasks.SmtpSession | None = None,
+        *,
+        reply_to: str | None = None,
+    ) -> bool:
+        capturados.append(tasks._build_message(to, subject, body, reply_to))
+        return True
+
     monkeypatch.setattr(auth_service, "_send_email", _send_email)
+    monkeypatch.setattr(tasks, "_send_email", _send_outbox_email)
     await enviar()
 
     [mensaje] = capturados

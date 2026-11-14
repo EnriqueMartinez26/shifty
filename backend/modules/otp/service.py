@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 
 from core.config import settings
+from core.database import tenant_bypass
 from core.exceptions import OTPException, OTPRateLimitedException, ValidationException
 from core.rate_limit import subject_quota_allows
 from core.redis import REDIS_UNAVAILABLE_ERRORS, get_redis
@@ -28,6 +29,7 @@ from modules.otp.client_token import (
 )
 from modules.auth.service import normalize_email
 from modules.notifications.tasks import client_mail_footer, is_deliverable_email
+from modules.notifications.outbox import encrypted_email_outbox_message
 from modules.otp.model import OtpVerification
 from modules.users.model import User, UserRole
 
@@ -400,6 +402,36 @@ def _live_codes_query(
     )
 
 
+async def otp_email_guard_is_current(
+    db: AsyncSession,
+    *,
+    store_id: str | None,
+    otp_id: object,
+    email: object,
+    now: datetime | None = None,
+) -> bool:
+    """Check a queued OTP email inside the OTP service boundary."""
+    if (
+        not isinstance(store_id, str)
+        or not isinstance(otp_id, str)
+        or not isinstance(email, str)
+    ):
+        return False
+    async with tenant_bypass(db):
+        current = await db.scalar(
+            select(OtpVerification.id).where(
+                OtpVerification.id == otp_id,
+                OtpVerification.store_id == store_id,
+                OtpVerification.email == email,
+                OtpVerification.consumed_at.is_(None),
+                OtpVerification.expires_at > (now or datetime.now(timezone.utc)),
+            )
+        )
+    # Close tenant_bypass's read transaction before the SMTP operation.
+    await AsyncSession.commit(db)
+    return current is not None
+
+
 class OtpService:
     """Se instancia por request.
 
@@ -495,6 +527,8 @@ class OtpService:
         *,
         email: str | None,
         expires_at: datetime,
+        notice_to: str | None = None,
+        store_name: str = "",
     ) -> None:
         """Invalida los codigos vivos de ese telefono enviados al MISMO buzon y
         guarda el nuevo, con el buzon al que se despacho
@@ -559,6 +593,28 @@ class OtpService:
             provider_message_id="email" if channel == "email" else "console-dispatch",
         )
         self.db.add(otp)
+        await self.db.flush()
+        if channel == "email" and email is not None:
+            self.db.add(
+                encrypted_email_outbox_message(
+                    store_id=store_id,
+                    to=email,
+                    subject=_otp_subject(store_name),
+                    body=_code_body(code, store_name),
+                    priority="critical",
+                    guard={"kind": "otp", "otp_id": otp.id},
+                )
+            )
+        if notice_to is not None:
+            self.db.add(
+                encrypted_email_outbox_message(
+                    store_id=store_id,
+                    to=notice_to,
+                    subject=_otp_subject(store_name),
+                    body=_notice_body(store_name),
+                    priority="low",
+                )
+            )
         await self.db.commit()
 
     async def request_code(
@@ -571,12 +627,11 @@ class OtpService:
         store_name: str = "",
         schedule_dispatch: DispatchScheduler,
     ) -> dict[str, object]:
-        """Genera el codigo, encola su mail y recien entonces lo guarda; el
-        mail lo entrega ``schedule_dispatch`` fuera del proceso de la API
-        (B4-01 lo saco del camino sincronico; AUD2-B4-06 lo saco tambien del
-        request). La respuesta no espera al SMTP y su tiempo no depende del
-        destino. El parametro es obligatorio a proposito, para que ningun
-        llamador vuelva a mandar en linea."""
+        """Guarda el codigo y el mail cifrado en una sola transaccion.
+
+        ``schedule_dispatch`` se conserva por compatibilidad con los llamadores;
+        el despacho durable del outbox ya no serializa el codigo al broker.
+        """
         normalized_phone = normalize_phone(phone)
         _check_channel(channel, email)
 
@@ -597,21 +652,14 @@ class OtpService:
             minutes=settings.OTP_CODE_EXPIRE_MINUTES
         )
 
-        # 2026-10-05: guardar el codigo invalida el vivo de ese mismo buzon
-        # (``_store_code``), asi que se guarda SOLO si su mail quedo
-        # encolado. Antes se guardaba primero y un encolado fallido (broker
-        # caido o lento) o el tope del buzon dejaban al titular sin codigo
-        # valido: pedir codigos para un telefono ajeno
-        # trababa su verificacion sin mandarle nada. Si el guardado falla
-        # despues de encolar, sale un mail con un codigo que no existe y el
-        # vivo sigue valido: es el orden que falla del lado seguro.
-        if channel == "email" and not await _hand_off_code_mail(
-            schedule_dispatch,
-            destination=destination,
-            notice_to=notice_to,
-            code=code,
-            store_name=store_name,
-        ):
+        allowed_notice: str | None = None
+        if channel == "email":
+            destination, allowed_notice = await _recipients_within_cap(
+                destination, notice_to
+            )
+        # El tope impide invalidar el codigo vivo si no se puede crear el mail
+        # correspondiente. Tampoco se manda el aviso de mismatch en ese caso.
+        if channel == "email" and destination is None:
             # Misma forma que con entrega: no dice si hubo tope, si el broker
             # cayo ni si el telefono tiene ficha. En desarrollo no se expone
             # un debug_code que no existe.
@@ -624,6 +672,8 @@ class OtpService:
             code,
             email=destination,
             expires_at=expires_at,
+            notice_to=allowed_notice,
+            store_name=store_name,
         )
         response = _otp_response(expires_at)
         if settings.OTP_DEBUG_EXPOSE_CODE:

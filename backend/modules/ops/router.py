@@ -26,8 +26,9 @@ from core.roles import (
 )
 from core.utils import ensure_utc_aware
 from modules.auth.dependencies import get_current_user
-from modules.payments.jobs import EVENT_EMAIL_SEND, overdue_holds
+from modules.payments.jobs import overdue_holds
 from modules.payments.model import (
+    EVENT_EMAIL_SEND,
     WEBHOOK_INBOX_MAX_ATTEMPTS,
     OutboxMessage,
     WebhookInbox,
