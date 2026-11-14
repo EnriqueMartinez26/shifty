@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Callable
 from datetime import datetime, timezone
 import smtplib
 from types import SimpleNamespace
@@ -443,7 +443,7 @@ async def test_outbox_recupera_reserva_si_redis_falla_al_registrar_fallo_pre_dat
 
     async def eval_with_lost_finish_results(
         script: str, numkeys: int, *args: Any
-    ) -> Any:
+    ) -> list[int]:
         nonlocal finish_failures
         if script == mail_budget._FINISH_SCRIPT and finish_failures:
             finish_failures -= 1
@@ -456,9 +456,7 @@ async def test_outbox_recupera_reserva_si_redis_falla_al_registrar_fallo_pre_dat
     monkeypatch.setattr(redis, "eval", eval_with_lost_finish_results)
     monkeypatch.setattr(mail_budget, "get_redis", get_redis)
     monkeypatch.setattr(mail_budget, "report_mail_failure", lambda **_kwargs: None)
-    original_reserve_mail: Callable[..., Awaitable[MailReservation]] = getattr(
-        tasks, "reserve_mail"
-    )
+    original_reserve_mail = mail_budget.reserve_mail
     reclaim_flags: list[bool] = []
 
     async def record_reserve_mail(
@@ -510,7 +508,7 @@ async def test_outbox_recupera_reserva_ambigua_antes_de_smtp(
 
     async def eval_with_lost_reserve_responses(
         script: str, numkeys: int, *args: Any
-    ) -> Any:
+    ) -> list[int]:
         nonlocal lost_responses
         result = await original_eval(script, numkeys, *args)
         if script == mail_budget._RESERVE_SCRIPT and lost_responses:
@@ -524,9 +522,7 @@ async def test_outbox_recupera_reserva_ambigua_antes_de_smtp(
     monkeypatch.setattr(redis, "eval", eval_with_lost_reserve_responses)
     monkeypatch.setattr(mail_budget, "get_redis", get_redis)
     monkeypatch.setattr(mail_budget, "report_mail_failure", lambda **_kwargs: None)
-    original_reserve_mail: Callable[..., Awaitable[MailReservation]] = getattr(
-        tasks, "reserve_mail"
-    )
+    original_reserve_mail = mail_budget.reserve_mail
     reclaim_flags: list[bool] = []
 
     async def record_reserve_mail(
@@ -617,9 +613,7 @@ async def test_fallos_tras_entrar_en_data_quedan_terminales(
         use_real_sender=True,
         real_sender_kind=real_sender_kind,
     )
-    original_reserve_mail: Callable[..., Awaitable[MailReservation]] = getattr(
-        tasks, "reserve_mail"
-    )
+    original_reserve_mail = mail_budget.reserve_mail
     reclaim_flags: list[bool] = []
 
     async def record_reserve_mail(
