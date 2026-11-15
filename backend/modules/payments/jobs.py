@@ -82,6 +82,7 @@ from modules.payments.processing import (
     enrich_mercadopago_webhook_payload,
 )
 from modules.users.model import User, UserRole
+from modules.waitlist.model import WaitlistEntry, WaitlistStatus
 from modules.waitlist.events import EVENT_SLOT_RELEASED, publish_slot_released
 from modules.waitlist.offers import ReleasedSlot, offer_released_slot
 from modules.payments.service import (
@@ -229,6 +230,7 @@ class _Mail:
 
     kind: str
     kwargs: dict[str, Any]
+    guard: dict[str, Any] | None = None
 
 
 def _sender(kind: str) -> PendingEmail | None:
@@ -304,6 +306,7 @@ def _persistir_mails(
                     "args": mail.kwargs,
                     "source_event": message.event_type,
                     "appointment_id": contexto["appointment_id"],
+                    **({"guard": mail.guard} if mail.guard is not None else {}),
                 },
             )
         )
@@ -500,6 +503,7 @@ async def _plan_outbox_message(
                     "email": oferta.pending_email.email,
                     "details": oferta.pending_email.details,
                 },
+                guard=oferta.pending_email.outbox_guard,
             )
         ]
 
@@ -703,7 +707,47 @@ async def _dispatch_pending_emails(
             if fila is None:
                 break
             intentados += 1
-            motivo = await _send_one_pending_email(fila, smtp)
+            if hasattr(smtp, "last_budget_decision"):
+                smtp.last_budget_decision = None
+            if hasattr(smtp, "last_delivery_retryable"):
+                smtp.last_delivery_retryable = False
+            payload = fila.payload if isinstance(fila.payload, dict) else {}
+            if str(payload.get("mail") or "") == "waitlist_offer":
+                try:
+                    vigente = await _waitlist_offer_guard_is_current(
+                        db, fila.store_id, payload.get("guard")
+                    )
+                except SoftTimeLimitExceeded:
+                    fila_id = getattr(fila, "id", None)
+                    if fila_id is None:
+                        raise
+                    await _recover_waitlist_offer_guard_claim(db, str(fila_id))
+                    raise
+                except Exception as exc:
+                    fila_id = getattr(fila, "id", None)
+                    if fila_id is None:
+                        raise
+                    logger.warning(
+                        "outbox_waitlist_offer_validation_failed",
+                        error_type=type(exc).__name__,
+                        **_contexto_del_mail(fila),
+                    )
+                    await _recover_waitlist_offer_guard_claim(
+                        db,
+                        str(fila_id),
+                        failure_reason="waitlist_offer_validation_failed",
+                    )
+                    # El rollback expiró el objeto ORM ``fila``; la fila por ID
+                    # ya quedó reabierta y contabilizada en una sesión sana.
+                    break
+                if vigente == "invalid":
+                    motivo = "waitlist_offer_invalid_guard"
+                elif not vigente:
+                    motivo = "waitlist_offer_stale"
+                else:
+                    motivo = await _send_one_pending_email(fila, smtp)
+            else:
+                motivo = await _send_one_pending_email(fila, smtp)
             decision_cuota = getattr(smtp, "last_budget_decision", None)
             if decision_cuota in {"deferred", "unavailable"}:
                 # El límite temporal o la caída de Redis impiden saber si hay
@@ -725,9 +769,14 @@ async def _dispatch_pending_emails(
                     **_contexto_del_mail(fila),
                 )
                 continue
-            if motivo in {"reminder_expired", "reminder_invalid_expiry"}:
-                # A reminder has no value after its appointment starts. Keep
-                # the durable claim and record why it reached terminal state.
+            if motivo in {
+                "reminder_expired",
+                "reminder_invalid_expiry",
+                "waitlist_offer_stale",
+                "waitlist_offer_invalid_guard",
+            }:
+                # These mails are no longer deliverable; keep the claim and
+                # record why the outbox row reached terminal state.
                 fila.error = motivo
                 disposiciones_terminales = True
                 continue
@@ -751,6 +800,24 @@ async def _dispatch_pending_emails(
     if fallados:
         for fila, motivo in fallados:
             fila.register_failure(motivo)
+    await AsyncSession.commit(db)
+
+
+async def _recover_waitlist_offer_guard_claim(
+    db: AsyncSession, fila_id: str, *, failure_reason: str | None = None
+) -> None:
+    """Revierte la sesión y libera por ID el claim antes de otro tick."""
+    await AsyncSession.rollback(db)
+    await _apply_tenant_context(db)
+    fila = (
+        await db.execute(
+            select(OutboxMessage).where(OutboxMessage.id == fila_id).with_for_update()
+        )
+    ).scalar_one_or_none()
+    if fila is not None and fila.is_active:
+        fila.processed_at = None
+        if failure_reason is not None:
+            fila.register_failure(failure_reason)
     await AsyncSession.commit(db)
 
 
@@ -850,6 +917,67 @@ async def _send_one_pending_email(fila: OutboxMessage, smtp: Any) -> str | None:
     # El sink ya logueo el error con el destinatario enmascarado.
     logger.warning("outbox_email_skipped", error_type="smtp", **contexto)
     return str(resultado.get("reason") or "smtp")
+
+
+async def _waitlist_offer_guard_is_current(
+    db: AsyncSession, store_id: str | None, raw_guard: Any
+) -> bool | Literal["invalid"]:
+    """Comprueba que la oferta concreta siga abierta antes de mandar su mail."""
+    if not isinstance(raw_guard, dict) or raw_guard.get("kind") != "waitlist_offer":
+        return "invalid"
+    entry_id = raw_guard.get("entry_id")
+    staff_id = raw_guard.get("staff_id")
+    if (
+        not store_id
+        or not isinstance(entry_id, str)
+        or not entry_id
+        or not isinstance(staff_id, str)
+        or not staff_id
+    ):
+        return "invalid"
+    parsed: dict[str, datetime] = {}
+    for key in ("starts_at", "ends_at", "expires_at"):
+        value = raw_guard.get(key)
+        if not isinstance(value, str):
+            return "invalid"
+        try:
+            parsed[key] = ensure_utc_aware(datetime.fromisoformat(value))
+        except ValueError:
+            return "invalid"
+
+    await _apply_tenant_context(db)
+    row = (
+        await db.execute(
+            select(
+                WaitlistEntry.is_active,
+                WaitlistEntry.status,
+                WaitlistEntry.offered_staff_id,
+                WaitlistEntry.offered_starts_at,
+                WaitlistEntry.offered_ends_at,
+                WaitlistEntry.offer_expires_at,
+            ).where(
+                WaitlistEntry.store_id == store_id,
+                WaitlistEntry.id == entry_id,
+            )
+        )
+    ).one_or_none()
+    # Cerrar también la transacción de lectura antes de abrir SMTP.
+    await AsyncSession.commit(db)
+    if row is None:
+        return False
+    is_active, status, staff_id_actual, starts_at, ends_at, expires_at = row
+    if not is_active:
+        return False
+    if starts_at is None or ends_at is None or expires_at is None:
+        return False
+    return (
+        status == WaitlistStatus.OFFERED.value
+        and staff_id_actual == staff_id
+        and ensure_utc_aware(starts_at) == parsed["starts_at"]
+        and ensure_utc_aware(ends_at) == parsed["ends_at"]
+        and ensure_utc_aware(expires_at) == parsed["expires_at"]
+        and datetime.now(timezone.utc) < parsed["expires_at"]
+    )
 
 
 async def _claim_and_expire_preferences(

@@ -107,6 +107,11 @@ async def test_task_persiste_reofertas_antes_del_commit(
         store_id="store-reoffer-test",
         email="marta@example.com",
         details={"public_id": "entry-reoffer-test"},
+        entry_id="entry-reoffer-test",
+        offered_staff_id="staff-reoffer-test",
+        offered_starts_at=datetime(2026, 10, 1, 13, tzinfo=timezone.utc),
+        offered_ends_at=datetime(2026, 10, 1, 13, 30, tzinfo=timezone.utc),
+        offer_expires_at=datetime(2026, 9, 30, 13, tzinfo=timezone.utc),
     )
     resultado_esperado = LapseResult(reoffered=1, pending_emails=[pendiente])
 
@@ -141,6 +146,7 @@ async def test_task_persiste_reofertas_antes_del_commit(
     assert payload["mail"] == "waitlist_offer"
     assert payload["args"]["email"] == pendiente.email
     assert payload["args"]["details"] == pendiente.details
+    assert payload["guard"] == pendiente.outbox_guard
 
 
 @pytest.mark.asyncio

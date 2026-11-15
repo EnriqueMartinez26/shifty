@@ -96,6 +96,23 @@ class PendingOfferEmail:
     store_id: str
     email: str
     details: dict[str, Any]
+    entry_id: str
+    offered_staff_id: str
+    offered_starts_at: datetime
+    offered_ends_at: datetime
+    offer_expires_at: datetime
+
+    @property
+    def outbox_guard(self) -> dict[str, str]:
+        """Identidad de la oferta que el dispatcher debe revalidar antes de SMTP."""
+        return {
+            "kind": "waitlist_offer",
+            "entry_id": self.entry_id,
+            "staff_id": self.offered_staff_id,
+            "starts_at": self.offered_starts_at.isoformat(),
+            "ends_at": self.offered_ends_at.isoformat(),
+            "expires_at": self.offer_expires_at.isoformat(),
+        }
 
 
 @dataclass(frozen=True)
@@ -408,6 +425,11 @@ def _offer_email(
     return PendingOfferEmail(
         store_id=entry.store_id,
         email=entry.client_email,
+        entry_id=entry.id,
+        offered_staff_id=entry.offered_staff_id,
+        offered_starts_at=entry.offered_starts_at,
+        offered_ends_at=entry.offered_ends_at,
+        offer_expires_at=entry.offer_expires_at,
         details={
             "public_id": entry.id,
             "client_name": entry.client_name,

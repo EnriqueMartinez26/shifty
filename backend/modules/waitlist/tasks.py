@@ -34,6 +34,7 @@ def persist_pending_offer_emails(
                         "email": pendiente.email,
                         "details": pendiente.details,
                     },
+                    "guard": pendiente.outbox_guard,
                     "source_event": "waitlist.offer.reoffered",
                 },
             )

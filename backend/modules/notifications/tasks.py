@@ -1389,12 +1389,13 @@ async def _dispatch_reminder(
         "logical_id": logical_id,
         "expires_at": appointment.starts_at.isoformat(),
     }
-    return await repo.schedule_reminder(
+    scheduled = await repo.schedule_reminder(
         appointment.id,
         stage.column,
         now,
         payload,
     )
+    return bool(scheduled)
 
 
 @dataclass(frozen=True)

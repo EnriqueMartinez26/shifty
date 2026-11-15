@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from celery.exceptions import SoftTimeLimitExceeded
 
 from core import mail_budget
 from core.config import settings
@@ -342,10 +343,10 @@ async def test_crash_despues_del_claim_no_reenvia_recordatorio_ambiguo(
     )
 
     async def worker_interrupted(_row: Any, _smtp: Any) -> None:
-        raise tasks.SoftTimeLimitExceeded()
+        raise SoftTimeLimitExceeded()
 
     monkeypatch.setattr(jobs, "_send_one_pending_email", worker_interrupted)
-    with pytest.raises(tasks.SoftTimeLimitExceeded):
+    with pytest.raises(SoftTimeLimitExceeded):
         await jobs._dispatch_pending_emails(object())  # type: ignore[arg-type]
     claim_time = row.processed_at
 
@@ -541,6 +542,62 @@ async def test_recordatorio_reintenta_fallo_transitorio_antes_de_data_con_mismo_
     assert metrics["admitted"] == 1
     assert metrics["failed"] == 1
     assert metrics["sent"] == 1
+
+
+@pytest.mark.parametrize("redis_available", [True, False])
+@pytest.mark.asyncio
+async def test_recordatorio_reintenta_fallo_pre_data_aun_con_budget_desactivado(
+    monkeypatch: pytest.MonkeyPatch,
+    redis_available: bool,
+) -> None:
+    """Una caida SMTP no pierde el outbox aunque el limite diario este apagado."""
+    monkeypatch.setattr(settings, "MAIL_DAILY_BUDGET", None)
+    redis = AtomicMailBudgetRedis()
+
+    async def get_redis() -> AtomicMailBudgetRedis:
+        if not redis_available:
+            raise OSError("redis unavailable")
+        return redis
+
+    monkeypatch.setattr(mail_budget, "get_redis", get_redis)
+    monkeypatch.setattr(mail_budget, "report_mail_failure", lambda **_kwargs: None)
+    row = _OutboxMailRow()
+    outcomes = iter(["connection-before-data", "success"])
+    connections = _wire_outbox_dispatch(
+        monkeypatch,
+        row,
+        lambda: _ScriptedSMTP(next(outcomes)),
+        use_real_sender=True,
+        real_sender_kind="reminder",
+    )
+    original_reserve_mail = mail_budget.reserve_mail
+    reservations: list[tuple[str, bool]] = []
+
+    async def record_reserve_mail(
+        *, priority: MailPriority, message_id: str
+    ) -> MailReservation:
+        assert priority == "medium"
+        reservations.append((message_id, current_mail_pre_data_retry()))
+        return await original_reserve_mail(priority=priority, message_id=message_id)
+
+    monkeypatch.setattr(tasks, "reserve_mail", record_reserve_mail)
+
+    await jobs._dispatch_pending_emails(object())  # type: ignore[arg-type]
+
+    assert row.processed_at is None
+    assert row.attempts == 1
+    assert connections[0].data_calls == 0
+
+    # Una nueva dispatch (incluido tras reiniciar el worker) recupera la fila.
+    await jobs._dispatch_pending_emails(object())  # type: ignore[arg-type]
+
+    assert row.processed_at is not None
+    assert row.attempts == 1
+    assert [connection.data_calls for connection in connections] == [0, 1]
+    assert reservations == [
+        ("reminder:appointment-1:24h", True),
+        ("reminder:appointment-1:24h", True),
+    ]
 
 
 @pytest.mark.asyncio
