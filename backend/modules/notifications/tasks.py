@@ -1358,6 +1358,7 @@ async def enqueue_confirmation_email(*, store_id: str, appointment_id: str) -> b
 
 async def _dispatch_reminder(
     repo: Any,
+    reminder_service: Any,
     row: tuple[Any, Any, Any, Any, Any],
     stage: ReminderStage,
     now: datetime,
@@ -1389,11 +1390,11 @@ async def _dispatch_reminder(
         "logical_id": logical_id,
         "expires_at": appointment.starts_at.isoformat(),
     }
-    scheduled = await repo.schedule_reminder(
-        appointment.id,
-        stage.column,
-        now,
-        payload,
+    scheduled = await reminder_service.schedule_reminder(
+        appointment_id=appointment.id,
+        column=stage.column,
+        scheduled_at=now,
+        payload=payload,
     )
     return bool(scheduled)
 
@@ -1449,6 +1450,7 @@ def _reminder_windows(now: datetime, lookahead_hours: int) -> list[_ReminderWind
 
 async def _process_reminder_window(
     repo: Any,
+    reminder_service: Any,
     ventana: _ReminderWindow,
     rows: list[tuple[Any, Any, Any, Any, Any]],
     now: datetime,
@@ -1481,7 +1483,7 @@ async def _process_reminder_window(
         if not getattr(store, "send_email_reminders", True):
             totales.skipped += 1
             continue
-        if await _dispatch_reminder(repo, row, ventana.stage, now):
+        if await _dispatch_reminder(repo, reminder_service, row, ventana.stage, now):
             totales.published += 1
     return True
 
@@ -1497,7 +1499,8 @@ async def process_due_appointment_reminders(
     # (inyectable en tests) y el presupuesto es tiempo real de proceso.
     deadline = time.monotonic() + REMINDER_TIME_BUDGET_SECONDS
 
-    from modules.appointments.repository import AppointmentRepository
+    from core.uow import AsyncSqlAlchemyUnitOfWork
+    from modules.appointments.service import ReminderScheduleService
 
     totales = _ReminderTotals()
     async with AsyncSessionFactory() as db:
@@ -1508,24 +1511,32 @@ async def process_due_appointment_reminders(
         set_tenant_context(None, True)
         try:
             await _apply_tenant_context(db)
-            repo = AppointmentRepository(db)
-            for ventana in _reminder_windows(now, lookahead_hours):
-                rows = await repo.get_upcoming_for_reminders(
-                    starts_after=ventana.starts_after,
-                    starts_before=ventana.starts_before,
-                    # V-diff de AUD2-B4-04: la columna de ESTA etapa. Con
-                    # el OR de antes, los turnos que ya tenian el de 24 h
-                    # ocupaban el tope de su ventana.
-                    pending_column=ventana.stage.column,
-                    limit=limit,
-                )
-                totales.windows.append(ventana.stage.name)
-                # Ventana llena: puede haber mas turnos afuera del tope.
-                totales.batch_full = totales.batch_full or len(rows) >= limit
-                if not await _process_reminder_window(
-                    repo, ventana, rows, now, deadline, totales
-                ):
-                    break
+            async with AsyncSqlAlchemyUnitOfWork(db) as uow:
+                repo = uow.appointments
+                reminder_service = ReminderScheduleService(uow)
+                for ventana in _reminder_windows(now, lookahead_hours):
+                    rows = await repo.get_upcoming_for_reminders(
+                        starts_after=ventana.starts_after,
+                        starts_before=ventana.starts_before,
+                        # V-diff de AUD2-B4-04: la columna de ESTA etapa. Con
+                        # el OR de antes, los turnos que ya tenian el de 24 h
+                        # ocupaban el tope de su ventana.
+                        pending_column=ventana.stage.column,
+                        limit=limit,
+                    )
+                    totales.windows.append(ventana.stage.name)
+                    # Ventana llena: puede haber mas turnos afuera del tope.
+                    totales.batch_full = totales.batch_full or len(rows) >= limit
+                    if not await _process_reminder_window(
+                        repo,
+                        reminder_service,
+                        ventana,
+                        rows,
+                        now,
+                        deadline,
+                        totales,
+                    ):
+                        break
         finally:
             set_tenant_context(None, False)
 

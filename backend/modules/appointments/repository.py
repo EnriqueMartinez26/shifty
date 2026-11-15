@@ -919,12 +919,7 @@ class AppointmentRepository:
         scheduled_at: datetime,
         payload: dict[str, Any],
     ) -> bool:
-        """Atomically persist a reminder and its pending email before sealing it.
-
-        The appointment timestamp means "scheduled", not delivered. Keeping it
-        in the same transaction as ``email.send`` prevents a worker restart
-        between the two writes from losing the reminder.
-        """
+        """Stage a reminder marker and outbox row in the caller's transaction."""
         if column not in REMINDER_COLUMNS:
             raise ValueError(f"columna de recordatorio desconocida: {column}")
         await _apply_tenant_context(self.db)
@@ -940,20 +935,14 @@ class AppointmentRepository:
         )
         store_id = result.scalar_one_or_none()
         if store_id is None:
-            await AsyncSession.commit(self.db)
             return False
-        try:
-            self.db.add(
-                OutboxMessage(
-                    store_id=store_id,
-                    event_type="email.send",
-                    payload=payload,
-                )
+        self.db.add(
+            OutboxMessage(
+                store_id=store_id,
+                event_type="email.send",
+                payload=payload,
             )
-            await AsyncSession.commit(self.db)
-        except Exception:
-            await AsyncSession.rollback(self.db)
-            raise
+        )
         return True
 
     async def release_reminder(self, appointment_id: str, column: str) -> None:

@@ -319,20 +319,22 @@ async def test_un_fallo_al_encolar_mail_se_reporta_a_sentry(
 async def test_agendar_el_recordatorio_no_vuelca_el_email_ni_el_telefono(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    agendados: list[dict[str, Any]] = []
+    agendados: list[tuple[str, str, datetime, dict[str, Any]]] = []
 
     class _Repo:
         async def claim_reminder(self, *args: Any) -> bool:
             return True
 
+    class _ReminderService:
         async def schedule_reminder(
             self,
-            _appointment_id: str,
-            _column: str,
-            _scheduled_at: datetime,
+            *,
+            appointment_id: str,
+            column: str,
+            scheduled_at: datetime,
             payload: dict[str, Any],
         ) -> bool:
-            agendados.append(payload)
+            agendados.append((appointment_id, column, scheduled_at, payload))
             return True
 
     turno = SimpleNamespace(
@@ -352,11 +354,12 @@ async def test_agendar_el_recordatorio_no_vuelca_el_email_ni_el_telefono(
 
     with capture_logs() as eventos:
         agendado = await tasks._dispatch_reminder(
-            _Repo(), fila, STAGE_24H, datetime.now(timezone.utc)
+            _Repo(), _ReminderService(), fila, STAGE_24H, datetime.now(timezone.utc)
         )
 
     assert agendado is True
-    assert agendados[0]["args"]["email"] == EMAIL
+    assert agendados[0][:2] == ("ap-1", STAGE_24H.column)
+    assert agendados[0][3]["args"]["email"] == EMAIL
     _sin_email_crudo(eventos)
     assert all("5491155512345" not in repr(e) for e in eventos)
 

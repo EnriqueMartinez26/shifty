@@ -5,8 +5,10 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from sqlalchemy.ext.asyncio import AsyncSession
 
 import modules.notifications.tasks as notification_tasks
+from modules.appointments.service import ReminderScheduleService
 
 
 @pytest.mark.asyncio
@@ -35,6 +37,22 @@ class _FakeSessionFactory:
             return SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
 
         return SimpleNamespace(connection=_connection)
+
+    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> bool:
+        return False
+
+
+class _FakeUnitOfWork:
+    """Small UoW adapter that gives the task its repository and session."""
+
+    repo_class: type[Any]
+
+    def __init__(self, db: Any) -> None:
+        self.session = db
+
+    async def __aenter__(self) -> _FakeUnitOfWork:
+        self.appointments = self.repo_class(self.session)
+        return self
 
     async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> bool:
         return False
@@ -120,10 +138,105 @@ def _preparar(
     monkeypatch.setattr(
         notification_tasks, "AsyncSessionFactory", lambda: _FakeSessionFactory()
     )
-    monkeypatch.setattr(
-        "modules.appointments.repository.AppointmentRepository", _FakeRepo
-    )
+    _configurar_uow_falso(monkeypatch, _FakeRepo)
+
     return _FakeRepo.schedules
+
+
+def _configurar_uow_falso(
+    monkeypatch: pytest.MonkeyPatch, repo_class: type[Any]
+) -> None:
+    _FakeUnitOfWork.repo_class = repo_class
+    monkeypatch.setattr("core.uow.AsyncSqlAlchemyUnitOfWork", _FakeUnitOfWork)
+
+    async def _commit(_session: Any) -> None:
+        return None
+
+    async def _rollback(_session: Any) -> None:
+        return None
+
+    monkeypatch.setattr(AsyncSession, "commit", _commit)
+    monkeypatch.setattr(AsyncSession, "rollback", _rollback)
+
+
+@pytest.mark.asyncio
+async def test_schedule_reminder_commits_even_when_the_marker_is_already_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commits: list[Any] = []
+    rollbacks: list[Any] = []
+    session = object()
+
+    class _Repo:
+        async def schedule_reminder(self, *_args: Any, **_kwargs: Any) -> bool:
+            return False
+
+    class _Uow:
+        appointments = _Repo()
+
+        def __init__(self) -> None:
+            self.session = session
+
+    async def _commit(actual_session: Any) -> None:
+        commits.append(actual_session)
+
+    async def _rollback(actual_session: Any) -> None:
+        rollbacks.append(actual_session)
+
+    monkeypatch.setattr(AsyncSession, "commit", _commit)
+    monkeypatch.setattr(AsyncSession, "rollback", _rollback)
+    service = ReminderScheduleService(_Uow())  # type: ignore[arg-type]
+
+    scheduled = await service.schedule_reminder(
+        appointment_id="appt-2",
+        column="reminder_24h_sent_at",
+        scheduled_at=datetime.now(timezone.utc),
+        payload={},
+    )
+
+    assert scheduled is False
+    assert commits == [session]
+    assert rollbacks == []
+
+
+@pytest.mark.asyncio
+async def test_schedule_reminder_rolls_back_when_the_repository_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commits: list[Any] = []
+    rollbacks: list[Any] = []
+    session = object()
+
+    class _Repo:
+        async def schedule_reminder(self, *_args: Any, **_kwargs: Any) -> bool:
+            raise RuntimeError("database unavailable")
+
+    class _Uow:
+        appointments = _Repo()
+
+        def __init__(self) -> None:
+            self.session = session
+
+    async def _commit(actual_session: Any) -> None:
+        commits.append(actual_session)
+
+    async def _rollback(actual_session: Any) -> None:
+        rollbacks.append(actual_session)
+
+    monkeypatch.setattr(AsyncSession, "commit", _commit)
+    monkeypatch.setattr(AsyncSession, "rollback", _rollback)
+    service = ReminderScheduleService(_Uow())  # type: ignore[arg-type]
+
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        await service.schedule_reminder(
+            appointment_id="appt-2",
+            column="reminder_24h_sent_at",
+            scheduled_at=datetime.now(timezone.utc),
+            payload={},
+        )
+
+    assert commits == []
+    assert rollbacks == [session]
 
 
 @pytest.mark.asyncio

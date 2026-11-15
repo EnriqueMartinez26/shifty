@@ -18,6 +18,8 @@ import modules.notifications.tasks as tasks
 from core.database import _apply_tenant_context, set_tenant_context
 from modules.appointments.model import Appointment
 from modules.appointments.repository import AppointmentRepository
+from modules.appointments.service import ReminderScheduleService
+from core.uow import AsyncSqlAlchemyUnitOfWork
 from modules.payments.model import OutboxMessage
 from tests.integration.test_feature_flags_finance_and_public_privacy import (
     add_staff_schedule,
@@ -154,14 +156,16 @@ async def test_error_al_insertar_el_outbox_revierte_la_marca_del_turno(
                 original_add(instance, **kwargs)
 
             monkeypatch.setattr(session, "add", reject_outbox)
-            repo = AppointmentRepository(session)
-            with pytest.raises(RuntimeError, match="outbox insert failed"):
-                await repo.schedule_reminder(
-                    appointment_id,
-                    "reminder_24h_sent_at",
-                    slot - timedelta(hours=23),
-                    payload,
-                )
+            uow = AsyncSqlAlchemyUnitOfWork(session)
+            async with uow:
+                reminder_service = ReminderScheduleService(uow)
+                with pytest.raises(RuntimeError, match="outbox insert failed"):
+                    await reminder_service.schedule_reminder(
+                        appointment_id=appointment_id,
+                        column="reminder_24h_sent_at",
+                        scheduled_at=slot - timedelta(hours=23),
+                        payload=payload,
+                    )
         finally:
             set_tenant_context(None, False)
 

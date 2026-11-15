@@ -24,7 +24,11 @@ from typing import Any
 import pytest
 
 import modules.notifications.tasks as tasks
-from tests.unit.test_notifications_resilience import _fila, _FakeSessionFactory
+from tests.unit.test_notifications_resilience import (
+    _configurar_uow_falso,
+    _fila,
+    _FakeSessionFactory,
+)
 
 
 def _pendiente(turno: Any, pending_column: str | None) -> bool:
@@ -97,9 +101,7 @@ def _preparar(
     _RepoConVentana.schedules = []
     _RepoConVentana.consultas = []
     monkeypatch.setattr(tasks, "AsyncSessionFactory", lambda: _FakeSessionFactory())
-    monkeypatch.setattr(
-        "modules.appointments.repository.AppointmentRepository", _RepoConVentana
-    )
+    _configurar_uow_falso(monkeypatch, _RepoConVentana)
     return _RepoConVentana.schedules
 
 

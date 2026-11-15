@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 import modules.notifications.tasks as notification_tasks
 from modules.appointments.repository import AppointmentRepository
+from modules.appointments.service import ReminderScheduleService
 from tests.integration.test_feature_flags_finance_and_public_privacy import (
     add_staff_schedule,
     create_service,
@@ -88,21 +89,16 @@ async def test_presupuesto_agotado_deja_de_reclamar_y_no_pierde_recordatorios(
     # Guardar cada mail consume mas de la mitad del presupuesto.
     tardanza = notification_tasks.REMINDER_TIME_BUDGET_SECONDS * 0.6
 
-    original_schedule = _FakeRepo.schedule_reminder
+    original_schedule = ReminderScheduleService.schedule_reminder
 
     async def schedule_slow(
-        repo: Any,
-        appointment_id: str,
-        column: str,
-        scheduled_at: datetime,
-        payload: dict[str, Any],
+        service: ReminderScheduleService,
+        **kwargs: Any,
     ) -> bool:
         reloj.ahora += tardanza
-        return await original_schedule(
-            repo, appointment_id, column, scheduled_at, payload
-        )
+        return await original_schedule(service, **kwargs)
 
-    monkeypatch.setattr(_FakeRepo, "schedule_reminder", schedule_slow)
+    monkeypatch.setattr(ReminderScheduleService, "schedule_reminder", schedule_slow)
 
     result = await notification_tasks.process_due_appointment_reminders(now=now)
 
