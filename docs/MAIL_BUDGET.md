@@ -6,13 +6,15 @@ Shifty, while other apps or manual sends using the same account are outside
 the counter. `MAIL_DAILY_BUDGET` remains unset by default. The owner-confirmed
 target is 250 admissions per day for the Brevo Free account reported at 300
 emails per day. That leaves a 50-message margin for traffic Shifty cannot
-count; it is not a hard provider limit. The owner also confirmed a UTC
-midnight reset.
+count; it is not a hard provider limit. The reset hour and timezone are not
+confirmed. Do not assume midnight UTC or enable the cap in production until
+Brevo's Plan & Usage counter or support confirms the actual reset window.
 
 With a 250-message target, the 20% critical reserve is 50 messages, the
 noncritical ceiling is 200 admissions, and the 80% alert begins at 200 total
-admissions. The confirmed reset window is `UTC` at hour `0`. These owner
-values are covered by tests, but the cap remains unset in production.
+admissions. The tests exercise configured reset windows, but they do not
+establish Brevo's actual reset time. The cap remains unset in production until
+the provider window is confirmed.
 
 The example values remain commented so copying `.env.example` does not turn
 on the cap:
@@ -21,9 +23,12 @@ on the cap:
 # MAIL_DAILY_BUDGET=250
 # MAIL_CRITICAL_RESERVE_PERCENT=20
 # MAIL_BUDGET_ALERT_PERCENT=80
-# MAIL_BUDGET_TIMEZONE=UTC
-# MAIL_BUDGET_RESET_HOUR=0
 ```
+
+Before enabling the cap, set `MAIL_BUDGET_TIMEZONE` and
+`MAIL_BUDGET_RESET_HOUR` to the reset window confirmed by Brevo. These values
+are intentionally absent from the example because the account's reset time
+and timezone are not yet verified.
 
 ## Configuration
 
