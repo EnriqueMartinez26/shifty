@@ -416,20 +416,31 @@ def _offer_email(
     staff_name: str,
 ) -> PendingOfferEmail | None:
     """Arma (no manda) el mail de la oferta; None si no hay a donde mandarlo."""
-    if not (is_deliverable_email(entry.client_email) and entry.client_email):
+    email = entry.client_email
+    if not (is_deliverable_email(email) and email):
         return None
+    offered_staff_id = entry.offered_staff_id
+    offered_starts_at = entry.offered_starts_at
+    offered_ends_at = entry.offered_ends_at
+    offer_expires_at = entry.offer_expires_at
+    # ``offer_released_slot`` sets these fields before building the pending
+    # email; keep that invariant explicit for both runtime and static typing.
+    assert offered_staff_id is not None
+    assert offered_starts_at is not None
+    assert offered_ends_at is not None
+    assert offer_expires_at is not None
     base = settings.FRONTEND_URL.rstrip("/")
     slug = getattr(store, "slug", None)
     fecha_iso = slot.starts_at.astimezone(ARGENTINA_TZ).date().isoformat()
     link = rebook_url(base, slug, service, staff)
     return PendingOfferEmail(
         store_id=entry.store_id,
-        email=entry.client_email,
+        email=email,
         entry_id=entry.id,
-        offered_staff_id=entry.offered_staff_id,
-        offered_starts_at=entry.offered_starts_at,
-        offered_ends_at=entry.offered_ends_at,
-        offer_expires_at=entry.offer_expires_at,
+        offered_staff_id=offered_staff_id,
+        offered_starts_at=offered_starts_at,
+        offered_ends_at=offered_ends_at,
+        offer_expires_at=offer_expires_at,
         details={
             "public_id": entry.id,
             "client_name": entry.client_name,

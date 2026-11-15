@@ -304,11 +304,12 @@ async def test_retry_de_oferta_expirada_no_manda_datos_viejos_ni_muta_estado(
             .scalars()
             .all()
         )
-        matches = [
-            fila
-            for fila in filas
-            if (fila.payload.get("args") or {}).get("email") == email
-        ]
+
+        def es_mail_de(fila: OutboxMessage) -> bool:
+            args = fila.payload.get("args")
+            return isinstance(args, dict) and args.get("email") == email
+
+        matches = [fila for fila in filas if es_mail_de(fila)]
         assert len(matches) == 1, matches
         return matches[0]
 
@@ -316,7 +317,10 @@ async def test_retry_de_oferta_expirada_no_manda_datos_viejos_ni_muta_estado(
     assert mail_a.attempts == 1
     assert mail_a.processed_at is None
     assert email_a not in [destino for destino, _asunto, _cuerpo in enviados]
-    entry_a_id = str(mail_a.payload["guard"]["entry_id"])
+    raw_guard = mail_a.payload.get("guard")
+    assert isinstance(raw_guard, dict)
+    entry_a_id = raw_guard.get("entry_id")
+    assert isinstance(entry_a_id, str)
     entry_a = await test_session.get(WaitlistEntry, entry_a_id)
     assert entry_a is not None
     entry_b_id = entry_ids[1]
@@ -339,23 +343,20 @@ async def test_retry_de_oferta_expirada_no_manda_datos_viejos_ni_muta_estado(
     test_session.expire_all()
 
     async def estado_lista() -> list[tuple[Any, ...]]:
-        return list(
-            (
-                await test_session.execute(
-                    select(
-                        WaitlistEntry.id,
-                        WaitlistEntry.status,
-                        WaitlistEntry.offer_expires_at,
-                        WaitlistEntry.offered_staff_id,
-                        WaitlistEntry.offered_starts_at,
-                        WaitlistEntry.offered_ends_at,
-                        WaitlistEntry.lapsed_offers,
-                    )
-                    .where(WaitlistEntry.id.in_([entry_a_id, entry_b_id]))
-                    .order_by(WaitlistEntry.id)
-                )
-            ).all()
+        resultado = await test_session.execute(
+            select(
+                WaitlistEntry.id,
+                WaitlistEntry.status,
+                WaitlistEntry.offer_expires_at,
+                WaitlistEntry.offered_staff_id,
+                WaitlistEntry.offered_starts_at,
+                WaitlistEntry.offered_ends_at,
+                WaitlistEntry.lapsed_offers,
+            )
+            .where(WaitlistEntry.id.in_([entry_a_id, entry_b_id]))
+            .order_by(WaitlistEntry.id)
         )
+        return [tuple(fila) for fila in resultado.all()]
 
     estado_antes = await estado_lista()
     booking_antes = (

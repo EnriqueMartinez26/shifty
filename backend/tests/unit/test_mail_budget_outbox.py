@@ -682,6 +682,28 @@ async def test_outbox_reintenta_fallo_pre_data_con_mismo_id_y_un_solo_cupo(
         use_real_sender=True,
         real_sender_kind=real_sender_kind,
     )
+    guard_checks = 0
+    if real_sender_kind == "waitlist_offer":
+        starts_at = datetime(2026, 11, 20, 13, tzinfo=timezone.utc)
+        guard = {
+            "kind": "waitlist_offer",
+            "entry_id": "entry-1",
+            "staff_id": "staff-1",
+            "starts_at": starts_at.isoformat(),
+            "ends_at": (starts_at + timedelta(minutes=30)).isoformat(),
+            "expires_at": (starts_at + timedelta(minutes=10)).isoformat(),
+        }
+        row.payload["guard"] = guard
+
+        async def current_offer(_db: Any, store_id: str | None, raw_guard: Any) -> bool:
+            nonlocal guard_checks
+            guard_checks += 1
+            assert store_id == row.store_id
+            assert raw_guard == guard
+            return True
+
+        monkeypatch.setattr(jobs, "_waitlist_offer_guard_is_current", current_offer)
+
     original_reserve_mail = mail_budget.reserve_mail
     reservations: list[tuple[MailPriority, str, bool]] = []
 
@@ -697,6 +719,8 @@ async def test_outbox_reintenta_fallo_pre_data_con_mismo_id_y_un_solo_cupo(
     assert row.attempts == 1
     assert row.processed_at is None
     assert connections[0].data_calls == 0
+    if real_sender_kind == "waitlist_offer":
+        assert guard_checks == 1
 
     await jobs._dispatch_pending_emails(object())  # type: ignore[arg-type]
     metrics = await mail_budget.read_mail_budget_metrics()
@@ -713,6 +737,8 @@ async def test_outbox_reintenta_fallo_pre_data_con_mismo_id_y_un_solo_cupo(
         (expected_priority, "outbox:outbox-retry-1", True),
         (expected_priority, "outbox:outbox-retry-1", True),
     ]
+    if real_sender_kind == "waitlist_offer":
+        assert guard_checks == 2
 
 
 @pytest.mark.asyncio

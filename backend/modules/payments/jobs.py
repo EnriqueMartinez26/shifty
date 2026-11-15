@@ -712,6 +712,7 @@ async def _dispatch_pending_emails(
             if hasattr(smtp, "last_delivery_retryable"):
                 smtp.last_delivery_retryable = False
             payload = fila.payload if isinstance(fila.payload, dict) else {}
+            motivo: str | None
             if str(payload.get("mail") or "") == "waitlist_offer":
                 try:
                     vigente = await _waitlist_offer_guard_is_current(

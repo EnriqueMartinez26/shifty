@@ -144,8 +144,8 @@ async def test_guard_error_o_timeout_reabre_claim_para_el_siguiente_tick(
     monkeypatch.setattr(jobs, "_send_one_pending_email", send)
     monkeypatch.setattr(jobs, "_apply_tenant_context", apply_context)
     monkeypatch.setattr(jobs, "smtp_session", smtp_session)
-    monkeypatch.setattr(jobs.AsyncSession, "rollback", rollback)
-    monkeypatch.setattr(jobs.AsyncSession, "commit", commit)
+    monkeypatch.setattr("modules.payments.jobs.AsyncSession.rollback", rollback)
+    monkeypatch.setattr("modules.payments.jobs.AsyncSession.commit", commit)
 
     if failure == "soft-timeout":
         with pytest.raises(SoftTimeLimitExceeded):
@@ -170,3 +170,53 @@ async def test_guard_error_o_timeout_reabre_claim_para_el_siguiente_tick(
     assert fila.processed_at is not None
     assert fila.attempts == (1 if failure == "dbapi-abort" else 0)
     assert sent == [fila.id]
+
+
+@pytest.mark.asyncio
+async def test_guard_ausente_terminaliza_sin_enviar(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fila = _OutboxRow(datetime.now(timezone.utc) + timedelta(minutes=5))
+    fila.payload.pop("guard")
+    claims = 0
+    commits = 0
+
+    async def claim(_db: Any, *, store_id: str | None = None) -> Any:
+        nonlocal claims
+        claims += 1
+        if fila.processed_at is None:
+            fila.processed_at = datetime.now(timezone.utc)
+            return fila
+        return None
+
+    async def apply_context(_db: Any) -> None:
+        return None
+
+    async def commit(_db: Any) -> None:
+        nonlocal commits
+        commits += 1
+
+    async def send(_row: Any, _smtp: Any) -> None:
+        raise AssertionError("an invalid offer guard must prevent SMTP")
+
+    class _SMTP:
+        last_budget_decision: str | None = None
+        last_delivery_retryable = False
+
+    @asynccontextmanager
+    async def smtp_session() -> AsyncIterator[_SMTP]:
+        yield _SMTP()
+
+    monkeypatch.setattr(jobs, "_claim_next_email", claim)
+    monkeypatch.setattr(jobs, "_send_one_pending_email", send)
+    monkeypatch.setattr(jobs, "_apply_tenant_context", apply_context)
+    monkeypatch.setattr(jobs, "smtp_session", smtp_session)
+    monkeypatch.setattr("modules.payments.jobs.AsyncSession.commit", commit)
+
+    await jobs._dispatch_pending_emails(object())  # type: ignore[arg-type]
+
+    assert claims == 2
+    assert commits == 1
+    assert fila.processed_at is not None
+    assert fila.error == "waitlist_offer_invalid_guard"
+    assert fila.attempts == 0
