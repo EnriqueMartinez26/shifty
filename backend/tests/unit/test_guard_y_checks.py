@@ -7,6 +7,7 @@ scripts REALES con binarios falsos (tests/unit/host_falso.py).
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import time
@@ -146,11 +147,15 @@ def test_guard_tiene_un_tope_global_de_seis_reinicios_por_hora(host: Host) -> No
 # problema a la misma cuenta de Brevo Free (300 por dia) que usa la app.
 
 
+def _tiene(binario: str) -> bool:
+    ruta = str(Path(BASH).parent) if BASH else None
+    return bool(shutil.which(binario, path=ruta) or shutil.which(binario))
+
+
 def _requiere(binario: str) -> pytest.MarkDecorator:
     """flock (util-linux) no existe en Git Bash: esos tests corren en CI."""
-    ruta = str(Path(BASH).parent) if BASH else None
     return pytest.mark.skipif(
-        shutil.which(binario, path=ruta) is None and shutil.which(binario) is None,
+        not _tiene(binario),
         reason=f"hace falta {binario} (util-linux/coreutils del host Linux)",
     )
 
@@ -275,7 +280,10 @@ def test_guard_manda_un_solo_aviso_por_corrida(host: Host) -> None:
     mails = host.mails()
     assert len(mails) == 1, mails
     assert len([ll for ll in host.llamadas() if ll.startswith("curl ")]) == 1
-    assert "Subject: [shifty@" in mails[0] and "guard: 3 avisos" in mails[0]
+    assert _asunto(mails[0]).endswith(
+        "] guard: shifty-rabbitmq-1 (rabbitmq) esta unhealthy; no se reinicia solo"
+        " (+2 avisos)"
+    )
     for linea in (
         "- guard: shifty-rabbitmq-1 (rabbitmq) esta unhealthy; no se reinicia solo",
         "- guard: reinicie shifty-backend-1 (unhealthy)",
@@ -290,9 +298,241 @@ def test_guard_manda_un_solo_aviso_por_corrida(host: Host) -> None:
     assert otra.returncode == 0, otra.stderr
     mails = host.mails()
     assert len(mails) == 2
-    assert "guard: 2 avisos" in mails[1]
+    assert _asunto(mails[1]).endswith(
+        "] guard: reinicie shifty-backend-1 (unhealthy) (+1 aviso)"
+    )
     assert "rabbitmq" not in mails[1]
     assert "alerta silenciada (guard-no-reinicia-shifty-rabbitmq-1)" in otra.stderr
+
+
+# --- revision del 2026-11-15 sobre el arreglo del 13/11 -----------------------
+
+
+def _sin_estado(host: Host) -> str:
+    """Un SHIFTY_STATE_DIR que no se puede crear ni escribir (su padre es un
+    archivo), como un / remontado de solo lectura tras errores de disco."""
+    archivo = host.raiz / "un-archivo"
+    archivo.write_text("no soy un directorio\n", encoding="utf-8")
+    return (archivo / "estado").as_posix()
+
+
+@pytest.mark.parametrize("servicio", ["db", "rabbitmq"])
+def test_guard_sin_estado_escribible_avisa_igual(host: Host, servicio: str) -> None:
+    """B1: abrir el lock (o crear el directorio de contadores) fallaba bajo
+    `set -e` y el guard salia 1 SIN avisar, cuando antes avisaba."""
+    resultado = host.correr(
+        "guard.sh",
+        FAKE_UNHEALTHY_IDS=f"shifty-{servicio}-1",
+        SHIFTY_STATE_DIR=_sin_estado(host),
+        ALERT_EMAIL="ops@example.com",
+    )
+
+    assert resultado.returncode == 0, resultado.stderr
+    assert _reinicios(host) == []
+    mails = host.mails()
+    assert len(mails) == 1, resultado.stderr
+    assert f"shifty-{servicio}-1" in _asunto(mails[0])
+    if _tiene("flock"):
+        assert "no pude abrir el lock" in resultado.stderr
+
+
+@pytest.mark.skipif(
+    os.name == "nt" or getattr(os, "geteuid", lambda: 0)() == 0,
+    reason="los permisos de solo lectura no frenan a root ni a Windows",
+)
+def test_guard_con_el_estado_de_solo_lectura_avisa_igual(host: Host) -> None:
+    """B1 tal cual: el directorio existe pero no se puede escribir."""
+    (host.state / "guard").mkdir()
+    for d in (host.state / "guard", host.state):
+        d.chmod(0o555)
+    try:
+        resultado = host.correr(
+            "guard.sh",
+            FAKE_UNHEALTHY_IDS="shifty-db-1 shifty-rabbitmq-1",
+            ALERT_EMAIL="ops@example.com",
+        )
+    finally:
+        for d in (host.state, host.state / "guard"):
+            d.chmod(0o755)
+
+    assert resultado.returncode == 0, resultado.stderr
+    mails = host.mails()
+    assert len(mails) == 1, resultado.stderr
+    assert "db esta unhealthy" in _asunto(mails[0])
+
+
+def test_guard_que_muere_a_mitad_de_corrida_manda_lo_encolado(host: Host) -> None:
+    """A1: un error bajo `set -e` entre alert_add y alert_flush perdia lo
+    encolado. Aca el contador de shifty-backend-1 es un directorio."""
+    (host.state / "guard" / "shifty-backend-1").mkdir(parents=True)
+
+    resultado = host.correr(
+        "guard.sh",
+        FAKE_UNHEALTHY_IDS="shifty-rabbitmq-1 shifty-backend-1",
+        ALERT_EMAIL="ops@example.com",
+    )
+
+    assert resultado.returncode != 0
+    assert _reinicios(host) == []
+    mails = host.mails()
+    assert len(mails) == 1, resultado.stderr
+    assert "shifty-rabbitmq-1 (rabbitmq) esta unhealthy" in _asunto(mails[0])
+
+
+def test_guard_tras_un_restart_fallido_no_reinicia_nada_mas(host: Host) -> None:
+    """A2: el 13/11 dockerd devolvia errores ("context deadline exceeded"), no
+    se colgaba: el guard probaba cada contenedor con hasta 120 s cada uno."""
+    resultado = host.correr(
+        "guard.sh",
+        FAKE_UNHEALTHY_IDS="shifty-backend-1 shifty-backend-2 shifty-backend-3",
+        FAKE_RESTART_EXIT="1",
+        ALERT_WEBHOOK_URL="https://hook",
+    )
+
+    assert resultado.returncode == 0, resultado.stderr
+    assert _reinicios(host) == ["docker restart shifty-backend-1"]
+    avisos = _avisos(host)
+    assert len(avisos) == 1, avisos
+    assert "fallo docker restart shifty-backend-1" in avisos[0]
+    assert "no reinicio shifty-backend-2" in resultado.stderr
+    # Lo que no se intento no gasta el tope de la hora.
+    assert not (host.state / "guard" / "shifty-backend-2").exists()
+
+
+def test_guard_con_docker_ps_que_falla_avisa_que_docker_no_responde(
+    host: Host,
+) -> None:
+    """A2: con el daemon caido `docker ps` falla enseguida (no vence el tope) y
+    el guard salia sin avisar."""
+    extra = {
+        "FAKE_UNHEALTHY_IDS": "abc123",
+        "FAKE_PS_EXIT": "1",
+        "ALERT_WEBHOOK_URL": "https://hook",
+    }
+
+    primera = host.correr("guard.sh", **extra)
+    segunda = host.correr("guard.sh", **extra)
+
+    assert primera.returncode == 0, primera.stderr
+    assert segunda.returncode == 0, segunda.stderr
+    assert _reinicios(host) == []
+    avisos = _avisos(host)
+    assert len(avisos) == 1, avisos
+    assert "docker no responde (docker ps fallo con codigo 1)" in avisos[0]
+    assert "alerta silenciada (guard-docker-no-responde)" in segunda.stderr
+
+
+def test_los_avisos_de_reinicio_no_gastan_la_reserva_de_un_incidente(
+    host: Host,
+) -> None:
+    """A3: cada "reinicie X" no tiene clave, asi que contaba como incidente
+    nuevo y se comia la reserva; despues la base caida no llegaba."""
+    p = _presupuesto(3, 1)
+    for n in (1, 2, 3):
+        resultado = host.correr(
+            "guard.sh", FAKE_UNHEALTHY_IDS=f"shifty-backend-{n}", **p
+        )
+        assert resultado.returncode == 0, resultado.stderr
+    assert len(_reinicios(host)) == 3
+    assert len(host.mails()) == 2
+
+    resultado = host.correr(
+        "guard.sh", FAKE_UNHEALTHY_IDS="shifty-db-1 shifty-backend-4", **p
+    )
+
+    assert resultado.returncode == 0, resultado.stderr
+    mails = host.mails()
+    assert len(mails) == 3, resultado.stderr
+    assert _asunto(mails[2]).endswith(
+        "] guard: db esta unhealthy (shifty-db-1); no reinicio nada"
+    )
+    assert "1 alertas suprimidas desde" in mails[2]
+
+
+@pytest.mark.parametrize("tope", ["abc", "0", "-1", "4,5"])
+def test_guard_con_un_tope_de_carga_invalido_usa_el_de_siempre(
+    host: Host, tope: str
+) -> None:
+    """A4: awk comparaba la carga contra "abc" como texto y reiniciaba igual."""
+    (host.fake / "loadavg").write_text(
+        "99999.00 40.00 20.00 9/764 4242\n", encoding="utf-8", newline="\n"
+    )
+
+    resultado = host.correr(
+        "guard.sh", FAKE_UNHEALTHY_IDS="abc123", GUARD_MAX_LOAD_PER_CPU=tope
+    )
+
+    assert resultado.returncode == 0, resultado.stderr
+    assert _reinicios(host) == []
+    assert f"GUARD_MAX_LOAD_PER_CPU={tope} no es un numero positivo; uso 4" in (
+        resultado.stderr
+    )
+    assert "host saturado" in resultado.stderr
+
+
+@pytest.mark.skipif(os.name == "nt", reason="arma un PATH de symlinks (Linux)")
+def test_guard_sin_timeout_lo_anota_una_vez(host: Host) -> None:
+    """A5: sin `timeout` docker y el mail corren sin tope; antes, en silencio."""
+    fake_bin = host.env["PATH"].split(os.pathsep)[0]
+    sin_timeout = host.raiz / "sin-timeout"
+    sin_timeout.mkdir()
+    assert BASH is not None
+    for directorio in (Path(BASH).parent, *map(Path, ("/usr/bin", "/bin"))):
+        if not directorio.is_dir():
+            continue
+        for binario in directorio.iterdir():
+            destino = sin_timeout / binario.name
+            if binario.name != "timeout" and not destino.exists():
+                destino.symlink_to(binario)
+
+    resultado = host.correr(
+        "guard.sh",
+        FAKE_UNHEALTHY_IDS="shifty-backend-1 shifty-backend-2",
+        ALERT_EMAIL="ops@example.com",
+        PATH=os.pathsep.join([fake_bin, sin_timeout.as_posix()]),
+    )
+
+    assert resultado.returncode == 0, resultado.stderr
+    assert len(_reinicios(host)) == 2
+    assert resultado.stderr.count("el host no tiene timeout") == 1
+    assert len(host.mails()) == 1
+
+
+def test_el_aviso_agrupado_empieza_por_el_mas_grave(host: Host) -> None:
+    """A6: "guard: N avisos en esta corrida" escondia lo mas grave."""
+    ahora = int(time.time())
+    (host.state / "guard").mkdir(parents=True)
+    (host.state / "guard" / "shifty-backend-2").write_text(
+        f"{ahora}\n{ahora}\n{ahora}\n", encoding="utf-8", newline="\n"
+    )
+
+    resultado = host.correr(
+        "guard.sh",
+        FAKE_UNHEALTHY_IDS=(
+            "shifty-backend-1 shifty-backend-2 shifty-backend-3 shifty-rabbitmq-1"
+        ),
+        FAKE_RESTART_FALLA="shifty-backend-3",
+        ALERT_EMAIL="ops@example.com",
+    )
+
+    assert resultado.returncode == 0, resultado.stderr
+    mails = host.mails()
+    assert len(mails) == 1, mails
+    assert _asunto(mails[0]).endswith(
+        "] guard: shifty-rabbitmq-1 (rabbitmq) esta unhealthy; no se reinicia solo"
+        " (+3 avisos)"
+    )
+    cuerpo = mails[0].split("\n\n", 1)[1]
+    orden = [
+        cuerpo.index(f"- guard: {texto}")
+        for texto in (
+            "shifty-rabbitmq-1 (rabbitmq) esta unhealthy",
+            "fallo docker restart shifty-backend-3",
+            "shifty-backend-2 sigue unhealthy",
+            "reinicie shifty-backend-1",
+        )
+    ]
+    assert orden == sorted(orden), cuerpo
 
 
 # --- alert() de scripts/lib/common.sh: silencio y presupuesto de mails --------
@@ -365,12 +605,14 @@ def test_el_presupuesto_diario_guarda_lugar_para_un_incidente_nuevo(
     """Cada alert() es un proceso nuevo: el contador vive en el estado del
     host, no en memoria. Silencio 0: ninguna clave queda silenciada."""
     p = _presupuesto(3, 1)
-    host.alertar("a: uno", "", "a", "0", **p)
+    host.alertar("a: uno", "", "guard-host-saturado", "0", **p)
     host.alertar("b: dos", "", "b", "0", **p)
-    # La reserva es solo para claves que todavia no salieron hoy.
-    repetida = host.alertar("a: uno otra vez", "", "a", "0", **p)
-    nueva = host.alertar("c: incidente nuevo", "", "c", "0", **p)
-    agotada = host.alertar("d: otro nuevo", "", "d", "0", **p)
+    # La reserva es solo para claves CRITICAS que todavia no salieron hoy
+    # (revision del 2026-11-15): ni una critica repetida ni una nueva comun.
+    repetida = host.alertar("a: uno otra vez", "", "guard-host-saturado", "0", **p)
+    comun = host.alertar("x: aviso nuevo comun", "", "x", "0", **p)
+    nueva = host.alertar("c: incidente nuevo", "", "guard-dependencia-db", "0", **p)
+    agotada = host.alertar("d: otro nuevo", "", "backup-fallo", "0", **p)
 
     asuntos = [_asunto(m) for m in host.mails()]
     assert len(asuntos) == 3, asuntos
@@ -378,6 +620,7 @@ def test_el_presupuesto_diario_guarda_lugar_para_un_incidente_nuevo(
     assert nueva.returncode == 0, nueva.stderr
     for resultado, asunto in (
         (repetida, "a: uno otra vez"),
+        (comun, "x: aviso nuevo comun"),
         (agotada, "d: otro nuevo"),
     ):
         assert resultado.returncode == 0

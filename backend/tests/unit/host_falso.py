@@ -164,7 +164,9 @@ if [ "$1" = compose ]; then
   esac
 fi
 case "$1" in
-  ps) for id in ${FAKE_UNHEALTHY_IDS:-}; do echo "$id"; done ;;
+  # FAKE_PS_EXIT: `docker ps` que falla sin colgarse (daemon caido: "Cannot
+  # connect to the Docker daemon").
+  ps) for id in ${FAKE_UNHEALTHY_IDS:-}; do echo "$id"; done; exit "${FAKE_PS_EXIT:-0}" ;;
   image)
     # docker image inspect [-f FORMATO] IMAGEN
     for imagen in "$@"; do :; done
@@ -196,7 +198,11 @@ case "$1" in
         mv "$ids.tmp" "$ids"
       done
     done ;;
-  restart) exit "${FAKE_RESTART_EXIT:-0}" ;;
+  # FAKE_RESTART_FALLA=<nombre>: solo el restart de ese contenedor falla (13/11:
+  # dockerd devolvia "context deadline exceeded").
+  restart)
+    [ "${FAKE_RESTART_FALLA:-}" != "$2" ] || exit 1
+    exit "${FAKE_RESTART_EXIT:-0}" ;;
   stats) printf 'shifty-backend-1\t1.5%%\t120MiB / 512MiB\t%s\t1kB / 2kB\t0B / 0B\t12\n' "${FAKE_MEM_PERC:-23.4%}" ;;
 esac
 exit 0

@@ -22,21 +22,32 @@
 # Incidente 2026-11-13 (dockerd colgado de 15:10 a 17:07 UTC):
 # - Una sola corrida a la vez: `flock -n` sobre $SHIFTY_STATE_DIR/guard.lock.
 #   Cron la lanza cada minuto y cada corrida quedaba colgada en `docker ps`:
-#   se apilaban (procesos 435 -> 764, load 68 en 2 vCPU).
+#   se apilaban (procesos 435 -> 764, load 68 en 2 vCPU). Si el lock no se
+#   puede abrir (estado de solo lectura) corre sin el: avisar importa mas.
 # - Toda llamada a docker tiene tope: GUARD_DOCKER_TIMEOUT_SECONDS (30) para
 #   ps/inspect y GUARD_RESTART_TIMEOUT_SECONDS (120) para restart, que espera
 #   el stop_grace_period del contenedor (60 s el de celery_worker). Si docker
-#   no contesta, esa corrida no reinicia nada y avisa una vez.
+#   no contesta o `docker ps` falla, esa corrida no reinicia nada y avisa una
+#   vez. Tras un `docker restart` que falla no reinicia nada mas en la
+#   corrida (el 13/11 dockerd devolvia errores, no se colgaba). Sin el
+#   binario `timeout` corre sin tope y lo anota una vez por corrida.
 # - Con el host saturado (load de 1 minuto por CPU sobre
 #   GUARD_MAX_LOAD_PER_CPU, 4) no reinicia: reiniciar bajo saturacion
-#   empeoro el 13/11. Sin carga legible reinicia como antes.
+#   empeoro el 13/11. Sin carga legible reinicia como antes; un tope que no
+#   es un numero positivo usa 4.
 # - Una corrida manda a lo sumo UN aviso con todos sus problemas (alert_add +
-#   alert_flush de lib/common.sh); cada problema conserva su silencio y queda
-#   en el log. El presupuesto diario de mails del host vive en alert().
+#   alert_flush de lib/common.sh), el mas grave primero; cada problema
+#   conserva su silencio y queda en el log. Lo encolado sale aunque la
+#   corrida muera a mitad (trap EXIT). El presupuesto diario de mails del
+#   host vive en alert().
 set -euo pipefail
 
 # shellcheck source=lib/common.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh"
+
+# Un error bajo `set -e` entre alert_add y alert_flush perdia lo encolado.
+# alert_flush vacia la cola: los flush explicitos de abajo no mandan dos veces.
+trap 'alert_flush guard' EXIT
 
 : "${GUARD_MAX_RESTARTS:=3}"
 : "${GUARD_MAX_TOTAL_RESTARTS:=6}"
@@ -50,25 +61,42 @@ set -euo pipefail
 : "${GUARD_MAX_LOAD_PER_CPU:=4}"
 : "${GUARD_LOADAVG_FILE:=/proc/loadavg}"
 
+# awk compara contra un texto como texto: con "abc" reiniciaba siempre.
+if ! [[ "$GUARD_MAX_LOAD_PER_CPU" =~ ^[0-9]+([.][0-9]+)?$ ]] ||
+  ! [[ "$GUARD_MAX_LOAD_PER_CPU" =~ [1-9] ]]; then
+  log "guard: GUARD_MAX_LOAD_PER_CPU=$GUARD_MAX_LOAD_PER_CPU no es un numero positivo; uso 4"
+  GUARD_MAX_LOAD_PER_CPU=4
+fi
+
 if deploy_in_progress; then
   log "guard: hay un deploy en curso, no se reinicia nada"
   exit 0
 fi
 
 estado="$SHIFTY_STATE_DIR/guard"
-mkdir -p "$estado"
+# Sin estado escribible (/ remontado de solo lectura) sigue: los avisos salen
+# igual; un reinicio, que necesita anotar su contador, no.
+mkdir -p "$estado" 2>/dev/null || log "guard: no pude crear $estado; sigo para avisar"
 ahora="$(date +%s)"
 global="$estado/_global"
 
-# El lock dura lo que dura el proceso (fd 9): un guard matado lo suelta.
+# El lock dura lo que dura el proceso (fd 9): un guard matado lo suelta. Si
+# no se puede abrir, corre sin el (falla abierto): sin lock se pueden apilar
+# corridas, sin aviso nadie se entera.
 if command -v flock >/dev/null 2>&1; then
-  exec 9>"$SHIFTY_STATE_DIR/guard.lock"
-  if ! flock -n 9; then
-    log "guard: otra corrida sigue en curso ($SHIFTY_STATE_DIR/guard.lock); salgo sin hacer nada"
-    exit 0
+  if { exec 9>"$SHIFTY_STATE_DIR/guard.lock"; } 2>/dev/null; then
+    if ! flock -n 9; then
+      log "guard: otra corrida sigue en curso ($SHIFTY_STATE_DIR/guard.lock); salgo sin hacer nada"
+      exit 0
+    fi
+  else
+    log "guard: no pude abrir el lock ($SHIFTY_STATE_DIR/guard.lock); corro sin el"
   fi
 else
   log "guard: el host no tiene flock; corro sin el lock de una sola corrida"
+fi
+if ! command -v timeout >/dev/null 2>&1; then
+  log "guard: el host no tiene timeout; docker y el mail de alerta corren sin tope"
 fi
 
 enfermos=()
@@ -90,10 +118,11 @@ es_tope_vencido() {
   [ "$1" -eq 124 ] || [ "$1" -eq 137 ]
 }
 
-# Docker no contesto: esta corrida no reinicia nada mas. Un aviso con clave
-# fija, no uno por contenedor ni por corrida.
+# docker_no_responde <que paso>: docker no contesto o fallo. Esta corrida no
+# reinicia nada mas. Un aviso con clave fija, no uno por contenedor ni por
+# corrida.
 docker_no_responde() {
-  alert_add "guard: docker no responde ($1 no termino en $2 s); no reinicio nada" \
+  alert_add "guard: docker no responde ($1); no reinicio nada" \
     "Mirar: systemctl status docker; journalctl -u docker --since -30min. Unhealthy: ${enfermos[*]:-sin listar}" \
     guard-docker-no-responde 60
   alert_flush guard
@@ -139,15 +168,17 @@ for proyecto in $GUARD_PROJECTS; do
     --filter "label=com.docker.compose.project=$proyecto" \
     --filter label=com.docker.compose.oneoff=False)" || rc=$?
   if es_tope_vencido "$rc"; then
-    docker_no_responde "docker ps" "$GUARD_DOCKER_TIMEOUT_SECONDS"
+    docker_no_responde "docker ps no termino en $GUARD_DOCKER_TIMEOUT_SECONDS s"
+  elif [ "$rc" -ne 0 ]; then
+    # Daemon caido: `docker ps` falla enseguida, sin vencer el tope.
+    docker_no_responde "docker ps fallo con codigo $rc"
   fi
-  [ "$rc" -eq 0 ] || exit "$rc"
   for id in $ids; do
     rc=0
     linea="$(docker_con_tope "$GUARD_DOCKER_TIMEOUT_SECONDS" inspect \
       -f '{{.Name}} {{index .Config.Labels "com.docker.compose.service"}}' "$id")" || rc=$?
     if es_tope_vencido "$rc"; then
-      docker_no_responde "docker inspect" "$GUARD_DOCKER_TIMEOUT_SECONDS"
+      docker_no_responde "docker inspect no termino en $GUARD_DOCKER_TIMEOUT_SECONDS s"
     fi
     [ "$rc" -eq 0 ] || exit "$rc"
     enfermos+=("${linea#/}")
@@ -167,8 +198,9 @@ for entrada in "${enfermos[@]}"; do
 done
 
 # La carga se mide una vez, antes del primer reinicio: "" sin medir, 1
-# saturado, 0 no.
+# saturado, 0 no. `restart_fallido`: el contenedor cuyo restart fallo.
 saturado=""
+restart_fallido=""
 for entrada in "${enfermos[@]}"; do
   nombre="${entrada%% *}"
   servicio="${entrada#* }"
@@ -206,6 +238,10 @@ for entrada in "${enfermos[@]}"; do
     fi
   fi
   [ "$saturado" = 0 ] || continue
+  if [ -n "$restart_fallido" ]; then
+    log "guard: no reinicio $nombre: el docker restart de $restart_fallido fallo en esta corrida"
+    continue
+  fi
 
   printf '%s\n' "${propios[@]}" "$ahora" >"$archivo"
   printf '%s\n' "${todos[@]}" "$ahora" >"$global"
@@ -215,9 +251,11 @@ for entrada in "${enfermos[@]}"; do
     alert_add "guard: reinicie $nombre (unhealthy)" \
       "Reinicio $((${#propios[@]} + 1)) de $GUARD_MAX_RESTARTS en la ultima hora."
   elif es_tope_vencido "$rc"; then
-    docker_no_responde "docker restart $nombre" "$GUARD_RESTART_TIMEOUT_SECONDS"
+    docker_no_responde "docker restart $nombre no termino en $GUARD_RESTART_TIMEOUT_SECONDS s"
   else
-    alert_add "guard: fallo docker restart $nombre" "El contenedor sigue unhealthy." \
+    restart_fallido="$nombre"
+    alert_add "guard: fallo docker restart $nombre" \
+      "Salio con codigo $rc; el contenedor sigue unhealthy. En esta corrida no reinicio nada mas." \
       "guard-fallo-$nombre" 30
   fi
 done

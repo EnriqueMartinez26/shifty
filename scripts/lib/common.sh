@@ -92,8 +92,9 @@ json_escape() {
 # guard en dos horas a la misma cuenta de Brevo Free, 300 por dia, que usa la
 # app; ningun presupuesto de la app los cuenta): a lo sumo
 # ALERT_EMAIL_MAX_PER_DAY (12) por dia UTC, y los ultimos
-# ALERT_EMAIL_RESERVED_PER_DAY (3) solo para claves que todavia no salieron
-# por mail ese dia, para que un incidente nuevo llegue. Pasado el
+# ALERT_EMAIL_RESERVED_PER_DAY (3) solo para claves CRITICAS (_alert_gravedad
+# 0) que todavia no salieron por mail ese dia, para que un incidente nuevo
+# llegue: un "reinicie X" o un tope no la gastan. Pasado el
 # presupuesto el mail no sale: queda en stderr y syslog, y el proximo mail
 # que salga dice cuantos se suprimieron. El webhook no gasta presupuesto. El
 # sello del silencio se escribe antes de mandar: un envio que falla se anota
@@ -122,8 +123,10 @@ alert_add() {
 }
 
 # alert_flush [prefijo]: manda lo encolado en un solo mensaje. Con un aviso,
-# su asunto y su detalle tal cual; con varios, "<prefijo>: N avisos en esta
-# corrida" y una linea por aviso.
+# su asunto y su detalle tal cual; con varios, una linea por aviso, el mas
+# grave primero (_alert_gravedad), y de asunto el del mas grave con
+# "(+N avisos)": "N avisos en esta corrida" escondia lo importante. El
+# prefijo va delante solo si ese asunto no empieza ya con el.
 alert_flush() {
   local prefijo="${1:-}" n="${#_ALERT_ASUNTOS[@]}"
   [ "$n" -gt 0 ] || return 0
@@ -170,12 +173,32 @@ alert_flush() {
     return 0
   fi
 
-  local subject body="" linea detalle
+  # Del mas grave al menos grave; a igual gravedad, en el orden en que se
+  # encolaron.
+  local g ordenados=()
+  for g in 0 1 2 3; do
+    for i in "${idx[@]}"; do
+      _alert_gravedad "${claves[$i]}"
+      if [ "$_ALERT_GRAVEDAD" = "$g" ]; then ordenados+=("$i"); fi
+    done
+  done
+  idx=("${ordenados[@]}")
+
+  local subject body="" linea detalle resto
   if [ "${#idx[@]}" -eq 1 ]; then
     subject="${asuntos[${idx[0]}]}"
     body="${detalles[${idx[0]}]}"
   else
-    subject="${prefijo:+$prefijo: }${#idx[@]} avisos en esta corrida"
+    subject="${asuntos[${idx[0]}]}"
+    if [ -n "$prefijo" ] && [[ "$subject" != "$prefijo:"* ]]; then
+      subject="$prefijo: $subject"
+    fi
+    resto=$((${#idx[@]} - 1))
+    if [ "$resto" -eq 1 ]; then
+      subject+=" (+1 aviso)"
+    else
+      subject+=" (+$resto avisos)"
+    fi
     for i in "${idx[@]}"; do
       linea="- ${asuntos[$i]}"
       detalle="${detalles[$i]//[$'\r\n']/ }"
@@ -234,17 +257,19 @@ _alert_presupuesto() {
     claves_hoy=("${lineas[@]:2}")
   fi
 
-  local nueva=0 k
+  # La reserva la usa solo un mensaje con una clave critica que no salio hoy.
+  local nueva_critica=0 k
   for k in "$@"; do
-    if ! _alert_en_lista "$k" "${claves_hoy[@]}"; then
-      nueva=1
+    _alert_gravedad "$k"
+    if [ "$_ALERT_GRAVEDAD" = 0 ] && ! _alert_en_lista "$k" "${claves_hoy[@]}"; then
+      nueva_critica=1
       break
     fi
   done
 
   _ALERT_MAIL_OK=1
   _ALERT_NOTA=""
-  if [ "$usados" -ge "$max" ] || { [ "$usados" -ge $((max - reserva)) ] && [ "$nueva" = 0 ]; }; then
+  if [ "$usados" -ge "$max" ] || { [ "$usados" -ge $((max - reserva)) ] && [ "$nueva_critica" = 0 ]; }; then
     if printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$subject" >>"$suprimidos" 2>/dev/null; then
       _ALERT_MAIL_OK=0
     else
@@ -272,6 +297,22 @@ _alert_presupuesto() {
     { : >"$suprimidos"; } 2>/dev/null || log "alertas: no pude vaciar $suprimidos"
   fi
   return 0
+}
+
+# _alert_gravedad <clave>: deja en _ALERT_GRAVEDAD de 0 (la mayor) a 3. Las
+# de gravedad 0 son las CRITICAS, las unicas que usan la reserva del
+# presupuesto diario: algo caido que necesita una persona (dependencia,
+# db/rabbitmq, docker, host saturado) o el backup. Despues un restart que
+# fallo, un tope alcanzado y el resto (un "reinicie X" no tiene clave).
+_alert_gravedad() {
+  case "$1" in
+    guard-dependencia-* | guard-no-reinicia-* | guard-docker-no-responde | guard-host-saturado | backup-*)
+      _ALERT_GRAVEDAD=0
+      ;;
+    guard-fallo-*) _ALERT_GRAVEDAD=1 ;;
+    guard-tope-*) _ALERT_GRAVEDAD=2 ;;
+    *) _ALERT_GRAVEDAD=3 ;;
+  esac
 }
 
 _alert_en_lista() {
