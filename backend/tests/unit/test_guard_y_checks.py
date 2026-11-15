@@ -27,6 +27,7 @@ from tests.unit.host_falso import (
     crear_host,
     escribir_meminfo,
     escribir_redis_info,
+    sin_espacio_para_crear,
 )
 
 
@@ -674,6 +675,40 @@ def test_guard_tras_un_restart_fallido_no_reinicia_nada_mas(host: Host) -> None:
     assert not (host.state / "guard" / "shifty-backend-2").exists()
 
 
+@pytest.mark.parametrize("como", ["cuelga", "falla"])
+def test_tras_un_restart_fallido_sigue_avisando_lo_demas(host: Host, como: str) -> None:
+    """2026-11-15 (A-ADV3): un restart colgado cortaba la corrida y el aviso de
+    rabbitmq, que venia despues en `docker ps`, esperaba unos 6 minutos (hasta
+    agotar el tope global). Sin otro restart, la corrida sigue para encolar los
+    avisos del resto."""
+    extra = {
+        "FAKE_UNHEALTHY_IDS": "shifty-backend-1 shifty-backend-2 shifty-rabbitmq-1",
+        "ALERT_EMAIL": "ops@example.com",
+    }
+    if como == "cuelga":
+        if not _tiene("timeout"):
+            pytest.skip("hace falta timeout (coreutils)")
+        extra.update(FAKE_DOCKER_CUELGA="restart", GUARD_RESTART_TIMEOUT_SECONDS="1")
+        primero = "docker no responde (docker restart shifty-backend-1 no termino"
+    else:
+        extra["FAKE_RESTART_EXIT"] = "1"
+        primero = "fallo docker restart shifty-backend-1"
+
+    resultado = host.correr("guard.sh", **extra)
+
+    assert resultado.returncode == 0, resultado.stderr
+    assert _reinicios(host) == ["docker restart shifty-backend-1"]
+    mails = host.mails()
+    assert len(mails) == 1, resultado.stderr
+    for linea in (
+        "- guard: shifty-rabbitmq-1 (rabbitmq) esta unhealthy; no se reinicia solo",
+        f"- guard: {primero}",
+        "- guard: no reinicio shifty-backend-2: ya fallo un restart en esta corrida",
+    ):
+        assert linea in mails[0], mails[0]
+    assert not (host.state / "guard" / "shifty-backend-2").exists()
+
+
 def test_guard_con_docker_ps_que_falla_avisa_que_docker_no_responde(
     host: Host,
 ) -> None:
@@ -1106,6 +1141,98 @@ def test_un_intervalo_sin_estado_invalido_usa_tres_horas(host: Host, cada: str) 
         resultado.stderr
     )
     assert len(host.mails()) == 1
+
+
+# 2026-11-15 (A-ADV1): con los inodos agotados o el disco lleno el directorio de
+# alertas pasa `[ -w ]` pero no admite archivos nuevos. Sin sello ni registro,
+# alert() mandaba igual: un mail y un webhook por minuto del guard.
+
+
+def test_un_estado_que_no_admite_archivos_nuevos_usa_el_respaldo(host: Host) -> None:
+    sin_espacio_para_crear(host, f"{host.state.as_posix()}/alerts/*")
+    extra = {
+        "FAKE_UNHEALTHY_IDS": "shifty-rabbitmq-1",
+        "ALERT_EMAIL": "ops@example.com",
+        "ALERT_WEBHOOK_URL": "https://hook",
+    }
+
+    resultados = [host.correr("guard.sh", **extra) for _ in range(3)]
+
+    assert [r.returncode for r in resultados] == [0, 0, 0], resultados[0].stderr
+    assert len(host.mails()) == 1, resultados[1].stderr
+    assert len([ll for ll in host.llamadas() if ll.startswith("curl ")]) == 1
+    run = (host.raiz / "run" / "alerts").as_posix()
+    assert f"vive en {run} (tmpfs)" in resultados[0].stderr
+
+
+@pytest.mark.parametrize("donde", ["estado", "estado-y-respaldo"])
+def test_un_sello_que_no_se_escribe_no_manda_un_mail_por_minuto(
+    host: Host, donde: str
+) -> None:
+    """La prueba de escritura pasa, pero el sello del silencio no se puede crear
+    al mandar: baja al respaldo y, sin respaldo, al modo sin estado."""
+    raiz = host.state.as_posix() if donde == "estado" else "*"
+    sin_espacio_para_crear(host, f"{raiz}/alerts/guard-*")
+    con_hora_utc(host)
+    extra = {
+        "FAKE_UNHEALTHY_IDS": "shifty-rabbitmq-1",
+        "ALERT_EMAIL": "ops@example.com",
+        "ALERT_WEBHOOK_URL": "https://hook",
+    }
+
+    for hora in ("05:58", "05:59", "06:00", "06:01", "06:02"):
+        resultado = host.correr("guard.sh", FAKE_HORA_UTC=hora, **extra)
+        assert resultado.returncode == 0, resultado.stderr
+
+    mails = host.mails()
+    assert len(mails) == 1, resultado.stderr
+    assert len([ll for ll in host.llamadas() if ll.startswith("curl ")]) == 1
+    assert "rabbitmq" in _asunto(mails[0])
+    assert _asunto(mails[0]).endswith("(sin estado)") == (donde != "estado")
+    assert "esta alerta no queda silenciada" not in resultado.stderr
+
+
+def test_un_registro_del_presupuesto_que_no_se_escribe_no_lo_saltea(
+    host: Host,
+) -> None:
+    """Sin poder anotar el mail en .mails-del-dia (disco lleno) mandaba igual:
+    el presupuesto diario no contaba nada."""
+    (host.state / "alerts" / ".mails-del-dia.tmp").mkdir(parents=True)
+    p = _presupuesto(1, 0)
+
+    resultados = [
+        host.alertar(f"{clave}: aviso", "", clave, "0", **p) for clave in "abc"
+    ]
+
+    assert [r.returncode for r in resultados] == [0, 0, 0]
+    mails = host.mails()
+    assert len(mails) == 1, resultados[0].stderr
+    assert _asunto(mails[0]).endswith("a: aviso")
+    assert "alerta suprimida por presupuesto diario del host: c: aviso" in (
+        resultados[2].stderr
+    )
+    assert "mando igual" not in resultados[0].stderr
+
+
+def test_sin_registro_en_ningun_estado_manda_solo_en_la_ventana(host: Host) -> None:
+    for raiz in (host.state, host.raiz / "run"):
+        (raiz / "alerts" / ".mails-del-dia.tmp").mkdir(parents=True)
+    con_hora_utc(host)
+
+    fuera = host.alertar(
+        "b: aviso", "", "b", "0", FAKE_HORA_UTC="05:07", ALERT_EMAIL="o@x"
+    )
+    assert fuera.returncode == 0, fuera.stderr
+    assert host.mails() == []
+    assert "fuera de la ventana" in fuera.stderr
+
+    dentro = host.alertar(
+        "b: aviso", "", "b", "0", FAKE_HORA_UTC="06:07", ALERT_EMAIL="o@x"
+    )
+    assert dentro.returncode == 0, dentro.stderr
+    mails = host.mails()
+    assert len(mails) == 1
+    assert _asunto(mails[0]).endswith("b: aviso (sin estado)")
 
 
 # --- checks.sh --------------------------------------------------------------

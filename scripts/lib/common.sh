@@ -101,7 +101,10 @@ json_escape() {
 # y no se reintenta. El estado se toca con flock.
 #
 # Estado que no se puede escribir (revision del 2026-11-15: con / de solo
-# lectura mandaba sin silencio ni presupuesto, un mail por minuto):
+# lectura mandaba sin silencio ni presupuesto, un mail por minuto). Se decide
+# creando y borrando un archivo de prueba, no con `[ -w ]` (con los inodos
+# agotados o el disco lleno da bien y no se crea nada), y un sello o un
+# registro del presupuesto que no se escribe al mandar tampoco manda igual:
 # - pasa a $SHIFTY_RUN_DIR/alerts (tmpfs, /run/shifty), que sigue escribible
 #   con / remontado de solo lectura; se pierde al reiniciar el host y lo anota
 #   una vez por corrida.
@@ -109,9 +112,11 @@ json_escape() {
 #   ni presupuesto diario: cada aviso queda en stderr y en syslog (crit los
 #   criticos), y mail y webhook salen solo en una ventana del reloj: las horas
 #   UTC multiplo de ALERT_STATELESS_EVERY_HOURS (3), en el minuto 00 para un
-#   script que corre cada minuto (el guard), en cualquier minuto para los de
-#   cada hora. A lo sumo 24/N mensajes por dia y por script; lo de entre
-#   ventanas queda solo en syslog. El mensaje dice que es un envio degradado.
+#   script que corre cada minuto (el guard), en cualquier minuto para los
+#   demas. El guard manda a lo sumo un mensaje por ventana; los demas, uno por
+#   llamada a alert() en la hora ventana: checks.sh uno por problema y
+#   latency-check.sh (cada 5 minutos) hasta 12. Lo de entre ventanas queda
+#   solo en syslog. El mensaje dice que es un envio degradado.
 alert() {
   alert_add "$@"
   alert_flush
@@ -167,6 +172,7 @@ alert_add() {
 alert_flush() {
   local prefijo="${1:-}" n="${#_ALERT_ASUNTOS[@]}"
   [ "$n" -gt 0 ] || return 0
+  # _alert_con_estado y _alert_componer leen estas variables locales.
   local asuntos=("${_ALERT_ASUNTOS[@]}") detalles=("${_ALERT_DETALLES[@]}")
   local claves=("${_ALERT_CLAVES[@]}") silencios=("${_ALERT_SILENCIOS[@]}")
   _ALERT_ASUNTOS=()
@@ -174,88 +180,36 @@ alert_flush() {
   _ALERT_CLAVES=()
   _ALERT_SILENCIOS=()
 
-  # Sello y presupuesto se leen y escriben bajo un lock: dos procesos a la
-  # vez (corridas apiladas, guard y checks) no mandan dos veces lo mismo.
-  local dir estado=1 fd=""
-  _alert_dir_estado
-  dir="$_ALERT_DIR"
-  if [ -z "$dir" ]; then
-    estado=0
-  elif command -v flock >/dev/null 2>&1; then
-    if { exec {fd}>>"$dir/.lock"; } 2>/dev/null; then
-      flock -w 15 "$fd" || log "alertas: no pude tomar $dir/.lock en 15 s; sigo sin el"
-    else
-      fd=""
-      log "alertas: no pude abrir $dir/.lock; sigo sin lock"
+  # El estado vive en el primer directorio donde se puede crear un archivo y
+  # donde se pudo escribir lo de este envio (sellos y registro del
+  # presupuesto): $SHIFTY_STATE_DIR/alerts y despues $SHIFTY_RUN_DIR/alerts
+  # (tmpfs). Sin ninguno, modo sin estado. Un sello o un registro que no se
+  # escribe no manda igual: con los inodos agotados `[ -w ]` daba bien y salia
+  # un mail por minuto (revision del 2026-11-15).
+  local propio="$SHIFTY_STATE_DIR/alerts" dir estado=1 i
+  dir="$propio"
+  if ! _alert_intentar "$dir" "$prefijo"; then
+    shifty_run_dir
+    dir="$SHIFTY_RUN_DIR/alerts"
+    if ! { crear_run_dir && _alert_intentar "$dir" "$prefijo"; }; then
+      estado=0
     fi
   fi
-
-  local i clave stamp idx=() seguimiento=()
-  for ((i = 0; i < n; i++)); do
-    clave="${claves[$i]}"
-    if [ -n "$clave" ] && [ "$estado" = 1 ]; then
-      stamp="$dir/${clave//[^A-Za-z0-9_.-]/_}"
-      if [ -f "$stamp" ] && [ -n "$(find "$stamp" -mmin "-${silencios[$i]}" 2>/dev/null)" ]; then
-        log "alerta silenciada ($clave): ${asuntos[$i]}"
-        continue
-      fi
-      touch "$stamp" 2>/dev/null || log "alertas: no pude escribir $stamp; esta alerta no queda silenciada"
-    fi
-    idx+=("$i")
-    # Sin clave, el asunto identifica la alerta para la reserva del dia.
-    clave="${clave:-asunto:${asuntos[$i]}}"
-    seguimiento+=("${clave//[$'\r\n']/ }")
-  done
-  if [ "${#idx[@]}" -eq 0 ]; then
-    if [ -n "$fd" ]; then exec {fd}>&-; fi
-    return 0
-  fi
-
-  # Del mas grave al menos grave; a igual gravedad, en el orden en que se
-  # encolaron.
-  local g ordenados=()
-  for g in 0 1 2 3; do
-    for i in "${idx[@]}"; do
-      _alert_gravedad "${claves[$i]}"
-      if [ "$_ALERT_GRAVEDAD" = "$g" ]; then ordenados+=("$i"); fi
-    done
-  done
-  idx=("${ordenados[@]}")
-
-  local subject body="" linea detalle resto
-  if [ "${#idx[@]}" -eq 1 ]; then
-    subject="${asuntos[${idx[0]}]}"
-    body="${detalles[${idx[0]}]}"
-  else
-    subject="${asuntos[${idx[0]}]}"
-    if [ -n "$prefijo" ] && [[ "$subject" != "$prefijo:"* ]]; then
-      subject="$prefijo: $subject"
-    fi
-    resto=$((${#idx[@]} - 1))
-    if [ "$resto" -eq 1 ]; then
-      subject+=" (+1 aviso)"
-    else
-      subject+=" (+$resto avisos)"
-    fi
-    for i in "${idx[@]}"; do
-      linea="- ${asuntos[$i]}"
-      detalle="${detalles[$i]//[$'\r\n']/ }"
-      if [ -n "$detalle" ]; then linea+=": $detalle"; fi
-      if [ -n "$body" ]; then body+=$'\n'; fi
-      body+="$linea"
-    done
-  fi
-
-  local mail=0
-  _ALERT_NOTA=""
-  if [ -n "${ALERT_EMAIL:-}" ]; then
-    mail=1
+  if [ "$dir" != "$propio" ] && [ -z "${_ALERT_AVISO_ESTADO:-}" ]; then
+    _ALERT_AVISO_ESTADO=1
     if [ "$estado" = 1 ]; then
-      _alert_presupuesto "$dir" "$subject" "${seguimiento[@]}"
-      mail="$_ALERT_MAIL_OK"
+      log "alertas: no puedo escribir el estado de alertas en $propio; vive en $dir (tmpfs): se pierde al reiniciar el host"
+    else
+      log "alertas: no puedo escribir el estado de alertas en $propio ni en $dir; modo sin estado: sin silencio ni presupuesto, mail y webhook solo en la ventana de ALERT_STATELESS_EVERY_HOURS"
     fi
   fi
-  if [ -n "$fd" ]; then exec {fd}>&-; fi
+  if [ "$estado" = 0 ]; then
+    _ALERT_IDX=()
+    for ((i = 0; i < n; i++)); do _ALERT_IDX+=("$i"); done
+    _alert_componer "$prefijo"
+  fi
+  [ "${#_ALERT_IDX[@]}" -gt 0 ] || return 0
+  local idx=("${_ALERT_IDX[@]}") subject="$_ALERT_ASUNTO" body="$_ALERT_CUERPO"
 
   local prioridad
   for i in "${idx[@]}"; do
@@ -273,34 +227,122 @@ alert_flush() {
     _alert_sin_estado "$subject" "$body" "${#idx[@]}"
     return 0
   fi
-  _alert_mandar "$subject" "$body" "$mail" "$_ALERT_NOTA"
+  _alert_mandar "$subject" "$body" "$_ALERT_MAIL_OK" "$_ALERT_NOTA"
   return 0
 }
 
-# _alert_dir_estado: deja en _ALERT_DIR donde vive el estado de alertas:
-# $SHIFTY_STATE_DIR/alerts o, si no se puede escribir, $SHIFTY_RUN_DIR/alerts
-# (tmpfs). Vacio si ninguno se puede escribir (modo sin estado). Lo anota una
-# vez por proceso.
-_alert_dir_estado() {
-  local propio="$SHIFTY_STATE_DIR/alerts" respaldo
-  _ALERT_DIR=""
-  if mkdir -p "$propio" 2>/dev/null && [ -w "$propio" ]; then
-    _ALERT_DIR="$propio"
-    return 0
+# _alert_escribible <dir>: <dir> existe o se crea y admite un archivo nuevo.
+# Se prueba creandolo y borrandolo: con los inodos agotados o el disco lleno
+# `[ -w ]` da bien y no se puede crear nada.
+_alert_escribible() {
+  local prueba="$1/.prueba-de-escritura.${BASHPID:-$$}"
+  mkdir -p "$1" 2>/dev/null || return 1
+  rm -f "$prueba" 2>/dev/null || true
+  touch "$prueba" 2>/dev/null || return 1
+  rm -f "$prueba" 2>/dev/null || true
+}
+
+# _alert_intentar <dir> <prefijo>: el envio con estado en <dir>. Sale 1 si en
+# <dir> no se puede crear un archivo o si no se pudo escribir un sello o el
+# registro del presupuesto (lo anota): el llamador baja al respaldo o al modo
+# sin estado, nunca manda sin silencio ni presupuesto.
+_alert_intentar() {
+  _alert_escribible "$1" || return 1
+  _alert_con_estado "$1" "$2" && return 0
+  log "alertas: no pude escribir el estado de alertas en $1 ($_ALERT_FALLA); no mando sin silencio ni presupuesto"
+  return 1
+}
+
+# _alert_con_estado <dir> <prefijo>: silencio por clave y presupuesto en
+# <dir>, bajo su lock (dos procesos a la vez, corridas apiladas o guard y
+# checks, no mandan dos veces lo mismo). Deja en _ALERT_IDX los avisos que
+# salen, en _ALERT_ASUNTO y _ALERT_CUERPO el mensaje, y en _ALERT_MAIL_OK y
+# _ALERT_NOTA lo del presupuesto. Sale 1, con el motivo en _ALERT_FALLA, si
+# no pudo escribir un sello o el registro. Lee la cola de alert_flush.
+_alert_con_estado() {
+  local dir="$1" prefijo="$2" fd="" i clave stamp seguimiento=()
+  _ALERT_IDX=()
+  _ALERT_FALLA=""
+  _ALERT_MAIL_OK=1
+  _ALERT_NOTA=""
+  if command -v flock >/dev/null 2>&1; then
+    if { exec {fd}>>"$dir/.lock"; } 2>/dev/null; then
+      flock -w 15 "$fd" || log "alertas: no pude tomar $dir/.lock en 15 s; sigo sin el"
+    else
+      fd=""
+      log "alertas: no pude abrir $dir/.lock; sigo sin lock"
+    fi
   fi
-  shifty_run_dir
-  respaldo="$SHIFTY_RUN_DIR/alerts"
-  if crear_run_dir && mkdir -p "$respaldo" 2>/dev/null &&
-    [ -w "$respaldo" ]; then
-    _ALERT_DIR="$respaldo"
+
+  for ((i = 0; i < n; i++)); do
+    clave="${claves[$i]}"
+    if [ -n "$clave" ]; then
+      stamp="$dir/${clave//[^A-Za-z0-9_.-]/_}"
+      if [ -f "$stamp" ] && [ -n "$(find "$stamp" -mmin "-${silencios[$i]}" 2>/dev/null)" ]; then
+        log "alerta silenciada ($clave): ${asuntos[$i]}"
+        continue
+      fi
+      if ! touch "$stamp" 2>/dev/null; then
+        _ALERT_FALLA="no pude escribir el sello $stamp"
+        if [ -n "$fd" ]; then exec {fd}>&-; fi
+        return 1
+      fi
+    fi
+    _ALERT_IDX+=("$i")
+    # Sin clave, el asunto identifica la alerta para la reserva del dia.
+    clave="${clave:-asunto:${asuntos[$i]}}"
+    seguimiento+=("${clave//[$'\r\n']/ }")
+  done
+
+  local rc=0
+  if [ "${#_ALERT_IDX[@]}" -gt 0 ]; then
+    _alert_componer "$prefijo"
+    if [ -n "${ALERT_EMAIL:-}" ]; then
+      _alert_presupuesto "$dir" "$_ALERT_ASUNTO" "${seguimiento[@]}" || rc=1
+    fi
   fi
-  [ -z "${_ALERT_AVISO_ESTADO:-}" ] || return 0
-  _ALERT_AVISO_ESTADO=1
-  if [ -n "$_ALERT_DIR" ]; then
-    log "alertas: no puedo escribir el estado de alertas en $propio; vive en $respaldo (tmpfs): se pierde al reiniciar el host"
+  if [ -n "$fd" ]; then exec {fd}>&-; fi
+  return "$rc"
+}
+
+# _alert_componer <prefijo>: ordena _ALERT_IDX del mas grave al menos grave
+# (a igual gravedad, en el orden en que se encolaron) y deja el mensaje en
+# _ALERT_ASUNTO y _ALERT_CUERPO. Lee la cola de alert_flush.
+_alert_componer() {
+  local prefijo="$1" g i ordenados=()
+  for g in 0 1 2 3; do
+    for i in "${_ALERT_IDX[@]}"; do
+      _alert_gravedad "${claves[$i]}"
+      if [ "$_ALERT_GRAVEDAD" = "$g" ]; then ordenados+=("$i"); fi
+    done
+  done
+  _ALERT_IDX=("${ordenados[@]}")
+
+  local subject body="" linea detalle resto
+  if [ "${#_ALERT_IDX[@]}" -eq 1 ]; then
+    subject="${asuntos[${_ALERT_IDX[0]}]}"
+    body="${detalles[${_ALERT_IDX[0]}]}"
   else
-    log "alertas: no puedo escribir el estado de alertas en $propio ni en $respaldo; modo sin estado: sin silencio ni presupuesto, mail y webhook solo en la ventana de ALERT_STATELESS_EVERY_HOURS"
+    subject="${asuntos[${_ALERT_IDX[0]}]}"
+    if [ -n "$prefijo" ] && [[ "$subject" != "$prefijo:"* ]]; then
+      subject="$prefijo: $subject"
+    fi
+    resto=$((${#_ALERT_IDX[@]} - 1))
+    if [ "$resto" -eq 1 ]; then
+      subject+=" (+1 aviso)"
+    else
+      subject+=" (+$resto avisos)"
+    fi
+    for i in "${_ALERT_IDX[@]}"; do
+      linea="- ${asuntos[$i]}"
+      detalle="${detalles[$i]//[$'\r\n']/ }"
+      if [ -n "$detalle" ]; then linea+=": $detalle"; fi
+      if [ -n "$body" ]; then body+=$'\n'; fi
+      body+="$linea"
+    done
   fi
+  _ALERT_ASUNTO="$subject"
+  _ALERT_CUERPO="$body"
 }
 
 # _alert_sin_estado <asunto> <detalle> <alertas>: el envio del modo sin estado.
@@ -335,7 +377,9 @@ _alert_sin_estado() {
 # salio). Se llama con el lock de alertas tomado. Deja en _ALERT_MAIL_OK si
 # el mail sale (1) o no (0), y en _ALERT_NOTA la cuenta de suprimidos que
 # viaja en el mail que sale. La cuenta se vacia al darle ese mail a msmtp,
-# aunque msmtp falle: como el sello, no se reintenta.
+# aunque msmtp falle: como el sello, no se reintenta. Sale 1, con el motivo
+# en _ALERT_FALLA, si no pudo anotar el mail o la suprimida: sin registro
+# el presupuesto no cuenta nada (revision del 2026-11-15).
 _alert_presupuesto() {
   local dir="$1" subject="$2"
   shift 2
@@ -373,7 +417,8 @@ _alert_presupuesto() {
     if printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$subject" >>"$suprimidos" 2>/dev/null; then
       _ALERT_MAIL_OK=0
     else
-      log "alertas: no pude anotar la alerta suprimida en $suprimidos; mando igual"
+      _ALERT_FALLA="no pude anotar la alerta suprimida en $suprimidos"
+      return 1
     fi
     return 0
   fi
@@ -383,7 +428,9 @@ _alert_presupuesto() {
   done
   if ! { printf '%s\n' "$hoy" "$((usados + 1))" "${claves_hoy[@]}" >"$registro.tmp" &&
     mv -f "$registro.tmp" "$registro"; } 2>/dev/null; then
-    log "alertas: no pude anotar el mail en $registro; mando igual"
+    rm -f "$registro.tmp" 2>/dev/null || true
+    _ALERT_FALLA="no pude anotar el mail en $registro"
+    return 1
   fi
 
   if [ -s "$suprimidos" ]; then

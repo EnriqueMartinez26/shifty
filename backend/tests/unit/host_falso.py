@@ -375,6 +375,38 @@ def con_hora_utc(host: Host) -> None:
     host.env["PATH"] = os.pathsep.join([str(directorio), host.env["PATH"]])
 
 
+# touch: no puede CREAR un archivo cuya ruta matchee el patron glob
+# FAKE_TOUCH_SIN_ESPACIO (inodos agotados o ENOSPC: el directorio pasa `[ -w ]`
+# y no admite archivos nuevos); uno que ya existe se actualiza. alert() crea con
+# touch la prueba de escritura y los sellos del silencio.
+_TOUCH = r"""#!/bin/sh
+for ultimo in "$@"; do :; done
+if [ -n "${FAKE_TOUCH_SIN_ESPACIO:-}" ] && [ ! -e "$ultimo" ]; then
+  case "$ultimo" in
+    $FAKE_TOUCH_SIN_ESPACIO)
+      printf "touch: cannot touch '%s': No space left on device\n" "$ultimo" >&2
+      exit 1 ;;
+  esac
+fi
+exec "$FAKE_TOUCH_REAL" "$@"
+"""
+
+
+def sin_espacio_para_crear(host: Host, patron: str) -> None:
+    """Pone un `touch` falso delante del PATH del host: no crea los archivos que
+    matcheen `patron` (glob). Solo para los tests que lo necesitan."""
+    assert BASH is not None
+    herramientas = str(Path(BASH).parent)
+    touch_real = shutil.which("touch", path=herramientas) or shutil.which("touch")
+    assert touch_real, "hace falta el touch de coreutils"
+    directorio = host.raiz / "sin-espacio"
+    directorio.mkdir()
+    _ejecutable(directorio / "touch", _TOUCH)
+    host.env["FAKE_TOUCH_REAL"] = Path(touch_real).as_posix()
+    host.env["FAKE_TOUCH_SIN_ESPACIO"] = patron
+    host.env["PATH"] = os.pathsep.join([str(directorio), host.env["PATH"]])
+
+
 _DF = r"""#!/bin/sh
 echo "Filesystem 1024-blocks Used Available Capacity Mounted on"
 echo "/dev/sda1 100 50 50 ${FAKE_DISK_USE:-42}% /"

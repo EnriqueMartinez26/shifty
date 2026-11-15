@@ -35,9 +35,11 @@
 #   ps/inspect y GUARD_RESTART_TIMEOUT_SECONDS (120) para restart, que espera
 #   el stop_grace_period del contenedor (60 s el de celery_worker). Si docker
 #   no contesta o `docker ps` falla, esa corrida no reinicia nada y avisa una
-#   vez. Tras un `docker restart` que falla no reinicia nada mas en la
-#   corrida (el 13/11 dockerd devolvia errores, no se colgaba). Sin el
-#   binario `timeout` corre sin tope y lo anota una vez por corrida.
+#   vez. Tras un `docker restart` que falla o se cuelga no reinicia nada mas
+#   en la corrida (el 13/11 dockerd devolvia errores, no se colgaba), pero
+#   sigue con los demas contenedores para encolar sus avisos (rabbitmq, topes,
+#   "no reinicio X"). Sin el binario `timeout` corre sin tope y lo anota una
+#   vez por corrida.
 # - Con el host saturado (load de 1 minuto por CPU sobre
 #   GUARD_MAX_LOAD_PER_CPU, 4) no reinicia: reiniciar bajo saturacion
 #   empeoro el 13/11. Sin carga legible reinicia como antes; un tope que no
@@ -172,13 +174,18 @@ es_tope_vencido() {
   [ "$1" -eq 124 ] || [ "$1" -eq 137 ]
 }
 
-# docker_no_responde <que paso>: docker no contesto o fallo. Esta corrida no
-# reinicia nada mas. Un aviso con clave fija, no uno por contenedor ni por
-# corrida.
-docker_no_responde() {
+# aviso_docker_no_responde <que paso>: encola el aviso de que docker no
+# contesto o fallo. Una clave fija, no una por contenedor ni por corrida.
+aviso_docker_no_responde() {
   alert_add "guard: docker no responde ($1); no reinicio nada" \
     "Mirar: systemctl status docker; journalctl -u docker --since -30min. Unhealthy: ${enfermos[*]:-sin listar}" \
     guard-docker-no-responde 60
+}
+
+# docker_no_responde <que paso>: `docker ps` o `inspect` no contestaron o
+# fallaron. Sin la lista de contenedores la corrida termina aca.
+docker_no_responde() {
+  aviso_docker_no_responde "$1"
   alert_flush guard
   exit 0
 }
@@ -282,7 +289,8 @@ for entrada in "${enfermos[@]}"; do
 done
 
 # La carga se mide una vez, antes del primer reinicio: "" sin medir, 1
-# saturado, 0 no. `restart_fallido`: el contenedor cuyo restart fallo.
+# saturado, 0 no. `restart_fallido`: el contenedor cuyo restart fallo o se
+# colgo.
 saturado=""
 restart_fallido=""
 for entrada in "${enfermos[@]}"; do
@@ -334,8 +342,12 @@ for entrada in "${enfermos[@]}"; do
     fi
   fi
   [ "$saturado" = 0 ] || continue
+  # Tras un restart que fallo o se colgo no llama mas a docker, pero sigue
+  # con el resto: un rabbitmq que venia despues esperaba al tope global.
   if [ -n "$restart_fallido" ]; then
-    log "guard: no reinicio $nombre: el docker restart de $restart_fallido fallo en esta corrida"
+    alert_add "guard: no reinicio $nombre: ya fallo un restart en esta corrida" \
+      "El docker restart de $restart_fallido fallo; $nombre sigue unhealthy. Mirar: docker logs --tail 200 $nombre" \
+      "guard-sin-reinicio-$nombre" 60
     continue
   fi
   if [ -n "$sin_exclusividad" ]; then
@@ -359,7 +371,8 @@ for entrada in "${enfermos[@]}"; do
     alert_add "guard: reinicie $nombre (unhealthy)" \
       "Reinicio $((${#propios[@]} + 1)) de $GUARD_MAX_RESTARTS en la ultima hora."
   elif es_tope_vencido "$rc"; then
-    docker_no_responde "docker restart $nombre no termino en $GUARD_RESTART_TIMEOUT_SECONDS s"
+    restart_fallido="$nombre"
+    aviso_docker_no_responde "docker restart $nombre no termino en $GUARD_RESTART_TIMEOUT_SECONDS s"
   else
     restart_fallido="$nombre"
     alert_add "guard: fallo docker restart $nombre" \
