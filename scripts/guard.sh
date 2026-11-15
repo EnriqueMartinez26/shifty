@@ -18,6 +18,18 @@
 #   Tope global: GUARD_MAX_TOTAL_RESTARTS (6) en la misma ventana. Pasado un
 #   tope avisa y no reinicia mas.
 # - Durante un deploy (lock en .deploy/lock) no hace nada.
+#
+# Incidente 2026-11-13 (dockerd colgado de 15:10 a 17:07 UTC):
+# - Una sola corrida a la vez: `flock -n` sobre $SHIFTY_STATE_DIR/guard.lock.
+#   Cron la lanza cada minuto y cada corrida quedaba colgada en `docker ps`:
+#   se apilaban (procesos 435 -> 764, load 68 en 2 vCPU).
+# - Toda llamada a docker tiene tope: GUARD_DOCKER_TIMEOUT_SECONDS (30) para
+#   ps/inspect y GUARD_RESTART_TIMEOUT_SECONDS (120) para restart, que espera
+#   el stop_grace_period del contenedor (60 s el de celery_worker). Si docker
+#   no contesta, esa corrida no reinicia nada y avisa una vez.
+# - Con el host saturado (load de 1 minuto por CPU sobre
+#   GUARD_MAX_LOAD_PER_CPU, 4) no reinicia: reiniciar bajo saturacion
+#   empeoro el 13/11. Sin carga legible reinicia como antes.
 set -euo pipefail
 
 # shellcheck source=lib/common.sh
@@ -30,6 +42,10 @@ set -euo pipefail
 : "${GUARD_DEPENDENCIES:=db redis_state}"
 # Proyectos de compose que vigila; por defecto, el de este clon.
 : "${GUARD_PROJECTS:=$COMPOSE_PROJECT_NAME}"
+: "${GUARD_DOCKER_TIMEOUT_SECONDS:=30}"
+: "${GUARD_RESTART_TIMEOUT_SECONDS:=120}"
+: "${GUARD_MAX_LOAD_PER_CPU:=4}"
+: "${GUARD_LOADAVG_FILE:=/proc/loadavg}"
 
 if deploy_in_progress; then
   log "guard: hay un deploy en curso, no se reinicia nada"
@@ -40,6 +56,60 @@ estado="$SHIFTY_STATE_DIR/guard"
 mkdir -p "$estado"
 ahora="$(date +%s)"
 global="$estado/_global"
+
+# El lock dura lo que dura el proceso (fd 9): un guard matado lo suelta.
+if command -v flock >/dev/null 2>&1; then
+  exec 9>"$SHIFTY_STATE_DIR/guard.lock"
+  if ! flock -n 9; then
+    log "guard: otra corrida sigue en curso ($SHIFTY_STATE_DIR/guard.lock); salgo sin hacer nada"
+    exit 0
+  fi
+else
+  log "guard: el host no tiene flock; corro sin el lock de una sola corrida"
+fi
+
+enfermos=()
+
+# docker <args> con tope de <segundos>. Sale 124 (137 si hubo que matarlo) si
+# docker no contesta. El hijo no hereda el fd del lock: un docker colgado que
+# sobreviva al guard no bloquea a las corridas siguientes.
+docker_con_tope() {
+  local tope="$1"
+  shift
+  if command -v timeout >/dev/null 2>&1; then
+    timeout -k 5 "$tope" docker "$@" 9>&-
+  else
+    docker "$@" 9>&-
+  fi
+}
+
+es_tope_vencido() {
+  [ "$1" -eq 124 ] || [ "$1" -eq 137 ]
+}
+
+# Docker no contesto: esta corrida no reinicia nada mas. Un aviso con clave
+# fija, no uno por contenedor ni por corrida.
+docker_no_responde() {
+  alert "guard: docker no responde ($1 no termino en $2 s); no reinicio nada" \
+    "Mirar: systemctl status docker; journalctl -u docker --since -30min. Unhealthy: ${enfermos[*]:-sin listar}" \
+    guard-docker-no-responde 60
+  exit 0
+}
+
+# Load de 1 minuto por CPU sobre GUARD_MAX_LOAD_PER_CPU. Deja las cifras en
+# `carga_texto`. Sin load o CPUs legibles no frena (sale 1) y lo anota.
+carga_texto=""
+host_saturado() {
+  local carga="" cpus=""
+  carga="$(awk '{ print $1; exit }' "$GUARD_LOADAVG_FILE" 2>/dev/null)" || carga=""
+  cpus="$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null)" || cpus=""
+  if ! [[ "$carga" =~ ^[0-9]+([.][0-9]+)?$ ]] || ! [[ "$cpus" =~ ^[1-9][0-9]*$ ]]; then
+    log "guard: no pude leer la carga del host ($GUARD_LOADAVG_FILE, nproc); reinicio igual"
+    return 1
+  fi
+  carga_texto="load de 1 minuto $carga con $cpus CPU, tope $GUARD_MAX_LOAD_PER_CPU por CPU"
+  awk -v c="$carga" -v n="$cpus" -v t="$GUARD_MAX_LOAD_PER_CPU" 'BEGIN { exit !(c / n > t) }'
+}
 
 # Marcas de <archivo> dentro de la ventana, una por linea.
 recientes() {
@@ -59,13 +129,23 @@ en_lista() {
 }
 
 # "<nombre> <servicio>" de cada contenedor unhealthy de los proyectos vigilados.
-enfermos=()
 for proyecto in $GUARD_PROJECTS; do
-  ids="$(docker ps -q --filter health=unhealthy \
+  rc=0
+  ids="$(docker_con_tope "$GUARD_DOCKER_TIMEOUT_SECONDS" ps -q --filter health=unhealthy \
     --filter "label=com.docker.compose.project=$proyecto" \
-    --filter label=com.docker.compose.oneoff=False)"
+    --filter label=com.docker.compose.oneoff=False)" || rc=$?
+  if es_tope_vencido "$rc"; then
+    docker_no_responde "docker ps" "$GUARD_DOCKER_TIMEOUT_SECONDS"
+  fi
+  [ "$rc" -eq 0 ] || exit "$rc"
   for id in $ids; do
-    linea="$(docker inspect -f '{{.Name}} {{index .Config.Labels "com.docker.compose.service"}}' "$id")"
+    rc=0
+    linea="$(docker_con_tope "$GUARD_DOCKER_TIMEOUT_SECONDS" inspect \
+      -f '{{.Name}} {{index .Config.Labels "com.docker.compose.service"}}' "$id")" || rc=$?
+    if es_tope_vencido "$rc"; then
+      docker_no_responde "docker inspect" "$GUARD_DOCKER_TIMEOUT_SECONDS"
+    fi
+    [ "$rc" -eq 0 ] || exit "$rc"
     enfermos+=("${linea#/}")
   done
 done
@@ -81,6 +161,9 @@ for entrada in "${enfermos[@]}"; do
   fi
 done
 
+# La carga se mide una vez, antes del primer reinicio: "" sin medir, 1
+# saturado, 0 no.
+saturado=""
 for entrada in "${enfermos[@]}"; do
   nombre="${entrada%% *}"
   servicio="${entrada#* }"
@@ -108,11 +191,26 @@ for entrada in "${enfermos[@]}"; do
     continue
   fi
 
+  if [ -z "$saturado" ]; then
+    saturado=0
+    if host_saturado; then
+      saturado=1
+      alert "guard: host saturado ($carga_texto); no reinicio nada" \
+        "Reiniciar con el host saturado lo empeora (13/11). Unhealthy: ${enfermos[*]}" \
+        guard-host-saturado 60
+    fi
+  fi
+  [ "$saturado" = 0 ] || continue
+
   printf '%s\n' "${propios[@]}" "$ahora" >"$archivo"
   printf '%s\n' "${todos[@]}" "$ahora" >"$global"
-  if docker restart "$nombre" >/dev/null; then
+  rc=0
+  docker_con_tope "$GUARD_RESTART_TIMEOUT_SECONDS" restart "$nombre" >/dev/null || rc=$?
+  if [ "$rc" -eq 0 ]; then
     alert "guard: reinicie $nombre (unhealthy)" \
       "Reinicio $((${#propios[@]} + 1)) de $GUARD_MAX_RESTARTS en la ultima hora."
+  elif es_tope_vencido "$rc"; then
+    docker_no_responde "docker restart $nombre" "$GUARD_RESTART_TIMEOUT_SECONDS"
   else
     alert "guard: fallo docker restart $nombre" "El contenedor sigue unhealthy." \
       "guard-fallo-$nombre" 30

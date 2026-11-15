@@ -56,6 +56,11 @@ requiere_bash = pytest.mark.skipif(BASH is None, reason="hace falta bash")
 
 _DOCKER = r"""#!/bin/sh
 printf '%s\n' "docker $*" >> "$FAKE_DIR/calls"
+# FAKE_DOCKER_CUELGA=<subcomando>: el daemon no contesta (13/11: dockerd colgado
+# con "context deadline exceeded"). Duerme con el sleep real, no con el falso.
+if [ -n "${FAKE_DOCKER_CUELGA:-}" ] && [ "$1" = "$FAKE_DOCKER_CUELGA" ]; then
+  exec "$FAKE_SLEEP_REAL" 30
+fi
 # El token de GitHub no tiene por que llegar a docker/compose: se anota si un
 # `docker` lo hereda en el entorno.
 [ -z "${DEPLOY_GITHUB_TOKEN:-}" ] || printf '%s\n' "docker $1 $2" >> "$FAKE_DIR/docker_ve_el_token"
@@ -654,9 +659,16 @@ def crear_host(tmp_path: Path) -> Host:
     escribir_redis_info(fake / "redis_info", usada=10 * 1048576)
     # El sha que se despliega paso Quality en main.
     escribir_corridas_de_quality(fake / "gh_runs", verdes=1)
+    # La carga que lee el guard: la de un host tranquilo, salvo que el test la
+    # cambie (la del runner no puede decidir si el guard reinicia).
+    (fake / "loadavg").write_text(
+        "0.10 0.20 0.30 1/200 4242\n", encoding="utf-8", newline="\n"
+    )
     # Git Bash en Windows: /usr/bin (find, sort, sha256sum de GNU) antes que
     # System32, donde `find` es otro programa.
     herramientas = str(Path(BASH).parent)
+    sleep_real = shutil.which("sleep", path=herramientas) or shutil.which("sleep")
+    assert sleep_real, "hace falta el sleep de coreutils"
     env = {
         **os.environ,
         "PATH": os.pathsep.join(
@@ -673,6 +685,8 @@ def crear_host(tmp_path: Path) -> Host:
         "HARDENING_REBOOT_FLAG": (fake / "reboot-required").as_posix(),
         "HARDENING_OS_RELEASE": (fake / "os-release").as_posix(),
         "HARDENING_SSHD_CONFIG": (fake / "sshd_config").as_posix(),
+        "GUARD_LOADAVG_FILE": (fake / "loadavg").as_posix(),
+        "FAKE_SLEEP_REAL": Path(sleep_real).as_posix(),
     }
     for variable in (
         "APP_VERSION",

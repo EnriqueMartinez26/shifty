@@ -7,6 +7,7 @@ scripts REALES con binarios falsos (tests/unit/host_falso.py).
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -14,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from tests.unit.host_falso import (
+    BASH,
     DEPLOY,
     SSHD_SANO,
     Host,
@@ -133,6 +135,129 @@ def test_guard_tiene_un_tope_global_de_seis_reinicios_por_hora(host: Host) -> No
     (host.fake / "calls").unlink()
     host.correr("guard.sh", FAKE_UNHEALTHY_IDS="shifty-backend-9")
     assert _reinicios(host) == []
+
+
+# --- incidente 2026-11-13: dockerd colgado y tormenta de alertas ---------------
+# De 15:10 a 17:07 UTC dockerd no contestaba (healthchecks vencidos, KILL que
+# fallaba). El guard corria cada minuto sin lock ni tope de tiempo: cada corrida
+# quedaba colgada en `docker ps` y se apilaba (procesos 435 -> 764, load 68 en 2
+# vCPU); al destrabarse reiniciaba sobre el host saturado y mandaba un mail por
+# problema a la misma cuenta de Brevo Free (300 por dia) que usa la app.
+
+
+def _requiere(binario: str) -> pytest.MarkDecorator:
+    """flock (util-linux) no existe en Git Bash: esos tests corren en CI."""
+    ruta = str(Path(BASH).parent) if BASH else None
+    return pytest.mark.skipif(
+        shutil.which(binario, path=ruta) is None and shutil.which(binario) is None,
+        reason=f"hace falta {binario} (util-linux/coreutils del host Linux)",
+    )
+
+
+def _avisos(host: Host) -> list[str]:
+    return [ll for ll in host.llamadas() if ll.startswith(("curl ", "msmtp "))]
+
+
+@_requiere("flock")
+def test_guard_no_corre_si_otra_corrida_tiene_el_lock(host: Host) -> None:
+    assert BASH is not None
+    listo = host.raiz / "lock-tomado"
+    duenio = subprocess.Popen(
+        [
+            BASH,
+            "-c",
+            'exec 9>"$0"; flock 9; : > "$1"; read -r _',
+            (host.state / "guard.lock").as_posix(),
+            listo.as_posix(),
+        ],
+        stdin=subprocess.PIPE,
+    )
+    try:
+        limite = time.time() + 20
+        while not listo.exists():
+            assert time.time() < limite, "el duenio del lock no arranco"
+            time.sleep(0.05)
+
+        resultado = host.correr("guard.sh", FAKE_UNHEALTHY_IDS="abc123")
+    finally:
+        duenio.communicate(b"\n", timeout=20)
+
+    assert resultado.returncode == 0, resultado.stderr
+    assert "otra corrida sigue en curso" in resultado.stderr
+    assert not _hay(host.llamadas(), r"^docker ")
+
+
+@_requiere("timeout")
+def test_guard_con_docker_colgado_no_reinicia_y_avisa_una_vez(host: Host) -> None:
+    extra = {
+        "FAKE_UNHEALTHY_IDS": "abc123",
+        "FAKE_DOCKER_CUELGA": "ps",
+        "GUARD_DOCKER_TIMEOUT_SECONDS": "1",
+        "ALERT_WEBHOOK_URL": "https://hook",
+    }
+    inicio = time.time()
+    primera = host.correr("guard.sh", **extra)
+    segunda = host.correr("guard.sh", **extra)
+
+    assert time.time() - inicio < 25, "el tope de docker no corto la espera"
+    assert primera.returncode == 0, primera.stderr
+    assert segunda.returncode == 0, segunda.stderr
+    assert _reinicios(host) == []
+    avisos = _avisos(host)
+    assert len(avisos) == 1, avisos
+    assert "docker no responde" in avisos[0]
+
+
+@_requiere("timeout")
+def test_guard_con_docker_restart_colgado_no_sigue_reiniciando(host: Host) -> None:
+    resultado = host.correr(
+        "guard.sh",
+        FAKE_UNHEALTHY_IDS="shifty-backend-1 shifty-backend-2",
+        FAKE_DOCKER_CUELGA="restart",
+        GUARD_RESTART_TIMEOUT_SECONDS="1",
+        ALERT_WEBHOOK_URL="https://hook",
+    )
+
+    assert resultado.returncode == 0, resultado.stderr
+    assert len(_reinicios(host)) == 1
+    avisos = _avisos(host)
+    assert len(avisos) == 1, avisos
+    assert "docker no responde" in avisos[0]
+
+
+def test_guard_con_el_host_saturado_no_reinicia_y_avisa_una_vez(host: Host) -> None:
+    (host.fake / "loadavg").write_text(
+        "99999.00 40.00 20.00 9/764 4242\n", encoding="utf-8", newline="\n"
+    )
+    extra = {
+        "FAKE_UNHEALTHY_IDS": "shifty-backend-1 shifty-backend-2",
+        "ALERT_WEBHOOK_URL": "https://hook",
+    }
+
+    primera = host.correr("guard.sh", **extra)
+    segunda = host.correr("guard.sh", **extra)
+
+    assert primera.returncode == 0, primera.stderr
+    assert segunda.returncode == 0, segunda.stderr
+    assert _reinicios(host) == []
+    avisos = _avisos(host)
+    assert len(avisos) == 1, avisos
+    assert "host saturado" in avisos[0]
+    assert "99999.00" in avisos[0]
+    # Lo que no se reinicio no gasta el tope de la hora.
+    assert not (host.state / "guard" / "shifty-backend-1").exists()
+
+
+def test_guard_sin_carga_legible_reinicia_como_antes(host: Host) -> None:
+    resultado = host.correr(
+        "guard.sh",
+        FAKE_UNHEALTHY_IDS="abc123",
+        GUARD_LOADAVG_FILE=(host.raiz / "no-existe").as_posix(),
+    )
+
+    assert resultado.returncode == 0, resultado.stderr
+    assert _hay(host.llamadas(), r"docker restart abc123")
+    assert "no pude leer la carga" in resultado.stderr
 
 
 # --- checks.sh --------------------------------------------------------------
