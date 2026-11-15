@@ -384,12 +384,12 @@ def _flock_que_falla_una_vez(host: Host) -> str:
     directorio.mkdir()
     falso = directorio / "flock"
     falso.write_text(
-        '#!/bin/sh\n'
+        "#!/bin/sh\n"
         'if [ ! -e "$FAKE_DIR/flock-ya-fallo" ]; then\n'
         '  : > "$FAKE_DIR/flock-ya-fallo"\n'
-        '  exit 1\n'
-        'fi\n'
-        'exit 0\n',
+        "  exit 1\n"
+        "fi\n"
+        "exit 0\n",
         encoding="utf-8",
         newline="\n",
     )
