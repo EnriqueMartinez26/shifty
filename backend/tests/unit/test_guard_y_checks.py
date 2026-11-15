@@ -17,6 +17,7 @@ import pytest
 from tests.unit.host_falso import (
     BASH,
     DEPLOY,
+    SCRIPTS,
     SSHD_SANO,
     Host,
     _hay,
@@ -258,6 +259,208 @@ def test_guard_sin_carga_legible_reinicia_como_antes(host: Host) -> None:
     assert resultado.returncode == 0, resultado.stderr
     assert _hay(host.llamadas(), r"docker restart abc123")
     assert "no pude leer la carga" in resultado.stderr
+
+
+def test_guard_manda_un_solo_aviso_por_corrida(host: Host) -> None:
+    extra = {
+        "FAKE_UNHEALTHY_IDS": "shifty-rabbitmq-1 shifty-backend-1 shifty-backend-2",
+        "ALERT_EMAIL": "ops@example.com",
+        "ALERT_WEBHOOK_URL": "https://hook",
+    }
+
+    resultado = host.correr("guard.sh", **extra)
+
+    assert resultado.returncode == 0, resultado.stderr
+    assert len(_reinicios(host)) == 2
+    mails = host.mails()
+    assert len(mails) == 1, mails
+    assert len([ll for ll in host.llamadas() if ll.startswith("curl ")]) == 1
+    assert "Subject: [shifty@" in mails[0] and "guard: 3 avisos" in mails[0]
+    for linea in (
+        "- guard: shifty-rabbitmq-1 (rabbitmq) esta unhealthy; no se reinicia solo",
+        "- guard: reinicie shifty-backend-1 (unhealthy)",
+        "- guard: reinicie shifty-backend-2 (unhealthy)",
+    ):
+        assert linea in mails[0]
+    # Cada problema sigue en el log, aunque el mail sea uno.
+    assert resultado.stderr.count("ALERTA: guard:") == 3
+
+    # La corrida siguiente omite lo silenciado (rabbitmq, 60 min).
+    otra = host.correr("guard.sh", **extra)
+    assert otra.returncode == 0, otra.stderr
+    mails = host.mails()
+    assert len(mails) == 2
+    assert "guard: 2 avisos" in mails[1]
+    assert "rabbitmq" not in mails[1]
+    assert "alerta silenciada (guard-no-reinicia-shifty-rabbitmq-1)" in otra.stderr
+
+
+# --- alert() de scripts/lib/common.sh: silencio y presupuesto de mails --------
+
+
+def test_alerta_repetida_con_clave_sale_una_vez(host: Host) -> None:
+    primera = host.alertar("disco: / al 85 %", "", "disco", "60", ALERT_EMAIL="o@x")
+    segunda = host.alertar("disco: / al 85 %", "", "disco", "60", ALERT_EMAIL="o@x")
+
+    assert primera.returncode == 0 and segunda.returncode == 0
+    assert len(host.mails()) == 1
+    assert "alerta silenciada (disco)" in segunda.stderr
+
+
+def test_alertas_con_claves_distintas_salen_las_dos(host: Host) -> None:
+    host.alertar("disco: / al 85 %", "", "disco", "60", ALERT_EMAIL="o@x")
+    host.alertar("swap: el host no tiene swap", "", "swap", "60", ALERT_EMAIL="o@x")
+
+    mails = host.mails()
+    assert len(mails) == 2
+    assert "disco: / al 85 %" in mails[0] and "swap: el host" in mails[1]
+
+
+@_requiere("flock")
+def test_dos_alertas_a_la_vez_con_la_misma_clave_salen_una_vez(host: Host) -> None:
+    """Sin lock, varios procesos pasaban el chequeo del sello antes de que
+    alguno lo tocara."""
+    assert BASH is not None
+    largada = host.raiz / "largada"
+    procesos = [
+        subprocess.Popen(
+            [
+                BASH,
+                "-c",
+                'set -euo pipefail; while [ ! -e "$1" ]; do :; done; . "$0"; '
+                'alert "db caida" "" db-caida 60',
+                (SCRIPTS / "lib" / "common.sh").as_posix(),
+                largada.as_posix(),
+            ],
+            cwd=host.repo,
+            env={**host.env, "ALERT_EMAIL": "o@x"},
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        for _ in range(6)
+    ]
+    time.sleep(0.5)
+    largada.write_text("ya\n", encoding="utf-8")
+    for proceso in procesos:
+        assert proceso.wait(timeout=60) == 0
+
+    assert len(host.mails()) == 1, host.mails()
+
+
+def _presupuesto(maximo: int, reserva: int) -> dict[str, str]:
+    return {
+        "ALERT_EMAIL": "o@x",
+        "ALERT_EMAIL_MAX_PER_DAY": str(maximo),
+        "ALERT_EMAIL_RESERVED_PER_DAY": str(reserva),
+    }
+
+
+def _asunto(mail: str) -> str:
+    return mail.split("Subject: ", 1)[1].splitlines()[0]
+
+
+def test_el_presupuesto_diario_guarda_lugar_para_un_incidente_nuevo(
+    host: Host,
+) -> None:
+    """Cada alert() es un proceso nuevo: el contador vive en el estado del
+    host, no en memoria. Silencio 0: ninguna clave queda silenciada."""
+    p = _presupuesto(3, 1)
+    host.alertar("a: uno", "", "a", "0", **p)
+    host.alertar("b: dos", "", "b", "0", **p)
+    # La reserva es solo para claves que todavia no salieron hoy.
+    repetida = host.alertar("a: uno otra vez", "", "a", "0", **p)
+    nueva = host.alertar("c: incidente nuevo", "", "c", "0", **p)
+    agotada = host.alertar("d: otro nuevo", "", "d", "0", **p)
+
+    asuntos = [_asunto(m) for m in host.mails()]
+    assert len(asuntos) == 3, asuntos
+    assert asuntos[2].endswith("c: incidente nuevo")
+    assert nueva.returncode == 0, nueva.stderr
+    for resultado, asunto in (
+        (repetida, "a: uno otra vez"),
+        (agotada, "d: otro nuevo"),
+    ):
+        assert resultado.returncode == 0
+        assert (
+            f"alerta suprimida por presupuesto diario del host: {asunto}"
+            in resultado.stderr
+        )
+    assert _hay(
+        host.llamadas(),
+        r"^logger .*alerta suprimida por presupuesto diario del host: d: otro nuevo",
+    )
+
+
+def test_el_cambio_de_dia_utc_renueva_el_presupuesto_y_cuenta_las_suprimidas(
+    host: Host,
+) -> None:
+    p = _presupuesto(1, 0)
+    host.alertar("a: uno", "", "a", "0", **p)
+    host.alertar("b: dos", "", "b", "0", **p)
+    host.alertar("c: tres", "", "c", "0", **p)
+    assert len(host.mails()) == 1
+
+    # El mismo registro, pero de ayer (UTC): el dia nuevo arranca de cero.
+    registro = host.state / "alerts" / ".mails-del-dia"
+    lineas = registro.read_text(encoding="utf-8").splitlines()
+    ayer = time.strftime("%Y-%m-%d", time.gmtime(time.time() - 86400))
+    registro.write_text("\n".join([ayer, *lineas[1:]]) + "\n", encoding="utf-8")
+
+    resultado = host.alertar("d: cuatro", "detalle", "d", "0", **p)
+
+    assert resultado.returncode == 0, resultado.stderr
+    mails = host.mails()
+    assert len(mails) == 2
+    assert _asunto(mails[1]).endswith("d: cuatro")
+    assert "2 alertas suprimidas desde 20" in mails[1]
+    # Se cuentan una vez: el mail siguiente ya no las repite.
+    registro.write_text(ayer + "\n0\n", encoding="utf-8")
+    host.alertar("e: cinco", "", "e", "0", **p)
+    assert "suprimidas" not in host.mails()[2]
+
+
+def test_un_msmtp_que_falla_se_anota_y_no_se_reintenta(host: Host) -> None:
+    resultados = [
+        host.alertar(
+            "db caida", "", "db-caida", "60", ALERT_EMAIL="o@x", FAKE_MSMTP_EXIT="75"
+        )
+        for _ in range(2)
+    ]
+
+    assert all(r.returncode == 0 for r in resultados)
+    assert len([ll for ll in host.llamadas() if ll.startswith("msmtp ")]) == 1
+    assert "no se pudo mandar la alerta por mail (msmtp)" in resultados[0].stderr
+    assert "alerta silenciada (db-caida)" in resultados[1].stderr
+
+
+def test_el_webhook_no_gasta_presupuesto_y_su_falla_se_anota(host: Host) -> None:
+    p = {**_presupuesto(1, 0), "ALERT_WEBHOOK_URL": "https://hook"}
+    host.alertar("a: uno", "", "a", "0", **p)
+    resultado = host.alertar("b: dos", "", "b", "0", FAKE_CURL_EXIT="22", **p)
+
+    curls = [ll for ll in host.llamadas() if ll.startswith("curl ")]
+    assert len(curls) == 2
+    assert len(host.mails()) == 1
+    assert "no se pudo mandar la alerta al webhook" in resultado.stderr
+    assert (
+        "alerta suprimida por presupuesto diario del host: b: dos" in resultado.stderr
+    )
+
+
+def test_sin_estado_escribible_la_alerta_sale_igual(host: Host) -> None:
+    archivo = host.raiz / "un-archivo"
+    archivo.write_text("no soy un directorio\n", encoding="utf-8")
+    sin_estado = {
+        "SHIFTY_STATE_DIR": (archivo / "estado").as_posix(),
+        **_presupuesto(1, 0),
+    }
+
+    primera = host.alertar("db caida", "", "db-caida", "60", **sin_estado)
+    segunda = host.alertar("db caida", "", "db-caida", "60", **sin_estado)
+
+    assert primera.returncode == 0 and segunda.returncode == 0
+    assert len(host.mails()) == 2
+    assert "no puedo escribir el estado de alertas" in primera.stderr
 
 
 # --- checks.sh --------------------------------------------------------------

@@ -8,7 +8,7 @@ el certificado o el disco (R11-02, R11-03, R11-05, R11-17, R11-20).
 Los scripts corren en el VPS, pero su logica se prueba aca: cada test levanta
 el script REAL con `bash` y un PATH con binarios falsos (`docker`, `curl`,
 `rclone`, `df`, `timedatectl`, `openssl`, `sleep`, `sshd`, `ufw`, `apt-config`,
-`fail2ban-client`) que anotan cada llamada en
+`fail2ban-client`, `msmtp`) que anotan cada llamada en
 un archivo. Se afirma sobre el ORDEN y la presencia de esas llamadas: migrar
 antes de recrear, no migrar en el rollback, no pasar de 3 reinicios por hora,
 no marcar exito si la copia fuera del host fallo.
@@ -223,6 +223,15 @@ case "$*" in
     exit "${FAKE_GH_EXIT:-0}" ;;
 esac
 exit "${FAKE_CURL_EXIT:-0}"
+"""
+
+# msmtp: anota la llamada y guarda cada mail (cabeceras y cuerpo que llegan por
+# stdin) en `mails`, separados por una linea `=====`. Nunca sale un mail real.
+_MSMTP = r"""#!/bin/sh
+printf '%s\n' "msmtp $*" >> "$FAKE_DIR/calls"
+cat >> "$FAKE_DIR/mails"
+printf '=====\n' >> "$FAKE_DIR/mails"
+exit "${FAKE_MSMTP_EXIT:-0}"
 """
 
 # Endurecimiento del host (scripts/host-hardening-check.sh). Cada falso
@@ -550,6 +559,29 @@ class Host:
             return []
         return archivo.read_text(encoding="utf-8").splitlines()
 
+    def mails(self) -> list[str]:
+        """Los mails que le llegaron al msmtp falso, en orden."""
+        archivo = self.fake / "mails"
+        if not archivo.exists():
+            return []
+        texto = archivo.read_text(encoding="utf-8")
+        return [m for m in texto.split("=====\n") if m.strip()]
+
+    def alertar(self, *args: str, **extra: str) -> subprocess.CompletedProcess[str]:
+        """`alert <args>` de scripts/lib/common.sh en un proceso bash nuevo,
+        estricto como los scripts que la usan."""
+        assert BASH is not None
+        common = (SCRIPTS / "lib" / "common.sh").as_posix()
+        return subprocess.run(
+            [BASH, "-c", 'set -euo pipefail; . "$0"; alert "$@"', common, *args],
+            cwd=self.repo,
+            env={**self.env, **extra},
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+
     def correr(
         self, script: str, *args: str, **extra: str
     ) -> subprocess.CompletedProcess[str]:
@@ -627,6 +659,7 @@ def crear_host(tmp_path: Path) -> Host:
         _ejecutable(
             bin_dir / nombre, _REGISTRA.format(nombre=nombre, variable=variable)
         )
+    _ejecutable(bin_dir / "msmtp", _MSMTP)
     _ejecutable(bin_dir / "df", _DF)
     _ejecutable(bin_dir / "timedatectl", _TIMEDATECTL)
     _ejecutable(bin_dir / "openssl", _OPENSSL)
@@ -693,6 +726,8 @@ def crear_host(tmp_path: Path) -> Host:
         "DOMAIN",
         "ALERT_WEBHOOK_URL",
         "ALERT_EMAIL",
+        "ALERT_EMAIL_MAX_PER_DAY",
+        "ALERT_EMAIL_RESERVED_PER_DAY",
         "COMPOSE_FILE",
         "DEPLOY_SKIP_QUALITY_CHECK",
     ):

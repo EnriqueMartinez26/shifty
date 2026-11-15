@@ -30,6 +30,9 @@
 # - Con el host saturado (load de 1 minuto por CPU sobre
 #   GUARD_MAX_LOAD_PER_CPU, 4) no reinicia: reiniciar bajo saturacion
 #   empeoro el 13/11. Sin carga legible reinicia como antes.
+# - Una corrida manda a lo sumo UN aviso con todos sus problemas (alert_add +
+#   alert_flush de lib/common.sh); cada problema conserva su silencio y queda
+#   en el log. El presupuesto diario de mails del host vive en alert().
 set -euo pipefail
 
 # shellcheck source=lib/common.sh
@@ -90,9 +93,10 @@ es_tope_vencido() {
 # Docker no contesto: esta corrida no reinicia nada mas. Un aviso con clave
 # fija, no uno por contenedor ni por corrida.
 docker_no_responde() {
-  alert "guard: docker no responde ($1 no termino en $2 s); no reinicio nada" \
+  alert_add "guard: docker no responde ($1 no termino en $2 s); no reinicio nada" \
     "Mirar: systemctl status docker; journalctl -u docker --since -30min. Unhealthy: ${enfermos[*]:-sin listar}" \
     guard-docker-no-responde 60
+  alert_flush guard
   exit 0
 }
 
@@ -154,9 +158,10 @@ done
 for entrada in "${enfermos[@]}"; do
   servicio="${entrada#* }"
   if en_lista "$servicio" "$GUARD_DEPENDENCIES"; then
-    alert "guard: $servicio esta unhealthy (${entrada%% *}); no reinicio nada" \
+    alert_add "guard: $servicio esta unhealthy (${entrada%% *}); no reinicio nada" \
       "Con una dependencia caida el resto falla por arrastre. Unhealthy: ${enfermos[*]}" \
       "guard-dependencia-$servicio" 30
+    alert_flush guard
     exit 0
   fi
 done
@@ -169,7 +174,7 @@ for entrada in "${enfermos[@]}"; do
   servicio="${entrada#* }"
 
   if en_lista "$servicio" "$GUARD_NO_RESTART"; then
-    alert "guard: $nombre ($servicio) esta unhealthy; no se reinicia solo" \
+    alert_add "guard: $nombre ($servicio) esta unhealthy; no se reinicia solo" \
       "Mirar: docker logs --tail 200 $nombre" "guard-no-reinicia-$nombre" 60
     continue
   fi
@@ -179,13 +184,13 @@ for entrada in "${enfermos[@]}"; do
   mapfile -t todos < <(recientes "$global")
 
   if [ "${#propios[@]}" -ge "$GUARD_MAX_RESTARTS" ]; then
-    alert "guard: $nombre sigue unhealthy y ya se reinicio ${#propios[@]} veces en la ultima hora" \
+    alert_add "guard: $nombre sigue unhealthy y ya se reinicio ${#propios[@]} veces en la ultima hora" \
       "No se reinicia mas hasta que baje el contador. Mirar: docker logs --tail 200 $nombre" \
       "guard-tope-$nombre" 60
     continue
   fi
   if [ "${#todos[@]}" -ge "$GUARD_MAX_TOTAL_RESTARTS" ]; then
-    alert "guard: tope global de $GUARD_MAX_TOTAL_RESTARTS reinicios por hora alcanzado; $nombre sigue unhealthy" \
+    alert_add "guard: tope global de $GUARD_MAX_TOTAL_RESTARTS reinicios por hora alcanzado; $nombre sigue unhealthy" \
       "Demasiados contenedores cayendo a la vez: hace falta una persona." \
       "guard-tope-global" 60
     continue
@@ -195,7 +200,7 @@ for entrada in "${enfermos[@]}"; do
     saturado=0
     if host_saturado; then
       saturado=1
-      alert "guard: host saturado ($carga_texto); no reinicio nada" \
+      alert_add "guard: host saturado ($carga_texto); no reinicio nada" \
         "Reiniciar con el host saturado lo empeora (13/11). Unhealthy: ${enfermos[*]}" \
         guard-host-saturado 60
     fi
@@ -207,12 +212,13 @@ for entrada in "${enfermos[@]}"; do
   rc=0
   docker_con_tope "$GUARD_RESTART_TIMEOUT_SECONDS" restart "$nombre" >/dev/null || rc=$?
   if [ "$rc" -eq 0 ]; then
-    alert "guard: reinicie $nombre (unhealthy)" \
+    alert_add "guard: reinicie $nombre (unhealthy)" \
       "Reinicio $((${#propios[@]} + 1)) de $GUARD_MAX_RESTARTS en la ultima hora."
   elif es_tope_vencido "$rc"; then
     docker_no_responde "docker restart $nombre" "$GUARD_RESTART_TIMEOUT_SECONDS"
   else
-    alert "guard: fallo docker restart $nombre" "El contenedor sigue unhealthy." \
+    alert_add "guard: fallo docker restart $nombre" "El contenedor sigue unhealthy." \
       "guard-fallo-$nombre" 30
   fi
 done
+alert_flush guard
