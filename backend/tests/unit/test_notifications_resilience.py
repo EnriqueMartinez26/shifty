@@ -64,10 +64,12 @@ class _FakeRepo:
 
     claims: list[tuple[str, str]] = []
     releases: list[tuple[str, str]] = []
+    schedules: list[tuple[str, str, datetime, dict[str, Any]]] = []
     rows: list[tuple[Any, Any, Any, Any, Any]] = []
     limits: list[int | None] = []
     columns: list[str | None] = []
     claim_result = True
+    schedule_result = True
 
     def __init__(self, db: Any) -> None:
         self.db = db
@@ -93,45 +95,43 @@ class _FakeRepo:
     async def release_reminder(self, appointment_id: str, column: str) -> None:
         self.releases.append((appointment_id, column))
 
+    async def schedule_reminder(
+        self,
+        appointment_id: str,
+        column: str,
+        scheduled_at: datetime,
+        payload: dict[str, Any],
+    ) -> bool:
+        self.schedules.append((appointment_id, column, scheduled_at, payload))
+        return self.schedule_result
+
 
 def _preparar(
     monkeypatch: pytest.MonkeyPatch, rows: list[Any], *, claim_result: bool = True
-) -> list[dict[str, Any]]:
-    enviados: list[dict[str, Any]] = []
-
-    async def fake_notify_client_reminder(
-        *,
-        email: str | None,
-        details: dict[str, Any],
-        smtp: Any = None,
-    ) -> dict[str, str]:
-        enviados.append(details)
-        return {"status": "sent", "channel": "email", "to": email or ""}
-
+) -> list[tuple[str, str, datetime, dict[str, Any]]]:
     _FakeRepo.claims = []
     _FakeRepo.releases = []
+    _FakeRepo.schedules = []
     _FakeRepo.limits = []
     _FakeRepo.columns = []
     _FakeRepo.rows = rows
     _FakeRepo.claim_result = claim_result
+    _FakeRepo.schedule_result = True
     monkeypatch.setattr(
         notification_tasks, "AsyncSessionFactory", lambda: _FakeSessionFactory()
     )
     monkeypatch.setattr(
-        notification_tasks, "notify_client_reminder", fake_notify_client_reminder
-    )
-    monkeypatch.setattr(
         "modules.appointments.repository.AppointmentRepository", _FakeRepo
     )
-    return enviados
+    return _FakeRepo.schedules
 
 
 @pytest.mark.asyncio
-async def test_el_recordatorio_de_24h_reclama_la_marca_y_envia(
+async def test_el_recordatorio_de_24h_guarda_la_marca_y_el_mail_en_outbox(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     now = datetime.now(timezone.utc)
-    enviados = _preparar(monkeypatch, [_fila(now, 23)])
+    _preparar(monkeypatch, [_fila(now, 23)])
 
     result = await notification_tasks.process_due_appointment_reminders(
         now=now, lookahead_hours=48
@@ -140,21 +140,28 @@ async def test_el_recordatorio_de_24h_reclama_la_marca_y_envia(
     assert result["status"] == "processed"
     assert result["published"] == 1
     assert result["skipped"] == 0
-    assert _FakeRepo.claims == [("appt-2", "reminder_24h_sent_at")]
-    assert enviados[0]["stage"] == "24h"
-    assert enviados[0]["rebook_url"].endswith("/b/demo?service=svc-1&staff=st-1")
+    assert _FakeRepo.schedules[0][0:2] == ("appt-2", "reminder_24h_sent_at")
+    payload = _FakeRepo.schedules[0][3]
+    assert payload["mail"] == "reminder"
+    assert payload["args"]["details"]["stage"] == "24h"
+    assert payload["args"]["details"]["rebook_url"].endswith(
+        "/b/demo?service=svc-1&staff=st-1"
+    )
+    assert payload["logical_id"] == "reminder:appt-2:24h"
+    assert payload["expires_at"] == _FakeRepo.rows[0][0].starts_at.isoformat()
 
 
 @pytest.mark.asyncio
 async def test_reclamo_perdido_no_reenvia(monkeypatch: pytest.MonkeyPatch) -> None:
     # Otro worker gano el UPDATE ... WHERE col IS NULL: este no manda nada.
     now = datetime.now(timezone.utc)
-    enviados = _preparar(monkeypatch, [_fila(now, 23)], claim_result=False)
+    _preparar(monkeypatch, [_fila(now, 23)])
+    _FakeRepo.schedule_result = False
 
     result = await notification_tasks.process_due_appointment_reminders(now=now)
 
     assert result["published"] == 0
-    assert enviados == []
+    assert len(_FakeRepo.schedules) == 1
 
 
 @pytest.mark.asyncio
@@ -162,12 +169,12 @@ async def test_a_hora_y_media_va_solo_el_de_2h(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     now = datetime.now(timezone.utc)
-    enviados = _preparar(monkeypatch, [_fila(now, 1.5)])
+    schedules = _preparar(monkeypatch, [_fila(now, 1.5)])
 
     await notification_tasks.process_due_appointment_reminders(now=now)
 
-    assert _FakeRepo.claims == [("appt-2", "reminder_2h_sent_at")]
-    assert enviados[0]["stage"] == "2h"
+    assert schedules[0][0:2] == ("appt-2", "reminder_2h_sent_at")
+    assert schedules[0][3]["args"]["details"]["stage"] == "2h"
 
 
 @pytest.mark.asyncio
@@ -177,26 +184,26 @@ async def test_tienda_con_recordatorios_apagados_se_saltea(
     now = datetime.now(timezone.utc)
     fila = _fila(now, 23)
     fila[4].send_email_reminders = False
-    enviados = _preparar(monkeypatch, [fila])
+    schedules = _preparar(monkeypatch, [fila])
 
     result = await notification_tasks.process_due_appointment_reminders(now=now)
 
     assert result["skipped"] == 1
-    assert enviados == []
+    assert schedules == []
     assert _FakeRepo.claims == []
 
 
 @pytest.mark.asyncio
-async def test_envio_fallido_libera_la_marca(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_falla_al_guardar_mail_no_sella_el_recordatorio(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     now = datetime.now(timezone.utc)
     _preparar(monkeypatch, [_fila(now, 23)])
 
-    async def explota(**kwargs: Any) -> dict[str, str]:
-        raise RuntimeError("SMTP send failed")
+    async def fail_schedule(*_args: Any, **_kwargs: Any) -> bool:
+        raise RuntimeError("database unavailable")
 
-    monkeypatch.setattr(notification_tasks, "notify_client_reminder", explota)
+    monkeypatch.setattr(_FakeRepo, "schedule_reminder", fail_schedule)
 
-    result = await notification_tasks.process_due_appointment_reminders(now=now)
-
-    assert result["published"] == 0
-    assert _FakeRepo.releases == [("appt-2", "reminder_24h_sent_at")]
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        await notification_tasks.process_due_appointment_reminders(now=now)

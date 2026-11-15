@@ -1,9 +1,8 @@
-"""Dos workers reclaman el mismo recordatorio: solo uno envia.
+"""Dos workers programan una sola fila durable por etapa.
 
-El reclamo es ``UPDATE appointments SET reminder_24h_sent_at = now WHERE id =
-:id AND reminder_24h_sent_at IS NULL``. En Postgres real dos sesiones que lo
-corren a la vez ven rowcount 1 y 0; en SQLite no hay concurrencia y el test
-seria una mentira.
+La marca de etapa y la fila ``email.send`` se escriben en la misma transaccion.
+En Postgres real dos sesiones concurrentes deben producir una sola fila; en
+SQLite no hay concurrencia y el test seria una mentira.
 """
 
 import asyncio
@@ -12,12 +11,14 @@ from typing import Any
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 import modules.notifications.tasks as tasks
 from core.database import _apply_tenant_context, set_tenant_context
+from modules.appointments.model import Appointment
 from modules.appointments.repository import AppointmentRepository
+from modules.payments.model import OutboxMessage
 from tests.integration.test_feature_flags_finance_and_public_privacy import (
     add_staff_schedule,
     create_service,
@@ -75,19 +76,12 @@ async def _turno_para_manana(
 
 
 @pytest.mark.asyncio
-async def test_dos_workers_reclaman_el_mismo_recordatorio_y_solo_uno_envia(
+async def test_dos_workers_programan_una_sola_fila_durable(
     client: AsyncClient,
     app_sessions: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     appointment_id, slot = await _turno_para_manana(client, app_sessions)
-    enviados: list[dict[str, Any]] = []
-
-    async def buzon(**kwargs: Any) -> dict[str, str]:
-        enviados.append(kwargs["details"])
-        return {"status": "sent", "channel": "email", "to": ""}
-
-    monkeypatch.setattr(tasks, "notify_client_reminder", buzon)
     # El job usa AsyncSessionFactory; aca se lo apunta al engine de la app.
     monkeypatch.setattr(tasks, "AsyncSessionFactory", app_sessions)
 
@@ -99,10 +93,9 @@ async def test_dos_workers_reclaman_el_mismo_recordatorio_y_solo_uno_envia(
     )
 
     assert sum(int(r["published"]) for r in resultados) == 1
-    assert len(enviados) == 1
-    assert enviados[0]["stage"] == "24h"
 
-    # La marca quedo persistida: una tercera corrida no manda nada.
+    # La marca y el email pendiente quedaron persistidos; una tercera corrida
+    # no crea otra fila aunque el dispatcher todavia no se haya ejecutado.
     tercera = await tasks.process_due_appointment_reminders(now=now)
     assert tercera["published"] == 0
 
@@ -110,11 +103,85 @@ async def test_dos_workers_reclaman_el_mismo_recordatorio_y_solo_uno_envia(
         set_tenant_context(None, True)
         try:
             await _apply_tenant_context(session)
+            filas = list(
+                (
+                    await session.scalars(
+                        select(OutboxMessage).where(
+                            OutboxMessage.event_type == "email.send",
+                            OutboxMessage.payload["logical_id"].as_string()
+                            == f"reminder:{appointment_id}:24h",
+                        )
+                    )
+                ).all()
+            )
+            assert len(filas) == 1
+            assert filas[0].processed_at is None
+            assert filas[0].payload["mail"] == "reminder"
+            assert filas[0].payload["expires_at"] == slot.isoformat()
             repo = AppointmentRepository(session)
             reclamo_tardio = await repo.claim_reminder(
                 appointment_id, "reminder_24h_sent_at", now
             )
             assert reclamo_tardio is False
             assert await repo.claim_reminder(appointment_id, "reminder_2h_sent_at", now)
+        finally:
+            set_tenant_context(None, False)
+
+
+@pytest.mark.asyncio
+async def test_error_al_insertar_el_outbox_revierte_la_marca_del_turno(
+    client: AsyncClient,
+    app_sessions: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    appointment_id, slot = await _turno_para_manana(client, app_sessions)
+    payload = {
+        "mail": "reminder",
+        "args": {"email": "recordado@demo.com", "details": {"stage": "24h"}},
+        "logical_id": f"reminder:{appointment_id}:24h",
+        "expires_at": slot.isoformat(),
+    }
+
+    async with app_sessions() as session:
+        set_tenant_context(None, True)
+        try:
+            await _apply_tenant_context(session)
+            original_add = session.add
+
+            def reject_outbox(instance: Any, **kwargs: Any) -> None:
+                if isinstance(instance, OutboxMessage):
+                    raise RuntimeError("outbox insert failed")
+                original_add(instance, **kwargs)
+
+            monkeypatch.setattr(session, "add", reject_outbox)
+            repo = AppointmentRepository(session)
+            with pytest.raises(RuntimeError, match="outbox insert failed"):
+                await repo.schedule_reminder(
+                    appointment_id,
+                    "reminder_24h_sent_at",
+                    slot - timedelta(hours=23),
+                    payload,
+                )
+        finally:
+            set_tenant_context(None, False)
+
+    async with app_sessions() as session:
+        set_tenant_context(None, True)
+        try:
+            await _apply_tenant_context(session)
+            appointment = await session.get(Appointment, appointment_id)
+            assert appointment is not None
+            assert appointment.reminder_24h_sent_at is None
+            rows = list(
+                (
+                    await session.scalars(
+                        select(OutboxMessage).where(
+                            OutboxMessage.payload["logical_id"].as_string()
+                            == f"reminder:{appointment_id}:24h"
+                        )
+                    )
+                ).all()
+            )
+            assert rows == []
         finally:
             set_tenant_context(None, False)

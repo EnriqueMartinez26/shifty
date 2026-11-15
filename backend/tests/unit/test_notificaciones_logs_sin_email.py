@@ -316,22 +316,25 @@ async def test_un_fallo_al_encolar_mail_se_reporta_a_sentry(
 
 
 @pytest.mark.asyncio
-async def test_el_fallo_del_recordatorio_no_vuelca_el_texto_crudo(
+async def test_agendar_el_recordatorio_no_vuelca_el_email_ni_el_telefono(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    liberados: list[str] = []
+    agendados: list[dict[str, Any]] = []
 
     class _Repo:
         async def claim_reminder(self, *args: Any) -> bool:
             return True
 
-        async def release_reminder(self, appointment_id: str, columna: str) -> None:
-            liberados.append(columna)
+        async def schedule_reminder(
+            self,
+            _appointment_id: str,
+            _column: str,
+            _scheduled_at: datetime,
+            payload: dict[str, Any],
+        ) -> bool:
+            agendados.append(payload)
+            return True
 
-    async def explota(**kwargs: Any) -> dict[str, str]:
-        raise RuntimeError(f"rechazado {EMAIL} desde +5491155512345")
-
-    monkeypatch.setattr(tasks, "notify_client_reminder", explota)
     turno = SimpleNamespace(
         id="ap-1",
         public_id="appt-b408",
@@ -348,12 +351,12 @@ async def test_el_fallo_del_recordatorio_no_vuelca_el_texto_crudo(
     )
 
     with capture_logs() as eventos:
-        enviado = await tasks._dispatch_reminder(
+        agendado = await tasks._dispatch_reminder(
             _Repo(), fila, STAGE_24H, datetime.now(timezone.utc)
         )
 
-    assert enviado is False
-    assert liberados == [STAGE_24H.column], "el reclamo se libera para reintentar"
+    assert agendado is True
+    assert agendados[0]["args"]["email"] == EMAIL
     _sin_email_crudo(eventos)
     assert all("5491155512345" not in repr(e) for e in eventos)
 

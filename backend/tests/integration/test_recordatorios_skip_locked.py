@@ -104,16 +104,21 @@ async def test_el_resultado_informa_filas_sin_revisar_y_lote_lleno(
         notification_tasks, "time", SimpleNamespace(monotonic=reloj.monotonic)
     )
 
-    async def envio_lento(
-        *,
-        email: str | None,
-        details: dict[str, Any],
-        smtp: Any = None,
-    ) -> dict[str, str]:
-        reloj.ahora += notification_tasks.REMINDER_TIME_BUDGET_SECONDS * 0.6
-        return {"status": "sent", "channel": "email", "to": email or ""}
+    schedule_reminder = _FakeRepo.schedule_reminder
 
-    monkeypatch.setattr(notification_tasks, "notify_client_reminder", envio_lento)
+    async def schedule_lento(
+        repo: Any,
+        appointment_id: str,
+        column: str,
+        scheduled_at: datetime,
+        payload: dict[str, Any],
+    ) -> bool:
+        reloj.ahora += notification_tasks.REMINDER_TIME_BUDGET_SECONDS * 0.6
+        return await schedule_reminder(
+            repo, appointment_id, column, scheduled_at, payload
+        )
+
+    monkeypatch.setattr(_FakeRepo, "schedule_reminder", schedule_lento)
 
     # Hay 5 vencidos y el tope es 4: el lote vino lleno y, de los 4 traidos,
     # el presupuesto alcanzo para 2. El quinto nunca se vio: no se cuenta como

@@ -48,6 +48,7 @@ from modules.notifications.tasks import (
     EVENT_APPOINTMENT_CONFIRMED,
     EVENT_APPOINTMENT_RESCHEDULED,
     build_client_details,
+    notify_client_reminder,
     send_waitlist_offer_email,
     format_local_datetime,
     format_local_deadline,
@@ -236,6 +237,7 @@ def _sender(kind: str) -> PendingEmail | None:
         "waitlist_offer": send_waitlist_offer_email,
         "cancellation": send_cancellation_email,
         "confirmation": send_confirmation_email,
+        "reminder": notify_client_reminder,
         "store_notification": send_store_notification_email,
         "rebook": send_rebook_email,
         "reschedule": send_reschedule_email,
@@ -687,6 +689,7 @@ async def _dispatch_pending_emails(
     fallados: list[tuple[OutboxMessage, str]] = []
     intentados = 0
     diferido_por_cuota = False
+    disposiciones_terminales = False
     async with smtp_session() as smtp:
         while True:
             if time.monotonic() >= deadline:
@@ -722,6 +725,12 @@ async def _dispatch_pending_emails(
                     **_contexto_del_mail(fila),
                 )
                 continue
+            if motivo in {"reminder_expired", "reminder_invalid_expiry"}:
+                # A reminder has no value after its appointment starts. Keep
+                # the durable claim and record why it reached terminal state.
+                fila.error = motivo
+                disposiciones_terminales = True
+                continue
             if motivo is not None:
                 retryable_pre_data = getattr(smtp, "last_delivery_retryable", False)
                 if retryable_pre_data:
@@ -735,10 +744,11 @@ async def _dispatch_pending_emails(
                 fallados.append((fila, motivo))
                 if retryable_pre_data:
                     break
-    if not fallados and not diferido_por_cuota:
+    if not fallados and not diferido_por_cuota and not disposiciones_terminales:
         return
-    if fallados or diferido_por_cuota:
+    if fallados or diferido_por_cuota or disposiciones_terminales:
         await _apply_tenant_context(db)
+    if fallados:
         for fila, motivo in fallados:
             fila.register_failure(motivo)
     await AsyncSession.commit(db)
@@ -782,18 +792,40 @@ async def _send_one_pending_email(fila: OutboxMessage, smtp: Any) -> str | None:
     contexto = _contexto_del_mail(fila)
     payload = fila.payload if isinstance(fila.payload, dict) else {}
     mail_kind = str(payload.get("mail") or "")
+    if hasattr(smtp, "last_budget_decision"):
+        smtp.last_budget_decision = None
+    if hasattr(smtp, "last_delivery_retryable"):
+        smtp.last_delivery_retryable = False
+    if mail_kind == "reminder":
+        expires_at = payload.get("expires_at")
+        if not isinstance(expires_at, str):
+            return "reminder_invalid_expiry"
+        try:
+            expiry = ensure_utc_aware(datetime.fromisoformat(expires_at))
+        except ValueError:
+            return "reminder_invalid_expiry"
+        if datetime.now(timezone.utc) >= expiry:
+            logger.info(
+                "outbox_reminder_expired",
+                **contexto,
+            )
+            return "reminder_expired"
     enviar = _sender(mail_kind)
     argumentos = payload.get("args")
     if enviar is None or not isinstance(argumentos, dict):
         logger.warning("outbox_email_skipped", error_type="unknown_mail", **contexto)
         return "unknown_mail"
     try:
-        priority: MailPriority = "low" if mail_kind == "rebook" else "high"
-        message_id = f"outbox:{getattr(fila, 'id', None) or getattr(fila, 'public_id', 'unknown')}"
-        if hasattr(smtp, "last_budget_decision"):
-            smtp.last_budget_decision = None
-        if hasattr(smtp, "last_delivery_retryable"):
-            smtp.last_delivery_retryable = False
+        priority: MailPriority = (
+            "low"
+            if mail_kind == "rebook"
+            else "medium"
+            if mail_kind == "reminder"
+            else "high"
+        )
+        message_id = payload.get("logical_id")
+        if not isinstance(message_id, str) or not message_id:
+            message_id = f"outbox:{getattr(fila, 'id', None) or getattr(fila, 'public_id', 'unknown')}"
         # La fila solo se reclama cuando SQL la dejó pendiente. Eso cubre un
         # envío nuevo, diferido antes de SMTP o reabierto por un fallo conocido
         # pre-DATA; los resultados ambiguos después de DATA quedan sellados.

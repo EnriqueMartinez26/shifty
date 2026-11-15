@@ -62,10 +62,16 @@ def test_el_presupuesto_requiere_la_ventana_real_del_proveedor() -> None:
 
     settings = _build(
         MAIL_DAILY_BUDGET=250,
-        MAIL_BUDGET_TIMEZONE="America/Argentina/Buenos_Aires",
-        MAIL_BUDGET_RESET_HOUR=4,
+        MAIL_BUDGET_TIMEZONE="UTC",
+        MAIL_BUDGET_RESET_HOUR=0,
+        MAIL_CRITICAL_RESERVE_PERCENT=20,
+        MAIL_BUDGET_ALERT_PERCENT=80,
     )
     assert settings.MAIL_DAILY_BUDGET == 250
+    assert settings.MAIL_BUDGET_TIMEZONE == "UTC"
+    assert settings.MAIL_BUDGET_RESET_HOUR == 0
+    assert settings.MAIL_CRITICAL_RESERVE_PERCENT == 20
+    assert settings.MAIL_BUDGET_ALERT_PERCENT == 80
 
 
 @pytest.mark.parametrize("segundos", [59, 3601])

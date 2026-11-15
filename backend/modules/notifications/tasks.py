@@ -47,15 +47,12 @@ from modules.notifications.reminders import (
 
 logger = structlog.get_logger()
 
-# B4-02 (2026-09-17): el lote de recordatorios corre bajo el time limit de
-# Celery (120 s soft / 150 s hard, core/config.py) y cada recordatorio se
-# reclama con commit ANTES de mandarse. Sin tope, con un SMTP lento el hard
-# limit mataba el proceso a mitad del lote y los turnos ya reclamados quedaban
-# marcados como enviados sin mail: la corrida siguiente los descartaba. Dos
-# topes: filas por corrida (la query traia 5 objetos ORM por turno de 48 h de
-# TODAS las tiendas) y un presupuesto de tiempo que se revisa ANTES de reclamar
-# el siguiente. Lo que no entra queda con la marca en NULL y espera al tick
-# siguiente (beat cada 15 minutos); el reclamo sigue siendo la exclusion.
+# B4-02 (2026-09-17): el lote tiene un tope de filas y un presupuesto de
+# tiempo. Cada etapa y su email.send se guardan juntos en SQL antes de marcar
+# el recordatorio programado. El SMTP lo procesa el despachador del outbox:
+# un reinicio entre la programacion y el envio deja la fila pendiente para el
+# siguiente tick. Las filas que no entran al presupuesto siguen con la marca
+# en NULL y vuelven a salir en la corrida siguiente.
 #
 # S-06 (2026-09-18): el resultado decia ``deferred`` y contaba solo las filas
 # TRAIDAS que el presupuesto no alcanzo a revisar; lo que quedaba afuera del
@@ -188,22 +185,19 @@ class SmtpSession:
     """Una conexion SMTP (conexion + STARTTLS + LOGIN) para varios envios.
 
     B4-08 (2026-09-18): ``_send_email`` abria conexion, STARTTLS y LOGIN por
-    cada mensaje, y el lote de recordatorios pagaba N handshakes en serie
-    contra el time limit de Celery. Decision del coordinador: una sesion
-    reutilizable a lo largo del lote (no una API de lista), para conservar el
-    ciclo de B4-02 por turno (presupuesto -> reclamo -> envio -> liberacion).
+    cada mensaje. El dispatcher reutiliza una sesion SMTP a lo largo del lote
+    de outbox para evitar N handshakes en serie contra el time limit de Celery.
 
     La conexion se abre en el primer envio, no al entrar: un lote sin mails
     no toca el SMTP, y el cierre nunca ocurre con el lote de la base sin
     commitear.
 
     Revision V-diff (2026-09-18): una conexion YA USADA se sondea con ``NOOP``
-    antes de cada envio; si esta muerta se descarta y se abre otra. Un fallo
-    del envio en si NUNCA se reintenta: smtplib convierte en
-    ``SMTPServerDisconnected`` hasta el timeout esperando el ``250`` del
-    DATA, y si el servidor ya habia aceptado el mensaje, reenviarlo le
-    mandaba el recordatorio dos veces al cliente. ``send`` devuelve False y
-    el llamador libera su reclamo como en B4-02.
+    antes de cada envio; si esta muerta se descarta y se abre otra. Un error
+    ambiguo durante DATA no se reintenta: smtplib puede esperar el ``250``
+    despues de que el servidor acepto el mensaje. Solo un fallo positivo antes
+    de DATA queda habilitado para el reintento acotado del dispatcher; los
+    demas reclamos permanecen terminales.
     """
 
     def __init__(self) -> None:
@@ -306,10 +300,9 @@ class SmtpSession:
         self.last_budget_decision = None
         self.last_delivery_retryable = False
         try:
-            # AUD2-B4-08: dentro del try. Afuera, un error del parser de
-            # cabeceras se propagaba con el asunto o la direccion en el
-            # texto, y en el recordatorio liberaba el reclamo, asi que el
-            # mismo turno reintentaba cada 15 minutos hasta su hora.
+            # AUD2-B4-08: dentro del try. Un error del parser de cabeceras se
+            # registra sin PII y no escapa del sink. Como no es un fallo SMTP
+            # transitorio pre-DATA, el outbox no reabre el reclamo.
             message = _build_message(to, subject, body, reply_to)
         except SoftTimeLimitExceeded:
             raise
@@ -968,11 +961,12 @@ async def notify_client_reminder(
     queda declarado en ``reminder_sin_canal`` en vez de escondido detras de
     un 201 de Twilio.
 
-    ``smtp`` es la sesion del lote (B4-08); sin ella el mail sale suelto.
+    ``smtp`` es la sesion compartida del lote de outbox; sin ella el mail sale
+    con una sesion suelta.
     """
     # El email tecnico {tel}@store{id}.noreply no recibe nada: mandarle ahi
-    # rebota, ensucia la reputacion del remitente y, como el fallo libera el
-    # reclamo, el job reintentaba cada 15 minutos hasta la hora del turno.
+    # rebota y ensucia la reputacion del remitente. El scheduler lo descarta
+    # antes de crear la fila durable.
     if not is_deliverable_email(email):
         email = None
 
@@ -1367,52 +1361,40 @@ async def _dispatch_reminder(
     row: tuple[Any, Any, Any, Any, Any],
     stage: ReminderStage,
     now: datetime,
-    smtp: SmtpSession | None = None,
 ) -> bool:
-    """Reclama la marca durable y manda una etapa. Devuelve si se envio."""
+    """Persists a reminder email and its stage marker as one durable schedule."""
     appointment, service, staff, client, store = row
-    claimed = await repo.claim_reminder(appointment.id, stage.column, now)
-    if not claimed:
-        return False
     details = build_client_details(appointment, service, staff, store)
     details["stage"] = stage.name
-    try:
-        result = await notify_client_reminder(
-            # AUD2-B4-01 (2026-09-20): el email de ESTA reserva, como los
-            # otros cinco mails al cliente. El registro puede tener una
-            # direccion vieja (o una que el titular nunca dio: el flujo
-            # publico no pisa el contacto de una ficha existente) y el
-            # recordatorio era el unico aviso que la usaba. Se cae al registro
-            # si el turno no trae email.
-            email=getattr(appointment, "client_email", None)
-            or getattr(client, "email", None),
-            details=details,
-            smtp=smtp,
-        )
-    except SoftTimeLimitExceeded:
-        raise
-    except Exception as exc:
-        # Se libera la marca para reintentar en la proxima corrida.
-        await repo.release_reminder(appointment.id, stage.column)
-        decision = getattr(smtp, "last_budget_decision", None)
-        if decision in {"deferred", "unavailable"}:
-            logger.info(
-                "appointment_reminder_deferred_by_mail_budget",
+    # AUD2-B4-01 (2026-09-20): usa el email de ESTA reserva y cae al registro
+    # si el turno no trae uno. Sin un destino entregable no hay mail que
+    # persistir; sellamos la etapa como una disposición terminal.
+    email = getattr(appointment, "client_email", None) or getattr(client, "email", None)
+    if not is_deliverable_email(email):
+        claimed = await repo.claim_reminder(appointment.id, stage.column, now)
+        if claimed:
+            logger.warning(
+                "reminder_sin_canal",
                 appointment=appointment.public_id,
-                stage=stage.name,
-                admission_decision=decision,
+                motivo="el cliente no dejo un mail entregable",
             )
-            return False
-        logger.warning(
-            "appointment_reminder_dispatch_failed",
-            appointment=appointment.public_id,
-            stage=stage.name,
-            error_type=type(exc).__name__,
-            error=_safe_error(exc),
-        )
-        report_mail_failure(component="notifications", error_type=type(exc).__name__)
         return False
-    return result.get("status") == "sent"
+
+    logical_id = _mail_message_id("reminder", details)
+    payload = {
+        "mail": "reminder",
+        "args": {"email": email, "details": details},
+        "source_event": "appointment.reminder",
+        "appointment_id": appointment.id,
+        "logical_id": logical_id,
+        "expires_at": appointment.starts_at.isoformat(),
+    }
+    return await repo.schedule_reminder(
+        appointment.id,
+        stage.column,
+        now,
+        payload,
+    )
 
 
 @dataclass(frozen=True)
@@ -1469,14 +1451,13 @@ async def _process_reminder_window(
     ventana: _ReminderWindow,
     rows: list[tuple[Any, Any, Any, Any, Any]],
     now: datetime,
-    smtp: SmtpSession,
     deadline: float,
     totales: _ReminderTotals,
 ) -> bool:
     """Manda la etapa de esta ventana. False si se agoto el presupuesto.
 
-    El ciclo por turno de B4-02 no cambia: presupuesto -> reclamo -> envio ->
-    liberacion ante fallo.
+    Cada reclamo y su fila de salida se confirman juntos; los limites del lote
+    dejan sin cambios los turnos que esperan al proximo tick.
     """
     for index, row in enumerate(rows):
         if time.monotonic() >= deadline:
@@ -1499,7 +1480,7 @@ async def _process_reminder_window(
         if not getattr(store, "send_email_reminders", True):
             totales.skipped += 1
             continue
-        if await _dispatch_reminder(repo, row, ventana.stage, now, smtp):
+        if await _dispatch_reminder(repo, row, ventana.stage, now):
             totales.published += 1
     return True
 
@@ -1520,33 +1501,30 @@ async def process_due_appointment_reminders(
     totales = _ReminderTotals()
     async with AsyncSessionFactory() as db:
         # Job global cross-tenant: sin request/tenant necesita el bypass RLS para
-        # ver y reclamar los turnos de TODAS las tiendas (shifty_app es
-        # NOBYPASSRLS). Los reclamos commitean PLANO (sin reabrir transaccion,
-        # para no quedar "idle in transaction" durante el SMTP, F1-22) y cada
-        # sentencia del repositorio reaplica este contexto al entrar.
+        # ver los turnos de TODAS las tiendas (shifty_app es NOBYPASSRLS). El
+        # agendado y su fila outbox commitean juntos; el repositorio reaplica
+        # este contexto antes de cada sentencia.
         set_tenant_context(None, True)
         try:
             await _apply_tenant_context(db)
             repo = AppointmentRepository(db)
-            # B4-08: una sola conexion SMTP para todo el lote.
-            async with smtp_session() as smtp:
-                for ventana in _reminder_windows(now, lookahead_hours):
-                    rows = await repo.get_upcoming_for_reminders(
-                        starts_after=ventana.starts_after,
-                        starts_before=ventana.starts_before,
-                        # V-diff de AUD2-B4-04: la columna de ESTA etapa. Con
-                        # el OR de antes, los turnos que ya tenian el de 24 h
-                        # ocupaban el tope de su ventana.
-                        pending_column=ventana.stage.column,
-                        limit=limit,
-                    )
-                    totales.windows.append(ventana.stage.name)
-                    # Ventana llena: puede haber mas turnos afuera del tope.
-                    totales.batch_full = totales.batch_full or len(rows) >= limit
-                    if not await _process_reminder_window(
-                        repo, ventana, rows, now, smtp, deadline, totales
-                    ):
-                        break
+            for ventana in _reminder_windows(now, lookahead_hours):
+                rows = await repo.get_upcoming_for_reminders(
+                    starts_after=ventana.starts_after,
+                    starts_before=ventana.starts_before,
+                    # V-diff de AUD2-B4-04: la columna de ESTA etapa. Con
+                    # el OR de antes, los turnos que ya tenian el de 24 h
+                    # ocupaban el tope de su ventana.
+                    pending_column=ventana.stage.column,
+                    limit=limit,
+                )
+                totales.windows.append(ventana.stage.name)
+                # Ventana llena: puede haber mas turnos afuera del tope.
+                totales.batch_full = totales.batch_full or len(rows) >= limit
+                if not await _process_reminder_window(
+                    repo, ventana, rows, now, deadline, totales
+                ):
+                    break
         finally:
             set_tenant_context(None, False)
 

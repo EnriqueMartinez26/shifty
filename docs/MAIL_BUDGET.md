@@ -3,17 +3,27 @@
 Shifty applies an optional best-effort budget at the shared SMTP sink. This
 does not guarantee the provider's account quota: it counts sends made through
 Shifty, while other apps or manual sends using the same account are outside
-the counter. `MAIL_DAILY_BUDGET` remains unset by default. The owner-approved
-initial target is 250 admissions per day for the Brevo Free account reported
-at 300 emails per day. That leaves a 50-message margin for traffic Shifty
-cannot count; it is not a hard provider limit.
+the counter. `MAIL_DAILY_BUDGET` remains unset by default. The owner-confirmed
+target is 250 admissions per day for the Brevo Free account reported at 300
+emails per day. That leaves a 50-message margin for traffic Shifty cannot
+count; it is not a hard provider limit. The owner also confirmed a UTC
+midnight reset.
 
 With a 250-message target, the 20% critical reserve is 50 messages, the
 noncritical ceiling is 200 admissions, and the 80% alert begins at 200 total
-admissions. These values are implemented and tested but are not activated in
-the production environment. The exact account reset hour and timezone are
-unconfirmed. Do not set the cap until the operator confirms both from the
-Brevo counter or support.
+admissions. The confirmed reset window is `UTC` at hour `0`. These owner
+values are covered by tests, but the cap remains unset in production.
+
+The example values remain commented so copying `.env.example` does not turn
+on the cap:
+
+```dotenv
+# MAIL_DAILY_BUDGET=250
+# MAIL_CRITICAL_RESERVE_PERCENT=20
+# MAIL_BUDGET_ALERT_PERCENT=80
+# MAIL_BUDGET_TIMEZONE=UTC
+# MAIL_BUDGET_RESET_HOUR=0
+```
 
 ## Configuration
 
@@ -69,12 +79,20 @@ mail remains uncapped and a Redis outage only loses budget metrics.
 There is no exactly-once delivery guarantee. `admitted` means Shifty reserved
 an internal slot; `sent` means the SMTP call returned success, not that the
 recipient's inbox accepted or displayed the message. Provider acceptance can
-be ambiguous after DATA, and a process can fail between the database claim and
-the SMTP attempt. Repeating an idempotent admission does not prove delivery.
+be ambiguous after DATA. The outbox commits a claim before SMTP: a worker
+crash after that claim leaves the row terminal to avoid duplicating a possibly
+accepted message. Pending schedules survive scheduler or broker restarts;
+delivery after an in-flight claim is still best-effort. Repeating an
+idempotent admission does not prove delivery.
 
 Outbox-backed high and medium messages stay pending when budget admission is
-deferred or Redis is unavailable; reminders release their durable claim and
-retry on a later tick. Low-priority rebook invitations are intentionally
+deferred or Redis is unavailable. A reminder's appointment stage marker and
+its `email.send` row commit in one SQL transaction. The dispatcher retries
+only positively identified pre-DATA failures, reusing the same logical ID and
+admission for up to 10 failed attempts. It marks reminders expired when their
+appointment starts; expired rows are terminal and are not sent. A pending row
+stays in SQL if the dispatcher or Celery broker is unavailable, and a later
+outbox tick can resume it. Low-priority rebook invitations are intentionally
 discarded at saturation. OTP uses a Celery task without automatic retry;
 password reset and password-change emails use request background tasks. Public
 booking registration/confirmation emails use a separate Celery task with no
@@ -82,9 +100,10 @@ retry; budget denials return a failure result and the task finishes. Re-offers
 from `waitlist.tasks` now commit the `OFFERED` state, expiry, and `email.send`
 row together. The normal outbox dispatcher sends after commit and retries only
 failures positively identified before SMTP DATA, within the existing attempt
-limit. Ambiguous results after DATA remain terminal. Offer expiry starts when
-the offer is created, so a long dispatch delay can reduce the customer's
-remaining time to accept it.
+limit. Ambiguous results after DATA remain terminal. Waitlist `OFFERED` state,
+offer expiry, and its `email.send` row are still committed together. Offer
+expiry starts when the offer is created, so a long dispatch delay can reduce
+the customer's remaining time to accept it.
 
 OTP, password reset/change, and public booking registration/confirmation still
 use direct delivery paths without durable outbox retries. This PR does not
