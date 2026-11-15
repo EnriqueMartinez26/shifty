@@ -799,8 +799,8 @@ def _path_sin(host: Host, *excluidos: str) -> str:
             if binario.name not in excluidos and not os.path.lexists(destino):
                 destino.symlink_to(binario)
     path = os.pathsep.join([fake_bin, sin.as_posix()])
-    for binario in excluidos:
-        assert shutil.which(binario, path=path) is None, binario
+    for excluido in excluidos:
+        assert shutil.which(excluido, path=path) is None, excluido
     return path
 
 
