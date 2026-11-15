@@ -98,8 +98,20 @@ json_escape() {
 # presupuesto el mail no sale: queda en stderr y syslog, y el proximo mail
 # que salga dice cuantos se suprimieron. El webhook no gasta presupuesto. El
 # sello del silencio se escribe antes de mandar: un envio que falla se anota
-# y no se reintenta. El estado se toca con flock; si no se puede escribir,
-# manda igual y lo anota.
+# y no se reintenta. El estado se toca con flock.
+#
+# Estado que no se puede escribir (revision del 2026-11-15: con / de solo
+# lectura mandaba sin silencio ni presupuesto, un mail por minuto):
+# - pasa a $SHIFTY_RUN_DIR/alerts (tmpfs, /run/shifty), que sigue escribible
+#   con / remontado de solo lectura; se pierde al reiniciar el host y lo anota
+#   una vez por corrida.
+# - Sin ningun estado escribible (modo sin estado) no hay silencio por clave
+#   ni presupuesto diario: cada aviso queda en stderr y en syslog (crit los
+#   criticos), y mail y webhook salen solo en una ventana del reloj: las horas
+#   UTC multiplo de ALERT_STATELESS_EVERY_HOURS (3), en el minuto 00 para un
+#   script que corre cada minuto (el guard), en cualquier minuto para los de
+#   cada hora. A lo sumo 24/N mensajes por dia y por script; lo de entre
+#   ventanas queda solo en syslog. El mensaje dice que es un envio degradado.
 alert() {
   alert_add "$@"
   alert_flush
@@ -109,6 +121,31 @@ _ALERT_ASUNTOS=()
 _ALERT_DETALLES=()
 _ALERT_CLAVES=()
 _ALERT_SILENCIOS=()
+# 1 en un script que corre cada minuto (guard.sh): en modo sin estado manda
+# solo en el minuto 00 de la ventana.
+: "${_ALERT_CADA_MINUTO:=0}"
+
+# shifty_run_dir: valida SHIFTY_RUN_DIR, el respaldo en tmpfs del estado (lock
+# del guard y estado de alertas). Una ruta relativa cambia con el directorio
+# actual: dos corridas tomarian locks distintos. Invalida, usa /run/shifty.
+# La letra de unidad es solo para los tests en Git Bash.
+shifty_run_dir() {
+  local defecto=/run/shifty
+  [ -z "${_SHIFTY_RUN_DIR_VALIDADO:-}" ] || return 0
+  _SHIFTY_RUN_DIR_VALIDADO=1
+  : "${SHIFTY_RUN_DIR:=$defecto}"
+  if ! [[ "$SHIFTY_RUN_DIR" =~ ^([A-Za-z]:)?/[A-Za-z0-9._/-]*[A-Za-z0-9._-]$ ]] ||
+    [[ "$SHIFTY_RUN_DIR" =~ (^|/)[.][.]?(/|$) ]]; then
+    log "SHIFTY_RUN_DIR=$SHIFTY_RUN_DIR no es una ruta absoluta valida; uso $defecto"
+    SHIFTY_RUN_DIR="$defecto"
+  fi
+}
+
+# crear_run_dir: crea SHIFTY_RUN_DIR solo para su duenio (umask y no
+# `mkdir -m`: en Git Bash el chmod de -m falla y mkdir sale 1).
+crear_run_dir() {
+  (umask 077 && mkdir -p "$SHIFTY_RUN_DIR") 2>/dev/null
+}
 
 # alert_add <asunto> <detalle> [clave] [minutos]: encola un aviso para el
 # proximo alert_flush.
@@ -139,10 +176,11 @@ alert_flush() {
 
   # Sello y presupuesto se leen y escriben bajo un lock: dos procesos a la
   # vez (corridas apiladas, guard y checks) no mandan dos veces lo mismo.
-  local dir="$SHIFTY_STATE_DIR/alerts" estado=1 fd=""
-  if ! mkdir -p "$dir" 2>/dev/null || ! [ -w "$dir" ]; then
+  local dir estado=1 fd=""
+  _alert_dir_estado
+  dir="$_ALERT_DIR"
+  if [ -z "$dir" ]; then
     estado=0
-    log "alertas: no puedo escribir el estado de alertas en $dir; mando sin silencio ni presupuesto"
   elif command -v flock >/dev/null 2>&1; then
     if { exec {fd}>>"$dir/.lock"; } 2>/dev/null; then
       flock -w 15 "$fd" || log "alertas: no pude tomar $dir/.lock en 15 s; sigo sin el"
@@ -219,14 +257,76 @@ alert_flush() {
   fi
   if [ -n "$fd" ]; then exec {fd}>&-; fi
 
+  local prioridad
   for i in "${idx[@]}"; do
     log "ALERTA: ${asuntos[$i]}${detalles[$i]:+ | ${detalles[$i]}}"
+    prioridad=user.warning
+    if [ "$estado" = 0 ]; then
+      _alert_gravedad "${claves[$i]}"
+      if [ "$_ALERT_GRAVEDAD" = 0 ]; then prioridad=user.crit; fi
+    fi
     if command -v logger >/dev/null 2>&1; then
-      logger -t shifty -p user.warning -- "${asuntos[$i]}${detalles[$i]:+ | ${detalles[$i]}}" || true
+      logger -t shifty -p "$prioridad" -- "${asuntos[$i]}${detalles[$i]:+ | ${detalles[$i]}}" || true
     fi
   done
+  if [ "$estado" = 0 ]; then
+    _alert_sin_estado "$subject" "$body" "${#idx[@]}"
+    return 0
+  fi
   _alert_mandar "$subject" "$body" "$mail" "$_ALERT_NOTA"
   return 0
+}
+
+# _alert_dir_estado: deja en _ALERT_DIR donde vive el estado de alertas:
+# $SHIFTY_STATE_DIR/alerts o, si no se puede escribir, $SHIFTY_RUN_DIR/alerts
+# (tmpfs). Vacio si ninguno se puede escribir (modo sin estado). Lo anota una
+# vez por proceso.
+_alert_dir_estado() {
+  local propio="$SHIFTY_STATE_DIR/alerts" respaldo
+  _ALERT_DIR=""
+  if mkdir -p "$propio" 2>/dev/null && [ -w "$propio" ]; then
+    _ALERT_DIR="$propio"
+    return 0
+  fi
+  shifty_run_dir
+  respaldo="$SHIFTY_RUN_DIR/alerts"
+  if crear_run_dir && mkdir -p "$respaldo" 2>/dev/null &&
+    [ -w "$respaldo" ]; then
+    _ALERT_DIR="$respaldo"
+  fi
+  [ -z "${_ALERT_AVISO_ESTADO:-}" ] || return 0
+  _ALERT_AVISO_ESTADO=1
+  if [ -n "$_ALERT_DIR" ]; then
+    log "alertas: no puedo escribir el estado de alertas en $propio; vive en $respaldo (tmpfs): se pierde al reiniciar el host"
+  else
+    log "alertas: no puedo escribir el estado de alertas en $propio ni en $respaldo; modo sin estado: sin silencio ni presupuesto, mail y webhook solo en la ventana de ALERT_STATELESS_EVERY_HOURS"
+  fi
+}
+
+# _alert_sin_estado <asunto> <detalle> <alertas>: el envio del modo sin estado.
+# Los avisos ya quedaron en stderr y en syslog; mail y webhook salen solo en
+# la ventana del reloj (ver alert()), sin presupuesto.
+_alert_sin_estado() {
+  local subject="$1" body="$2" n="$3"
+  local cada="${ALERT_STATELESS_EVERY_HOURS:-3}" hm h m
+  if ! [[ "$cada" =~ ^[1-9][0-9]*$ ]] || [ "$cada" -gt 24 ]; then
+    log "alertas: ALERT_STATELESS_EVERY_HOURS=$cada no es un numero de horas entre 1 y 24; uso 3"
+    cada=3
+  fi
+  hm="$(date -u +%H:%M 2>/dev/null)" || hm=""
+  if [[ "$hm" =~ ^([0-9][0-9]):([0-9][0-9])$ ]]; then
+    h=$((10#${BASH_REMATCH[1]}))
+    m=$((10#${BASH_REMATCH[2]}))
+    if [ $((h % cada)) -ne 0 ] || { [ "$_ALERT_CADA_MINUTO" = 1 ] && [ "$m" -ne 0 ]; }; then
+      log "alertas: modo sin estado, fuera de la ventana (cada $cada h UTC): $n alertas solo en stderr y syslog, sin mail ni webhook"
+      return 0
+    fi
+  else
+    # Sin reloj legible no hay ventana: avisar importa mas.
+    log "alertas: modo sin estado y no pude leer la hora UTC; mando igual"
+  fi
+  local nota="Envio degradado sin estado: no hay estado de alertas escribible ($SHIFTY_STATE_DIR/alerts ni $SHIFTY_RUN_DIR/alerts). Sin silencio por clave ni presupuesto diario; sale a lo sumo un mensaje cada $cada h UTC y lo de entre ventanas queda solo en syslog. Esta corrida tuvo $n alertas."
+  _alert_mandar "$subject (sin estado)" "$nota"$'\n\n'"$body" 1 ""
 }
 
 # Estado del presupuesto, en $SHIFTY_STATE_DIR/alerts: `.mails-del-dia` (la
@@ -302,14 +402,16 @@ _alert_presupuesto() {
 # _alert_gravedad <clave>: deja en _ALERT_GRAVEDAD de 0 (la mayor) a 3. Las
 # de gravedad 0 son las CRITICAS, las unicas que usan la reserva del
 # presupuesto diario: algo caido que necesita una persona (dependencia,
-# db/rabbitmq, docker, host saturado) o el backup. Despues un restart que
-# fallo, un tope alcanzado y el resto (un "reinicie X" no tiene clave).
+# db/rabbitmq, docker, host saturado, un guard sin exclusividad que no
+# reinicia nada) o el backup. Despues un restart que fallo o que no se hizo
+# por no poder anotar el contador, un tope alcanzado y el resto (un "reinicie
+# X" no tiene clave).
 _alert_gravedad() {
   case "$1" in
-    guard-dependencia-* | guard-no-reinicia-* | guard-docker-no-responde | guard-host-saturado | backup-*)
+    guard-dependencia-* | guard-no-reinicia-* | guard-docker-no-responde | guard-host-saturado | guard-sin-exclusividad | backup-*)
       _ALERT_GRAVEDAD=0
       ;;
-    guard-fallo-*) _ALERT_GRAVEDAD=1 ;;
+    guard-fallo-* | guard-sin-contador-*) _ALERT_GRAVEDAD=1 ;;
     guard-tope-*) _ALERT_GRAVEDAD=2 ;;
     *) _ALERT_GRAVEDAD=3 ;;
   esac

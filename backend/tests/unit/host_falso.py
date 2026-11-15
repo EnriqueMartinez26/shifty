@@ -187,7 +187,9 @@ case "$1" in
         *.Image*) echo "${FAKE_RUNNING_IMAGE_ID:-sha256:igual}" ;;
         *) echo "/$id" ;;
       esac
-    done ;;
+    done
+    # FAKE_INSPECT_EXIT: `docker inspect` que falla sin colgarse.
+    exit "${FAKE_INSPECT_EXIT:-0}" ;;
   rm)
     shift
     for id in "$@"; do
@@ -345,6 +347,32 @@ def escribir_corridas_de_quality(ruta: Path, *, verdes: int) -> None:
         encoding="utf-8",
         newline="\n",
     )
+
+
+# date: la hora UTC (HH:MM) que ve la ventana del modo sin estado de alert()
+# sale de FAKE_HORA_UTC; todo lo demas lo contesta el date real.
+_DATE = r"""#!/bin/sh
+if [ "$*" = "-u +%H:%M" ] && [ -n "${FAKE_HORA_UTC:-}" ]; then
+  printf '%s\n' "$FAKE_HORA_UTC"
+  exit 0
+fi
+exec "$FAKE_DATE_REAL" "$@"
+"""
+
+
+def con_hora_utc(host: Host) -> None:
+    """Pone un `date` falso delante del PATH del host: cada corrida elige la
+    hora UTC con FAKE_HORA_UTC=HH:MM. Solo para los tests que la necesitan:
+    un sh por cada `date` (cada linea de log) es lento en Git Bash."""
+    assert BASH is not None
+    herramientas = str(Path(BASH).parent)
+    date_real = shutil.which("date", path=herramientas) or shutil.which("date")
+    assert date_real, "hace falta el date de coreutils"
+    directorio = host.raiz / "hora"
+    directorio.mkdir()
+    _ejecutable(directorio / "date", _DATE)
+    host.env["FAKE_DATE_REAL"] = Path(date_real).as_posix()
+    host.env["PATH"] = os.pathsep.join([str(directorio), host.env["PATH"]])
 
 
 _DF = r"""#!/bin/sh
@@ -708,15 +736,26 @@ def crear_host(tmp_path: Path) -> Host:
     herramientas = str(Path(BASH).parent)
     sleep_real = shutil.which("sleep", path=herramientas) or shutil.which("sleep")
     assert sleep_real, "hace falta el sleep de coreutils"
+    rutas = [str(bin_dir), herramientas, os.environ.get("PATH", "")]
+    # Git Bash no trae flock (util-linux) y sin flock el guard no reinicia
+    # (modo observacion, revision del 2026-11-15). En Windows, al final del
+    # PATH, un falso que siempre da el lock: los tests de reinicio prueban lo
+    # de siempre. La exclusividad real la prueban en Linux los tests con
+    # _requiere("flock").
+    if not (shutil.which("flock", path=herramientas) or shutil.which("flock")):
+        flock_falso = tmp_path / "flock-falso"
+        flock_falso.mkdir()
+        _ejecutable(flock_falso / "flock", "#!/bin/sh\nexit 0\n")
+        rutas.append(str(flock_falso))
     env = {
         **os.environ,
-        "PATH": os.pathsep.join(
-            [str(bin_dir), herramientas, os.environ.get("PATH", "")]
-        ),
+        "PATH": os.pathsep.join(rutas),
         "FAKE_DIR": fake.as_posix(),
         "SHIFTY_OPS_ENV": (tmp_path / "no-existe.env").as_posix(),
         "SHIFTY_DIR": repo.as_posix(),
         "SHIFTY_STATE_DIR": state.as_posix(),
+        # El respaldo en tmpfs (/run/shifty en el host): nunca el del runner.
+        "SHIFTY_RUN_DIR": (tmp_path / "run").as_posix(),
         "BACKUP_DIR": backups.as_posix(),
         "COMPOSE_PROJECT_NAME": "shifty",
         "HOST_MEMINFO": (fake / "meminfo").as_posix(),
@@ -734,6 +773,7 @@ def crear_host(tmp_path: Path) -> Host:
         "ALERT_EMAIL",
         "ALERT_EMAIL_MAX_PER_DAY",
         "ALERT_EMAIL_RESERVED_PER_DAY",
+        "ALERT_STATELESS_EVERY_HOURS",
         "COMPOSE_FILE",
         "DEPLOY_SKIP_QUALITY_CHECK",
     ):

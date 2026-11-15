@@ -23,6 +23,7 @@ from tests.unit.host_falso import (
     Host,
     _hay,
     _lineas_de_cron,
+    con_hora_utc,
     crear_host,
     escribir_meminfo,
     escribir_redis_info,
@@ -361,22 +362,296 @@ def test_guard_con_el_estado_de_solo_lectura_avisa_igual(host: Host) -> None:
     assert "db esta unhealthy" in _asunto(mails[0])
 
 
+def _flock_que_falla(host: Host) -> str:
+    """Un PATH con un flock que falla sin que haya conflicto (sale 1): un
+    error de flock, no otra corrida con el lock."""
+    directorio = host.raiz / "flock-roto"
+    directorio.mkdir()
+    falso = directorio / "flock"
+    falso.write_text(
+        '#!/bin/sh\nprintf \'%s\\n\' "flock $*" >> "$FAKE_DIR/calls"\nexit 1\n',
+        encoding="utf-8",
+        newline="\n",
+    )
+    falso.chmod(0o755)
+    return os.pathsep.join([str(directorio), host.env["PATH"]])
+
+
 def test_guard_que_muere_a_mitad_de_corrida_manda_lo_encolado(host: Host) -> None:
     """A1: un error bajo `set -e` entre alert_add y alert_flush perdia lo
-    encolado. Aca el contador de shifty-backend-1 es un directorio."""
-    (host.state / "guard" / "shifty-backend-1").mkdir(parents=True)
-
+    encolado. Aca el aviso de sin exclusividad se encola antes de `docker
+    ps` y la corrida muere en un `docker inspect` que falla."""
     resultado = host.correr(
         "guard.sh",
-        FAKE_UNHEALTHY_IDS="shifty-rabbitmq-1 shifty-backend-1",
+        FAKE_UNHEALTHY_IDS="shifty-backend-1",
+        FAKE_INSPECT_EXIT="1",
         ALERT_EMAIL="ops@example.com",
+        PATH=_flock_que_falla(host),
     )
 
     assert resultado.returncode != 0
     assert _reinicios(host) == []
     mails = host.mails()
     assert len(mails) == 1, resultado.stderr
-    assert "shifty-rabbitmq-1 (rabbitmq) esta unhealthy" in _asunto(mails[0])
+    assert "guard: sin exclusividad" in _asunto(mails[0])
+
+
+# --- exclusividad (revision del 2026-11-15) -----------------------------------
+# El guard reinicia SOLO con el lock de una sola corrida. Sin flock, sin un
+# lock que se pueda abrir o con un error de flock que no es un conflicto, corre
+# en modo observacion: todos los chequeos y avisos, ningun reinicio.
+
+_EXCLUSIVIDAD = ["flock-que-falla", "sin-flock"]
+
+
+def _path_sin_exclusividad(host: Host, como: str) -> str:
+    if como == "sin-flock":
+        if os.name == "nt":
+            pytest.skip("arma un PATH de symlinks (Linux)")
+        return _path_sin(host, "flock")
+    return _flock_que_falla(host)
+
+
+@pytest.mark.parametrize("como", _EXCLUSIVIDAD)
+def test_guard_sin_exclusividad_observa_avisa_y_no_reinicia(
+    host: Host, como: str
+) -> None:
+    extra = {
+        "FAKE_UNHEALTHY_IDS": "shifty-backend-1 shifty-rabbitmq-1 shifty-backend-2",
+        "ALERT_EMAIL": "ops@example.com",
+        "PATH": _path_sin_exclusividad(host, como),
+    }
+
+    resultado = host.correr("guard.sh", **extra)
+
+    assert resultado.returncode == 0, resultado.stderr
+    assert _reinicios(host) == []
+    mails = host.mails()
+    assert len(mails) == 1, resultado.stderr
+    motivo = "el host no tiene flock" if como == "sin-flock" else "flock"
+    assert "] guard: sin exclusividad (" in _asunto(mails[0])
+    assert motivo in _asunto(mails[0])
+    assert "no reinicio ningun contenedor (+3 avisos)" in _asunto(mails[0])
+    for linea in (
+        "- guard: shifty-rabbitmq-1 (rabbitmq) esta unhealthy; no se reinicia solo",
+        "- guard: no reinicio shifty-backend-1: sin exclusividad (",
+        "- guard: no reinicio shifty-backend-2: sin exclusividad (",
+    ):
+        assert linea in mails[0], mails[0]
+    # Lo que no se reinicio no gasta el tope.
+    assert not (host.state / "guard" / "shifty-backend-1").exists()
+
+    # Cada aviso conserva su silencio: la corrida siguiente no manda nada.
+    otra = host.correr("guard.sh", **extra)
+    assert otra.returncode == 0, otra.stderr
+    assert _reinicios(host) == []
+    assert len(host.mails()) == 1
+
+
+@pytest.mark.parametrize("como", _EXCLUSIVIDAD)
+def test_dos_guards_a_la_vez_sin_exclusividad_no_reinician(
+    host: Host, como: str
+) -> None:
+    assert BASH is not None
+    env = {
+        **host.env,
+        "FAKE_UNHEALTHY_IDS": "shifty-backend-1 shifty-backend-2",
+        "PATH": _path_sin_exclusividad(host, como),
+    }
+    procesos = [
+        subprocess.Popen(
+            [BASH, str(SCRIPTS / "guard.sh")],
+            cwd=host.repo,
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        for _ in range(2)
+    ]
+    salidas = [p.communicate(timeout=60)[1] for p in procesos]
+
+    assert [p.returncode for p in procesos] == [0, 0], salidas
+    assert _reinicios(host) == []
+    for salida in salidas:
+        assert "modo observacion" in salida, salida
+
+
+def test_guard_sin_ningun_lock_que_se_pueda_abrir_observa(host: Host) -> None:
+    con_hora_utc(host)
+    resultado = host.correr(
+        "guard.sh",
+        FAKE_UNHEALTHY_IDS="shifty-backend-1",
+        ALERT_EMAIL="ops@example.com",
+        SHIFTY_STATE_DIR=_sin_estado(host),
+        SHIFTY_RUN_DIR=(host.raiz / "un-archivo" / "run").as_posix(),
+        FAKE_HORA_UTC="06:00",
+    )
+
+    assert resultado.returncode == 0, resultado.stderr
+    assert _reinicios(host) == []
+    mails = host.mails()
+    assert len(mails) == 1, resultado.stderr
+    assert "guard: sin exclusividad (no pude abrir " in _asunto(mails[0])
+
+
+@_requiere("flock")
+def test_guard_no_corre_si_otra_corrida_tiene_el_lock_de_respaldo(
+    host: Host,
+) -> None:
+    """Una corrida que solo pudo tomar el lock de /run (el estado no se podia
+    escribir) tambien excluye a las demas."""
+    assert BASH is not None
+    run = host.raiz / "run"
+    run.mkdir()
+    listo = host.raiz / "lock-tomado"
+    duenio = subprocess.Popen(
+        [
+            BASH,
+            "-c",
+            'exec 9>"$0"; flock 9; : > "$1"; read -r _',
+            (run / "guard.lock").as_posix(),
+            listo.as_posix(),
+        ],
+        stdin=subprocess.PIPE,
+    )
+    try:
+        limite = time.time() + 20
+        while not listo.exists():
+            assert time.time() < limite, "el duenio del lock no arranco"
+            time.sleep(0.05)
+
+        resultado = host.correr("guard.sh", FAKE_UNHEALTHY_IDS="abc123")
+    finally:
+        duenio.communicate(b"\n", timeout=20)
+
+    assert resultado.returncode == 0, resultado.stderr
+    assert "otra corrida sigue en curso" in resultado.stderr
+    assert not _hay(host.llamadas(), r"^docker ")
+
+
+@_requiere("flock")
+@pytest.mark.skipif(
+    getattr(os, "geteuid", lambda: 0)() == 0,
+    reason="los permisos de solo lectura no frenan a root",
+)
+def test_un_lock_de_solo_lectura_sigue_excluyendo(host: Host) -> None:
+    """Con el estado remontado de solo lectura otra corrida puede seguir con el
+    lock: si este guard no pudiera abrirlo tomaria solo el de /run y los dos
+    reiniciarian a la vez. flock no necesita escribir: lo abre para leer."""
+    assert BASH is not None
+    lock = host.state / "guard.lock"
+    lock.write_text("", encoding="utf-8")
+    listo = host.raiz / "lock-tomado"
+    duenio = subprocess.Popen(
+        [
+            BASH,
+            "-c",
+            'exec 9<"$0"; flock 9; : > "$1"; read -r _',
+            lock.as_posix(),
+            listo.as_posix(),
+        ],
+        stdin=subprocess.PIPE,
+    )
+    try:
+        limite = time.time() + 20
+        while not listo.exists():
+            assert time.time() < limite, "el duenio del lock no arranco"
+            time.sleep(0.05)
+        lock.chmod(0o444)
+        host.state.chmod(0o555)
+        try:
+            resultado = host.correr("guard.sh", FAKE_UNHEALTHY_IDS="abc123")
+        finally:
+            host.state.chmod(0o755)
+    finally:
+        duenio.communicate(b"\n", timeout=20)
+
+    assert resultado.returncode == 0, resultado.stderr
+    assert "otra corrida sigue en curso" in resultado.stderr
+    assert not _hay(host.llamadas(), r"^docker ")
+
+
+# --- contadores de reinicio (revision del 2026-11-15) ---------------------------
+
+
+def test_guard_con_un_contador_ilegible_no_reinicia_y_sigue_avisando(
+    host: Host,
+) -> None:
+    """El `printf` al contador moria bajo `set -e` y se perdian los avisos que
+    venian despues (rabbitmq). Aca el contador de shifty-backend-1 es un
+    directorio."""
+    (host.state / "guard" / "shifty-backend-1").mkdir(parents=True)
+
+    resultado = host.correr(
+        "guard.sh",
+        FAKE_UNHEALTHY_IDS="shifty-backend-1 shifty-rabbitmq-1 shifty-backend-2",
+        ALERT_EMAIL="ops@example.com",
+    )
+
+    assert resultado.returncode == 0, resultado.stderr
+    assert _reinicios(host) == []
+    mails = host.mails()
+    assert len(mails) == 1, resultado.stderr
+    for linea in (
+        "- guard: shifty-rabbitmq-1 (rabbitmq) esta unhealthy; no se reinicia solo",
+        "- guard: no reinicio shifty-backend-1: no puedo leer el contador",
+        "- guard: no reinicio shifty-backend-2: no puedo leer el contador",
+    ):
+        assert linea in mails[0], mails[0]
+
+
+_NO_ROOT = pytest.mark.skipif(
+    os.name == "nt" or getattr(os, "geteuid", lambda: 0)() == 0,
+    reason="los permisos no frenan a root ni a Windows",
+)
+
+
+@_NO_ROOT
+def test_guard_sin_poder_anotar_el_contador_no_reinicia(host: Host) -> None:
+    (host.state / "guard").mkdir()
+    (host.state / "guard").chmod(0o555)
+    try:
+        resultado = host.correr(
+            "guard.sh",
+            FAKE_UNHEALTHY_IDS="shifty-backend-1 shifty-rabbitmq-1",
+            ALERT_EMAIL="ops@example.com",
+        )
+    finally:
+        (host.state / "guard").chmod(0o755)
+
+    assert resultado.returncode == 0, resultado.stderr
+    assert _reinicios(host) == []
+    mails = host.mails()
+    assert len(mails) == 1, resultado.stderr
+    assert (
+        "- guard: no reinicio shifty-backend-1: no puedo anotar el contador"
+        in (mails[0])
+    )
+    assert "shifty-rabbitmq-1 (rabbitmq) esta unhealthy" in mails[0]
+
+
+@_NO_ROOT
+@pytest.mark.parametrize(
+    ("contador", "marcas"), [("shifty-backend-1", 3), ("_global", 6)]
+)
+def test_un_contador_que_no_se_lee_no_saltea_el_tope(
+    host: Host, contador: str, marcas: int
+) -> None:
+    """Un contador que se podia escribir pero no leer se tomaba por vacio: cada
+    corrida reiniciaba y el tope de 3 (o de 6) no frenaba nunca."""
+    ahora = int(time.time())
+    archivo = host.state / "guard" / contador
+    archivo.parent.mkdir(parents=True)
+    archivo.write_text(f"{ahora}\n" * marcas, encoding="utf-8", newline="\n")
+    archivo.chmod(0o200)
+
+    for _ in range(4):
+        resultado = host.correr("guard.sh", FAKE_UNHEALTHY_IDS="shifty-backend-1")
+        assert resultado.returncode == 0, resultado.stderr
+
+    assert _reinicios(host) == []
+    assert "no puedo leer el contador" in resultado.stderr
 
 
 def test_guard_tras_un_restart_fallido_no_reinicia_nada_mas(host: Host) -> None:
@@ -470,26 +745,38 @@ def test_guard_con_un_tope_de_carga_invalido_usa_el_de_siempre(
     assert "host saturado" in resultado.stderr
 
 
-@pytest.mark.skipif(os.name == "nt", reason="arma un PATH de symlinks (Linux)")
-def test_guard_sin_timeout_lo_anota_una_vez(host: Host) -> None:
-    """A5: sin `timeout` docker y el mail corren sin tope; antes, en silencio."""
+def _path_sin(host: Host, *excluidos: str) -> str:
+    """Un PATH con los binarios falsos y symlinks a los del sistema, menos
+    `excluidos`. Solo Linux: Windows no crea symlinks sin privilegios."""
     fake_bin = host.env["PATH"].split(os.pathsep)[0]
-    sin_timeout = host.raiz / "sin-timeout"
-    sin_timeout.mkdir()
+    sin = host.raiz / ("sin-" + "-".join(excluidos))
+    sin.mkdir()
     assert BASH is not None
     for directorio in (Path(BASH).parent, *map(Path, ("/usr/bin", "/bin"))):
         if not directorio.is_dir():
             continue
         for binario in directorio.iterdir():
-            destino = sin_timeout / binario.name
-            if binario.name != "timeout" and not destino.exists():
+            destino = sin / binario.name
+            # lexists y no exists: exists() sigue el symlink, y en un Ubuntu con
+            # /usr fusionado /bin y /usr/bin son el mismo directorio. Un symlink
+            # roto (/usr/bin/grub-ntldr-img del runner de CI, 2026-11-15) pasaba
+            # el chequeo la segunda vez y symlink_to fallaba con FileExistsError.
+            if binario.name not in excluidos and not os.path.lexists(destino):
                 destino.symlink_to(binario)
+    path = os.pathsep.join([fake_bin, sin.as_posix()])
+    for binario in excluidos:
+        assert shutil.which(binario, path=path) is None, binario
+    return path
 
+
+@pytest.mark.skipif(os.name == "nt", reason="arma un PATH de symlinks (Linux)")
+def test_guard_sin_timeout_lo_anota_una_vez(host: Host) -> None:
+    """A5: sin `timeout` docker y el mail corren sin tope; antes, en silencio."""
     resultado = host.correr(
         "guard.sh",
         FAKE_UNHEALTHY_IDS="shifty-backend-1 shifty-backend-2",
         ALERT_EMAIL="ops@example.com",
-        PATH=os.pathsep.join([fake_bin, sin_timeout.as_posix()]),
+        PATH=_path_sin(host, "timeout"),
     )
 
     assert resultado.returncode == 0, resultado.stderr
@@ -690,20 +977,135 @@ def test_el_webhook_no_gasta_presupuesto_y_su_falla_se_anota(host: Host) -> None
     )
 
 
-def test_sin_estado_escribible_la_alerta_sale_igual(host: Host) -> None:
-    archivo = host.raiz / "un-archivo"
-    archivo.write_text("no soy un directorio\n", encoding="utf-8")
-    sin_estado = {
-        "SHIFTY_STATE_DIR": (archivo / "estado").as_posix(),
-        **_presupuesto(1, 0),
-    }
+# --- estado de alertas que no se puede escribir (revision del 2026-11-15) ------
+# Antes alert_flush mandaba sin silencio ni presupuesto: con / remontado de solo
+# lectura, un mail por minuto a la cuenta de Brevo que usa la app.
+
+
+def test_sin_estado_escribible_la_alerta_usa_el_respaldo_en_tmpfs(host: Host) -> None:
+    sin_estado = {"SHIFTY_STATE_DIR": _sin_estado(host), **_presupuesto(1, 0)}
 
     primera = host.alertar("db caida", "", "db-caida", "60", **sin_estado)
     segunda = host.alertar("db caida", "", "db-caida", "60", **sin_estado)
 
     assert primera.returncode == 0 and segunda.returncode == 0
-    assert len(host.mails()) == 2
-    assert "no puedo escribir el estado de alertas" in primera.stderr
+    assert len(host.mails()) == 1
+    assert "alerta silenciada (db-caida)" in segunda.stderr
+    run = (host.raiz / "run" / "alerts").as_posix()
+    assert "no puedo escribir el estado de alertas en" in primera.stderr
+    assert f"vive en {run} (tmpfs): se pierde al reiniciar el host" in (primera.stderr)
+
+
+def test_guard_con_el_estado_de_solo_lectura_no_manda_un_mail_por_minuto(
+    host: Host,
+) -> None:
+    extra = {
+        "FAKE_UNHEALTHY_IDS": "shifty-rabbitmq-1",
+        "ALERT_EMAIL": "ops@example.com",
+        "SHIFTY_STATE_DIR": _sin_estado(host),
+    }
+
+    resultados = [host.correr("guard.sh", **extra) for _ in range(3)]
+
+    assert [r.returncode for r in resultados] == [0, 0, 0], resultados[0].stderr
+    assert len(host.mails()) == 1, resultados[0].stderr
+    # El lock de /run alcanza: no es el modo observacion.
+    assert "sin exclusividad" not in resultados[0].stderr
+    assert resultados[0].stderr.count("se pierde al reiniciar el host") == 1
+
+
+def _sin_ningun_estado(host: Host) -> dict[str, str]:
+    archivo = host.raiz / "un-archivo"
+    archivo.write_text("no soy un directorio\n", encoding="utf-8")
+    return {
+        "SHIFTY_STATE_DIR": (archivo / "estado").as_posix(),
+        "SHIFTY_RUN_DIR": (archivo / "run").as_posix(),
+    }
+
+
+def test_sin_ningun_estado_avisa_por_syslog_y_manda_solo_en_la_ventana(
+    host: Host,
+) -> None:
+    """Sin estado ni en el disco ni en tmpfs no hay silencio ni presupuesto:
+    cada aviso queda en stderr y syslog, y el mail y el webhook salen solo en
+    el minuto 00 de las horas UTC multiplo de ALERT_STATELESS_EVERY_HOURS (3)."""
+    con_hora_utc(host)
+    extra = {
+        "FAKE_UNHEALTHY_IDS": "shifty-rabbitmq-1",
+        "ALERT_EMAIL": "ops@example.com",
+        "ALERT_WEBHOOK_URL": "https://hook",
+        **_sin_ningun_estado(host),
+    }
+
+    fuera = [
+        host.correr("guard.sh", FAKE_HORA_UTC=hora, **extra)
+        for hora in ("05:00", "05:01", "06:01")
+    ]
+
+    for resultado in fuera:
+        assert resultado.returncode == 0, resultado.stderr
+        assert "ALERTA: guard: shifty-rabbitmq-1 (rabbitmq) esta unhealthy" in (
+            resultado.stderr
+        )
+        assert "fuera de la ventana" in resultado.stderr
+    assert _avisos(host) == []
+    assert _hay(
+        host.llamadas(),
+        r"^logger -t shifty -p user\.crit -- guard: shifty-rabbitmq-1 \(rabbitmq\)",
+    )
+
+    en_ventana = host.correr("guard.sh", FAKE_HORA_UTC="06:00", **extra)
+
+    assert en_ventana.returncode == 0, en_ventana.stderr
+    mails = host.mails()
+    assert len(mails) == 1, en_ventana.stderr
+    assert len([ll for ll in host.llamadas() if ll.startswith("curl ")]) == 1
+    assert _asunto(mails[0]).endswith("(+1 aviso) (sin estado)")
+    assert "Envio degradado sin estado" in mails[0]
+    assert "Esta corrida tuvo 2 alertas." in mails[0]
+    assert "guard: sin exclusividad" in mails[0]
+    assert "rabbitmq" in mails[0]
+
+
+@pytest.mark.parametrize(
+    ("hora", "cada", "sale"),
+    [("06:07", "", True), ("05:07", "", False), ("10:07", "5", True)],
+)
+def test_sin_ningun_estado_un_script_de_cada_hora_avisa_en_su_hora_de_ventana(
+    host: Host, hora: str, cada: str, sale: bool
+) -> None:
+    """checks.sh y backup-check.sh corren una vez por hora (minuto 7 y 17): su
+    aviso sale en cualquier minuto de una hora de ventana."""
+    con_hora_utc(host)
+    extra = {"ALERT_EMAIL": "o@x", "FAKE_HORA_UTC": hora, **_sin_ningun_estado(host)}
+    if cada:
+        extra["ALERT_STATELESS_EVERY_HOURS"] = cada
+
+    resultado = host.alertar("backup: viejo", "", "backup-viejo", "60", **extra)
+
+    assert resultado.returncode == 0, resultado.stderr
+    assert len(host.mails()) == (1 if sale else 0), resultado.stderr
+
+
+@pytest.mark.parametrize("cada", ["abc", "0", "25", "-1"])
+def test_un_intervalo_sin_estado_invalido_usa_tres_horas(host: Host, cada: str) -> None:
+    con_hora_utc(host)
+    resultado = host.alertar(
+        "backup: viejo",
+        "",
+        "backup-viejo",
+        "60",
+        ALERT_EMAIL="o@x",
+        ALERT_STATELESS_EVERY_HOURS=cada,
+        FAKE_HORA_UTC="03:07",
+        **_sin_ningun_estado(host),
+    )
+
+    assert resultado.returncode == 0, resultado.stderr
+    assert f"ALERT_STATELESS_EVERY_HOURS={cada} no es un numero de horas" in (
+        resultado.stderr
+    )
+    assert len(host.mails()) == 1
 
 
 # --- checks.sh --------------------------------------------------------------

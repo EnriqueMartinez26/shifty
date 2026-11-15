@@ -20,10 +20,17 @@
 # - Durante un deploy (lock en .deploy/lock) no hace nada.
 #
 # Incidente 2026-11-13 (dockerd colgado de 15:10 a 17:07 UTC):
-# - Una sola corrida a la vez: `flock -n` sobre $SHIFTY_STATE_DIR/guard.lock.
-#   Cron la lanza cada minuto y cada corrida quedaba colgada en `docker ps`:
-#   se apilaban (procesos 435 -> 764, load 68 en 2 vCPU). Si el lock no se
-#   puede abrir (estado de solo lectura) corre sin el: avisar importa mas.
+# - Una sola corrida a la vez: `flock -n` sobre $SHIFTY_STATE_DIR/guard.lock y
+#   $SHIFTY_RUN_DIR/guard.lock. Cron la lanza cada minuto y cada corrida
+#   quedaba colgada en `docker ps`: se apilaban (procesos 435 -> 764, load 68
+#   en 2 vCPU).
+# - Reinicia SOLO con exclusividad (revision del 2026-11-15). Sin flock, sin
+#   ningun lock que se pueda abrir o con un error de flock que no es otra
+#   corrida, corre en modo observacion: todos los chequeos y avisos, ningun
+#   reinicio, y un aviso critico (guard-sin-exclusividad) que lo dice.
+# - Sin poder leer o anotar un contador no reinicia ese contenedor ni los que
+#   siguen en la corrida, y sigue avisando: un contador que no se lee dejaba
+#   pasar el tope (revision del 2026-11-15).
 # - Toda llamada a docker tiene tope: GUARD_DOCKER_TIMEOUT_SECONDS (30) para
 #   ps/inspect y GUARD_RESTART_TIMEOUT_SECONDS (120) para restart, que espera
 #   el stop_grace_period del contenedor (60 s el de celery_worker). Si docker
@@ -48,6 +55,9 @@ set -euo pipefail
 # Un error bajo `set -e` entre alert_add y alert_flush perdia lo encolado.
 # alert_flush vacia la cola: los flush explicitos de abajo no mandan dos veces.
 trap 'alert_flush guard' EXIT
+# Corre cada minuto: en el modo sin estado de alert() manda solo en el minuto
+# 00 de la ventana.
+_ALERT_CADA_MINUTO=1
 
 : "${GUARD_MAX_RESTARTS:=3}"
 : "${GUARD_MAX_TOTAL_RESTARTS:=6}"
@@ -80,20 +90,64 @@ mkdir -p "$estado" 2>/dev/null || log "guard: no pude crear $estado; sigo para a
 ahora="$(date +%s)"
 global="$estado/_global"
 
-# El lock dura lo que dura el proceso (fd 9): un guard matado lo suelta. Si
-# no se puede abrir, corre sin el (falla abierto): sin lock se pueden apilar
-# corridas, sin aviso nadie se entera.
+# abrir_lock <8|9> <archivo>: abre el fd del lock. Con el estado de solo
+# lectura un lock que ya existe se abre para leer: flock no necesita escribir.
+abrir_lock() {
+  case "$1" in
+    8) { exec 8>>"$2"; } 2>/dev/null || { exec 8<"$2"; } 2>/dev/null ;;
+    9) { exec 9>>"$2"; } 2>/dev/null || { exec 9<"$2"; } 2>/dev/null ;;
+  esac
+}
+
+# Exclusividad. Dos locks: $SHIFTY_STATE_DIR/guard.lock (fd 9) y
+# $SHIFTY_RUN_DIR/guard.lock (fd 8, tmpfs: sigue escribible con / remontado
+# de solo lectura). Toma todos los que puede abrir y, si otra corrida tiene
+# cualquiera de los dos, sale: dos corridas que reinician comparten al menos
+# un lock, salvo que a cada una le falle abrir uno distinto. Los locks duran
+# lo que dura el proceso: un guard matado los suelta. `flock -E` da su propio
+# codigo al conflicto: un error de flock no pasa por otra corrida.
+# `sin_exclusividad`: vacio con exclusividad; si no, por que no la hay.
+shifty_run_dir
+conflicto_flock=99
+sin_exclusividad=""
 if command -v flock >/dev/null 2>&1; then
-  if { exec 9>"$SHIFTY_STATE_DIR/guard.lock"; } 2>/dev/null; then
-    if ! flock -n 9; then
-      log "guard: otra corrida sigue en curso ($SHIFTY_STATE_DIR/guard.lock); salgo sin hacer nada"
-      exit 0
+  tomados=0
+  fallas=""
+  for fd in 9 8; do
+    if [ "$fd" = 9 ]; then
+      lock="$SHIFTY_STATE_DIR/guard.lock"
+    else
+      lock="$SHIFTY_RUN_DIR/guard.lock"
+      # El mismo archivo dos veces: el segundo flock chocaria con el primero.
+      if [ "$lock" -ef "$SHIFTY_STATE_DIR/guard.lock" ]; then continue; fi
+      crear_run_dir || true
     fi
-  else
-    log "guard: no pude abrir el lock ($SHIFTY_STATE_DIR/guard.lock); corro sin el"
-  fi
+    if ! abrir_lock "$fd" "$lock"; then
+      log "guard: no pude abrir el lock ($lock)"
+      fallas+="${fallas:+; }no pude abrir $lock"
+      continue
+    fi
+    rc=0
+    flock -n -E "$conflicto_flock" "$fd" || rc=$?
+    if [ "$rc" -eq 0 ]; then
+      tomados=$((tomados + 1))
+    elif [ "$rc" -eq "$conflicto_flock" ]; then
+      log "guard: otra corrida sigue en curso ($lock); salgo sin hacer nada"
+      exit 0
+    else
+      log "guard: flock salio con codigo $rc sobre $lock"
+      fallas+="${fallas:+; }flock salio $rc sobre $lock"
+    fi
+  done
+  if [ "$tomados" -eq 0 ]; then sin_exclusividad="$fallas"; fi
 else
-  log "guard: el host no tiene flock; corro sin el lock de una sola corrida"
+  sin_exclusividad="el host no tiene flock"
+fi
+if [ -n "$sin_exclusividad" ]; then
+  log "guard: sin exclusividad ($sin_exclusividad); modo observacion: chequeo y aviso, no reinicio nada"
+  alert_add "guard: sin exclusividad ($sin_exclusividad); no reinicio ningun contenedor" \
+    "Sin el lock de una sola corrida dos guards podrian reiniciar a la vez. Los chequeos y avisos siguen; los reinicios vuelven cuando el lock ande (flock y $SHIFTY_STATE_DIR o $SHIFTY_RUN_DIR escribibles)." \
+    guard-sin-exclusividad 180
 fi
 if ! command -v timeout >/dev/null 2>&1; then
   log "guard: el host no tiene timeout; docker y el mail de alerta corren sin tope"
@@ -102,15 +156,15 @@ fi
 enfermos=()
 
 # docker <args> con tope de <segundos>. Sale 124 (137 si hubo que matarlo) si
-# docker no contesta. El hijo no hereda el fd del lock: un docker colgado que
-# sobreviva al guard no bloquea a las corridas siguientes.
+# docker no contesta. El hijo no hereda los fds de los locks: un docker
+# colgado que sobreviva al guard no bloquea a las corridas siguientes.
 docker_con_tope() {
   local tope="$1"
   shift
   if command -v timeout >/dev/null 2>&1; then
-    timeout -k 5 "$tope" docker "$@" 9>&-
+    timeout -k 5 "$tope" docker "$@" 9>&- 8>&-
   else
-    docker "$@" 9>&-
+    docker "$@" 9>&- 8>&-
   fi
 }
 
@@ -154,6 +208,36 @@ recientes() {
       printf '%s\n' "$marca"
     fi
   done <"$archivo"
+}
+
+# contador_legible <archivo>: todavia no existe (cero reinicios) o es un
+# archivo que se puede abrir. Uno que no se lee se tomaba por vacio y el tope
+# dejaba de contar.
+contador_legible() {
+  if [ ! -e "$1" ] && [ ! -L "$1" ]; then return 0; fi
+  [ -f "$1" ] && { : <"$1"; } 2>/dev/null
+}
+
+# anotar <archivo> <marcas...>: reescribe el contador por tmp + mv (-T: nunca
+# adentro de un directorio). Si falla, el contador viejo queda entero.
+anotar() {
+  local archivo="$1"
+  shift
+  if { printf '%s\n' "$@" >"$archivo.tmp" && mv -fT "$archivo.tmp" "$archivo"; } 2>/dev/null; then
+    return 0
+  fi
+  rm -f "$archivo.tmp" 2>/dev/null || true
+  return 1
+}
+
+# sin_contador <nombre> <motivo>: no reinicia <nombre> y, en esta corrida,
+# tampoco a los que siguen (`contador_roto`).
+contador_roto=""
+sin_contador() {
+  contador_roto="$2"
+  alert_add "guard: no reinicio $1: $2" \
+    "El tope de reinicios necesita el contador: en esta corrida no reinicio nada mas. Mirar: ls -l $estado; df -h $estado" \
+    "guard-sin-contador-$1" 60
 }
 
 en_lista() {
@@ -211,7 +295,19 @@ for entrada in "${enfermos[@]}"; do
     continue
   fi
 
+  if [ -n "$contador_roto" ]; then
+    sin_contador "$nombre" "$contador_roto"
+    continue
+  fi
   archivo="$estado/$nombre"
+  if ! contador_legible "$archivo"; then
+    sin_contador "$nombre" "no puedo leer el contador $archivo"
+    continue
+  fi
+  if ! contador_legible "$global"; then
+    sin_contador "$nombre" "no puedo leer el contador $global"
+    continue
+  fi
   mapfile -t propios < <(recientes "$archivo")
   mapfile -t todos < <(recientes "$global")
 
@@ -242,9 +338,21 @@ for entrada in "${enfermos[@]}"; do
     log "guard: no reinicio $nombre: el docker restart de $restart_fallido fallo en esta corrida"
     continue
   fi
+  if [ -n "$sin_exclusividad" ]; then
+    alert_add "guard: no reinicio $nombre: sin exclusividad ($sin_exclusividad)" \
+      "Sigue unhealthy. Mirar: docker logs --tail 200 $nombre" "guard-sin-reinicio-$nombre" 60
+    continue
+  fi
 
-  printf '%s\n' "${propios[@]}" "$ahora" >"$archivo"
-  printf '%s\n' "${todos[@]}" "$ahora" >"$global"
+  # El contador se anota ANTES del restart: sin anotarlo no se reinicia.
+  if ! anotar "$archivo" "${propios[@]}" "$ahora"; then
+    sin_contador "$nombre" "no puedo anotar el contador $archivo"
+    continue
+  fi
+  if ! anotar "$global" "${todos[@]}" "$ahora"; then
+    sin_contador "$nombre" "no puedo anotar el contador $global"
+    continue
+  fi
   rc=0
   docker_con_tope "$GUARD_RESTART_TIMEOUT_SECONDS" restart "$nombre" >/dev/null || rc=$?
   if [ "$rc" -eq 0 ]; then
