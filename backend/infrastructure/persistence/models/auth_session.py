@@ -25,7 +25,7 @@ class AuthSessionModel(Base):
         DateTime(timezone=True), nullable=True
     )
     # D-20261113-01: distingue rotacion, logout, admin, cambio de clave y reuso.
-    # Solo una rotacion vieja habilita revocar las sesiones vivas por reuso.
+    # `reuse_detected` en el token viejo tambien reclama la cascada una sola vez.
     revoked_reason: Mapped[str | None] = mapped_column(String(16), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)

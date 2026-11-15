@@ -128,3 +128,63 @@ async def test_el_reuso_fuera_de_la_ventana_de_gracia_revoca_todo(
         "el reuso de un refresh rotado hace rato no revoco la familia entera"
     )
     assert await _refresh(client, otro) == 401
+
+
+@pytest.mark.asyncio
+async def test_reuso_concurrente_cascadea_una_vez_y_no_toca_login_posterior(
+    client: AsyncClient,
+    app_sessions: async_sessionmaker[AsyncSession],
+    owner_engine: AsyncEngine,
+) -> None:
+    email = "pg-reuso-repetido@demo.com"
+    familia, otro = await _dos_dispositivos(
+        client, app_sessions, slug="pg-reuso-repetido", email=email
+    )
+    assert await _refresh(client, familia) == 200
+
+    async with owner_engine.begin() as conn:
+        await conn.execute(
+            text(
+                "update auth_sessions "
+                "set revoked_at = revoked_at - make_interval(secs => :atras) "
+                "where refresh_token_hash = :hash"
+            ),
+            {"atras": REFRESH_REUSE_GRACE_SECONDS + 5, "hash": hash_token(familia)},
+        )
+
+    codigos = await asyncio.gather(*(_refresh(client, familia) for _ in range(RAFAGA)))
+    assert all(codigo == 401 for codigo in codigos), codigos
+    assert await _vivas(owner_engine, email) == set()
+
+    login = await client.post(
+        "/auth/login", json={"email": email, "password": PASSWORD}
+    )
+    assert login.status_code == 200, login.text
+    posterior = client.cookies.get(REFRESH_COOKIE)
+    assert posterior and posterior not in {familia, otro}
+
+    assert await _refresh(client, familia) == 401
+    assert await _refresh(client, posterior) == 200
+
+
+@pytest.mark.asyncio
+async def test_refresh_y_logout_concurrentes_no_revocan_otro_dispositivo(
+    client: AsyncClient,
+    app_sessions: async_sessionmaker[AsyncSession],
+    owner_engine: AsyncEngine,
+) -> None:
+    email = "pg-refresh-logout-race@demo.com"
+    familia, otro = await _dos_dispositivos(
+        client, app_sessions, slug="pg-refresh-logout-race", email=email
+    )
+    refresh_response, logout_response = await asyncio.gather(
+        client.post("/auth/refresh", headers={"Cookie": f"{REFRESH_COOKIE}={familia}"}),
+        client.post("/auth/logout", headers={"Cookie": f"{REFRESH_COOKIE}={familia}"}),
+    )
+    assert refresh_response.status_code in {200, 401}, refresh_response.text
+    assert logout_response.status_code == 204, logout_response.text
+    vivas = await _vivas(owner_engine, email)
+    assert hash_token(otro) in vivas
+    if refresh_response.status_code == 200:
+        nuevo = refresh_response.cookies.get(REFRESH_COOKIE)
+        assert nuevo and hash_token(nuevo) in vivas

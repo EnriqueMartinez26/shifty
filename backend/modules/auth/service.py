@@ -457,6 +457,17 @@ async def _handle_refresh_reuse(
     # NULL/otro motivo incluye revocaciones historicas anteriores al registro
     # del motivo; sin evidencia de rotacion no se corta una sesion mas nueva.
     if revoked_reason != REVOKED_BY_ROTATION:
+        if revoked_reason == REVOKED_BY_REUSE:
+            # Este token ya disparo la cascada. Se conserva la deteccion, pero
+            # repetirlo no debe revocar sesiones creadas desde entonces.
+            logger.warning(
+                "refresh_token_reuse_detected",
+                user_id=session.user_id,
+                revoked_sessions=0,
+                cascade_claimed=False,
+                ip=ip,
+            )
+            raise AuthenticationException(message="Sesion expirada")
         logger.info(
             "refresh_token_reuse_after_non_rotation_revocation",
             user_id=session.user_id,
@@ -465,14 +476,30 @@ async def _handle_refresh_reuse(
         )
         raise AuthenticationException(message="Sesion expirada")
 
-    revoked = await revoke_sessions_for_user(
-        db, session.user_id, revoked_reason=REVOKED_BY_REUSE
+    # Reclama la cascada una sola vez por token. El UPDATE condicional se
+    # serializa en Postgres: solo una repeticion puede cambiar `rotated` a
+    # `reuse_detected`; las concurrentes quedan como detecciones sin cascada.
+    claim = await db.execute(
+        update(AuthSession)
+        .where(
+            AuthSession.id == session.id,
+            AuthSession.revoked_at.is_not(None),
+            AuthSession.revoked_reason == REVOKED_BY_ROTATION,
+        )
+        .values(revoked_reason=REVOKED_BY_REUSE)
     )
+    cascade_claimed = (getattr(claim, "rowcount", 0) or 0) == 1
+    revoked = 0
+    if cascade_claimed:
+        revoked = await revoke_sessions_for_user(
+            db, session.user_id, revoked_reason=REVOKED_BY_REUSE
+        )
     await db.commit()
     logger.warning(
         "refresh_token_reuse_detected",
         user_id=session.user_id,
         revoked_sessions=revoked,
+        cascade_claimed=cascade_claimed,
         ip=ip,
     )
     raise AuthenticationException(message="Sesion expirada")

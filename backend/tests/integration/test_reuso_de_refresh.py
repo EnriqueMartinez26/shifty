@@ -35,6 +35,7 @@ from modules.auth.service import (
     REVOKED_BY_ADMIN,
     REVOKED_BY_LOGOUT,
     REVOKED_BY_PASSWORD,
+    REVOKED_BY_REUSE,
     hash_token,
     refresh_session,
 )
@@ -160,6 +161,37 @@ async def test_reusar_un_refresh_ya_rotado_mata_la_familia_entera(
     # Y el access token emitido antes tampoco, porque cuelga del sid revocado.
     muerto = await client.get("/me", headers=auth_headers(token))
     assert muerto.status_code in {401, 403}
+
+
+@pytest.mark.asyncio
+async def test_repetir_reuso_no_revoca_un_login_posterior(
+    client: AsyncClient, test_session: AsyncSession
+) -> None:
+    email = "reuso-repetido@test.com"
+    await register_and_login(client, slug="reuso-repetido", email=email)
+    viejo = client.cookies.get(REFRESH_COOKIE)
+    assert viejo
+
+    rotacion = await client.post("/auth/refresh")
+    assert rotacion.status_code == 200, rotacion.text
+    await _envejecer_revocacion(test_session, viejo)
+
+    _usar(client, viejo)
+    primer_reuso = await client.post("/auth/refresh")
+    assert primer_reuso.status_code == 401, primer_reuso.text
+    assert await _motivo_revocacion(test_session, viejo) == REVOKED_BY_REUSE
+    assert await _vivas(test_session) == 0
+
+    client.cookies.clear()
+    posterior = await _otro_dispositivo(client, email)
+    _usar(client, viejo)
+    segundo_reuso = await client.post("/auth/refresh")
+    assert segundo_reuso.status_code == 401, segundo_reuso.text
+    assert "set-cookie" not in segundo_reuso.headers
+    assert await _motivo_revocacion(test_session, viejo) == REVOKED_BY_REUSE
+
+    _usar(client, posterior)
+    assert (await client.post("/auth/refresh")).status_code == 200
 
 
 @pytest.mark.asyncio
