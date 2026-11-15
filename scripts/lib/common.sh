@@ -103,8 +103,9 @@ json_escape() {
 # Estado que no se puede escribir (revision del 2026-11-15: con / de solo
 # lectura mandaba sin silencio ni presupuesto, un mail por minuto). Se decide
 # creando y borrando un archivo de prueba, no con `[ -w ]` (con los inodos
-# agotados o el disco lleno da bien y no se crea nada), y un sello o un
-# registro del presupuesto que no se escribe al mandar tampoco manda igual:
+# agotados o el disco lleno da bien y no se crea nada). Los sellos que fallan,
+# los presupuestos ilegibles y los topes cuya supresion no se puede anotar no
+# mandan igual:
 # - pasa a $SHIFTY_RUN_DIR/alerts (tmpfs, /run/shifty), que sigue escribible
 #   con / remontado de solo lectura; se pierde al reiniciar el host y lo anota
 #   una vez por corrida.
@@ -117,6 +118,11 @@ json_escape() {
 #   llamada a alert() en la hora ventana: checks.sh uno por problema y
 #   latency-check.sh (cada 5 minutos) hasta 12. Lo de entre ventanas queda
 #   solo en syslog. El mensaje dice que es un envio degradado.
+# - Si cualquier intento de estado en la ruta principal falla, un respaldo
+#   saludable puede conservar silencio y presupuesto y mandar webhooks, pero
+#   no SMTP: el respaldo podria desconocer mails que ya salieron.
+# - Si tampoco hay estado utilizable en el respaldo, rige el modo sin estado:
+#   SMTP y webhook solo en la ventana UTC documentada, sin presupuesto diario.
 alert() {
   alert_add "$@"
   alert_flush
@@ -170,8 +176,9 @@ alert_add() {
 # "(+N avisos)": "N avisos en esta corrida" escondia lo importante. El
 # prefijo va delante solo si ese asunto no empieza ya con el.
 alert_flush() {
-  local prefijo="${1:-}" n="${#_ALERT_ASUNTOS[@]}"
+  local prefijo="${1:-}" n="${#_ALERT_ASUNTOS[@]}" mail=1
   [ "$n" -gt 0 ] || return 0
+  _ALERT_BLOQUEAR_EMAIL=0
   # _alert_con_estado y _alert_componer leen estas variables locales.
   local asuntos=("${_ALERT_ASUNTOS[@]}") detalles=("${_ALERT_DETALLES[@]}")
   local claves=("${_ALERT_CLAVES[@]}") silencios=("${_ALERT_SILENCIOS[@]}")
@@ -183,12 +190,14 @@ alert_flush() {
   # El estado vive en el primer directorio donde se puede crear un archivo y
   # donde se pudo escribir lo de este envio (sellos y registro del
   # presupuesto): $SHIFTY_STATE_DIR/alerts y despues $SHIFTY_RUN_DIR/alerts
-  # (tmpfs). Sin ninguno, modo sin estado. Un sello o un registro que no se
-  # escribe no manda igual: con los inodos agotados `[ -w ]` daba bien y salia
-  # un mail por minuto (revision del 2026-11-15).
+  # (tmpfs). Si falla cualquier intento en la ruta primaria, un respaldo que
+  # pueda guardar estado registra el aviso pero no manda SMTP: pudo haber uso
+  # previo que el respaldo no conoce. Si también falla el respaldo, se aplica
+  # el modo sin estado, limitado a la ventana UTC.
   local propio="$SHIFTY_STATE_DIR/alerts" dir estado=1 i
   dir="$propio"
   if ! _alert_intentar "$dir" "$prefijo"; then
+    _ALERT_BLOQUEAR_EMAIL=1
     shifty_run_dir
     dir="$SHIFTY_RUN_DIR/alerts"
     if ! { crear_run_dir && _alert_intentar "$dir" "$prefijo"; }; then
@@ -224,10 +233,14 @@ alert_flush() {
     fi
   done
   if [ "$estado" = 0 ]; then
-    _alert_sin_estado "$subject" "$body" "${#idx[@]}"
+    # Sin estado utilizable, se aplica el modo degradado acotado por ventana.
+    # El bloqueo por lock/ledger incierto solo evita saltar a un respaldo sano.
+    if [ -n "${ALERT_EMAIL:-}" ] && ! command -v timeout >/dev/null 2>&1; then mail=3; fi
+    _alert_sin_estado "$subject" "$body" "${#idx[@]}" "$mail"
     return 0
   fi
-  _alert_mandar "$subject" "$body" "$_ALERT_MAIL_OK" "$_ALERT_NOTA"
+  if [ "$_ALERT_BLOQUEAR_EMAIL" = 1 ]; then mail=2; else mail="$_ALERT_MAIL_OK"; fi
+  _alert_mandar "$subject" "$body" "$mail" "$_ALERT_NOTA"
   return 0
 }
 
@@ -244,10 +257,15 @@ _alert_escribible() {
 
 # _alert_intentar <dir> <prefijo>: el envio con estado en <dir>. Sale 1 si en
 # <dir> no se puede crear un archivo o si no se pudo escribir un sello o el
-# registro del presupuesto (lo anota): el llamador baja al respaldo o al modo
-# sin estado, nunca manda sin silencio ni presupuesto.
+# registro del presupuesto (lo anota): el llamador prueba el respaldo y, si no
+# tiene estado utilizable, aplica el modo sin estado con ventana UTC.
 _alert_intentar() {
-  _alert_escribible "$1" || return 1
+  _ALERT_FALLA=""
+  if ! _alert_escribible "$1"; then
+    _ALERT_FALLA="no pude completar la prueba de escritura en $1"
+    log "alertas: no pude escribir el estado de alertas en $1 ($_ALERT_FALLA)"
+    return 1
+  fi
   _alert_con_estado "$1" "$2" && return 0
   log "alertas: no pude escribir el estado de alertas en $1 ($_ALERT_FALLA); no mando sin silencio ni presupuesto"
   return 1
@@ -265,13 +283,20 @@ _alert_con_estado() {
   _ALERT_FALLA=""
   _ALERT_MAIL_OK=1
   _ALERT_NOTA=""
-  if command -v flock >/dev/null 2>&1; then
-    if { exec {fd}>>"$dir/.lock"; } 2>/dev/null; then
-      flock -w 15 "$fd" || log "alertas: no pude tomar $dir/.lock en 15 s; sigo sin el"
-    else
-      fd=""
-      log "alertas: no pude abrir $dir/.lock; sigo sin lock"
-    fi
+  if ! command -v flock >/dev/null 2>&1; then
+    _ALERT_FALLA="el host no tiene flock para proteger el presupuesto en $dir"
+    return 1
+  fi
+  if ! { exec {fd}>>"$dir/.lock"; } 2>/dev/null; then
+    _ALERT_FALLA="no pude abrir $dir/.lock"
+    return 1
+  fi
+  local lock_rc=0
+  flock -w 15 "$fd" || lock_rc=$?
+  if [ "$lock_rc" -ne 0 ]; then
+    exec {fd}>&-
+    _ALERT_FALLA="no pude tomar $dir/.lock (flock salio $lock_rc)"
+    return 1
   fi
 
   for ((i = 0; i < n; i++)); do
@@ -345,11 +370,11 @@ _alert_componer() {
   _ALERT_CUERPO="$body"
 }
 
-# _alert_sin_estado <asunto> <detalle> <alertas>: el envio del modo sin estado.
+# _alert_sin_estado <asunto> <detalle> <alertas> [mail]: envio degradado sin estado.
 # Los avisos ya quedaron en stderr y en syslog; mail y webhook salen solo en
 # la ventana del reloj (ver alert()), sin presupuesto.
 _alert_sin_estado() {
-  local subject="$1" body="$2" n="$3"
+  local subject="$1" body="$2" n="$3" mail="${4:-1}"
   local cada="${ALERT_STATELESS_EVERY_HOURS:-3}" hm h m
   if ! [[ "$cada" =~ ^[1-9][0-9]*$ ]] || [ "$cada" -gt 24 ]; then
     log "alertas: ALERT_STATELESS_EVERY_HOURS=$cada no es un numero de horas entre 1 y 24; uso 3"
@@ -368,7 +393,7 @@ _alert_sin_estado() {
     log "alertas: modo sin estado y no pude leer la hora UTC; mando igual"
   fi
   local nota="Envio degradado sin estado: no hay estado de alertas escribible ($SHIFTY_STATE_DIR/alerts ni $SHIFTY_RUN_DIR/alerts). Sin silencio por clave ni presupuesto diario; sale a lo sumo un mensaje cada $cada h UTC y lo de entre ventanas queda solo en syslog. Esta corrida tuvo $n alertas."
-  _alert_mandar "$subject (sin estado)" "$nota"$'\n\n'"$body" 1 ""
+  _alert_mandar "$subject (sin estado)" "$nota"$'\n\n'"$body" "$mail" ""
 }
 
 # Estado del presupuesto, en $SHIFTY_STATE_DIR/alerts: `.mails-del-dia` (la
@@ -383,6 +408,12 @@ _alert_sin_estado() {
 _alert_presupuesto() {
   local dir="$1" subject="$2"
   shift 2
+  _ALERT_MAIL_OK=1
+  _ALERT_NOTA=""
+  if [ -n "${ALERT_EMAIL:-}" ] && ! command -v timeout >/dev/null 2>&1; then
+    _ALERT_MAIL_OK=3
+    return 0
+  fi
   local max="${ALERT_EMAIL_MAX_PER_DAY:-12}" reserva="${ALERT_EMAIL_RESERVED_PER_DAY:-3}"
   [[ "$max" =~ ^(0|[1-9][0-9]*)$ ]] || max=12
   [[ "$reserva" =~ ^(0|[1-9][0-9]*)$ ]] || reserva=3
@@ -391,14 +422,26 @@ _alert_presupuesto() {
   hoy="$(date -u +%Y-%m-%d)"
 
   local lineas=() usados=0 claves_hoy=()
-  if [ -f "$registro" ]; then
-    mapfile -t lineas <"$registro" 2>/dev/null || lineas=()
-  fi
-  # Otro dia o un registro ilegible arrancan de cero.
-  if [ "${#lineas[@]}" -ge 2 ] && [ "${lineas[0]}" = "$hoy" ] &&
-    [[ "${lineas[1]}" =~ ^(0|[1-9][0-9]*)$ ]]; then
-    usados="${lineas[1]}"
-    claves_hoy=("${lineas[@]:2}")
+  if [ -e "$registro" ] || [ -L "$registro" ]; then
+    if [ ! -f "$registro" ] || ! mapfile -t lineas <"$registro" 2>/dev/null; then
+      _ALERT_FALLA="no pude leer el registro de presupuesto $registro"
+      return 1
+    fi
+    local fecha_registro="${lineas[0]:-}" fecha_calendario=""
+    if ! [[ "$fecha_registro" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] ||
+      ! fecha_calendario="$(date -u -d "$fecha_registro" +%F 2>/dev/null)" ||
+      [ "$fecha_calendario" != "$fecha_registro" ] || [[ "$fecha_registro" > "$hoy" ]]; then
+      _ALERT_FALLA="registro de presupuesto invalido en $registro"
+      return 1
+    fi
+    if [ "${lineas[0]}" = "$hoy" ]; then
+      if [ "${#lineas[@]}" -lt 2 ] || ! [[ "${lineas[1]}" =~ ^(0|[1-9][0-9]*)$ ]]; then
+        _ALERT_FALLA="registro de presupuesto invalido para hoy en $registro"
+        return 1
+      fi
+      usados="${lineas[1]}"
+      claves_hoy=("${lineas[@]:2}")
+    fi
   fi
 
   # La reserva la usa solo un mensaje con una clave critica que no salio hoy.
@@ -417,7 +460,7 @@ _alert_presupuesto() {
     if printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$subject" >>"$suprimidos" 2>/dev/null; then
       _ALERT_MAIL_OK=0
     else
-      _ALERT_FALLA="no pude anotar la alerta suprimida en $suprimidos"
+      _ALERT_FALLA="no pude anotar la alerta suprimida en el registro de presupuesto $suprimidos"
       return 1
     fi
     return 0
@@ -429,7 +472,11 @@ _alert_presupuesto() {
   if ! { printf '%s\n' "$hoy" "$((usados + 1))" "${claves_hoy[@]}" >"$registro.tmp" &&
     mv -f "$registro.tmp" "$registro"; } 2>/dev/null; then
     rm -f "$registro.tmp" 2>/dev/null || true
-    _ALERT_FALLA="no pude anotar el mail en $registro"
+    if [ "$usados" -gt 0 ]; then
+      _ALERT_FALLA="registro de presupuesto con uso previo ($usados): no pude anotar el mail en $registro"
+    else
+      _ALERT_FALLA="no pude anotar el primer mail en un registro de presupuesto vacio ($registro)"
+    fi
     return 1
   fi
 
@@ -455,7 +502,7 @@ _alert_presupuesto() {
 # X" no tiene clave).
 _alert_gravedad() {
   case "$1" in
-    guard-dependencia-* | guard-no-reinicia-* | guard-docker-no-responde | guard-host-saturado | guard-sin-exclusividad | backup-*)
+    guard-dependencia-* | guard-no-reinicia-* | guard-docker-no-responde | guard-host-saturado | guard-sin-exclusividad | guard-sin-timeout | guard-carga-desconocida | backup-*)
       _ALERT_GRAVEDAD=0
       ;;
     guard-fallo-* | guard-sin-contador-*) _ALERT_GRAVEDAD=1 ;;
@@ -473,7 +520,7 @@ _alert_en_lista() {
   return 1
 }
 
-# _alert_mandar <asunto> <detalle> <mail 1|0> <nota>: un intento por canal,
+# _alert_mandar <asunto> <detalle> <mail 1|0|2|3> <nota>: un intento por canal,
 # sin reintentos. Nunca afirma que el mail llego: solo que msmtp lo acepto.
 _alert_mandar() {
   local subject="$1" body="$2" mail="$3" nota="$4"
@@ -494,7 +541,13 @@ $body}")"
       log "no se pudo mandar la alerta al webhook"
     fi
   fi
-  if [ -n "${ALERT_EMAIL:-}" ] && [ "$mail" != 1 ]; then
+  if [ -n "${ALERT_EMAIL:-}" ] && [ "$mail" = 2 ]; then
+    suprimida=1
+    log "alerta SMTP suprimida: no se pudo proteger el presupuesto diario del host"
+  elif [ -n "${ALERT_EMAIL:-}" ] && [ "$mail" = 3 ]; then
+    suprimida=1
+    log "alerta SMTP suprimida: no hay timeout para limitar el envio"
+  elif [ -n "${ALERT_EMAIL:-}" ] && [ "$mail" != 1 ]; then
     suprimida=1
     log "alerta suprimida por presupuesto diario del host: $subject"
     if command -v logger >/dev/null 2>&1; then
@@ -509,15 +562,17 @@ $body}")"
       mailer="sendmail"
     fi
     if [ -n "$mailer" ]; then
-      # Con DNS caido msmtp puede colgarse (13/11) y el guard espera con su
-      # lock tomado: 30 s de tope.
-      local con_tope=()
-      if command -v timeout >/dev/null 2>&1; then con_tope=(timeout -k 5 30); fi
-      if printf 'To: %s\nSubject: [shifty@%s] %s\nContent-Type: text/plain; charset=UTF-8\n\n%s\n' \
-        "$ALERT_EMAIL" "$host" "$subject" "$cuerpo" | "${con_tope[@]}" "$mailer" -t; then
-        sent=1
+      if ! command -v timeout >/dev/null 2>&1; then
+        suprimida=1
+        log "alerta SMTP suprimida: no hay timeout para limitar $mailer"
       else
-        log "no se pudo mandar la alerta por mail ($mailer)"
+        # Con DNS caido msmtp puede colgarse (13/11): 30 s de tope.
+        if printf 'To: %s\nSubject: [shifty@%s] %s\nContent-Type: text/plain; charset=UTF-8\n\n%s\n' \
+          "$ALERT_EMAIL" "$host" "$subject" "$cuerpo" | timeout -k 5 30 "$mailer" -t; then
+          sent=1
+        else
+          log "no se pudo mandar la alerta por mail ($mailer)"
+        fi
       fi
     else
       log "ALERT_EMAIL definido pero el host no tiene msmtp ni sendmail"

@@ -256,16 +256,15 @@ def test_guard_con_el_host_saturado_no_reinicia_y_avisa_una_vez(host: Host) -> N
     assert not (host.state / "guard" / "shifty-backend-1").exists()
 
 
-def test_guard_sin_carga_legible_reinicia_como_antes(host: Host) -> None:
+def test_guard_con_carga_legible_no_saturada_reinicia_como_antes(host: Host) -> None:
     resultado = host.correr(
         "guard.sh",
         FAKE_UNHEALTHY_IDS="abc123",
-        GUARD_LOADAVG_FILE=(host.raiz / "no-existe").as_posix(),
     )
 
     assert resultado.returncode == 0, resultado.stderr
     assert _hay(host.llamadas(), r"docker restart abc123")
-    assert "no pude leer la carga" in resultado.stderr
+    assert "no pude leer la carga" not in resultado.stderr
 
 
 def test_guard_manda_un_solo_aviso_por_corrida(host: Host) -> None:
@@ -331,9 +330,11 @@ def test_guard_sin_estado_escribible_avisa_igual(host: Host, servicio: str) -> N
 
     assert resultado.returncode == 0, resultado.stderr
     assert _reinicios(host) == []
-    mails = host.mails()
-    assert len(mails) == 1, resultado.stderr
-    assert f"shifty-{servicio}-1" in _asunto(mails[0])
+    assert host.mails() == []
+    assert f"shifty-{servicio}-1" in resultado.stderr
+    assert "alerta SMTP suprimida: no se pudo proteger el presupuesto diario" in (
+        resultado.stderr
+    )
     if _tiene("flock"):
         assert "no pude abrir el lock" in resultado.stderr
 
@@ -358,9 +359,8 @@ def test_guard_con_el_estado_de_solo_lectura_avisa_igual(host: Host) -> None:
             d.chmod(0o755)
 
     assert resultado.returncode == 0, resultado.stderr
-    mails = host.mails()
-    assert len(mails) == 1, resultado.stderr
-    assert "db esta unhealthy" in _asunto(mails[0])
+    assert host.mails() == []
+    assert "ALERTA: guard: db esta unhealthy" in resultado.stderr
 
 
 def _flock_que_falla(host: Host) -> str:
@@ -378,23 +378,46 @@ def _flock_que_falla(host: Host) -> str:
     return os.pathsep.join([str(directorio), host.env["PATH"]])
 
 
+def _flock_que_falla_una_vez(host: Host) -> str:
+    """Falla el lock primario y permite tomar el lock del respaldo."""
+    directorio = host.raiz / "flock-falla-una-vez"
+    directorio.mkdir()
+    falso = directorio / "flock"
+    falso.write_text(
+        '#!/bin/sh\n'
+        'if [ ! -e "$FAKE_DIR/flock-ya-fallo" ]; then\n'
+        '  : > "$FAKE_DIR/flock-ya-fallo"\n'
+        '  exit 1\n'
+        'fi\n'
+        'exit 0\n',
+        encoding="utf-8",
+        newline="\n",
+    )
+    falso.chmod(0o755)
+    return os.pathsep.join([str(directorio), host.env["PATH"]])
+
+
 def test_guard_que_muere_a_mitad_de_corrida_manda_lo_encolado(host: Host) -> None:
     """A1: un error bajo `set -e` entre alert_add y alert_flush perdia lo
     encolado. Aca el aviso de sin exclusividad se encola antes de `docker
     ps` y la corrida muere en un `docker inspect` que falla."""
+    con_hora_utc(host)
     resultado = host.correr(
         "guard.sh",
         FAKE_UNHEALTHY_IDS="shifty-backend-1",
         FAKE_INSPECT_EXIT="1",
         ALERT_EMAIL="ops@example.com",
+        FAKE_HORA_UTC="06:00",
         PATH=_flock_que_falla(host),
     )
 
     assert resultado.returncode != 0
     assert _reinicios(host) == []
+    assert "ALERTA: guard: sin exclusividad" in resultado.stderr
     mails = host.mails()
     assert len(mails) == 1, resultado.stderr
     assert "guard: sin exclusividad" in _asunto(mails[0])
+    assert _asunto(mails[0]).endswith("(sin estado)")
 
 
 # --- exclusividad (revision del 2026-11-15) -----------------------------------
@@ -417,10 +440,13 @@ def _path_sin_exclusividad(host: Host, como: str) -> str:
 def test_guard_sin_exclusividad_observa_avisa_y_no_reinicia(
     host: Host, como: str
 ) -> None:
+    path = _path_sin_exclusividad(host, como)
+    con_hora_utc(host)
     extra = {
         "FAKE_UNHEALTHY_IDS": "shifty-backend-1 shifty-rabbitmq-1 shifty-backend-2",
         "ALERT_EMAIL": "ops@example.com",
-        "PATH": _path_sin_exclusividad(host, como),
+        "FAKE_HORA_UTC": "06:00",
+        "PATH": os.pathsep.join([(host.raiz / "hora").as_posix(), path]),
     }
 
     resultado = host.correr("guard.sh", **extra)
@@ -428,22 +454,23 @@ def test_guard_sin_exclusividad_observa_avisa_y_no_reinicia(
     assert resultado.returncode == 0, resultado.stderr
     assert _reinicios(host) == []
     mails = host.mails()
-    assert len(mails) == 1, resultado.stderr
+    assert len(mails) == 1, mails
+    assert "guard: sin exclusividad" in _asunto(mails[0])
+    assert _asunto(mails[0]).endswith("(sin estado)")
     motivo = "el host no tiene flock" if como == "sin-flock" else "flock"
-    assert "] guard: sin exclusividad (" in _asunto(mails[0])
-    assert motivo in _asunto(mails[0])
-    assert "no reinicio ningun contenedor (+3 avisos)" in _asunto(mails[0])
+    assert "guard: sin exclusividad (" in resultado.stderr
+    assert motivo in resultado.stderr
     for linea in (
-        "- guard: shifty-rabbitmq-1 (rabbitmq) esta unhealthy; no se reinicia solo",
-        "- guard: no reinicio shifty-backend-1: sin exclusividad (",
-        "- guard: no reinicio shifty-backend-2: sin exclusividad (",
+        "shifty-rabbitmq-1 (rabbitmq) esta unhealthy; no se reinicia solo",
+        "no reinicio shifty-backend-1: sin exclusividad (",
+        "no reinicio shifty-backend-2: sin exclusividad (",
     ):
-        assert linea in mails[0], mails[0]
+        assert linea in resultado.stderr, resultado.stderr
     # Lo que no se reinicio no gasta el tope.
     assert not (host.state / "guard" / "shifty-backend-1").exists()
 
-    # Cada aviso conserva su silencio: la corrida siguiente no manda nada.
-    otra = host.correr("guard.sh", **extra)
+    # Sin estado, el minuto siguiente queda fuera de la ventana de envio.
+    otra = host.correr("guard.sh", **{**extra, "FAKE_HORA_UTC": "06:01"})
     assert otra.returncode == 0, otra.stderr
     assert _reinicios(host) == []
     assert len(host.mails()) == 1
@@ -780,6 +807,23 @@ def test_guard_con_un_tope_de_carga_invalido_usa_el_de_siempre(
     assert "host saturado" in resultado.stderr
 
 
+def test_guard_con_carga_ilegible_no_reinicia(host: Host) -> None:
+    """Sin medir la carga, reiniciar podria agravar la saturacion del host."""
+    faltante = (host.raiz / "loadavg-inexistente").as_posix()
+
+    resultado = host.correr(
+        "guard.sh",
+        FAKE_UNHEALTHY_IDS="shifty-backend-1",
+        GUARD_LOADAVG_FILE=faltante,
+    )
+
+    assert resultado.returncode == 0, resultado.stderr
+    assert _reinicios(host) == []
+    assert "no pude leer la carga del host" in resultado.stderr
+    assert "no reinicio nada" in resultado.stderr
+    assert not (host.state / "guard" / "shifty-backend-1").exists()
+
+
 def _path_sin(host: Host, *excluidos: str) -> str:
     """Un PATH con los binarios falsos y symlinks a los del sistema, menos
     `excluidos`. Solo Linux: Windows no crea symlinks sin privilegios."""
@@ -806,7 +850,7 @@ def _path_sin(host: Host, *excluidos: str) -> str:
 
 @pytest.mark.skipif(os.name == "nt", reason="arma un PATH de symlinks (Linux)")
 def test_guard_sin_timeout_lo_anota_una_vez(host: Host) -> None:
-    """A5: sin `timeout` docker y el mail corren sin tope; antes, en silencio."""
+    """A5: sin `timeout` no se inicia Docker ni se intenta SMTP ilimitado."""
     resultado = host.correr(
         "guard.sh",
         FAKE_UNHEALTHY_IDS="shifty-backend-1 shifty-backend-2",
@@ -815,9 +859,11 @@ def test_guard_sin_timeout_lo_anota_una_vez(host: Host) -> None:
     )
 
     assert resultado.returncode == 0, resultado.stderr
-    assert len(_reinicios(host)) == 2
-    assert resultado.stderr.count("el host no tiene timeout") == 1
-    assert len(host.mails()) == 1
+    assert _reinicios(host) == []
+    assert not any(call.startswith("docker ") for call in host.llamadas())
+    assert "el host no tiene timeout" in resultado.stderr
+    assert "alerta SMTP suprimida: no hay timeout" in resultado.stderr
+    assert host.mails() == []
 
 
 def test_el_aviso_agrupado_empieza_por_el_mas_grave(host: Host) -> None:
@@ -921,6 +967,106 @@ def _asunto(mail: str) -> str:
     return mail.split("Subject: ", 1)[1].splitlines()[0]
 
 
+def test_alerta_sin_lock_usa_modo_sin_estado_en_ventana(host: Host) -> None:
+    con_hora_utc(host)
+    resultado = host.alertar(
+        "a: aviso",
+        "",
+        "a",
+        "0",
+        FAKE_HORA_UTC="06:00",
+        PATH=_flock_que_falla(host),
+        **_presupuesto(1, 0),
+    )
+
+    assert resultado.returncode == 0, resultado.stderr
+    assert "no pude tomar" in resultado.stderr
+    mails = host.mails()
+    assert len(mails) == 1, resultado.stderr
+    assert _asunto(mails[0]).endswith("a: aviso (sin estado)")
+
+
+def test_alerta_lock_primario_fallido_no_manda_email_con_respaldo_sano(
+    host: Host,
+) -> None:
+    con_hora_utc(host)
+    resultado = host.alertar(
+        "a: aviso",
+        "",
+        "a",
+        "0",
+        FAKE_HORA_UTC="06:00",
+        PATH=_flock_que_falla_una_vez(host),
+        **_presupuesto(1, 0),
+    )
+
+    assert resultado.returncode == 0, resultado.stderr
+    assert host.mails() == []
+    assert "no pude tomar" in resultado.stderr
+    assert "alerta SMTP suprimida: no se pudo proteger el presupuesto diario" in (
+        resultado.stderr
+    )
+    registro_respaldo = host.raiz / "run" / "alerts" / ".mails-del-dia"
+    assert registro_respaldo.read_text(encoding="utf-8").splitlines()[:2] == [
+        time.strftime("%Y-%m-%d", time.gmtime()),
+        "1",
+    ]
+
+
+def test_alerta_con_registro_de_presupuesto_corrupto_falla_cerrado(host: Host) -> None:
+    con_hora_utc(host)
+    hoy = time.strftime("%Y-%m-%d", time.gmtime())
+    alertas = host.state / "alerts"
+    alertas.mkdir(parents=True, exist_ok=True)
+    (alertas / ".mails-del-dia").write_text(
+        f"{hoy}\nno-es-un-conteo\n", encoding="utf-8", newline="\n"
+    )
+
+    resultado = host.alertar(
+        "a: aviso",
+        "",
+        "a",
+        "0",
+        FAKE_HORA_UTC="06:00",
+        **_presupuesto(1, 0),
+    )
+
+    assert resultado.returncode == 0, resultado.stderr
+    assert host.mails() == []
+    assert "registro de presupuesto invalido para hoy" in resultado.stderr
+    assert "alerta SMTP suprimida: no se pudo proteger el presupuesto diario" in (
+        resultado.stderr
+    )
+
+
+@pytest.mark.parametrize("fecha", ["2026-99-99", "2999-01-01"])
+def test_alerta_con_fecha_de_presupuesto_invalida_o_futura_falla_cerrado(
+    host: Host, fecha: str
+) -> None:
+    con_hora_utc(host)
+    alertas = host.state / "alerts"
+    alertas.mkdir(parents=True, exist_ok=True)
+    (alertas / ".mails-del-dia").write_text(
+        f"{fecha}\n0\n", encoding="utf-8", newline="\n"
+    )
+
+    resultado = host.alertar(
+        "a: aviso",
+        "",
+        "a",
+        "0",
+        FAKE_HORA_UTC="06:00",
+        **_presupuesto(1, 0),
+    )
+
+    assert resultado.returncode == 0, resultado.stderr
+    assert host.mails() == []
+    assert "registro de presupuesto invalido" in resultado.stderr
+    assert "alerta SMTP suprimida: no se pudo proteger el presupuesto diario" in (
+        resultado.stderr
+    )
+
+
 def test_el_presupuesto_diario_guarda_lugar_para_un_incidente_nuevo(
     host: Host,
 ) -> None:
@@ -969,7 +1115,9 @@ def test_el_cambio_de_dia_utc_renueva_el_presupuesto_y_cuenta_las_suprimidas(
     registro = host.state / "alerts" / ".mails-del-dia"
     lineas = registro.read_text(encoding="utf-8").splitlines()
     ayer = time.strftime("%Y-%m-%d", time.gmtime(time.time() - 86400))
-    registro.write_text("\n".join([ayer, *lineas[1:]]) + "\n", encoding="utf-8")
+    registro.write_text(
+        "\n".join([ayer, *lineas[1:]]) + "\n", encoding="utf-8", newline="\n"
+    )
 
     resultado = host.alertar("d: cuatro", "detalle", "d", "0", **p)
 
@@ -979,7 +1127,7 @@ def test_el_cambio_de_dia_utc_renueva_el_presupuesto_y_cuenta_las_suprimidas(
     assert _asunto(mails[1]).endswith("d: cuatro")
     assert "2 alertas suprimidas desde 20" in mails[1]
     # Se cuentan una vez: el mail siguiente ya no las repite.
-    registro.write_text(ayer + "\n0\n", encoding="utf-8")
+    registro.write_text(ayer + "\n0\n", encoding="utf-8", newline="\n")
     host.alertar("e: cinco", "", "e", "0", **p)
     assert "suprimidas" not in host.mails()[2]
 
@@ -1024,7 +1172,10 @@ def test_sin_estado_escribible_la_alerta_usa_el_respaldo_en_tmpfs(host: Host) ->
     segunda = host.alertar("db caida", "", "db-caida", "60", **sin_estado)
 
     assert primera.returncode == 0 and segunda.returncode == 0
-    assert len(host.mails()) == 1
+    assert host.mails() == []
+    assert "alerta SMTP suprimida: no se pudo proteger el presupuesto diario" in (
+        primera.stderr
+    )
     assert "alerta silenciada (db-caida)" in segunda.stderr
     run = (host.raiz / "run" / "alerts").as_posix()
     assert "no puedo escribir el estado de alertas en" in primera.stderr
@@ -1043,9 +1194,12 @@ def test_guard_con_el_estado_de_solo_lectura_no_manda_un_mail_por_minuto(
     resultados = [host.correr("guard.sh", **extra) for _ in range(3)]
 
     assert [r.returncode for r in resultados] == [0, 0, 0], resultados[0].stderr
-    assert len(host.mails()) == 1, resultados[0].stderr
+    assert host.mails() == []
     # El lock de /run alcanza: no es el modo observacion.
     assert "sin exclusividad" not in resultados[0].stderr
+    assert "alerta SMTP suprimida: no se pudo proteger el presupuesto diario" in (
+        resultados[0].stderr
+    )
     assert resultados[0].stderr.count("se pierde al reiniciar el host") == 1
 
 
@@ -1159,10 +1313,18 @@ def test_un_estado_que_no_admite_archivos_nuevos_usa_el_respaldo(host: Host) -> 
     resultados = [host.correr("guard.sh", **extra) for _ in range(3)]
 
     assert [r.returncode for r in resultados] == [0, 0, 0], resultados[0].stderr
-    assert len(host.mails()) == 1, resultados[1].stderr
+    assert host.mails() == []
     assert len([ll for ll in host.llamadas() if ll.startswith("curl ")]) == 1
+    assert "alerta SMTP suprimida: no se pudo proteger el presupuesto diario" in (
+        resultados[0].stderr
+    )
     run = (host.raiz / "run" / "alerts").as_posix()
     assert f"vive en {run} (tmpfs)" in resultados[0].stderr
+    registro_respaldo = host.raiz / "run" / "alerts" / ".mails-del-dia"
+    assert registro_respaldo.read_text(encoding="utf-8").splitlines()[:2] == [
+        time.strftime("%Y-%m-%d", time.gmtime()),
+        "1",
+    ]
 
 
 @pytest.mark.parametrize("donde", ["estado", "estado-y-respaldo"])
@@ -1180,23 +1342,31 @@ def test_un_sello_que_no_se_escribe_no_manda_un_mail_por_minuto(
         "ALERT_WEBHOOK_URL": "https://hook",
     }
 
+    resultados = []
     for hora in ("05:58", "05:59", "06:00", "06:01", "06:02"):
         resultado = host.correr("guard.sh", FAKE_HORA_UTC=hora, **extra)
+        resultados.append(resultado)
         assert resultado.returncode == 0, resultado.stderr
 
     mails = host.mails()
-    assert len(mails) == 1, resultado.stderr
+    if donde == "estado":
+        assert mails == []
+        assert "alerta SMTP suprimida: no se pudo proteger el presupuesto diario" in (
+            resultados[0].stderr
+        )
+        assert "alerta silenciada" in resultado.stderr
+    else:
+        assert len(mails) == 1, resultado.stderr
+        assert "rabbitmq" in _asunto(mails[0])
+        assert _asunto(mails[0]).endswith("(sin estado)")
+        assert "fuera de la ventana" in resultado.stderr
     assert len([ll for ll in host.llamadas() if ll.startswith("curl ")]) == 1
-    assert "rabbitmq" in _asunto(mails[0])
-    assert _asunto(mails[0]).endswith("(sin estado)") == (donde != "estado")
-    assert "esta alerta no queda silenciada" not in resultado.stderr
 
 
-def test_un_registro_del_presupuesto_que_no_se_escribe_no_lo_saltea(
+def test_falla_al_reservar_ledger_primario_no_manda_smtp_con_respaldo_sano(
     host: Host,
 ) -> None:
-    """Sin poder anotar el mail en .mails-del-dia (disco lleno) mandaba igual:
-    el presupuesto diario no contaba nada."""
+    """El respaldo conserva el contador, pero no manda si falla el estado primario."""
     (host.state / "alerts" / ".mails-del-dia.tmp").mkdir(parents=True)
     p = _presupuesto(1, 0)
 
@@ -1205,13 +1375,84 @@ def test_un_registro_del_presupuesto_que_no_se_escribe_no_lo_saltea(
     ]
 
     assert [r.returncode for r in resultados] == [0, 0, 0]
-    mails = host.mails()
-    assert len(mails) == 1, resultados[0].stderr
-    assert _asunto(mails[0]).endswith("a: aviso")
-    assert "alerta suprimida por presupuesto diario del host: c: aviso" in (
+    assert host.mails() == []
+    assert "alerta SMTP suprimida: no se pudo proteger el presupuesto diario" in (
+        resultados[0].stderr
+    )
+    assert "alerta SMTP suprimida: no se pudo proteger el presupuesto diario" in (
         resultados[2].stderr
     )
-    assert "mando igual" not in resultados[0].stderr
+    registro_respaldo = host.raiz / "run" / "alerts" / ".mails-del-dia"
+    assert registro_respaldo.read_text(encoding="utf-8").splitlines()[:2] == [
+        time.strftime("%Y-%m-%d", time.gmtime()),
+        "1",
+    ]
+
+
+def test_uso_previo_primario_no_se_pierde_si_falla_la_siguiente_escritura(
+    host: Host,
+) -> None:
+    hoy = time.strftime("%Y-%m-%d", time.gmtime())
+    alertas = host.state / "alerts"
+    alertas.mkdir(parents=True, exist_ok=True)
+    (alertas / ".mails-del-dia").write_text(
+        f"{hoy}\n1\na\n", encoding="utf-8", newline="\n"
+    )
+    (alertas / ".mails-del-dia.tmp").mkdir()
+
+    resultado = host.alertar(
+        "b: aviso",
+        "",
+        "b",
+        "0",
+        **_presupuesto(3, 0),
+    )
+
+    assert resultado.returncode == 0, resultado.stderr
+    assert host.mails() == []
+    assert "registro de presupuesto con uso previo (1)" in resultado.stderr
+    assert "alerta SMTP suprimida: no se pudo proteger el presupuesto diario" in (
+        resultado.stderr
+    )
+    registro_respaldo = host.raiz / "run" / "alerts" / ".mails-del-dia"
+    assert registro_respaldo.read_text(encoding="utf-8").splitlines()[:2] == [
+        hoy,
+        "1",
+    ]
+
+
+def test_presupuesto_primario_al_tope_no_se_puede_saltar_con_respaldo_vacio(
+    host: Host,
+) -> None:
+    con_hora_utc(host)
+    hoy = time.strftime("%Y-%m-%d", time.gmtime())
+    alertas = host.state / "alerts"
+    alertas.mkdir(parents=True, exist_ok=True)
+    (alertas / ".mails-del-dia").write_text(
+        f"{hoy}\n1\na\n", encoding="utf-8", newline="\n"
+    )
+    (alertas / ".mails-suprimidos").mkdir()
+
+    resultado = host.alertar(
+        "b: aviso",
+        "",
+        "b",
+        "0",
+        FAKE_HORA_UTC="06:00",
+        **_presupuesto(1, 0),
+    )
+
+    assert resultado.returncode == 0, resultado.stderr
+    assert host.mails() == []
+    assert "no pude anotar la alerta suprimida" in resultado.stderr
+    assert "alerta SMTP suprimida: no se pudo proteger el presupuesto diario" in (
+        resultado.stderr
+    )
+    registro_respaldo = host.raiz / "run" / "alerts" / ".mails-del-dia"
+    assert registro_respaldo.read_text(encoding="utf-8").splitlines()[:2] == [
+        hoy,
+        "1",
+    ]
 
 
 def test_sin_registro_en_ningun_estado_manda_solo_en_la_ventana(host: Host) -> None:

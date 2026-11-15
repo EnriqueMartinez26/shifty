@@ -152,7 +152,12 @@ if [ -n "$sin_exclusividad" ]; then
     guard-sin-exclusividad 180
 fi
 if ! command -v timeout >/dev/null 2>&1; then
-  log "guard: el host no tiene timeout; docker y el mail de alerta corren sin tope"
+  log "guard: el host no tiene timeout; no consulto ni reinicio Docker"
+  alert_add "guard: falta timeout; no consulto ni reinicio Docker" \
+    "Instalar coreutils para limitar los comandos Docker y el envio SMTP." \
+    guard-sin-timeout 60
+  alert_flush guard
+  exit 0
 fi
 
 enfermos=()
@@ -163,11 +168,8 @@ enfermos=()
 docker_con_tope() {
   local tope="$1"
   shift
-  if command -v timeout >/dev/null 2>&1; then
-    timeout -k 5 "$tope" docker "$@" 9>&- 8>&-
-  else
-    docker "$@" 9>&- 8>&-
-  fi
+  command -v timeout >/dev/null 2>&1 || return 125
+  timeout -k 5 "$tope" docker "$@" 9>&- 8>&-
 }
 
 es_tope_vencido() {
@@ -191,15 +193,15 @@ docker_no_responde() {
 }
 
 # Load de 1 minuto por CPU sobre GUARD_MAX_LOAD_PER_CPU. Deja las cifras en
-# `carga_texto`. Sin load o CPUs legibles no frena (sale 1) y lo anota.
+# `carga_texto`. Retorna 0 si esta saturado, 1 si no y 2 si no pudo medirlo.
 carga_texto=""
 host_saturado() {
   local carga="" cpus=""
   carga="$(awk '{ print $1; exit }' "$GUARD_LOADAVG_FILE" 2>/dev/null)" || carga=""
   cpus="$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null)" || cpus=""
   if ! [[ "$carga" =~ ^[0-9]+([.][0-9]+)?$ ]] || ! [[ "$cpus" =~ ^[1-9][0-9]*$ ]]; then
-    log "guard: no pude leer la carga del host ($GUARD_LOADAVG_FILE, nproc); reinicio igual"
-    return 1
+    log "guard: no pude leer la carga del host ($GUARD_LOADAVG_FILE, nproc); no reinicio nada"
+    return 2
   fi
   carga_texto="load de 1 minuto $carga con $cpus CPU, tope $GUARD_MAX_LOAD_PER_CPU por CPU"
   awk -v c="$carga" -v n="$cpus" -v t="$GUARD_MAX_LOAD_PER_CPU" 'BEGIN { exit !(c / n > t) }'
@@ -289,8 +291,8 @@ for entrada in "${enfermos[@]}"; do
 done
 
 # La carga se mide una vez, antes del primer reinicio: "" sin medir, 1
-# saturado, 0 no. `restart_fallido`: el contenedor cuyo restart fallo o se
-# colgo.
+# saturado, 2 desconocida, 0 no. `restart_fallido`: el contenedor cuyo restart
+# fallo o se colgo.
 saturado=""
 restart_fallido=""
 for entrada in "${enfermos[@]}"; do
@@ -334,11 +336,18 @@ for entrada in "${enfermos[@]}"; do
 
   if [ -z "$saturado" ]; then
     saturado=0
-    if host_saturado; then
+    carga_rc=0
+    host_saturado || carga_rc=$?
+    if [ "$carga_rc" -eq 0 ]; then
       saturado=1
       alert_add "guard: host saturado ($carga_texto); no reinicio nada" \
         "Reiniciar con el host saturado lo empeora (13/11). Unhealthy: ${enfermos[*]}" \
         guard-host-saturado 60
+    elif [ "$carga_rc" -gt 1 ]; then
+      saturado=2
+      alert_add "guard: no pude medir la carga; no reinicio nada" \
+        "No se pudo verificar si el host esta saturado ($GUARD_LOADAVG_FILE, nproc). Unhealthy: ${enfermos[*]}" \
+        guard-carga-desconocida 60
     fi
   fi
   [ "$saturado" = 0 ] || continue
