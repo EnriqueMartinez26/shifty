@@ -151,6 +151,11 @@ if [ "$1" = compose ]; then
         exit "${FAKE_REDIS_EXIT:-0}"
       fi
       if [ "$3" = rabbitmq ]; then
+        # FAKE_RABBIT_CUELGA=1: el CLI de RabbitMQ no contesta (nodo trabado o
+        # daemon de docker lento). Duerme con el sleep real.
+        if [ -n "${FAKE_RABBIT_CUELGA:-}" ]; then
+          exec "$FAKE_SLEEP_REAL" 30
+        fi
         # Por defecto, lo que imprime RabbitMQ 3.13.7 sin alarmas. Sin `:`:
         # FAKE_RABBIT_ALARMS='' es una salida vacia de verdad.
         sin_alarmas='{"alarms":[],"node":"rabbit@rabbitmq","result":"ok"}'
