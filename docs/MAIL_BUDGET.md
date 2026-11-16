@@ -70,42 +70,50 @@ same quota window. If a retry crosses the provider reset, the same logical
 message can be admitted once in the new window and consume that window's slot.
 SMTP sends are not retried after an ambiguous result because the provider may
 already have accepted the message. An outbox send may retry a transient
-failure positively identified before DATA on a later tick, with the same
-logical ID and the same budget admission within that quota window, subject to
-the existing bounded outbox attempt limit. Once DATA starts,
-4xx responses, timeouts, and disconnects remain terminal. The `failed` metric
-counts SMTP attempts, so a pre-DATA attempt later delivered successfully can
-appear in both `failed` and `sent` while consuming one `admitted` slot in that
-window. Redis
-reservation checks use at most two attempts; when a cap is configured and
-Redis remains unavailable, mail admission fails closed. With no cap configured,
-mail remains uncapped and a Redis outage only loses budget metrics.
+failure positively identified before the message body starts, with the same
+logical ID and budget admission within that quota window, up to 10 SMTP
+attempts total. Delays are 20, 40, 80, and 160 seconds, then capped at 5
+minutes. A refusal of the DATA command before the server's 354 response is
+still pre-body; any uncertain result after body transmission is terminal and
+marked `unknown`. The `failed` metric counts SMTP attempts, so a pre-body
+attempt later delivered successfully can appear in both `failed` and `sent`
+while consuming one `admitted` slot in that window. Redis reservation checks
+use at most two attempts. If Redis is unavailable, outbox rows defer for 60
+seconds without consuming an SMTP attempt; direct mail paths fail closed when
+a cap is configured. With no cap configured, mail remains uncapped and a
+Redis outage only loses budget metrics.
 
 There is no exactly-once delivery guarantee. `admitted` means Shifty reserved
 an internal slot; `sent` means the SMTP call returned success, not that the
 recipient's inbox accepted or displayed the message. Provider acceptance can
-be ambiguous after DATA. The outbox commits a claim before SMTP: a worker
-crash after that claim leaves the row terminal to avoid duplicating a possibly
-accepted message. Pending schedules survive scheduler or broker restarts;
-delivery after an in-flight claim is still best-effort. Repeating an
+be ambiguous after body transmission. The outbox commits each claim before
+SMTP. A claim older than 120 seconds after worker loss becomes `unknown` and
+is never resent, avoiding duplication of a message the provider may have
+accepted. Pending schedules and timed retries survive scheduler or broker
+restarts; delivery after an in-flight claim is still best-effort. Repeating an
 idempotent admission does not prove delivery.
 
 Outbox-backed high and medium messages stay pending when budget admission is
-deferred or Redis is unavailable. A reminder's appointment stage marker and
-its `email.send` row commit in one SQL transaction. The dispatcher retries
-only positively identified pre-DATA failures, reusing the same logical ID and
-admission for up to 10 failed attempts. It marks reminders expired when their
-appointment starts; expired rows are terminal and are not sent. A pending row
-stays in SQL if the dispatcher or Celery broker is unavailable, and a later
-outbox tick can resume it. Low-priority rebook invitations are intentionally
-discarded at saturation. OTP uses a Celery task without automatic retry;
+deferred or Redis is unavailable. A budget denial schedules the row for the
+configured provider reset; Redis unavailability schedules it 60 seconds
+later. Neither counts as an SMTP attempt, and the dispatcher continues to
+other eligible rows. A reminder's appointment stage marker and its
+`email.send` row commit in one SQL transaction. Before SMTP, the dispatcher
+checks that the appointment still belongs to the outbox store, remains in an
+open status, and has the same future start time captured by the reminder. A
+cancelled, rescheduled, missing, or expired appointment makes the row
+terminal `expired`. A pending row stays in SQL if the dispatcher or Celery
+broker is unavailable, and a later outbox tick can resume it. Low-priority
+rebook invitations are intentionally discarded at saturation. OTP uses a
+Celery task without automatic retry;
 password reset and password-change emails use request background tasks. Public
 booking registration/confirmation emails use a separate Celery task with no
 retry; budget denials return a failure result and the task finishes. Re-offers
 from `waitlist.tasks` now commit the `OFFERED` state, expiry, and `email.send`
 row together. The normal outbox dispatcher sends after commit and retries only
-failures positively identified before SMTP DATA, within the existing attempt
-limit. Ambiguous results after DATA remain terminal. Waitlist `OFFERED` state,
+failures positively identified before message-body transmission, up to 10
+SMTP attempts total. Ambiguous results after body transmission remain
+terminal as `unknown`. Waitlist `OFFERED` state,
 offer expiry, and its `email.send` row are still committed together. Offer
 expiry starts when the offer is created, so a long dispatch delay can reduce
 the customer's remaining time to accept it.

@@ -20,11 +20,13 @@ from typing import Any
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import modules.notifications.tasks as notification_tasks
 from modules.appointments.repository import AppointmentRepository
 from modules.appointments.service import ReminderScheduleService
+from modules.payments.model import OutboxMessage
 from tests.integration.test_feature_flags_finance_and_public_privacy import (
     add_staff_schedule,
     create_service,
@@ -194,3 +196,35 @@ async def test_la_query_de_recordatorios_respeta_el_limit_en_sql(
         *ventana, pending_column="reminder_2h_sent_at"
     )
     assert len(para_2h) == 2
+
+    reminder_appointment = para_24h[0][0]
+    logical_id = f"test-reminder-pending:{reminder_appointment.id}"
+    assert await repo.schedule_reminder(
+        reminder_appointment.id,
+        "reminder_24h_sent_at",
+        datetime.now(timezone.utc),
+        {
+            "mail": "reminder",
+            "logical_id": logical_id,
+            "args": {"email": "reminder@example.com"},
+        },
+    )
+    await test_session.flush()
+    reminder_rows = (
+        (
+            await test_session.execute(
+                select(OutboxMessage).where(
+                    OutboxMessage.store_id == reminder_appointment.store_id,
+                    OutboxMessage.event_type == "email.send",
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    reminder_outbox_row = next(
+        row
+        for row in reminder_rows
+        if isinstance(row.payload, dict) and row.payload.get("logical_id") == logical_id
+    )
+    assert reminder_outbox_row.delivery_status == "pending"

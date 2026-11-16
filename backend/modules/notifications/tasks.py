@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import re
 import smtplib
+import socket
 import ssl
 import time
 from collections.abc import AsyncIterator
@@ -175,6 +177,13 @@ def _is_retryable_pre_data_error(exc: Exception) -> bool:
         return bool(codes) and all(400 <= code < 500 for code in codes)
     if isinstance(exc, smtplib.SMTPResponseException):
         return 400 <= exc.smtp_code < 500
+    if isinstance(exc, socket.gaierror):
+        return exc.errno == socket.EAI_AGAIN
+    if isinstance(exc, OSError) and exc.errno in {
+        errno.ENETUNREACH,
+        errno.EHOSTUNREACH,
+    }:
+        return True
     return isinstance(
         exc,
         (ConnectionError, TimeoutError, smtplib.SMTPServerDisconnected),
@@ -203,7 +212,18 @@ class SmtpSession:
     def __init__(self) -> None:
         self._smtp: smtplib.SMTP | None = None
         self.last_budget_decision: str | None = None
+        self.last_budget_retry_at: datetime | None = None
+        self.last_delivery_attempted = False
         self.last_delivery_retryable = False
+        self.last_delivery_ambiguous = False
+        self._last_pre_data_failure = False
+
+    def _reset_attempt_state(self) -> None:
+        self.last_budget_decision = None
+        self.last_budget_retry_at = None
+        self.last_delivery_attempted = False
+        self.last_delivery_retryable = False
+        self.last_delivery_ambiguous = False
         self._last_pre_data_failure = False
 
     def _connect(self) -> smtplib.SMTP:
@@ -245,7 +265,9 @@ class SmtpSession:
             self._discard()
 
     def _send_sync(self, message: EmailMessage) -> None:
+        self.last_delivery_attempted = True
         self._last_pre_data_failure = False
+        self.last_delivery_ambiguous = False
         self._probe()
         if self._smtp is None:
             try:
@@ -262,16 +284,55 @@ class SmtpSession:
         # always exposes it, so stage tracking remains precise there.
         data_started = original_data is None
 
-        # smtplib.send_message calls this only after MAIL and RCPT have
-        # succeeded. Once it starts, a transport failure may have been
-        # accepted by the provider and must remain terminal.
+        # smtplib.SMTP.data writes DATA and reads the 354 response before it
+        # sends the message body. Track that boundary: a refusal before 354 is
+        # a known pre-body failure, while an error after body transmission may
+        # follow provider acceptance and must remain terminal.
         if original_data is not None:
             data_method = original_data
+            original_send = getattr(smtp, "send", None)
+            original_getreply = getattr(smtp, "getreply", None)
 
             def tracked_data(message_bytes: bytes | str) -> tuple[int, bytes]:
                 nonlocal data_started
-                data_started = True
-                return data_method(message_bytes)
+                if not callable(original_send) or not callable(original_getreply):
+                    # Small SMTP test doubles only expose ``data``; without
+                    # smtplib's protocol hooks, keep the conservative behavior.
+                    data_started = True
+                    self.last_delivery_ambiguous = True
+                    response = data_method(message_bytes)
+                    if response[0] == 250:
+                        self.last_delivery_ambiguous = False
+                    return response
+
+                data_accepted = False
+                data_reply_seen = False
+
+                def tracked_send(payload: bytes | str) -> None:
+                    nonlocal data_started
+                    if data_accepted:
+                        data_started = True
+                        self.last_delivery_ambiguous = True
+                    original_send(payload)
+
+                def tracked_getreply() -> tuple[int, bytes]:
+                    nonlocal data_accepted, data_reply_seen
+                    response = original_getreply()
+                    if not data_reply_seen:
+                        data_reply_seen = True
+                        data_accepted = response[0] == 354
+                    return response
+
+                setattr(smtp, "send", tracked_send)
+                setattr(smtp, "getreply", tracked_getreply)
+                try:
+                    response = data_method(message_bytes)
+                    if response[0] == 250:
+                        self.last_delivery_ambiguous = False
+                    return response
+                finally:
+                    setattr(smtp, "send", original_send)
+                    setattr(smtp, "getreply", original_getreply)
 
             setattr(smtp, "data", tracked_data)
         try:
@@ -297,8 +358,7 @@ class SmtpSession:
         priority: MailPriority = "medium",
         message_id: str | None = None,
     ) -> bool:
-        self.last_budget_decision = None
-        self.last_delivery_retryable = False
+        self._reset_attempt_state()
         try:
             # AUD2-B4-08: dentro del try. Un error del parser de cabeceras se
             # registra sin PII y no escapa del sink. Como no es un fallo SMTP
@@ -329,6 +389,7 @@ class SmtpSession:
             message_id=effective_message_id,
         )
         self.last_budget_decision = reservation.decision
+        self.last_budget_retry_at = reservation.retry_at
         if reservation.decision != "admitted":
             logger.warning(
                 "mail_budget_admission_rejected",
@@ -358,9 +419,10 @@ class SmtpSession:
                 error_type=type(exc).__name__,
                 error=_safe_error(exc),
             )
-            report_mail_failure(
-                component="notifications", error_type=type(exc).__name__
-            )
+            if not (retry_pre_data and self.last_delivery_retryable):
+                report_mail_failure(
+                    component="notifications", error_type=type(exc).__name__
+                )
             return False
         await finish_mail(reservation, sent=True)
         return True
@@ -818,10 +880,27 @@ def _rescheduled_body(details: dict[str, Any]) -> str:
 # los ``partial`` de payments/jobs). Quien necesite asincronia despacha una
 # tarea de verdad; ``tests/architecture/test_enqueue_encola_de_verdad.py``
 # impide que vuelva un ``enqueue_*`` que mande en linea.
+def _reset_smtp_attempt(smtp: SmtpSession | None) -> None:
+    reset = getattr(smtp, "_reset_attempt_state", None)
+    if callable(reset):
+        reset()
+
+
+def _report_mail_wrapper_failure(smtp: SmtpSession | None, exc: Exception) -> None:
+    if (
+        smtp is not None
+        and getattr(smtp, "last_delivery_attempted", False)
+        and getattr(smtp, "last_delivery_retryable", False)
+    ):
+        return
+    report_mail_failure(component="notifications", error_type=type(exc).__name__)
+
+
 async def send_reschedule_email(
     *, email: str | None, details: dict[str, Any], smtp: SmtpSession | None = None
 ) -> dict[str, str]:
     """Mail "te movimos el turno". Nunca aborta la reprogramacion."""
+    _reset_smtp_attempt(smtp)
     if not is_deliverable_email(email):
         return {"status": "skipped", "reason": "no-deliverable"}
     assert email is not None
@@ -843,7 +922,7 @@ async def send_reschedule_email(
             appointment=details.get("public_id"),
             error_type=type(exc).__name__,
         )
-        report_mail_failure(component="notifications", error_type=type(exc).__name__)
+        _report_mail_wrapper_failure(smtp, exc)
         return {"status": "failed", "reason": type(exc).__name__}
     if not success:
         return {"status": "failed", "reason": "smtp"}
@@ -1022,6 +1101,7 @@ async def send_registration_email(
     *, email: str | None, details: dict[str, Any], smtp: SmtpSession | None = None
 ) -> dict[str, str]:
     """Mail "reserva registrada" al crear un turno pendiente. Nunca aborta."""
+    _reset_smtp_attempt(smtp)
     if not is_deliverable_email(email):
         return {"status": "skipped", "reason": "no-deliverable"}
     assert email is not None
@@ -1035,7 +1115,7 @@ async def send_registration_email(
             appointment=details.get("public_id"),
             error_type=type(exc).__name__,
         )
-        report_mail_failure(component="notifications", error_type=type(exc).__name__)
+        _report_mail_wrapper_failure(smtp, exc)
         return {"status": "failed", "reason": type(exc).__name__}
 
 
@@ -1043,6 +1123,7 @@ async def send_cancellation_email(
     *, email: str | None, details: dict[str, Any], smtp: SmtpSession | None = None
 ) -> dict[str, str]:
     """Mail "turno cancelado" (p.ej. por un bloqueo de agenda). Nunca aborta."""
+    _reset_smtp_attempt(smtp)
     if not is_deliverable_email(email):
         return {"status": "skipped", "reason": "no-deliverable"}
     assert email is not None
@@ -1064,7 +1145,7 @@ async def send_cancellation_email(
             appointment=details.get("public_id"),
             error_type=type(exc).__name__,
         )
-        report_mail_failure(component="notifications", error_type=type(exc).__name__)
+        _report_mail_wrapper_failure(smtp, exc)
         return {"status": "failed", "reason": type(exc).__name__}
     if not success:
         return {"status": "failed", "reason": "smtp"}
@@ -1075,6 +1156,7 @@ async def send_rebook_email(
     *, email: str | None, details: dict[str, Any], smtp: SmtpSession | None = None
 ) -> dict[str, str]:
     """Mail "reserva tu proximo turno" al completar. Nunca aborta."""
+    _reset_smtp_attempt(smtp)
     if not is_deliverable_email(email):
         return {"status": "skipped", "reason": "no-deliverable"}
     assert email is not None
@@ -1096,7 +1178,7 @@ async def send_rebook_email(
             appointment=details.get("public_id"),
             error_type=type(exc).__name__,
         )
-        report_mail_failure(component="notifications", error_type=type(exc).__name__)
+        _report_mail_wrapper_failure(smtp, exc)
         return {"status": "failed", "reason": type(exc).__name__}
     if not success:
         return {"status": "failed", "reason": "smtp"}
@@ -1127,6 +1209,7 @@ async def send_waitlist_offer_email(
     *, email: str | None, details: dict[str, Any], smtp: SmtpSession | None = None
 ) -> dict[str, str]:
     """Mail "se libero un turno" a quien esta en lista de espera. Nunca aborta."""
+    _reset_smtp_attempt(smtp)
     if not is_deliverable_email(email):
         return {"status": "skipped", "reason": "no-deliverable"}
     assert email is not None
@@ -1148,7 +1231,7 @@ async def send_waitlist_offer_email(
             entry=details.get("public_id"),
             error_type=type(exc).__name__,
         )
-        report_mail_failure(component="notifications", error_type=type(exc).__name__)
+        _report_mail_wrapper_failure(smtp, exc)
         return {"status": "failed", "reason": type(exc).__name__}
     if not success:
         return {"status": "failed", "reason": "smtp"}
@@ -1159,6 +1242,7 @@ async def send_confirmation_email(
     *, email: str | None, details: dict[str, Any], smtp: SmtpSession | None = None
 ) -> dict[str, str]:
     """Mail "turno confirmado". Nunca aborta la confirmacion."""
+    _reset_smtp_attempt(smtp)
     if not is_deliverable_email(email):
         return {"status": "skipped", "reason": "no-deliverable"}
     assert email is not None
@@ -1175,7 +1259,7 @@ async def send_confirmation_email(
             error_type=type(exc).__name__,
             error=_safe_error(exc),
         )
-        report_mail_failure(component="notifications", error_type=type(exc).__name__)
+        _report_mail_wrapper_failure(smtp, exc)
         return {
             "status": "failed",
             "reason": type(exc).__name__,
@@ -1649,6 +1733,7 @@ async def send_store_notification_email(
     va en el sink del aviso, no en el proveedor, para que cubra a cualquier
     llamador nuevo sin que haya que acordarse.
     """
+    _reset_smtp_attempt(smtp)
     if not is_deliverable_email(email):
         return {"status": "skipped", "reason": "no-deliverable"}
     try:
@@ -1676,5 +1761,5 @@ async def send_store_notification_email(
             email=_mask_email(email),
             error_type=type(exc).__name__,
         )
-        report_mail_failure(component="notifications", error_type=type(exc).__name__)
+        _report_mail_wrapper_failure(smtp, exc)
         return {"status": "failed", "reason": type(exc).__name__}

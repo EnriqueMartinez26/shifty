@@ -316,8 +316,9 @@ async def test_retry_de_oferta_expirada_no_manda_datos_viejos_ni_muta_estado(
     mail_a = await fila_de_mail(email_a)
     assert mail_a.attempts == 1
     assert mail_a.processed_at is None
+    assert mail_a.delivery_status == "pending"
     assert email_a not in [destino for destino, _asunto, _cuerpo in enviados]
-    raw_guard = mail_a.payload.get("guard")
+    raw_guard = mail_a.payload.get("waitlist_offer_guard")
     assert isinstance(raw_guard, dict)
     entry_a_id = raw_guard.get("entry_id")
     assert isinstance(entry_a_id, str)
@@ -327,6 +328,7 @@ async def test_retry_de_oferta_expirada_no_manda_datos_viejos_ni_muta_estado(
 
     # El outbox conserva el intento A; hacemos vencer esa oferta antes del retry.
     entry_a.offer_expires_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+    mail_a.next_attempt_at = datetime.now(timezone.utc) - timedelta(seconds=1)
     await test_session.commit()
     if reofertar:
 
@@ -378,6 +380,7 @@ async def test_retry_de_oferta_expirada_no_manda_datos_viejos_ni_muta_estado(
     ).scalar_one()
     mail_a = await fila_de_mail(email_a)
     assert mail_a.processed_at is not None
+    assert mail_a.delivery_status == "expired"
     assert mail_a.error == "waitlist_offer_stale"
     assert mail_a.attempts == 1
     assert estado_despues == estado_antes

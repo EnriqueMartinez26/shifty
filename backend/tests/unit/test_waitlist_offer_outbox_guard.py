@@ -31,7 +31,7 @@ class _OutboxRow:
         self.payload = {
             "mail": "waitlist_offer",
             "args": {"email": "client@example.com", "details": {}},
-            "guard": {
+            "waitlist_offer_guard": {
                 "kind": "waitlist_offer",
                 "entry_id": "entry-1",
                 "staff_id": "staff-1",
@@ -47,6 +47,9 @@ class _OutboxRow:
         self.processed_at: datetime | None = None
         self.attempts = 0
         self.error: str | None = None
+        self.delivery_status: str | None = "pending"
+        self.next_attempt_at: datetime | None = None
+        self.claimed_at: datetime | None = None
         self.is_active = True
 
     def register_failure(self, reason: str) -> None:
@@ -105,8 +108,16 @@ async def test_guard_error_o_timeout_reabre_claim_para_el_siguiente_tick(
     async def claim(_db: Any, *, store_id: str | None = None) -> Any:
         nonlocal claims
         claims += 1
-        if fila.processed_at is None:
-            fila.processed_at = datetime.now(timezone.utc)
+        now = datetime.now(timezone.utc)
+        if (
+            fila.processed_at is None
+            and fila.delivery_status in {None, "pending"}
+            and (fila.next_attempt_at is None or fila.next_attempt_at <= now)
+        ):
+            fila.delivery_status = "claimed"
+            fila.claimed_at = now
+            fila.next_attempt_at = None
+            fila.processed_at = now
             return fila
         return None
 
@@ -156,19 +167,20 @@ async def test_guard_error_o_timeout_reabre_claim_para_el_siguiente_tick(
     assert rollback_calls == 1
     assert rls_calls == 2  # Antes del SELECT y reaplicado tras el rollback.
     assert fila.processed_at is None
-    assert fila.attempts == (1 if failure == "dbapi-abort" else 0)
+    assert fila.attempts == 0
     assert fila.error == (
         "waitlist_offer_validation_failed" if failure == "dbapi-abort" else None
     )
     assert sent == []
 
     # El mismo row vuelve a ser seleccionable; la guarda ya lee y el mail sale.
+    fila.next_attempt_at = datetime.now(timezone.utc) - timedelta(seconds=1)
     await jobs._dispatch_pending_emails(db)  # type: ignore[arg-type]
 
-    assert claims == 3
-    assert commit_calls == 2
+    assert claims == (4 if failure == "dbapi-abort" else 3)
+    assert commit_calls == 3
     assert fila.processed_at is not None
-    assert fila.attempts == (1 if failure == "dbapi-abort" else 0)
+    assert fila.attempts == 0
     assert sent == [fila.id]
 
 
@@ -177,7 +189,7 @@ async def test_guard_ausente_terminaliza_sin_enviar(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fila = _OutboxRow(datetime.now(timezone.utc) + timedelta(minutes=5))
-    fila.payload.pop("guard")
+    fila.payload.pop("waitlist_offer_guard")
     claims = 0
     commits = 0
 
@@ -185,6 +197,8 @@ async def test_guard_ausente_terminaliza_sin_enviar(
         nonlocal claims
         claims += 1
         if fila.processed_at is None:
+            fila.delivery_status = "claimed"
+            fila.claimed_at = datetime.now(timezone.utc)
             fila.processed_at = datetime.now(timezone.utc)
             return fila
         return None

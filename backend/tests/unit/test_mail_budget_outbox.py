@@ -20,7 +20,7 @@ from core.mail_budget import (
     current_mail_reserved_retry,
 )
 from modules.payments import jobs
-from modules.payments.model import WEBHOOK_INBOX_MAX_ATTEMPTS
+from modules.payments.model import OUTBOX_EMAIL_MAX_ATTEMPTS
 from modules.notifications import tasks
 from tests.redis_mail_budget_double import AtomicMailBudgetRedis
 
@@ -43,12 +43,9 @@ class _OutboxMailRow:
         self.processed_at: datetime | None = None
         self.attempts = 0
         self.error: str | None = None
-
-    def register_failure(self, reason: str) -> None:
-        self.attempts += 1
-        self.error = reason
-        if self.attempts >= WEBHOOK_INBOX_MAX_ATTEMPTS:
-            self.processed_at = datetime.now(timezone.utc)
+        self.delivery_status: str | None = "pending"
+        self.next_attempt_at: datetime | None = None
+        self.claimed_at: datetime | None = None
 
 
 class _ScriptedSMTP:
@@ -91,9 +88,17 @@ def _wire_outbox_dispatch(
     monkeypatch.setattr(settings, "MAIL_BUDGET_RESET_HOUR", 0)
 
     async def claim(*_args: Any, **_kwargs: Any) -> Any:
-        if row.processed_at is not None:
+        now = datetime.now(timezone.utc)
+        if (
+            row.processed_at is not None
+            or row.delivery_status not in {None, "pending"}
+            or (row.next_attempt_at is not None and row.next_attempt_at > now)
+        ):
             return None
-        row.processed_at = datetime.now(timezone.utc)
+        row.delivery_status = "claimed"
+        row.claimed_at = now
+        row.next_attempt_at = None
+        row.processed_at = now
         return row
 
     async def apply_context(_db: Any) -> None:
@@ -120,6 +125,9 @@ def _wire_outbox_dispatch(
     async def send(*, smtp: tasks.SmtpSession, to: str) -> dict[str, str]:
         delivered = await smtp.send(to, "Subject", "Body")
         return {"status": "sent" if delivered else "failed", "reason": "smtp"}
+
+    async def reminder_guard(_db: Any, _row: Any) -> None:
+        return None
 
     if use_real_sender:
         if real_sender_kind == "store_notification":
@@ -155,6 +163,7 @@ def _wire_outbox_dispatch(
 
     monkeypatch.setattr(jobs, "_claim_next_email", claim)
     monkeypatch.setattr(jobs, "_apply_tenant_context", apply_context)
+    monkeypatch.setattr(jobs, "_reminder_delivery_error", reminder_guard)
     monkeypatch.setattr(jobs, "smtp_session", smtp_session)
     if not use_real_sender:
         monkeypatch.setattr(jobs, "_sender", lambda _kind: send)
@@ -214,7 +223,7 @@ async def test_outbox_difiere_sin_consumir_intento_y_libera_el_reclamo(
     assert fila.processed_at is None
     assert fila.attempts == 0
     assert commits == [db]
-    assert reclamos == 1
+    assert reclamos == 2
 
 
 @pytest.mark.asyncio
@@ -248,14 +257,20 @@ async def test_outbox_descarta_baja_prioridad_sin_contarla_como_fallo(
     async def smtp_session() -> AsyncIterator[Smtp]:
         yield smtp
 
+    async def commit_state(_db: Any) -> None:
+        return None
+
     monkeypatch.setattr(jobs, "_claim_next_email", claim)
     monkeypatch.setattr(jobs, "_send_one_pending_email", dropped)
+    monkeypatch.setattr(jobs, "_commit_email_state", commit_state)
     monkeypatch.setattr(jobs, "smtp_session", smtp_session)
 
     await jobs._dispatch_pending_emails(object())  # type: ignore[arg-type]
 
     assert fila.processed_at is not None
     assert fila.attempts == 0
+    assert fila.delivery_status == "dropped"
+    assert fila.error == "mail_budget_dropped"
     assert reclamos == 2
 
 
@@ -446,7 +461,7 @@ async def test_recordatorio_no_se_bloquea_si_el_budget_esta_desactivado(
     await jobs._dispatch_pending_emails(object())  # type: ignore[arg-type]
 
     assert row.processed_at is not None
-    assert row.attempts == 0
+    assert row.attempts == 1
     assert len(connections) == 1
     assert connections[0].data_calls == 1
 
@@ -528,6 +543,7 @@ async def test_recordatorio_reintenta_fallo_transitorio_antes_de_data_con_mismo_
     assert row.attempts == 1
     assert connections[0].data_calls == 0
 
+    row.next_attempt_at = datetime.now(timezone.utc) - timedelta(seconds=1)
     await jobs._dispatch_pending_emails(object())  # type: ignore[arg-type]
     metrics = await mail_budget.read_mail_budget_metrics()
 
@@ -589,10 +605,11 @@ async def test_recordatorio_reintenta_fallo_pre_data_aun_con_budget_desactivado(
     assert connections[0].data_calls == 0
 
     # Una nueva dispatch (incluido tras reiniciar el worker) recupera la fila.
+    row.next_attempt_at = datetime.now(timezone.utc) - timedelta(seconds=1)
     await jobs._dispatch_pending_emails(object())  # type: ignore[arg-type]
 
     assert row.processed_at is not None
-    assert row.attempts == 1
+    assert row.attempts == 2
     assert [connection.data_calls for connection in connections] == [0, 1]
     assert reservations == [
         ("reminder:appointment-1:24h", True),
@@ -624,11 +641,16 @@ async def test_recordatorio_duplicado_usa_id_logico_y_no_reenvia(
 
     await jobs._dispatch_pending_emails(object())  # type: ignore[arg-type]
     row.processed_at = None  # simulate a duplicate SQL dispatch of the same row
+    row.delivery_status = "pending"
+    row.claimed_at = None
+    row.next_attempt_at = None
     await jobs._dispatch_pending_emails(object())  # type: ignore[arg-type]
     metrics = await mail_budget.read_mail_budget_metrics()
 
     assert row.processed_at is not None
     assert row.attempts == 1
+    assert row.delivery_status == "unknown"
+    assert row.error == "mail_budget_duplicate"
     assert len(connections) == 1
     assert connections[0].data_calls == 1
     assert metrics["admitted"] == 1
@@ -693,7 +715,7 @@ async def test_outbox_reintenta_fallo_pre_data_con_mismo_id_y_un_solo_cupo(
             "ends_at": (starts_at + timedelta(minutes=30)).isoformat(),
             "expires_at": (starts_at + timedelta(minutes=10)).isoformat(),
         }
-        row.payload["guard"] = guard
+        row.payload["waitlist_offer_guard"] = guard
 
         async def current_offer(_db: Any, store_id: str | None, raw_guard: Any) -> bool:
             nonlocal guard_checks
@@ -715,6 +737,7 @@ async def test_outbox_reintenta_fallo_pre_data_con_mismo_id_y_un_solo_cupo(
 
     monkeypatch.setattr(tasks, "reserve_mail", record_reserve_mail)
 
+    row.next_attempt_at = datetime.now(timezone.utc) - timedelta(seconds=1)
     await jobs._dispatch_pending_emails(object())  # type: ignore[arg-type]
     assert row.attempts == 1
     assert row.processed_at is None
@@ -722,6 +745,7 @@ async def test_outbox_reintenta_fallo_pre_data_con_mismo_id_y_un_solo_cupo(
     if real_sender_kind == "waitlist_offer":
         assert guard_checks == 1
 
+    row.next_attempt_at = datetime.now(timezone.utc) - timedelta(seconds=1)
     await jobs._dispatch_pending_emails(object())  # type: ignore[arg-type]
     metrics = await mail_budget.read_mail_budget_metrics()
 
@@ -792,6 +816,7 @@ async def test_outbox_recupera_reserva_si_redis_falla_al_registrar_fallo_pre_dat
     assert connections[0].data_calls == 0
     assert reclaim_flags == [True]
 
+    row.next_attempt_at = datetime.now(timezone.utc) - timedelta(seconds=1)
     await jobs._dispatch_pending_emails(object())  # type: ignore[arg-type]
     metrics = await mail_budget.read_mail_budget_metrics()
 
@@ -861,6 +886,7 @@ async def test_outbox_recupera_reserva_ambigua_antes_de_smtp(
     assert metrics["admitted"] == 1
     assert metrics["sent"] == 0
 
+    row.next_attempt_at = datetime.now(timezone.utc) - timedelta(seconds=1)
     await jobs._dispatch_pending_emails(object())  # type: ignore[arg-type]
     metrics = await mail_budget.read_mail_budget_metrics()
 
@@ -892,14 +918,16 @@ async def test_fallos_pre_data_respetan_el_maximo_original_del_outbox(
         real_sender_kind=real_sender_kind,
     )
 
-    for _ in range(WEBHOOK_INBOX_MAX_ATTEMPTS):
+    for _ in range(OUTBOX_EMAIL_MAX_ATTEMPTS):
         await jobs._dispatch_pending_emails(object())  # type: ignore[arg-type]
+        if row.next_attempt_at is not None:
+            row.next_attempt_at = datetime.now(timezone.utc) - timedelta(seconds=1)
     await jobs._dispatch_pending_emails(object())  # type: ignore[arg-type]
     metrics = await mail_budget.read_mail_budget_metrics()
 
-    assert row.attempts == WEBHOOK_INBOX_MAX_ATTEMPTS
+    assert row.attempts == OUTBOX_EMAIL_MAX_ATTEMPTS
     assert row.processed_at is not None
-    assert len(connections) == WEBHOOK_INBOX_MAX_ATTEMPTS
+    assert len(connections) == OUTBOX_EMAIL_MAX_ATTEMPTS
     assert all(connection.send_message_calls == 1 for connection in connections)
     assert all(connection.data_calls == 0 for connection in connections)
     assert metrics["admitted"] == 1
@@ -907,7 +935,7 @@ async def test_fallos_pre_data_respetan_el_maximo_original_del_outbox(
         metrics[f"priority:{'medium' if real_sender_kind == 'reminder' else 'high'}"]
         == 1
     )
-    assert metrics["failed"] == WEBHOOK_INBOX_MAX_ATTEMPTS
+    assert metrics["failed"] == OUTBOX_EMAIL_MAX_ATTEMPTS
     assert metrics["sent"] == 0
 
 

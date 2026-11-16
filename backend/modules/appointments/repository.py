@@ -941,6 +941,7 @@ class AppointmentRepository:
                 store_id=store_id,
                 event_type="email.send",
                 payload=payload,
+                delivery_status="pending",
             )
         )
         return True

@@ -146,7 +146,7 @@ async def test_task_persiste_reofertas_antes_del_commit(
     assert payload["mail"] == "waitlist_offer"
     assert payload["args"]["email"] == pendiente.email
     assert payload["args"]["details"] == pendiente.details
-    assert payload["guard"] == pendiente.outbox_guard
+    assert payload["waitlist_offer_guard"] == pendiente.outbox_guard
 
 
 @pytest.mark.asyncio
