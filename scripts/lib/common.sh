@@ -119,8 +119,19 @@ json_escape() {
 #   latency-check.sh (cada 5 minutos) hasta 12. Lo de entre ventanas queda
 #   solo en syslog. El mensaje dice que es un envio degradado.
 # - Si cualquier intento de estado en la ruta principal falla, un respaldo
-#   saludable puede conservar silencio y presupuesto y mandar webhooks, pero
-#   no SMTP: el respaldo podria desconocer mails que ya salieron.
+#   saludable conserva el silencio por clave para stderr, syslog y webhook,
+#   pero su presupuesto no autoriza SMTP: el respaldo podria desconocer mails
+#   que ya salieron con el estado principal. El SMTP sigue la misma ventana
+#   del modo sin estado (_alert_ventana): fuera de ella se suprime; adentro
+#   sale un mail por corrida del guard o por llamada a alert() con TODO lo
+#   encolado, silenciado o no (un sello del respaldo escrito entre ventanas
+#   las salteaba todas), con "(estado principal no disponible)" en el asunto.
+#   Un estado principal roto para siempre (/ de solo lectura, disco lleno,
+#   registro con fecha futura) sigue avisando por mail, acotado por la ventana
+#   y no por ningun registro: el guard a lo sumo 24/N por dia (8 con N=3), los
+#   demas como en el modo sin estado, mas los ALERT_EMAIL_MAX_PER_DAY de las
+#   corridas que todavia usen el estado principal. Sin hora legible, se
+#   suprime.
 # - Si tampoco hay estado utilizable en el respaldo, rige el modo sin estado:
 #   SMTP y webhook solo en la ventana UTC documentada, sin presupuesto diario.
 alert() {
@@ -191,9 +202,10 @@ alert_flush() {
   # donde se pudo escribir lo de este envio (sellos y registro del
   # presupuesto): $SHIFTY_STATE_DIR/alerts y despues $SHIFTY_RUN_DIR/alerts
   # (tmpfs). Si falla cualquier intento en la ruta primaria, un respaldo que
-  # pueda guardar estado registra el aviso pero no manda SMTP: pudo haber uso
-  # previo que el respaldo no conoce. Si también falla el respaldo, se aplica
-  # el modo sin estado, limitado a la ventana UTC.
+  # pueda guardar estado registra el aviso, pero su presupuesto no autoriza
+  # SMTP (pudo haber uso previo que el respaldo no conoce): el mail sale solo
+  # en la ventana UTC del modo sin estado. Si también falla el respaldo, se
+  # aplica el modo sin estado, limitado a la misma ventana.
   local propio="$SHIFTY_STATE_DIR/alerts" dir estado=1 i
   dir="$propio"
   if ! _alert_intentar "$dir" "$prefijo"; then
@@ -217,8 +229,24 @@ alert_flush() {
     for ((i = 0; i < n; i++)); do _ALERT_IDX+=("$i"); done
     _alert_componer "$prefijo"
   fi
-  [ "${#_ALERT_IDX[@]}" -gt 0 ] || return 0
-  local idx=("${_ALERT_IDX[@]}") subject="$_ALERT_ASUNTO" body="$_ALERT_CUERPO"
+  # Estado principal roto con respaldo sano: el SMTP sale solo en la ventana
+  # (ver alert()), aunque el respaldo haya silenciado todo.
+  local degradado=0 ventana=0
+  if [ "$estado" = 1 ] && [ "$_ALERT_BLOQUEAR_EMAIL" = 1 ] && [ -n "${ALERT_EMAIL:-}" ]; then
+    _alert_ventana || ventana=$?
+    if [ "$ventana" = 0 ]; then
+      degradado=1
+    elif [ "$ventana" = 2 ]; then
+      log "alertas: estado principal no disponible y no pude leer la hora UTC; SMTP suprimido"
+    fi
+  fi
+  [ "${#_ALERT_IDX[@]}" -gt 0 ] || [ "$degradado" = 1 ] || return 0
+  local idx=() subject="" body=""
+  if [ "${#_ALERT_IDX[@]}" -gt 0 ]; then
+    idx=("${_ALERT_IDX[@]}")
+    subject="$_ALERT_ASUNTO"
+    body="$_ALERT_CUERPO"
+  fi
 
   local prioridad
   for i in "${idx[@]}"; do
@@ -237,6 +265,17 @@ alert_flush() {
     # El bloqueo por lock/ledger incierto solo evita saltar a un respaldo sano.
     if [ -n "${ALERT_EMAIL:-}" ] && ! command -v timeout >/dev/null 2>&1; then mail=3; fi
     _alert_sin_estado "$subject" "$body" "${#idx[@]}" "$mail"
+    return 0
+  fi
+  if [ "$degradado" = 1 ]; then
+    # El webhook, con el silencio del respaldo; el mail, con todo lo encolado
+    # y sin el presupuesto del respaldo.
+    if [ "${#idx[@]}" -gt 0 ]; then _alert_mandar "$subject" "$body" 2 "" webhook; fi
+    _ALERT_IDX=()
+    for ((i = 0; i < n; i++)); do _ALERT_IDX+=("$i"); done
+    _alert_componer "$prefijo"
+    local nota="Envio degradado: no se pudo usar el estado de alertas principal ($propio) y el respaldo ($dir) no conoce los mails que ya salieron, asi que no protege el presupuesto diario. El mail sale solo en la ventana de ALERT_STATELESS_EVERY_HOURS (cada $_ALERT_CADA h UTC), con todos los avisos de la corrida aunque esten silenciados; lo de entre ventanas queda en syslog. Esta corrida tuvo $n alertas."
+    _alert_mandar "$_ALERT_ASUNTO (estado principal no disponible)" "$nota"$'\n\n'"$_ALERT_CUERPO" 1 "" mail
     return 0
   fi
   if [ "$_ALERT_BLOQUEAR_EMAIL" = 1 ]; then mail=2; else mail="$_ALERT_MAIL_OK"; fi
@@ -370,29 +409,42 @@ _alert_componer() {
   _ALERT_CUERPO="$body"
 }
 
-# _alert_sin_estado <asunto> <detalle> <alertas> [mail]: envio degradado sin estado.
-# Los avisos ya quedaron en stderr y en syslog; mail y webhook salen solo en
-# la ventana del reloj (ver alert()), sin presupuesto.
-_alert_sin_estado() {
-  local subject="$1" body="$2" n="$3" mail="${4:-1}"
+# _alert_ventana: sale 0 si la hora UTC cae en la ventana del envio degradado
+# (ver alert(): horas multiplo de ALERT_STATELESS_EVERY_HOURS, en el minuto 00
+# si _ALERT_CADA_MINUTO=1), 1 si no y 2 si no pudo leer la hora. Deja en
+# _ALERT_CADA las horas entre ventanas. La usan el modo sin estado y el SMTP
+# con el estado principal roto.
+_alert_ventana() {
   local cada="${ALERT_STATELESS_EVERY_HOURS:-3}" hm h m
   if ! [[ "$cada" =~ ^[1-9][0-9]*$ ]] || [ "$cada" -gt 24 ]; then
     log "alertas: ALERT_STATELESS_EVERY_HOURS=$cada no es un numero de horas entre 1 y 24; uso 3"
     cada=3
   fi
+  _ALERT_CADA="$cada"
   hm="$(date -u +%H:%M 2>/dev/null)" || hm=""
-  if [[ "$hm" =~ ^([0-9][0-9]):([0-9][0-9])$ ]]; then
-    h=$((10#${BASH_REMATCH[1]}))
-    m=$((10#${BASH_REMATCH[2]}))
-    if [ $((h % cada)) -ne 0 ] || { [ "$_ALERT_CADA_MINUTO" = 1 ] && [ "$m" -ne 0 ]; }; then
-      log "alertas: modo sin estado, fuera de la ventana (cada $cada h UTC): $n alertas solo en stderr y syslog, sin mail ni webhook"
-      return 0
-    fi
-  else
+  [[ "$hm" =~ ^([0-9][0-9]):([0-9][0-9])$ ]] || return 2
+  h=$((10#${BASH_REMATCH[1]}))
+  m=$((10#${BASH_REMATCH[2]}))
+  if [ $((h % cada)) -ne 0 ] || { [ "$_ALERT_CADA_MINUTO" = 1 ] && [ "$m" -ne 0 ]; }; then
+    return 1
+  fi
+  return 0
+}
+
+# _alert_sin_estado <asunto> <detalle> <alertas> [mail]: envio degradado sin estado.
+# Los avisos ya quedaron en stderr y en syslog; mail y webhook salen solo en
+# la ventana del reloj (ver alert()), sin presupuesto.
+_alert_sin_estado() {
+  local subject="$1" body="$2" n="$3" mail="${4:-1}" ventana=0
+  _alert_ventana || ventana=$?
+  if [ "$ventana" = 1 ]; then
+    log "alertas: modo sin estado, fuera de la ventana (cada $_ALERT_CADA h UTC): $n alertas solo en stderr y syslog, sin mail ni webhook"
+    return 0
+  elif [ "$ventana" = 2 ]; then
     # Sin reloj legible no hay ventana: avisar importa mas.
     log "alertas: modo sin estado y no pude leer la hora UTC; mando igual"
   fi
-  local nota="Envio degradado sin estado: no hay estado de alertas escribible ($SHIFTY_STATE_DIR/alerts ni $SHIFTY_RUN_DIR/alerts). Sin silencio por clave ni presupuesto diario; sale a lo sumo un mensaje cada $cada h UTC y lo de entre ventanas queda solo en syslog. Esta corrida tuvo $n alertas."
+  local nota="Envio degradado sin estado: no hay estado de alertas escribible ($SHIFTY_STATE_DIR/alerts ni $SHIFTY_RUN_DIR/alerts). Sin silencio por clave ni presupuesto diario; sale a lo sumo un mensaje cada $_ALERT_CADA h UTC y lo de entre ventanas queda solo en syslog. Esta corrida tuvo $n alertas."
   _alert_mandar "$subject (sin estado)" "$nota"$'\n\n'"$body" "$mail" ""
 }
 
@@ -520,40 +572,43 @@ _alert_en_lista() {
   return 1
 }
 
-# _alert_mandar <asunto> <detalle> <mail 1|0|2|3> <nota>: un intento por canal,
-# sin reintentos. Nunca afirma que el mail llego: solo que msmtp lo acepto.
+# _alert_mandar <asunto> <detalle> <mail 1|0|2|3> <nota> [ambos|webhook|mail]:
+# un intento por canal, sin reintentos. Nunca afirma que el mail llego: solo
+# que msmtp lo acepto. Con un solo canal no anota que ninguna alerta salio.
 _alert_mandar() {
-  local subject="$1" body="$2" mail="$3" nota="$4"
-  local host
+  local subject="$1" body="$2" mail="$3" nota="$4" canales="${5:-ambos}"
+  local host webhook="${ALERT_WEBHOOK_URL:-}" email="${ALERT_EMAIL:-}"
   host="$(hostname 2>/dev/null || echo host)"
+  if [ "$canales" = mail ]; then webhook=""; fi
+  if [ "$canales" = webhook ]; then email=""; fi
 
   local sent=0 suprimida=0
-  if [ -n "${ALERT_WEBHOOK_URL:-}" ]; then
+  if [ -n "$webhook" ]; then
     local text
     text="$(json_escape "[shifty@$host] $subject${body:+
 $body}")"
     # `text` lo lee Slack; `content`, Discord.
     if curl -fsS -m 10 -H 'Content-Type: application/json' \
       --data "{\"text\":\"$text\",\"content\":\"$text\"}" \
-      "$ALERT_WEBHOOK_URL" >/dev/null 2>&1; then
+      "$webhook" >/dev/null 2>&1; then
       sent=1
     else
       log "no se pudo mandar la alerta al webhook"
     fi
   fi
-  if [ -n "${ALERT_EMAIL:-}" ] && [ "$mail" = 2 ]; then
+  if [ -n "$email" ] && [ "$mail" = 2 ]; then
     suprimida=1
     log "alerta SMTP suprimida: no se pudo proteger el presupuesto diario del host"
-  elif [ -n "${ALERT_EMAIL:-}" ] && [ "$mail" = 3 ]; then
+  elif [ -n "$email" ] && [ "$mail" = 3 ]; then
     suprimida=1
     log "alerta SMTP suprimida: no hay timeout para limitar el envio"
-  elif [ -n "${ALERT_EMAIL:-}" ] && [ "$mail" != 1 ]; then
+  elif [ -n "$email" ] && [ "$mail" != 1 ]; then
     suprimida=1
     log "alerta suprimida por presupuesto diario del host: $subject"
     if command -v logger >/dev/null 2>&1; then
       logger -t shifty -p user.warning -- "alerta suprimida por presupuesto diario del host: $subject" || true
     fi
-  elif [ -n "${ALERT_EMAIL:-}" ]; then
+  elif [ -n "$email" ]; then
     local mailer="" cuerpo="$body"
     if [ -n "$nota" ]; then cuerpo="$nota"$'\n\n'"$body"; fi
     if command -v msmtp >/dev/null 2>&1; then
@@ -578,7 +633,7 @@ $body}")"
       log "ALERT_EMAIL definido pero el host no tiene msmtp ni sendmail"
     fi
   fi
-  if [ "$sent" != 1 ] && [ "$suprimida" != 1 ]; then
+  if [ "$canales" = ambos ] && [ "$sent" != 1 ] && [ "$suprimida" != 1 ]; then
     log "ninguna alerta salio del host: definir ALERT_WEBHOOK_URL o ALERT_EMAIL en $SHIFTY_OPS_ENV"
   fi
   return 0

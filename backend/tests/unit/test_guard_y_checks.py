@@ -321,11 +321,13 @@ def _sin_estado(host: Host) -> str:
 def test_guard_sin_estado_escribible_avisa_igual(host: Host, servicio: str) -> None:
     """B1: abrir el lock (o crear el directorio de contadores) fallaba bajo
     `set -e` y el guard salia 1 SIN avisar, cuando antes avisaba."""
+    con_hora_utc(host)
     resultado = host.correr(
         "guard.sh",
         FAKE_UNHEALTHY_IDS=f"shifty-{servicio}-1",
         SHIFTY_STATE_DIR=_sin_estado(host),
         ALERT_EMAIL="ops@example.com",
+        FAKE_HORA_UTC="05:58",
     )
 
     assert resultado.returncode == 0, resultado.stderr
@@ -346,6 +348,7 @@ def test_guard_sin_estado_escribible_avisa_igual(host: Host, servicio: str) -> N
 def test_guard_con_el_estado_de_solo_lectura_avisa_igual(host: Host) -> None:
     """B1 tal cual: el directorio existe pero no se puede escribir."""
     (host.state / "guard").mkdir()
+    con_hora_utc(host)
     for d in (host.state / "guard", host.state):
         d.chmod(0o555)
     try:
@@ -353,6 +356,7 @@ def test_guard_con_el_estado_de_solo_lectura_avisa_igual(host: Host) -> None:
             "guard.sh",
             FAKE_UNHEALTHY_IDS="shifty-db-1 shifty-rabbitmq-1",
             ALERT_EMAIL="ops@example.com",
+            FAKE_HORA_UTC="05:58",
         )
     finally:
         for d in (host.state, host.state / "guard"):
@@ -995,7 +999,7 @@ def test_alerta_lock_primario_fallido_no_manda_email_con_respaldo_sano(
         "",
         "a",
         "0",
-        FAKE_HORA_UTC="06:00",
+        FAKE_HORA_UTC="07:30",
         PATH=_flock_que_falla_una_vez(host),
         **_presupuesto(1, 0),
     )
@@ -1027,7 +1031,7 @@ def test_alerta_con_registro_de_presupuesto_corrupto_falla_cerrado(host: Host) -
         "",
         "a",
         "0",
-        FAKE_HORA_UTC="06:00",
+        FAKE_HORA_UTC="07:30",
         **_presupuesto(1, 0),
     )
 
@@ -1055,7 +1059,7 @@ def test_alerta_con_fecha_de_presupuesto_invalida_o_futura_falla_cerrado(
         "",
         "a",
         "0",
-        FAKE_HORA_UTC="06:00",
+        FAKE_HORA_UTC="07:30",
         **_presupuesto(1, 0),
     )
 
@@ -1166,7 +1170,12 @@ def test_el_webhook_no_gasta_presupuesto_y_su_falla_se_anota(host: Host) -> None
 
 
 def test_sin_estado_escribible_la_alerta_usa_el_respaldo_en_tmpfs(host: Host) -> None:
-    sin_estado = {"SHIFTY_STATE_DIR": _sin_estado(host), **_presupuesto(1, 0)}
+    con_hora_utc(host)
+    sin_estado = {
+        "SHIFTY_STATE_DIR": _sin_estado(host),
+        "FAKE_HORA_UTC": "07:30",
+        **_presupuesto(1, 0),
+    }
 
     primera = host.alertar("db caida", "", "db-caida", "60", **sin_estado)
     segunda = host.alertar("db caida", "", "db-caida", "60", **sin_estado)
@@ -1185,13 +1194,17 @@ def test_sin_estado_escribible_la_alerta_usa_el_respaldo_en_tmpfs(host: Host) ->
 def test_guard_con_el_estado_de_solo_lectura_no_manda_un_mail_por_minuto(
     host: Host,
 ) -> None:
+    con_hora_utc(host)
     extra = {
         "FAKE_UNHEALTHY_IDS": "shifty-rabbitmq-1",
         "ALERT_EMAIL": "ops@example.com",
         "SHIFTY_STATE_DIR": _sin_estado(host),
     }
 
-    resultados = [host.correr("guard.sh", **extra) for _ in range(3)]
+    resultados = [
+        host.correr("guard.sh", FAKE_HORA_UTC=hora, **extra)
+        for hora in ("05:58", "05:59", "06:01")
+    ]
 
     assert [r.returncode for r in resultados] == [0, 0, 0], resultados[0].stderr
     assert host.mails() == []
@@ -1304,13 +1317,17 @@ def test_un_intervalo_sin_estado_invalido_usa_tres_horas(host: Host, cada: str) 
 
 def test_un_estado_que_no_admite_archivos_nuevos_usa_el_respaldo(host: Host) -> None:
     sin_espacio_para_crear(host, f"{host.state.as_posix()}/alerts/*")
+    con_hora_utc(host)
     extra = {
         "FAKE_UNHEALTHY_IDS": "shifty-rabbitmq-1",
         "ALERT_EMAIL": "ops@example.com",
         "ALERT_WEBHOOK_URL": "https://hook",
     }
 
-    resultados = [host.correr("guard.sh", **extra) for _ in range(3)]
+    resultados = [
+        host.correr("guard.sh", FAKE_HORA_UTC=hora, **extra)
+        for hora in ("05:58", "05:59", "06:01")
+    ]
 
     assert [r.returncode for r in resultados] == [0, 0, 0], resultados[0].stderr
     assert host.mails() == []
@@ -1350,7 +1367,11 @@ def test_un_sello_que_no_se_escribe_no_manda_un_mail_por_minuto(
 
     mails = host.mails()
     if donde == "estado":
-        assert mails == []
+        # El sello principal falla en cada corrida: fuera de la ventana el SMTP
+        # sigue suprimido, y en el minuto 00 de las 06 sale un mail degradado.
+        assert len(mails) == 1, resultados[2].stderr
+        assert "rabbitmq" in _asunto(mails[0])
+        assert _asunto(mails[0]).endswith("(estado principal no disponible)")
         assert "alerta SMTP suprimida: no se pudo proteger el presupuesto diario" in (
             resultados[0].stderr
         )
@@ -1368,7 +1389,8 @@ def test_falla_al_reservar_ledger_primario_no_manda_smtp_con_respaldo_sano(
 ) -> None:
     """El respaldo conserva el contador, pero no manda si falla el estado primario."""
     (host.state / "alerts" / ".mails-del-dia.tmp").mkdir(parents=True)
-    p = _presupuesto(1, 0)
+    con_hora_utc(host)
+    p = {"FAKE_HORA_UTC": "07:30", **_presupuesto(1, 0)}
 
     resultados = [
         host.alertar(f"{clave}: aviso", "", clave, "0", **p) for clave in "abc"
@@ -1399,12 +1421,14 @@ def test_uso_previo_primario_no_se_pierde_si_falla_la_siguiente_escritura(
         f"{hoy}\n1\na\n", encoding="utf-8", newline="\n"
     )
     (alertas / ".mails-del-dia.tmp").mkdir()
+    con_hora_utc(host)
 
     resultado = host.alertar(
         "b: aviso",
         "",
         "b",
         "0",
+        FAKE_HORA_UTC="07:30",
         **_presupuesto(3, 0),
     )
 
@@ -1438,7 +1462,7 @@ def test_presupuesto_primario_al_tope_no_se_puede_saltar_con_respaldo_vacio(
         "",
         "b",
         "0",
-        FAKE_HORA_UTC="06:00",
+        FAKE_HORA_UTC="07:30",
         **_presupuesto(1, 0),
     )
 
@@ -1453,6 +1477,75 @@ def test_presupuesto_primario_al_tope_no_se_puede_saltar_con_respaldo_vacio(
         hoy,
         "1",
     ]
+
+
+# 2026-11-15 (PR #316): con el estado principal roto de forma persistente (/
+# de solo lectura, disco lleno, registro con fecha futura) y el respaldo sano,
+# el SMTP se suprimia en TODAS las corridas. ops.env.example trae el webhook
+# comentado: el incidente entero no mandaba ningun aviso fuera del host.
+
+
+def test_guard_con_el_estado_principal_roto_avisa_por_mail_en_la_ventana(
+    host: Host,
+) -> None:
+    con_hora_utc(host)
+    extra = {
+        "FAKE_UNHEALTHY_IDS": "shifty-rabbitmq-1",
+        "ALERT_EMAIL": "ops@example.com",
+        "SHIFTY_STATE_DIR": _sin_estado(host),
+    }
+
+    mails_por_hora: dict[str, int] = {}
+    resultados: dict[str, subprocess.CompletedProcess[str]] = {}
+    for hora in ("05:58", "05:59", "06:00", "06:01", "07:00", "09:00"):
+        resultados[hora] = host.correr("guard.sh", FAKE_HORA_UTC=hora, **extra)
+        assert resultados[hora].returncode == 0, resultados[hora].stderr
+        mails_por_hora[hora] = len(host.mails())
+
+    # Fuera de la ventana sigue el SMTP suprimido y el silencio del respaldo.
+    assert "alerta SMTP suprimida: no se pudo proteger el presupuesto diario" in (
+        resultados["05:58"].stderr
+    )
+    assert "alerta silenciada (guard-no-reinicia-shifty-rabbitmq-1)" in (
+        resultados["05:59"].stderr
+    )
+    assert mails_por_hora == {
+        "05:58": 0,
+        "05:59": 0,
+        "06:00": 1,
+        "06:01": 1,
+        "07:00": 1,
+        "09:00": 2,
+    }, resultados["06:00"].stderr
+    for mail in host.mails():
+        assert "rabbitmq" in _asunto(mail)
+        assert _asunto(mail).endswith("(estado principal no disponible)")
+        assert "Envio degradado: no se pudo usar el estado de alertas" in mail
+
+
+def test_un_script_de_cada_hora_con_el_estado_principal_roto_avisa_en_su_ventana(
+    host: Host,
+) -> None:
+    """checks.sh y backup-check.sh: en cualquier minuto de la hora ventana,
+    aunque el sello del respaldo (de una corrida fuera de la ventana) lo
+    silencie."""
+    con_hora_utc(host)
+    extra = {"SHIFTY_STATE_DIR": _sin_estado(host), "ALERT_EMAIL": "o@x"}
+
+    fuera = host.alertar(
+        "backup: viejo", "", "backup-viejo", "360", FAKE_HORA_UTC="05:07", **extra
+    )
+    assert fuera.returncode == 0, fuera.stderr
+    assert host.mails() == []
+
+    dentro = host.alertar(
+        "backup: viejo", "", "backup-viejo", "360", FAKE_HORA_UTC="06:07", **extra
+    )
+    assert dentro.returncode == 0, dentro.stderr
+    assert "alerta silenciada (backup-viejo)" in dentro.stderr
+    mails = host.mails()
+    assert len(mails) == 1, dentro.stderr
+    assert _asunto(mails[0]).endswith("backup: viejo (estado principal no disponible)")
 
 
 def test_sin_registro_en_ningun_estado_manda_solo_en_la_ventana(host: Host) -> None:
