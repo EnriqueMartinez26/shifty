@@ -26,6 +26,7 @@ from httpx import AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from modules.auth import service as auth_service
 from modules.auth.router import REFRESH_COOKIE
 from modules.auth.service import REFRESH_REUSE_GRACE_SECONDS, hash_token
 from tests.postgres.conftest import PASSWORD, register_and_login
@@ -103,7 +104,8 @@ async def _motivos(
 
 async def _esperar_bloqueadas(owner_engine: AsyncEngine, esperado: int) -> None:
     """Espera a que Postgres confirme la intercalacion bajo un row lock."""
-    limite = asyncio.get_running_loop().time() + 5
+    # La app tiene lock_timeout de 3 s; observar la barrera antes de que venza.
+    limite = asyncio.get_running_loop().time() + 2
     async with owner_engine.connect() as conn:
         while asyncio.get_running_loop().time() < limite:
             bloqueadas = await conn.scalar(
@@ -274,6 +276,7 @@ async def test_reuso_y_login_esperan_el_mismo_lock_de_usuario_en_postgres(
     client: AsyncClient,
     app_sessions: async_sessionmaker[AsyncSession],
     owner_engine: AsyncEngine,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     email = "pg-reuso-login-lock@demo.com"
     familia, _otro = await _dos_dispositivos(
@@ -281,6 +284,12 @@ async def test_reuso_y_login_esperan_el_mismo_lock_de_usuario_en_postgres(
     )
     await _rotar(client, familia)
     await _envejecer(owner_engine, familia)
+
+    async def password_valida(_password: str, _hashed_password: str) -> bool:
+        # Aisla el intercalado de locks del coste variable de bcrypt en CI.
+        return True
+
+    monkeypatch.setattr(auth_service, "verify_password_async", password_valida)
 
     tareas: list[asyncio.Task[Any]] = []
     async with owner_engine.connect() as conn:
