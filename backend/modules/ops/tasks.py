@@ -253,7 +253,11 @@ async def _update_slo_alerts(
         )
 
 
-@celery_app.task(name="monitor_ops_slo", bind=True, max_retries=3)  # type: ignore[untyped-decorator]
+# Two retries (1 and 2 minutes): Celery copies the beat entry's absolute
+# ``expires`` (295 s) into every retry, and a third one at 4 minutes landed
+# past it and was revoked without running. The next beat run (5 minutes)
+# takes over from there.
+@celery_app.task(name="monitor_ops_slo", bind=True, max_retries=2)  # type: ignore[untyped-decorator]
 def monitor_ops_slo(self: Task) -> dict[str, int]:
     """Mide el agregado global con RLS interno y alerta umbrales existentes.
 

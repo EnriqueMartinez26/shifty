@@ -15,6 +15,7 @@ from uuid import uuid4
 import sentry_sdk
 import pytest
 import pytest_asyncio
+from celery.app.task import Context
 from kombu.exceptions import OperationalError as KombuOperationalError
 from redis.asyncio import from_url
 from redis.exceptions import ConnectionError as RedisConnectionError
@@ -22,6 +23,7 @@ from sentry_sdk.envelope import Envelope
 from sentry_sdk.transport import HttpTransport, Transport
 
 from core import observability
+from core.celery_app import celery_app
 from core.config import settings
 from core.observability import OncePer
 from modules.ops import router as ops_router
@@ -916,6 +918,39 @@ def test_monitor_redis_down_reports_once_without_secrets_and_retries(
     }
     assert _SECRET not in json.dumps(real_sentry.events)
     assert _SECRET not in caplog.text
+
+
+def test_monitor_retries_fit_inside_the_beat_expiry(
+    monitor: _Monitor, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """2026-11-16 (PR #308 review): Celery copies the beat entry's absolute
+    ``expires`` into every retry, so a retry scheduled past it is revoked
+    without running. With 3 retries (1, 2 and 4 minutes) the third one landed
+    at about t+420 s against ``expires: 295`` and never ran."""
+    runs, _shared, countdowns = monitor
+
+    async def redis_down() -> None:
+        raise RedisConnectionError("Error connecting to redis_state:6379")
+
+    monkeypatch.setattr(slo_tasks, "get_redis", redis_down)
+    task = slo_tasks.monitor_ops_slo
+    for retries in range(task.max_retries):
+        runs.append(_metrics())
+        task.push_request(retries=retries)
+        try:
+            with pytest.raises(_Retried):
+                task.run()
+        finally:
+            task.pop_request()
+
+    entry = celery_app.conf.beat_schedule["monitor-ops-slo-every-5-minutes"]
+    expires = entry["options"]["expires"]
+    assert len(countdowns) == task.max_retries
+    assert sum(countdowns) < expires, (countdowns, expires)
+    # The premise: a retry inherits the original absolute expiry.
+    assert Context(expires="2026-11-16T00:04:55").as_execution_options()["expires"] == (
+        "2026-11-16T00:04:55"
+    )
 
 
 def test_monitor_broker_down_on_retry_still_reports_the_failure(
