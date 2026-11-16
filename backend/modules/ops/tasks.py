@@ -162,7 +162,12 @@ def _capture_slo_transition(transition: dict[str, Any]) -> bool:
 
     try:
         with sentry_sdk.new_scope() as scope:
+            # Stable, searchable attributes for the Sentry email rule
+            # (docs/DEPLOY_RUNBOOK.md): the code, its severity and whether it
+            # opened or cleared. Nothing else: no values that could carry data.
             scope.set_tag("slo.alert_code", code)
+            scope.set_tag("slo.severity", str(alert["severity"]))
+            scope.set_tag("slo.state", state)
             scope.set_context(
                 "slo",
                 {
@@ -173,7 +178,9 @@ def _capture_slo_transition(transition: dict[str, Any]) -> bool:
                     "threshold": alert["threshold"],
                 },
             )
-            scope.fingerprint = ["ops-slo", code]
+            # One Sentry issue per (code, state): a recovery event must not
+            # regress or add events to the issue the email rule watches.
+            scope.fingerprint = ["ops-slo", code, state]
             event_id = sentry_sdk.capture_message(message, level=level)
             if not event_id:
                 raise RuntimeError("Sentry SDK did not capture the SLO transition")

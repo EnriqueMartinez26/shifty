@@ -537,7 +537,58 @@ The caps (3 per container, 6 in total per hour) and the rule that `db` and `rabb
 
 **Sentry (plan F5-02).** With `SENTRY_DSN` set, traces are sampled per route (`backend/core/observability.py`): never `/ops/health/*` or `/ops/slo`, always `/payments/*` and the Mercado Pago webhook, 2 % of public GETs, 20 % of writes, 10 % of other panel reads; the release is `APP_VERSION`. Sentry Crons watches ONE beat task (owner decision 2026-09-25: stay on the free plan, which includes one cron monitor): `expire-unpaid-appointment-holds-every-minute`, because if it stops, appointments with an unpaid deposit are never released and the schedule stays taken. The `monitor-ops-slo-every-5-minutes` beat task checks the same global aggregate and thresholds as the authenticated `/ops/slo` endpoint and reports critical and warning threshold transitions to Sentry. Redis atomically tracks active codes and applies a 30-minute per-code cooldown across worker processes; recovery is reported once when an alerted code clears. A transition stays pending until the Sentry SDK accepts and queues the capture and Redis ACKs it; this does not confirm remote delivery. A failed capture releases its claim for retry, and expired claims recover after worker interruption. A Redis lock serializes delivery across prefork workers. The monitor fails and retries if Redis state cannot be read or written, and reports that failure to Sentry. This does not open the endpoint or create another Sentry Cron monitor. The configured webhook/email channel (`ALERT_WEBHOOK_URL`/`ALERT_EMAIL`) is host-only in `/etc/shifty/ops.env`; backend workers do not receive it, so these SLO events currently reach Sentry only. Connecting the host channel needs an approved bridge/configuration and remains open. A run that keeps going but falls behind (Mercado Pago slow, many held charges) is also reported directly by the task: `oldest_overdue_hold_seconds` in `/ops/slo` (threshold `SLO_MAX_OLDEST_OVERDUE_HOLD_SECONDS`, 600 s), at most once per 30 minutes per worker process. Charges the task parked because Mercado Pago reports them approved but they fail integrity are left out of that metric (each alerted once) and counted in `integrity_held_holds`, with no count threshold: a non-zero value is a paid appointment stuck in `pending_payment` that needs a person. Once a parked charge becomes eligible for its hourly recheck, `oldest_due_held_recheck_seconds` counts only the delay after that recheck was due. The separate threshold `SLO_MAX_OLDEST_DUE_HELD_RECHECK_SECONDS` defaults to 900 s (allowed 60-3600 s); `/ops/slo` emits `held_recheck_lag_high`, and the job reports `HeldRecheckLagging` to Sentry at most once per 30 minutes per worker process. Re-parking after a recheck resets that timer; this alert does not count the hour during which the charge is intentionally parked. `exclude_beat_tasks` in the `CeleryIntegration` excludes every other beat entry with one regex (`SENTRY_CRONS_EXCLUDED_BEAT_TASKS` in `core/observability.py`), so a new beat task is born without a monitor and never exceeds the quota. Other beat tasks remain covered by `/ops/slo` and the worker heartbeat healthcheck. Monitoring more tasks in Sentry Crons means a paid quota: change the regex and this paragraph together. **One-time cleanup:** in any Sentry project (environment) that ran F5-02 before this change, the other seven crontab tasks already created cron monitors (`process-payment-webhook-inbox-every-minute`, `reconcile-pending-payments-every-2-minutes`, `process-appointment-reminders-every-15-minutes`, `process-waitlist-offers-every-minute`, `purge-expired-auth-sessions-daily`, `purge-expired-data-daily`, `process-subscription-lifecycle-daily`). They no longer get check-ins, so Sentry marks them missed and keeps counting them against the quota: delete them by hand in Sentry (Crons, each monitor, Delete) after deploying this change. Keep only `expire-unpaid-appointment-holds-every-minute`.
 
-**Sentry email notification (manual setup; delivery unverified).** In the backend Sentry project, an authorized project owner should create an issue alert/workflow scoped to the `production` environment and enable its email action for an explicitly approved Sentry team or user. Sentry supports email actions addressed to a team or user; do not substitute a guessed mailbox. Configure alert conditions to notify on active SLO events (`message` contains `SLO threshold exceeded` and the `slo.alert_code` tag is present), including both warning and error levels, and on the monitor failure exception (`exception.value` contains `Critical SLO monitor failed`). Recovery events (`SLO threshold recovered`, level `info`) are informational and should not page by email. Set Sentry's repeated-notification frequency to the incident owner's chosen cadence; this is separate from the code's 30-minute per-alert cooldown. See [Sentry alert creation and email actions](https://docs.sentry.io/api/monitors/create-an-alert-for-an-organization/) and [fetch configured alerts](https://docs.sentry.io/api/monitors/fetch-alerts/).
+**SLO event contract.** Every transition the monitor reports is one Sentry message event with these attributes, and nothing else from the metrics (no store ids, no URLs, no customer data; `tests/unit/test_ops_slo_monitor_task.py` checks them through the real SDK and the production `before_send`):
+
+| Attribute | Active (threshold exceeded) | Recovered |
+| --- | --- | --- |
+| message | `SLO threshold exceeded` | `SLO threshold recovered` |
+| level | `error` for `critical` codes, `warning` for `warning` codes | `info` |
+| tag `slo.alert_code` | the code below | the code below |
+| tag `slo.severity` | `critical` or `warning` | same as when active |
+| tag `slo.state` | `active` | `resolved` |
+| fingerprint | `ops-slo`, code, `active` | `ops-slo`, code, `resolved` |
+| context `slo` | `code`, `severity`, `state`, `value`, `threshold` (integers) | same |
+
+Each code and state is its own Sentry issue, so a recovery never regresses the issue the email rule watches. The codes and their severity are stable; renaming or adding one means changing `_SLO_ALERTS` in `backend/modules/ops/router.py`, this table and the rule below together (`test_runbook_lists_exactly_the_slo_alert_codes` fails otherwise):
+
+<!-- slo-alert-codes:start -->
+| `slo.alert_code` | `slo.severity` | Metric over its threshold |
+| --- | --- | --- |
+| `dead_letter_webhooks` | critical | `dead_letter_webhooks_24h` |
+| `pending_webhooks_high` | critical | `pending_webhooks` |
+| `failed_webhooks_high` | critical | `failed_webhooks` |
+| `pending_outbox_high` | warning | `pending_outbox` |
+| `inbox_lag_high` | critical | `oldest_pending_inbox_seconds` |
+| `outbox_lag_high` | warning | `oldest_pending_outbox_seconds` |
+| `email_send_lag_high` | warning | `oldest_pending_email_send_seconds` |
+| `overdue_hold_lag_high` | warning | `oldest_overdue_hold_seconds` |
+| `held_recheck_lag_high` | warning | `oldest_due_held_recheck_seconds` |
+<!-- slo-alert-codes:end -->
+
+A monitor that cannot run (Redis state unreadable, a capture that raises) reports one exception event `Critical SLO monitor failed` with context `shifty.component = ops_slo_monitor` and `shifty.error_type` (the exception class name only), at most once per 30 minutes per worker process.
+
+**Sentry email rule: NOT APPLIED; end-to-end email NOT VALIDATED.** This is the rule to create, pending the first production deploy and the Sentry account holder; nobody has created it, and no email has been observed. Do not create it through the API from a script: the account holder creates it in the UI (Alerts, Create Alert, Issues) and confirms the field names there. Why not a frequency rule: each code emits at most one active event per 30 minutes (the cooldown in `modules/ops/tasks.py`), so a generic "more than 10 events in 1 hour" condition never fires.
+
+```text
+Name:         shifty production SLO email
+Project:      backend project (the one that receives SENTRY_DSN)
+Environment:  production
+When (any):   An event or issue activity is captured
+If (all):     The event's tags match  slo.alert_code  is one of
+                dead_letter_webhooks, pending_webhooks_high, failed_webhooks_high,
+                pending_outbox_high, inbox_lag_high, outbox_lag_high,
+                email_send_lag_high, overdue_hold_lag_high, held_recheck_lag_high
+              The event's tags match  slo.state  equals  active
+              The event's level is greater than or equal to  warning
+Then:         Send a notification (email) to the approved Sentry team or member
+Throttling:   30 minutes (per issue, so per code: one email per code every 30 min)
+
+If (all):     The event's exception value contains  Critical SLO monitor failed
+Then:         Send a notification (email) to the same team or member
+Throttling:   30 minutes
+```
+
+Recovery events (`slo.state = resolved`, level `info`) match neither block on purpose: they are visible in Sentry and do not email. The email recipient is a Sentry team or member that the account holder approves; do not type a guessed mailbox. To page only critical codes, add `The event's tags match slo.severity equals critical` to the first block. Reference: [Create alerts](https://docs.sentry.io/product/monitors-and-alerts/alerts/create-alerts/).
 
 **Delivery and test.** There are distinct checkpoints: a non-empty event ID means the SDK captured the event; it does not prove the transport sent it, Sentry received it, evaluated the workflow, or delivered email. A None return means the SDK did not capture the event, so the code releases its pending transition for retry. Keep the production rule scoped to `production`. For an end-to-end check, create a temporary copy scoped to the non-production environment in the same Sentry project, trigger one warning transition there, confirm the event and tags in Sentry, confirm the workflow fired, then confirm receipt in the authorized mailbox (including spam/quarantine). Clear the test condition and confirm the recovery event is visible without an email; remove the temporary rule afterward. Test the host route separately using the existing host-check procedure; `scripts/checks.sh` is scheduled independently of Celery and uses `/etc/shifty/ops.env` for host alerts, including RabbitMQ alarm/read failures. Do not use production thresholds for this test. Capture exceptions release the transition and apply a five-minute per-code retry cooldown; Celery retries after 1, 2, then 4 minutes (up to three retries per task), but only one capture attempt per code is made in that window. Redis claims expire after four minutes so an interrupted worker can recover pending work. If Sentry accepts an event but the worker stops before Redis ACK, a retry can emit it again: delivery is at-least-once and duplicates are possible. If Sentry is unavailable, the email rule cannot run; the host route covers host and broker checks, not Celery SLO delivery. Until a real Sentry recipient is configured and an email is observed, this PR remains Draft.
 

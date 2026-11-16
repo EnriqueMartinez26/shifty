@@ -2,16 +2,28 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
+import re
+import time
+from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 from uuid import uuid4
 
 import sentry_sdk
 import pytest
+from kombu.exceptions import OperationalError as KombuOperationalError
 from redis.asyncio import from_url
+from redis.exceptions import ConnectionError as RedisConnectionError
+from sentry_sdk.envelope import Envelope
+from sentry_sdk.transport import HttpTransport, Transport
 
+from core import observability
 from core.config import settings
+from core.observability import OncePer
+from modules.ops import router as ops_router
 from modules.ops import tasks as slo_tasks
 
 
@@ -612,3 +624,369 @@ def test_slo_monitor_uses_shared_global_metrics_and_thresholds(
     assert result == {"metrics_checked": 1, "alerts": 1}
     assert calls == ["apply", ("metrics", None), "thresholds", alerts]
     assert context_changes == [(None, True), (None, False)]
+
+
+# --- Public task interface with the real Sentry SDK -----------------------
+#
+# 2026-11-16 (PR #308 review): the tests above drive ``_update_slo_alerts``
+# with a stubbed SDK. These run ``monitor_ops_slo`` itself, with the real
+# ``sentry_sdk`` client and the production ``before_send`` scrubber, and only
+# replace the network edge (transport) and the stores (database, Redis).
+
+_SECRET = "s3cr3t-redis-pass"
+_SECRET_URL = f"redis://:{_SECRET}@redis_state:6379/0"
+_SENTRY_TEST_DSN = "https://public@sentry.invalid/1"
+
+_Monitor = tuple[list[dict[str, int]], _SharedRedisState, list[int]]
+
+
+class _CapturingTransport(Transport):
+    def __init__(self, options: dict[str, Any] | None = None) -> None:
+        super().__init__(options)
+        self.events: list[dict[str, Any]] = []
+
+    def capture_envelope(self, envelope: Envelope) -> None:
+        for item in envelope.items:
+            payload = item.payload.json
+            if item.type == "event" and payload is not None:
+                self.events.append(payload)
+
+
+class _Retried(Exception):
+    def __init__(self, countdown: int) -> None:
+        super().__init__(countdown)
+        self.countdown = countdown
+
+
+def _metrics(**overrides: int) -> dict[str, int]:
+    metrics = {metric: 0 for metric, _code, _severity in ops_router._SLO_ALERTS}
+    metrics.update(overrides)
+    return metrics
+
+
+def _close_sentry() -> None:
+    sentry_sdk.get_client().close(timeout=0)
+    sentry_sdk.get_global_scope().set_client(None)
+
+
+@pytest.fixture
+def real_sentry(monkeypatch: pytest.MonkeyPatch) -> Iterator[_CapturingTransport]:
+    monkeypatch.setattr(settings, "SENTRY_DSN", _SENTRY_TEST_DSN)
+    sentry_sdk.init(
+        dsn=_SENTRY_TEST_DSN,
+        transport=_CapturingTransport,
+        default_integrations=False,
+        auto_enabling_integrations=False,
+        before_send=observability._scrub_event,
+        environment="production",
+    )
+    transport = sentry_sdk.get_client().transport
+    assert isinstance(transport, _CapturingTransport)
+    try:
+        yield transport
+    finally:
+        _close_sentry()
+
+
+@pytest.fixture
+def monitor(monkeypatch: pytest.MonkeyPatch) -> Iterator[_Monitor]:
+    """Wire ``monitor_ops_slo`` to a metrics queue, shared Redis and a fake
+    retry. Yields (metrics per run, shared Redis state, retry countdowns)."""
+    runs: list[dict[str, int]] = []
+    shared = _SharedRedisState()
+    countdowns: list[int] = []
+
+    class FakeSession:
+        async def __aenter__(self) -> FakeSession:
+            return self
+
+        async def __aexit__(self, *_: object) -> None:
+            return None
+
+    async def apply_context(_db: FakeSession) -> None:
+        return None
+
+    async def get_metrics(_db: FakeSession, store_id: str | None) -> dict[str, int]:
+        assert store_id is None
+        return runs.pop(0)
+
+    async def get_worker_redis() -> _RedisClient:
+        return _RedisClient(shared)
+
+    def retry(*, exc: BaseException, countdown: int) -> _Retried:
+        countdowns.append(countdown)
+        return _Retried(countdown)
+
+    monkeypatch.setattr(slo_tasks, "AsyncSessionFactory", lambda: FakeSession())
+    monkeypatch.setattr(slo_tasks, "_apply_tenant_context", apply_context)
+    monkeypatch.setattr(slo_tasks, "_slo_metrics", get_metrics)
+    monkeypatch.setattr(slo_tasks, "get_redis", get_worker_redis)
+    monkeypatch.setattr(slo_tasks.monitor_ops_slo, "retry", retry)
+    monkeypatch.setattr(
+        slo_tasks,
+        "_MONITOR_FAILURE_COOLDOWN",
+        OncePer(slo_tasks.SLO_ALERT_COOLDOWN_SECONDS),
+    )
+    yield runs, shared, countdowns
+
+
+def _slo_events(transport: _CapturingTransport) -> list[dict[str, Any]]:
+    return [e for e in transport.events if "slo.alert_code" in e.get("tags", {})]
+
+
+def test_monitor_emits_one_slo_event_with_stable_attributes(
+    real_sentry: _CapturingTransport, monitor: _Monitor
+) -> None:
+    runs, _shared, countdowns = monitor
+    limit = settings.SLO_MAX_PENDING_WEBHOOKS
+    runs.extend(
+        [
+            _metrics(pending_webhooks=limit + 1),
+            _metrics(pending_webhooks=limit + 2),
+            _metrics(),
+        ]
+    )
+
+    assert slo_tasks.monitor_ops_slo.run() == {"metrics_checked": 9, "alerts": 1}
+    # Still breached on the next run: no duplicate event.
+    slo_tasks.monitor_ops_slo.run()
+    events = _slo_events(real_sentry)
+    assert len(events) == 1, events
+    event = events[0]
+    assert event["message"] == "SLO threshold exceeded"
+    assert event["level"] == "error"
+    assert event["environment"] == "production"
+    assert event["fingerprint"] == ["ops-slo", "pending_webhooks_high", "active"]
+    assert {k: v for k, v in event["tags"].items() if k.startswith("slo.")} == {
+        "slo.alert_code": "pending_webhooks_high",
+        "slo.severity": "critical",
+        "slo.state": "active",
+    }
+    assert event["contexts"]["slo"] == {
+        "code": "pending_webhooks_high",
+        "severity": "critical",
+        "state": "active",
+        "value": limit + 1,
+        "threshold": limit,
+    }
+
+    slo_tasks.monitor_ops_slo.run()
+    events = _slo_events(real_sentry)
+    assert len(events) == 2, events
+    recovery = events[1]
+    assert recovery["message"] == "SLO threshold recovered"
+    assert recovery["level"] == "info"
+    assert recovery["tags"]["slo.state"] == "resolved"
+    # Recovery is its own issue: it never regresses the active one.
+    assert recovery["fingerprint"] == ["ops-slo", "pending_webhooks_high", "resolved"]
+    assert countdowns == []
+
+
+@pytest.mark.parametrize(
+    ("metric", "code", "severity"),
+    list(ops_router._SLO_ALERTS),
+    ids=[code for _metric, code, _severity in ops_router._SLO_ALERTS],
+)
+def test_every_slo_code_maps_its_severity_to_a_sentry_level(
+    real_sentry: _CapturingTransport,
+    monitor: _Monitor,
+    metric: str,
+    code: str,
+    severity: str,
+) -> None:
+    runs, _shared, _countdowns = monitor
+    runs.append(_metrics(**{metric: ops_router._slo_thresholds()[metric] + 1}))
+
+    slo_tasks.monitor_ops_slo.run()
+
+    (event,) = _slo_events(real_sentry)
+    assert event["tags"]["slo.alert_code"] == code
+    assert event["tags"]["slo.severity"] == severity
+    assert event["level"] == ("error" if severity == "critical" else "warning")
+
+
+def test_runbook_lists_exactly_the_slo_alert_codes() -> None:
+    """The Sentry rule is keyed on ``slo.alert_code``: renaming a code without
+    updating the documented rule would silently stop its email."""
+    runbook = (
+        Path(__file__).resolve().parents[3] / "docs" / "DEPLOY_RUNBOOK.md"
+    ).read_text(encoding="utf-8")
+    section = runbook.split("<!-- slo-alert-codes:start -->", 1)[1].split(
+        "<!-- slo-alert-codes:end -->", 1
+    )[0]
+    documented = dict(
+        re.findall(r"^\| `([a-z_]+)` \| (critical|warning) \|", section, re.M)
+    )
+    assert documented == {
+        code: severity for _metric, code, severity in ops_router._SLO_ALERTS
+    }
+
+
+def test_monitor_redis_down_reports_once_without_secrets_and_retries(
+    real_sentry: _CapturingTransport,
+    monitor: _Monitor,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    runs, _shared, countdowns = monitor
+    runs.extend([_metrics(pending_webhooks=99), _metrics(pending_webhooks=99)])
+
+    async def redis_down() -> None:
+        raise RedisConnectionError(f"Error connecting to {_SECRET_URL}")
+
+    monkeypatch.setattr(slo_tasks, "get_redis", redis_down)
+    caplog.set_level(logging.DEBUG, logger=slo_tasks.logger.name)
+
+    for _ in range(2):
+        with pytest.raises(_Retried):
+            slo_tasks.monitor_ops_slo.run()
+
+    assert countdowns == [60, 60]
+    assert _slo_events(real_sentry) == []
+    # One failure notice per cooldown window, not one per run.
+    assert len(real_sentry.events) == 1, real_sentry.events
+    failure = real_sentry.events[0]
+    assert failure["exception"]["values"][0]["value"] == "Critical SLO monitor failed"
+    assert failure["contexts"]["shifty"] == {
+        "component": "ops_slo_monitor",
+        "error_type": "ConnectionError",
+    }
+    assert _SECRET not in json.dumps(real_sentry.events)
+    assert _SECRET not in caplog.text
+
+
+def test_monitor_broker_down_on_retry_still_reports_the_failure(
+    real_sentry: _CapturingTransport,
+    monitor: _Monitor,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """RabbitMQ down: publishing the retry fails, but the failure notice is
+    already queued in Sentry and the task fails fast instead of hanging."""
+    runs, _shared, _countdowns = monitor
+    runs.append(_metrics())
+
+    async def redis_down() -> None:
+        raise RedisConnectionError("Error connecting to redis_state:6379")
+
+    def broker_down(*, exc: BaseException, countdown: int) -> None:
+        raise KombuOperationalError("[Errno 111] Connection refused")
+
+    monkeypatch.setattr(slo_tasks, "get_redis", redis_down)
+    monkeypatch.setattr(slo_tasks.monitor_ops_slo, "retry", broker_down)
+
+    started = time.monotonic()
+    with pytest.raises(KombuOperationalError):
+        slo_tasks.monitor_ops_slo.run()
+
+    assert time.monotonic() - started < 5
+    assert len(real_sentry.events) == 1
+    assert real_sentry.events[0]["exception"]["values"][0]["value"] == (
+        "Critical SLO monitor failed"
+    )
+
+
+def test_monitor_sentry_capture_raising_keeps_transition_pending(
+    real_sentry: _CapturingTransport,
+    monitor: _Monitor,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runs, shared, countdowns = monitor
+    runs.extend([_metrics(dead_letter_webhooks_24h=1)] * 2)
+    real_capture = sentry_sdk.capture_message
+
+    def broken_capture(*_args: Any, **_kwargs: Any) -> str:
+        raise RuntimeError("sentry transport exploded")
+
+    monkeypatch.setattr(sentry_sdk, "capture_message", broken_capture)
+    with pytest.raises(_Retried):
+        slo_tasks.monitor_ops_slo.run()
+
+    assert countdowns == [60]
+    pending = shared.active["dead_letter_webhooks"]
+    assert pending["reported"] is False
+    assert "pending_token" not in pending
+    assert shared.locks == {}
+
+    # SDK back, after the per-code retry cooldown: the transition goes out once.
+    monkeypatch.setattr(sentry_sdk, "capture_message", real_capture)
+    pending["next_attempt_at"] = 0
+    slo_tasks.monitor_ops_slo.run()
+    assert shared.active["dead_letter_webhooks"]["reported"] is True
+    assert [e["tags"]["slo.alert_code"] for e in _slo_events(real_sentry)] == [
+        "dead_letter_webhooks"
+    ]
+
+
+def test_monitor_sdk_dropping_the_event_is_not_acked(
+    monitor: _Monitor, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``before_send`` (or sampling) dropping the event makes the SDK return
+    ``None``: the transition must stay pending, not count as reported."""
+    runs, shared, countdowns = monitor
+    runs.append(_metrics(failed_webhooks=10_000))
+    monkeypatch.setattr(settings, "SENTRY_DSN", _SENTRY_TEST_DSN)
+    sentry_sdk.init(
+        dsn=_SENTRY_TEST_DSN,
+        transport=_CapturingTransport,
+        default_integrations=False,
+        auto_enabling_integrations=False,
+        before_send=lambda _event, _hint: None,
+    )
+    try:
+        with pytest.raises(_Retried):
+            slo_tasks.monitor_ops_slo.run()
+    finally:
+        _close_sentry()
+
+    assert countdowns == [60]
+    assert shared.active["failed_webhooks_high"]["reported"] is False
+    assert shared.locks == {}
+
+
+def test_monitor_does_not_wait_for_a_hung_sentry_and_ack_is_not_delivery(
+    monitor: _Monitor, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The real HTTP transport queues events for a background thread: a hung
+    Sentry does not block the Celery worker. The flip side: a queue overflow
+    drops events after the SDK returned an id, so an ACK in Redis means
+    "handed to the SDK", never "delivered" and never "emailed"."""
+    runs, shared, _countdowns = monitor
+    thresholds = ops_router._slo_thresholds()
+    runs.append(
+        _metrics(
+            **{
+                metric: thresholds[metric] + 1
+                for metric, _code, _severity in ops_router._SLO_ALERTS
+            }
+        )
+    )
+    sent: list[bytes] = []
+
+    def hung_send(_self: HttpTransport, body: bytes, *_args: Any, **_kw: Any) -> None:
+        sent.append(body)
+        time.sleep(3)
+
+    dsn = "http://public@127.0.0.1:9/1"
+    monkeypatch.setattr(HttpTransport, "_send_request", hung_send)
+    monkeypatch.setattr(settings, "SENTRY_DSN", dsn)
+    sentry_sdk.init(
+        dsn=dsn,
+        default_integrations=False,
+        auto_enabling_integrations=False,
+        transport_queue_size=1,
+    )
+    try:
+        assert isinstance(sentry_sdk.get_client().transport, HttpTransport)
+        started = time.monotonic()
+        result = slo_tasks.monitor_ops_slo.run()
+        elapsed = time.monotonic() - started
+    finally:
+        _close_sentry()
+
+    codes = [code for _metric, code, _severity in ops_router._SLO_ALERTS]
+    assert result["alerts"] == len(codes)
+    assert elapsed < 2, f"the monitor waited for Sentry ({elapsed:.1f} s)"
+    assert all(shared.active[code]["reported"] is True for code in codes)
+    # One request in flight plus a one-slot queue: the rest were dropped
+    # after the SDK handed back an event id.
+    assert len(sent) <= 2
