@@ -1772,7 +1772,8 @@ def test_checks_avisa_alarma_de_rabbitmq_sin_reiniciarlo(host: Host) -> None:
     assert "rabbitmq: hay alarmas activas" in resultado.stderr
     assert _hay(
         host.llamadas(),
-        r"docker compose exec -T rabbitmq rabbitmq-diagnostics -q alarms --formatter json",
+        r"docker compose exec -T rabbitmq rabbitmq-diagnostics -q --timeout \d+ "
+        r"alarms --formatter json",
     )
     assert not _hay(host.llamadas(), r"docker restart .*rabbitmq")
 
@@ -1797,6 +1798,30 @@ _ALARMA_DE_MEMORIA_3_13 = (
     '{"global":[],"local":["Memory alarm on node rabbit@rabbitmq"],'
     '"message":"Node rabbit@rabbitmq reported alarms","result":"ok"}'
 )
+
+
+# 2026-11-16 (revision de la PR #308): `timeout` corta solo el cliente de
+# docker; `rabbitmq-diagnostics` sigue corriendo DENTRO del contenedor
+# (`timeout -k 5 3 docker compose exec -T rabbitmq sleep 300` sale 124 y el
+# sleep sigue vivo). El CLI recibe su propio --timeout, por debajo del tope de
+# afuera: `alarms` lo pasa a su rpc_call (alarms_command.ex de v3.13.7). Un
+# valor que no es un numero de segundos vuelve al default (30).
+@pytest.mark.parametrize(
+    ("tope", "tope_del_cli"),
+    [("30", 20), ("15", 10), ("abc", 20)],
+    ids=["default", "corto", "invalido"],
+)
+def test_checks_le_pasa_a_rabbitmq_su_propio_tope(
+    host: Host, tope: str, tope_del_cli: int
+) -> None:
+    resultado = _correr_checks(host, RABBITMQ_CHECK_TIMEOUT_SECONDS=tope)
+
+    assert resultado.returncode == 0, resultado.stderr
+    assert _hay(
+        host.llamadas(),
+        r"docker compose exec -T rabbitmq rabbitmq-diagnostics -q "
+        rf"--timeout {tope_del_cli} alarms --formatter json$",
+    )
 
 
 # 2026-11-16 (PR #308 sobre #316): el chequeo de RabbitMQ no tenia tope; un

@@ -218,15 +218,32 @@ chequear_redis_state() {
 # host (webhook y mail): nombra solo los recursos en alarma o el codigo de
 # salida, nunca la salida cruda del CLI, que puede traer datos del nodo (su
 # diagnostico imprime el hash de la cookie de Erlang).
+#
+# `timeout` corta solo el cliente de docker: el rabbitmq-diagnostics de
+# adentro del contenedor seguia corriendo (2026-11-16). El CLI recibe su
+# propio --timeout, 2/3 del tope de afuera (20 de 30 s; el resto es el
+# arranque de la VM de Erlang del CLI): `alarms` lo pasa a su rpc_call
+# (deps/rabbitmq_cli/.../alarms_command.ex del tag v3.13.7;
+# https://www.rabbitmq.com/docs/3.13/man/rabbitmq-diagnostics.8, "-t,
+# --timeout: Operation timeout in seconds").
 chequear_rabbitmq() {
-  local salida rc=0 comando="docker compose exec -T $RABBITMQ_SERVICE rabbitmq-diagnostics -q alarms --formatter json"
+  local tope="$RABBITMQ_CHECK_TIMEOUT_SECONDS"
+  if ! [[ "$tope" =~ ^[1-9][0-9]*$ ]]; then
+    log "checks: RABBITMQ_CHECK_TIMEOUT_SECONDS=$tope no es un numero de segundos; uso 30"
+    tope=30
+  fi
+  local tope_cli=$((tope * 2 / 3))
+  if [ "$tope_cli" -lt 1 ]; then tope_cli=1; fi
+  local salida rc=0
+  local comando="docker compose exec -T $RABBITMQ_SERVICE rabbitmq-diagnostics -q --timeout $tope_cli alarms --formatter json"
   salida="$(cd "$SHIFTY_DIR" && usar_version_en_curso &&
-    timeout -k 5 "$RABBITMQ_CHECK_TIMEOUT_SECONDS" \
-      docker compose exec -T "$RABBITMQ_SERVICE" rabbitmq-diagnostics -q alarms --formatter json 2>&1)" || rc=$?
+    timeout -k 5 "$tope" \
+      docker compose exec -T "$RABBITMQ_SERVICE" \
+      rabbitmq-diagnostics -q --timeout "$tope_cli" alarms --formatter json 2>&1)" || rc=$?
   if [ "$rc" -ne 0 ]; then
     local motivo="salio con $rc"
     if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
-      motivo="sin respuesta en $RABBITMQ_CHECK_TIMEOUT_SECONDS s"
+      motivo="sin respuesta en $tope s"
     fi
     problema "rabbitmq: no se pudieron consultar las alarmas" \
       "$comando: $motivo. La salida no viaja en el aviso: correrlo a mano en el host." \
