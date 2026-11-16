@@ -20,6 +20,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -60,6 +61,7 @@ def _escribir(
     codigos: dict[str, Any] | None = None,
     slo: list[dict[str, Any]] | None = None,
     stats: str | None = None,
+    locust_exit_code: int = 0,
 ) -> list[str]:
     (tmp / "run_stats.csv").write_text(
         "\n".join([CABECERA, *filas]) + "\n", encoding="utf-8"
@@ -70,30 +72,44 @@ def _escribir(
             if codigos is not None
             else {
                 "por_ruta": {"GET /public/services": {"200": 500}},
-                "rafagas": [{"201": 1, "409": 9}],
+                "rafagas": [{"201": 1, "409": 9} for _ in range(4)],
                 "errores_de_conexion": 0,
             }
         ),
         encoding="utf-8",
     )
-    muestras = (
-        slo
-        if slo is not None
-        else [
-            {
-                "t": "2026-09-24T10:00:00Z",
-                "metrics": {
-                    "oldest_pending_outbox_seconds": 5,
-                    "oldest_pending_email_send_seconds": 0,
-                    "failed_webhooks": 0,
-                },
-            }
-        ]
-    )
+    inicio = datetime(2026, 9, 24, 10, tzinfo=timezone.utc)
+    muestras = [
+        {
+            "t": (inicio + timedelta(seconds=30 * indice))
+            .isoformat()
+            .replace("+00:00", "Z"),
+            "metrics": {
+                "oldest_pending_outbox_seconds": 5,
+                "oldest_pending_email_send_seconds": 0,
+                "failed_webhooks": 0,
+            },
+        }
+        for indice in range(50)
+    ]
+    if slo is not None:
+        if not slo:
+            muestras = []
+        else:
+            for indice, muestra in enumerate(slo, start=50 - len(slo)):
+                muestras[indice] = {
+                    **muestra,
+                    "t": muestras[indice]["t"],
+                }
     (tmp / "run_slo.jsonl").write_text(
         "".join(json.dumps(m) + "\n" for m in muestras), encoding="utf-8"
     )
-    argumentos = ["--csv-prefix", str(tmp / "run")]
+    argumentos = [
+        "--csv-prefix",
+        str(tmp / "run"),
+        "--locust-exit-code",
+        str(locust_exit_code),
+    ]
     if stats is not None:
         (tmp / "stats.log").write_text(stats, encoding="utf-8")
         argumentos += ["--docker-stats", str(tmp / "stats.log")]
@@ -157,6 +173,37 @@ def test_un_runner_lejano_suma_su_latencia_de_red_al_umbral(tmp_path: Path) -> N
     assert _modulo().main([*argumentos, "--network-offset-ms", "150"]) == 0
 
 
+@pytest.mark.parametrize("offset", ["-1", "151", "999999"])
+def test_un_offset_de_red_fuera_del_limite_no_puede_aflojar_el_umbral(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], offset: str
+) -> None:
+    argumentos = _escribir(tmp_path, FILAS_OK)
+
+    assert _modulo().main([*argumentos, "--network-offset-ms", offset]) == 2
+    assert "debe estar entre 0 y 150" in capsys.readouterr().out
+
+
+def test_locust_con_salida_no_cero_nunca_da_aceptada(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    argumentos = _escribir(tmp_path, FILAS_OK, locust_exit_code=1)
+
+    assert _modulo().main(argumentos) == 1
+    assert "Locust termino con codigo 1" in capsys.readouterr().out
+
+
+def test_sin_codigo_de_salida_de_locust_no_se_puede_evaluar(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    argumentos = _escribir(tmp_path, FILAS_OK)
+
+    with pytest.raises(SystemExit) as salida:
+        _modulo().main(argumentos[:-2])
+
+    assert salida.value.code == 2
+    assert "--locust-exit-code" in capsys.readouterr().err
+
+
 @pytest.mark.parametrize(
     ("codigos", "motivo"),
     [
@@ -203,7 +250,7 @@ def test_los_409_fuera_de_la_rafaga_no_son_errores(tmp_path: Path) -> None:
     """Un slot tomado entre la disponibilidad y la reserva es un 409 legitimo."""
     codigos = {
         "por_ruta": {"POST /public/appointments": {"201": 40, "409": 3}},
-        "rafagas": [{"201": 1, "409": 9}],
+        "rafagas": [{"201": 1, "409": 9} for _ in range(4)],
     }
 
     assert _modulo().main(_escribir(tmp_path, FILAS_OK, codigos=codigos)) == 0
@@ -211,6 +258,15 @@ def test_los_409_fuera_de_la_rafaga_no_son_errores(tmp_path: Path) -> None:
 
 def test_sin_rafagas_registradas_falla(tmp_path: Path) -> None:
     codigos: dict[str, Any] = {"por_ruta": {}, "rafagas": []}
+
+    assert _modulo().main(_escribir(tmp_path, FILAS_OK, codigos=codigos)) == 1
+
+
+def test_menos_de_cuatro_rafagas_no_cierra_la_meseta(tmp_path: Path) -> None:
+    codigos: dict[str, Any] = {
+        "por_ruta": {},
+        "rafagas": [{"201": 1, "409": 9} for _ in range(3)],
+    }
 
     assert _modulo().main(_escribir(tmp_path, FILAS_OK, codigos=codigos)) == 1
 
@@ -273,6 +329,83 @@ def test_sin_muestras_del_slo_no_se_aprueba(tmp_path: Path) -> None:
     assert _modulo().main(_escribir(tmp_path, FILAS_OK, slo=[])) == 1
 
 
+def test_una_corrida_corta_no_se_aprueba_aunque_sus_metricas_sean_buenas(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    argumentos = _escribir(tmp_path, FILAS_OK)
+    (tmp_path / "run_slo.jsonl").write_text(
+        "".join(
+            json.dumps(
+                {
+                    "t": (
+                        datetime(2026, 9, 24, 10, tzinfo=timezone.utc)
+                        + timedelta(seconds=30 * indice)
+                    )
+                    .isoformat()
+                    .replace("+00:00", "Z"),
+                    "metrics": {
+                        "oldest_pending_outbox_seconds": 5,
+                        "oldest_pending_email_send_seconds": 0,
+                    },
+                }
+            )
+            + "\n"
+            for indice in range(10)
+        ),
+        encoding="utf-8",
+    )
+
+    assert _modulo().main(argumentos) == 1
+    assert "al menos 40" in capsys.readouterr().out
+
+
+def test_una_corrida_con_muestras_concentradas_en_poco_tiempo_no_se_aprueba(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    argumentos = _escribir(tmp_path, FILAS_OK)
+    inicio = datetime(2026, 9, 24, 10, tzinfo=timezone.utc)
+    (tmp_path / "run_slo.jsonl").write_text(
+        "".join(
+            json.dumps(
+                {
+                    "t": (inicio + timedelta(seconds=10 * indice))
+                    .isoformat()
+                    .replace("+00:00", "Z"),
+                    "metrics": {
+                        "oldest_pending_outbox_seconds": 5,
+                        "oldest_pending_email_send_seconds": 0,
+                    },
+                }
+            )
+            + "\n"
+            for indice in range(50)
+        ),
+        encoding="utf-8",
+    )
+
+    assert _modulo().main(argumentos) == 1
+    assert "cobertura fue" in capsys.readouterr().out
+
+
+def test_timestamps_repetidos_no_cuentan_como_cobertura_slo(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    argumentos = _escribir(tmp_path, FILAS_OK)
+    muestra = {
+        "t": "2026-09-24T10:00:00Z",
+        "metrics": {
+            "oldest_pending_outbox_seconds": 5,
+            "oldest_pending_email_send_seconds": 0,
+        },
+    }
+    (tmp_path / "run_slo.jsonl").write_text(
+        "".join(json.dumps(muestra) + "\n" for _ in range(50)), encoding="utf-8"
+    )
+
+    assert _modulo().main(argumentos) == 1
+    assert "timestamps distintos" in capsys.readouterr().out
+
+
 @pytest.mark.parametrize(
     ("stats", "esperado"),
     [
@@ -300,4 +433,14 @@ def test_la_memoria_de_cada_contenedor_queda_bajo_el_70(
 
 
 def test_sin_el_csv_de_locust_sale_con_error_de_entrada(tmp_path: Path) -> None:
-    assert _modulo().main(["--csv-prefix", str(tmp_path / "no-existe")]) == 2
+    assert (
+        _modulo().main(
+            [
+                "--csv-prefix",
+                str(tmp_path / "no-existe"),
+                "--locust-exit-code",
+                "0",
+            ]
+        )
+        == 2
+    )
