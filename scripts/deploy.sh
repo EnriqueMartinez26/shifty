@@ -389,18 +389,10 @@ imagenes_locales() {
 
 # --- compuerta --------------------------------------------------------------
 
-# Salida de `rabbitmq-diagnostics -q alarms --formatter json`, sin espacios,
-# de la imagen fijada en compose (3.13.7; test_la_compuerta_conoce_la_version_
-# de_rabbitmq_que_corre). Segun alarms_command.ex del tag v3.13.7:
-#   sin alarmas: {"alarms":[],"node":"rabbit@...","result":"ok"}
-#   con alarmas: {"global":[...],"local":[...],"message":"...","result":"ok"}
-# (exit 0 en los dos; nunca imprime vacio ni `[]`). La compuerta exigia vacio
-# o `[]` y el primer deploy (2026-10-08) fallo con la primera forma.
-# Sin python3 ni jq garantizados en el host, se compara texto estricto: un
-# objeto cuyas claves son solo alarms, node y result, cada una una vez, con
-# `alarms` presente y vacia y `result` (si viene) "ok". Cualquier otra cosa
-# (una alarma, una clave desconocida, texto, vacio) cuenta como alarma: la
-# compuerta falla cerrada.
+# Las alarmas de RabbitMQ se leen con rabbitmq_sin_alarmas (lib/common.sh,
+# compartida con el chequeo horario de scripts/checks.sh): cualquier salida
+# que no sea la de "sin alarmas" de 3.13.7 cuenta como alarma y la compuerta
+# falla cerrada.
 compuerta() {
   local fallos=0 i url
   for ((i = 1; i <= DEPLOY_GATE_CHECKS; i++)); do

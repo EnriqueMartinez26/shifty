@@ -74,14 +74,29 @@ json_escape() {
   printf '%s' "$s"
 }
 
-# Acepta solo la respuesta conocida de RabbitMQ 3.13.7 sin alarmas. Se usa
-# tanto en la compuerta de deploy como en el chequeo horario del host.
+# rabbitmq_sin_alarmas <salida>: sale 0 solo con la respuesta de RabbitMQ
+# 3.13.7 sin alarmas. La usan la compuerta de deploy.sh y el chequeo horario
+# de checks.sh; es una funcion pura, no avisa ni toca el estado de alertas.
+#
+# <salida> es la de `rabbitmq-diagnostics -q alarms --formatter json`, sin
+# espacios, de la imagen fijada en compose (3.13.7; test_la_compuerta_conoce_
+# la_version_de_rabbitmq_que_corre). Segun alarms_command.ex del tag v3.13.7:
+#   sin alarmas: {"alarms":[],"node":"rabbit@...","result":"ok"}
+#   con alarmas: {"global":[...],"local":[...],"message":"...","result":"ok"}
+# (exit 0 en los dos; nunca imprime vacio ni `[]`). La compuerta exigia vacio
+# o `[]` y el primer deploy (2026-10-08) fallo con la primera forma.
+# Sin python3 ni jq garantizados en el host, se compara texto estricto: un
+# objeto cuyas claves son solo alarms, node y result, cada una una vez, con
+# `alarms` presente y vacia y `result` (si viene) "ok". Cualquier otra cosa
+# (una alarma, una clave desconocida, texto, vacio) cuenta como alarma: falla
+# cerrada.
 rabbitmq_sin_alarmas() {
   local salida="$1" clave
   local miembro='("alarms":\[\]|"node":"[^"\\]*"|"result":"ok")'
   local objeto="^\{${miembro}(,${miembro})*\}$"
   [[ "$salida" =~ $objeto ]] || return 1
   case "$salida" in *'"alarms":[]'*) ;; *) return 1 ;; esac
+  # Cada clave a lo sumo una vez (un valor de node no puede tener comillas).
   for clave in '"alarms":' '"node":' '"result":'; do
     case "${salida#*"$clave"}" in *"$clave"*) return 1 ;; esac
   done
