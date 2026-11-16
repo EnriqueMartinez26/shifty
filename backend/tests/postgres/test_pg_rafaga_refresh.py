@@ -102,10 +102,12 @@ async def _motivos(
         return [cast(str | None, fila[0]) for fila in filas.all()]
 
 
-async def _esperar_bloqueadas(owner_engine: AsyncEngine, esperado: int) -> None:
+async def _esperar_bloqueadas(
+    owner_engine: AsyncEngine, esperado: int, *, bloqueador_pid: int
+) -> None:
     """Espera a que Postgres confirme la intercalacion bajo un row lock."""
-    # La app tiene lock_timeout de 3 s; observar la barrera antes de que venza.
-    limite = asyncio.get_running_loop().time() + 2
+    # El rol de la app tiene lock_timeout de 5 s; dejar margen al observador.
+    limite = asyncio.get_running_loop().time() + 2.5
     async with owner_engine.connect() as conn:
         while asyncio.get_running_loop().time() < limite:
             bloqueadas = await conn.scalar(
@@ -114,8 +116,10 @@ async def _esperar_bloqueadas(owner_engine: AsyncEngine, esperado: int) -> None:
                     "where datname = current_database() "
                     "and pid <> pg_backend_pid() "
                     "and cardinality(pg_blocking_pids(pid)) > 0 "
+                    "and :bloqueador_pid = any(pg_blocking_pids(pid)) "
                     "and query ilike '%FOR UPDATE%'"
-                )
+                ),
+                {"bloqueador_pid": bloqueador_pid},
             )
             if int(bloqueadas or 0) >= esperado:
                 return
@@ -299,15 +303,15 @@ async def test_reuso_y_login_esperan_el_mismo_lock_de_usuario_en_postgres(
                 text("select id from users where email = :email for update"),
                 {"email": email},
             )
+            bloqueador_pid = await conn.scalar(text("select pg_backend_pid()"))
+            assert bloqueador_pid is not None
             reuso = asyncio.create_task(_refresh(client, familia))
             tareas.append(reuso)
-            await _esperar_bloqueadas(owner_engine, 1)
-
             login = asyncio.create_task(
                 client.post("/auth/login", json={"email": email, "password": PASSWORD})
             )
             tareas.append(login)
-            await _esperar_bloqueadas(owner_engine, 2)
+            await _esperar_bloqueadas(owner_engine, 2, bloqueador_pid=bloqueador_pid)
             await transaccion.commit()
             await asyncio.gather(reuso, login)
         finally:
