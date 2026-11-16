@@ -6,7 +6,7 @@ import logging
 import os
 import re
 import time
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -14,6 +14,7 @@ from uuid import uuid4
 
 import sentry_sdk
 import pytest
+import pytest_asyncio
 from kombu.exceptions import OperationalError as KombuOperationalError
 from redis.asyncio import from_url
 from redis.exceptions import ConnectionError as RedisConnectionError
@@ -375,195 +376,257 @@ def test_slo_monitor_reports_warning_severity_from_shared_alerts(
     assert scope.context["slo"]["severity"] == "warning"
 
 
-@pytest.mark.asyncio
-async def test_slo_alert_lua_executes_against_real_redis_when_configured(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    url = os.getenv("SLO_TEST_REDIS_URL")
-    if not url:
-        pytest.skip("set SLO_TEST_REDIS_URL to a local disposable Redis for EVAL test")
-    parsed = urlparse(url)
-    if parsed.hostname not in {"127.0.0.1", "localhost", "::1"}:
-        pytest.skip("real EVAL test only accepts loopback Redis")
+# --- Real Redis: the Lua scripts themselves ---------------------------------
+#
+# 2026-11-16 (PR #308 review): ``_RedisClient`` above re-implements the scripts
+# in Python, so it cannot catch a broken script: replacing the UPDATE script
+# with ``return {}`` and the ACK script with ``return 0`` kept every test green.
+# These tests run the real scripts against a disposable Redis. They skip
+# without SLO_TEST_REDIS_URL (plain ``uv run pytest``) and FAIL instead of
+# skipping when SLO_TEST_REDIS_REQUIRED=1, which the ``backend-postgres`` CI
+# job sets next to its ``redis`` service.
 
-    client = from_url(url, decode_responses=True)
-    second_client = from_url(url, decode_responses=True)
-    state_key = f"{slo_tasks.SLO_ALERT_STATE_KEY}:test:{uuid4().hex}"
-    lock_key = f"{slo_tasks.SLO_ALERT_LOCK_KEY}:test:{uuid4().hex}"
-    await client.delete(state_key, lock_key)
-    monkeypatch.setattr(slo_tasks, "SLO_ALERT_STATE_KEY", state_key)
-    monkeypatch.setattr(slo_tasks, "SLO_ALERT_LOCK_KEY", lock_key)
+_LUA_ALERT: dict[str, str | int] = {
+    "code": "pending_webhooks_high",
+    "severity": "critical",
+    "value": 9,
+    "threshold": 5,
+}
+_LUA_CODE = "pending_webhooks_high"
 
-    async def get_local_redis() -> Any:
-        return client
 
-    monkeypatch.setattr(slo_tasks, "get_redis", get_local_redis)
-    monkeypatch.setattr(settings, "SENTRY_DSN", "")
-    alert = [
-        {
-            "code": "pending_webhooks_high",
-            "severity": "critical",
-            "value": 9,
-            "threshold": 5,
-        }
-    ]
+class _RealLua:
+    """Two clients (two workers) on throwaway keys of one real Redis."""
 
-    try:
-        serialized_alerts = json.dumps(alert, separators=(",", ":"))
-        check_args = (
+    def __init__(self, first: Any, second: Any, state_key: str, lock_key: str):
+        self.first = first
+        self.second = second
+        self.state_key = state_key
+        self.lock_key = lock_key
+
+    async def update(
+        self,
+        alerts: list[dict[str, str | int]],
+        now: float,
+        claim: str,
+        *,
+        client: Any = None,
+    ) -> list[dict[str, Any]]:
+        raw = await (client or self.first).eval(
             slo_tasks._UPDATE_SLO_ALERT_STATE,
             1,
-            state_key,
-            serialized_alerts,
-            "30000",
+            self.state_key,
+            json.dumps(alerts, separators=(",", ":")),
+            str(now),
             str(slo_tasks.SLO_ALERT_COOLDOWN_SECONDS),
+            claim,
+            str(slo_tasks.SLO_ALERT_DELIVERY_LEASE_SECONDS),
         )
-        concurrent_claims = await asyncio.gather(
-            client.eval(
-                *check_args,
-                "worker-a-claim",
-                str(slo_tasks.SLO_ALERT_DELIVERY_LEASE_SECONDS),
-            ),
-            second_client.eval(
-                *check_args,
-                "worker-b-claim",
-                str(slo_tasks.SLO_ALERT_DELIVERY_LEASE_SECONDS),
-            ),
-        )
-        claims = [json.loads(event) for batch in concurrent_claims for event in batch]
-        assert len(claims) == 1
-        transition = claims[0]
-        assert (
-            await second_client.eval(
+        return [json.loads(event) for event in raw]
+
+    async def ack(self, state: str, token: str, now: float) -> int:
+        return int(
+            await self.second.eval(
                 slo_tasks._ACK_SLO_ALERT_TRANSITION,
                 1,
-                state_key,
-                "pending_webhooks_high",
-                "active",
-                transition["token"],
-                "30000",
+                self.state_key,
+                _LUA_CODE,
+                state,
+                token,
+                str(now),
             )
-            == 1
         )
-        await client.delete(state_key)
 
-        interrupted = json.dumps(
-            [
-                {
-                    "code": "failed_webhooks_high",
-                    "severity": "critical",
-                    "value": 21,
-                    "threshold": 20,
-                }
-            ],
-            separators=(",", ":"),
-        )
-        abandoned = await client.eval(
-            slo_tasks._UPDATE_SLO_ALERT_STATE,
-            1,
-            state_key,
-            interrupted,
-            "30000",
-            str(slo_tasks.SLO_ALERT_COOLDOWN_SECONDS),
-            "interrupted-worker",
-            str(slo_tasks.SLO_ALERT_DELIVERY_LEASE_SECONDS),
-        )
-        assert len(abandoned) == 1
-        recovered_claim = await second_client.eval(
-            slo_tasks._UPDATE_SLO_ALERT_STATE,
-            1,
-            state_key,
-            interrupted,
-            "30241",
-            str(slo_tasks.SLO_ALERT_COOLDOWN_SECONDS),
-            "replacement-worker",
-            str(slo_tasks.SLO_ALERT_DELIVERY_LEASE_SECONDS),
-        )
-        assert len(recovered_claim) == 1
-        recovered_transition = json.loads(recovered_claim[0])
-        assert recovered_transition["token"] == "replacement-worker"
-
-        await client.delete(state_key)
-        capture_failed = await client.eval(
-            slo_tasks._UPDATE_SLO_ALERT_STATE,
-            1,
-            state_key,
-            interrupted,
-            "31000",
-            str(slo_tasks.SLO_ALERT_COOLDOWN_SECONDS),
-            "capture-failed-worker",
-            str(slo_tasks.SLO_ALERT_DELIVERY_LEASE_SECONDS),
-        )
-        failed_transition = json.loads(capture_failed[0])
-        assert (
-            await client.eval(
+    async def release(self, token: str, now: float) -> int:
+        return int(
+            await self.first.eval(
                 slo_tasks._RELEASE_SLO_ALERT_TRANSITION,
                 1,
-                state_key,
-                "failed_webhooks_high",
-                failed_transition["token"],
-                "31000",
+                self.state_key,
+                _LUA_CODE,
+                token,
+                str(now),
                 str(slo_tasks.SLO_ALERT_CAPTURE_RETRY_COOLDOWN_SECONDS),
             )
-            == 1
         )
-        too_soon = await client.eval(
-            slo_tasks._UPDATE_SLO_ALERT_STATE,
-            1,
-            state_key,
-            interrupted,
-            "31299",
-            str(slo_tasks.SLO_ALERT_COOLDOWN_SECONDS),
-            "early-retry-worker",
-            str(slo_tasks.SLO_ALERT_DELIVERY_LEASE_SECONDS),
-        )
-        assert too_soon == []
-        after_cooldown = await client.eval(
-            slo_tasks._UPDATE_SLO_ALERT_STATE,
-            1,
-            state_key,
-            interrupted,
-            "31300",
-            str(slo_tasks.SLO_ALERT_COOLDOWN_SECONDS),
-            "scheduled-retry-worker",
-            str(slo_tasks.SLO_ALERT_DELIVERY_LEASE_SECONDS),
-        )
-        assert len(after_cooldown) == 1
 
-        # Start the ordinary monitor transitions with an empty state key.
-        await client.delete(state_key)
+    async def state(self) -> dict[str, Any]:
+        raw = await self.first.get(self.state_key)
+        assert raw is not None
+        state: dict[str, Any] = json.loads(raw)
+        return state
 
-        await slo_tasks._update_slo_alerts(alert, now=30_000)
-        raw_state = await client.get(state_key)
-        assert raw_state is not None
-        state = json.loads(raw_state)
-        assert state["active"]["pending_webhooks_high"]["reported"] is True
-        assert state["last_active_at"]["pending_webhooks_high"] == 30_000
 
-        await slo_tasks._update_slo_alerts(alert, now=30_100)
-        await slo_tasks._update_slo_alerts([], now=30_200)
-        raw_state = await client.get(state_key)
-        assert raw_state is not None
-        assert json.loads(raw_state)["active"] == {}
+@pytest_asyncio.fixture
+async def real_lua(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[_RealLua]:
+    url = os.getenv("SLO_TEST_REDIS_URL")
+    if not url:
+        if os.getenv("SLO_TEST_REDIS_REQUIRED") == "1":
+            pytest.fail("SLO_TEST_REDIS_REQUIRED=1 but SLO_TEST_REDIS_URL is unset")
+        pytest.skip("set SLO_TEST_REDIS_URL to a local disposable Redis for EVAL test")
+    if urlparse(url).hostname not in {"127.0.0.1", "localhost", "::1"}:
+        pytest.fail("the real EVAL tests only accept a loopback Redis")
 
-        # Recovery resets the active state; recurrence is held until cooldown.
-        await slo_tasks._update_slo_alerts(alert, now=30_300)
-        raw_state = await client.get(state_key)
-        assert raw_state is not None
-        assert (
-            json.loads(raw_state)["active"]["pending_webhooks_high"]["reported"]
-            is False
-        )
-        await slo_tasks._update_slo_alerts(alert, now=31_801)
-        raw_state = await client.get(state_key)
-        assert raw_state is not None
-        assert (
-            json.loads(raw_state)["active"]["pending_webhooks_high"]["reported"] is True
-        )
+    first = from_url(url, decode_responses=True)
+    second = from_url(url, decode_responses=True)
+    lua = _RealLua(
+        first,
+        second,
+        f"{slo_tasks.SLO_ALERT_STATE_KEY}:test:{uuid4().hex}",
+        f"{slo_tasks.SLO_ALERT_LOCK_KEY}:test:{uuid4().hex}",
+    )
+    monkeypatch.setattr(slo_tasks, "SLO_ALERT_STATE_KEY", lua.state_key)
+    monkeypatch.setattr(slo_tasks, "SLO_ALERT_LOCK_KEY", lua.lock_key)
+
+    async def get_first() -> Any:
+        return first
+
+    monkeypatch.setattr(slo_tasks, "get_redis", get_first)
+    # Without a DSN the capture logs the transition and counts as handed off.
+    monkeypatch.setattr(settings, "SENTRY_DSN", "")
+    try:
+        yield lua
     finally:
-        await client.delete(state_key, lock_key)
-        await client.aclose()
-        await second_client.aclose()
+        await first.delete(lua.state_key, lua.lock_key)
+        await first.aclose()
+        await second.aclose()
+
+
+@pytest.mark.asyncio
+async def test_real_lua_activates_once_and_ack_marks_it_reported(
+    real_lua: _RealLua,
+) -> None:
+    (claimed,) = await real_lua.update([_LUA_ALERT], 30_000, "worker-a")
+    assert claimed == {"state": "active", "alert": _LUA_ALERT, "token": "worker-a"}
+
+    # Another worker inside the delivery lease gets nothing to send.
+    assert await real_lua.update([_LUA_ALERT], 30_010, "worker-b") == []
+    # Only the claim holder can ACK.
+    assert await real_lua.ack("active", "worker-b", 30_010) == 0
+    assert await real_lua.ack("resolved", "worker-a", 30_010) == 0
+    assert await real_lua.ack("active", "worker-a", 30_010) == 1
+
+    state = await real_lua.state()
+    assert state["active"][_LUA_CODE]["reported"] is True
+    assert "pending_token" not in state["active"][_LUA_CODE]
+    assert state["last_active_at"][_LUA_CODE] == 30_010
+    # Still breached later: no duplicate transition.
+    assert await real_lua.update([_LUA_ALERT], 30_900, "worker-c") == []
+
+
+@pytest.mark.asyncio
+async def test_real_lua_recovers_once_and_holds_recurrence_until_cooldown(
+    real_lua: _RealLua,
+) -> None:
+    await real_lua.update([_LUA_ALERT], 30_000, "open")
+    assert await real_lua.ack("active", "open", 30_000) == 1
+
+    (recovered,) = await real_lua.update([], 30_100, "close")
+    assert recovered["state"] == "resolved"
+    assert recovered["alert"]["code"] == _LUA_CODE
+    assert await real_lua.update([], 30_110, "close-again") == []
+    assert await real_lua.ack("resolved", "close", 30_100) == 1
+    assert (await real_lua.state())["active"] == {}
+
+    # Reopened inside the 30-minute cooldown: tracked, not reported.
+    assert await real_lua.update([_LUA_ALERT], 30_300, "early") == []
+    assert (await real_lua.state())["active"][_LUA_CODE]["reported"] is False
+    # Still open once the cooldown since the last activation has passed.
+    (again,) = await real_lua.update(
+        [_LUA_ALERT], 30_000 + slo_tasks.SLO_ALERT_COOLDOWN_SECONDS, "late"
+    )
+    assert again["state"] == "active"
+
+
+@pytest.mark.asyncio
+async def test_real_lua_release_and_expired_lease_reoffer_the_transition(
+    real_lua: _RealLua,
+) -> None:
+    # A failed capture releases its claim with a per-code retry cooldown.
+    await real_lua.update([_LUA_ALERT], 31_000, "failed-capture")
+    assert await real_lua.release("someone-else", 31_000) == 0
+    assert await real_lua.release("failed-capture", 31_000) == 1
+    retry_at = 31_000 + slo_tasks.SLO_ALERT_CAPTURE_RETRY_COOLDOWN_SECONDS
+    assert await real_lua.update([_LUA_ALERT], retry_at - 1, "too-soon") == []
+    (retried,) = await real_lua.update([_LUA_ALERT], retry_at, "retry")
+    assert retried["token"] == "retry"
+
+    # A worker that dies holding the claim: the lease expires and another
+    # worker takes it; the dead worker's late ACK no longer counts.
+    lease_end = retry_at + slo_tasks.SLO_ALERT_DELIVERY_LEASE_SECONDS
+    assert await real_lua.update([_LUA_ALERT], lease_end - 1, "w2") == []
+    (recovered,) = await real_lua.update([_LUA_ALERT], lease_end, "w3")
+    assert recovered["token"] == "w3"
+    assert await real_lua.ack("active", "retry", lease_end) == 0
+    assert await real_lua.ack("active", "w3", lease_end) == 1
+
+
+@pytest.mark.asyncio
+async def test_real_lua_concurrent_workers_claim_a_transition_once(
+    real_lua: _RealLua,
+) -> None:
+    batches = await asyncio.gather(
+        real_lua.update([_LUA_ALERT], 32_000, "worker-a", client=real_lua.first),
+        real_lua.update([_LUA_ALERT], 32_000, "worker-b", client=real_lua.second),
+    )
+
+    assert sum(len(batch) for batch in batches) == 1
+
+
+@pytest.mark.asyncio
+async def test_real_lua_keeps_an_in_flight_activation_until_its_lease_ends(
+    real_lua: _RealLua,
+) -> None:
+    await real_lua.update([_LUA_ALERT], 33_000, "in-flight")
+
+    # The breach clears while the claim is being sent: nothing to recover yet,
+    # and the claim survives so its ACK still lands.
+    assert await real_lua.update([], 33_010, "next") == []
+    assert (await real_lua.state())["active"][_LUA_CODE]["pending_state"] == "active"
+
+    lease_end = 33_000 + slo_tasks.SLO_ALERT_DELIVERY_LEASE_SECONDS
+    assert await real_lua.update([], lease_end, "after") == []
+    assert (await real_lua.state())["active"] == {}
+
+
+@pytest.mark.asyncio
+async def test_real_lua_dispatch_lock_is_exclusive_and_released(
+    real_lua: _RealLua, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await real_lua.first.set(real_lua.lock_key, "other-worker")
+
+    await slo_tasks._update_slo_alerts([_LUA_ALERT], now=34_000)
+    assert await real_lua.first.get(real_lua.state_key) is None
+    # Only the owner's token releases the lock.
+    assert (
+        await real_lua.first.eval(
+            slo_tasks._RELEASE_SLO_ALERT_LOCK, 1, real_lua.lock_key, "not-mine"
+        )
+        == 0
+    )
+    assert await real_lua.first.get(real_lua.lock_key) == "other-worker"
+    await real_lua.first.delete(real_lua.lock_key)
+
+    await slo_tasks._update_slo_alerts([_LUA_ALERT], now=34_000)
+    assert (await real_lua.state())["active"][_LUA_CODE]["reported"] is True
+    assert await real_lua.first.get(real_lua.lock_key) is None
+
+    # A failing capture releases the claim and the lock on the real scripts.
+    await real_lua.first.delete(real_lua.state_key)
+
+    def broken_capture(_transition: dict[str, Any]) -> bool:
+        raise RuntimeError("capture failed")
+
+    monkeypatch.setattr(slo_tasks, "_capture_slo_transition", broken_capture)
+    with pytest.raises(RuntimeError, match="capture failed"):
+        await slo_tasks._update_slo_alerts([_LUA_ALERT], now=35_000)
+    pending = (await real_lua.state())["active"][_LUA_CODE]
+    assert pending["reported"] is False
+    assert "pending_token" not in pending
+    assert pending["next_attempt_at"] == (
+        35_000 + slo_tasks.SLO_ALERT_CAPTURE_RETRY_COOLDOWN_SECONDS
+    )
+    assert await real_lua.first.get(real_lua.lock_key) is None
 
 
 def test_slo_monitor_uses_shared_global_metrics_and_thresholds(
