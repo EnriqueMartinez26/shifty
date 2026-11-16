@@ -549,7 +549,7 @@ The caps (3 per container, 6 in total per hour) and the rule that `db` and `rabb
 | fingerprint | `ops-slo`, code, `active` | `ops-slo`, code, `resolved` |
 | context `slo` | `code`, `severity`, `state`, `value`, `threshold` (integers) | same |
 
-Each code and state is its own Sentry issue, so a recovery never regresses the issue the email rule watches. The codes and their severity are stable; renaming or adding one means changing `_SLO_ALERTS` in `backend/modules/ops/router.py`, this table and the rule below together (`test_runbook_lists_exactly_the_slo_alert_codes` fails otherwise):
+Each code and state is its own Sentry issue, so a recovery never regresses the issue the email rule watches. **Resolve SLO issues, never archive or ignore them "forever".** Every activation of a code lands in the same issue (fingerprint `ops-slo`, code, `active`); in Sentry an archived/ignored issue does not trigger alerts for new events, so archiving it would silently stop that code's email for good. Resolving is safe: the next activation regresses the issue and the rule fires again. This is the expected Sentry issue-state behavior, not verified here: confirm it in the UI when the rule is created. The codes and their severity are stable; renaming or adding one means changing `_SLO_ALERTS` in `backend/modules/ops/router.py`, this table and the rule below together (`test_runbook_lists_exactly_the_slo_alert_codes` fails otherwise):
 
 <!-- slo-alert-codes:start -->
 | `slo.alert_code` | `slo.severity` | Metric over its threshold |
