@@ -248,10 +248,12 @@ async def test_reusos_concurrentes_de_tokens_distintos_consumen_toda_la_historia
     )
     assert all(codigo == 401 for codigo in codigos), codigos
     assert await _vivas(owner_engine, email) == set()
-    assert sorted(await _motivos(owner_engine, familia, viejo_b)) == [
+    motivos = await _motivos(owner_engine, familia, viejo_b)
+    assert len(motivos) == 2
+    assert {motivo for motivo in motivos if motivo is not None} == {
         "reuse_detected",
         "superseded",
-    ]
+    }
 
     login = await client.post(
         "/auth/login", json={"email": email, "password": PASSWORD}
@@ -261,7 +263,7 @@ async def test_reusos_concurrentes_de_tokens_distintos_consumen_toda_la_historia
     assert posterior and posterior not in {familia, viejo_b, vigente_c, otro}
 
     replays = await asyncio.gather(_refresh(client, familia), _refresh(client, viejo_b))
-    assert replays == [401, 401], replays
+    assert tuple(replays) == (401, 401), replays
     vivas = await _vivas(owner_engine, email)
     assert vivas == {hash_token(posterior)}, vivas
     assert await _refresh(client, posterior) == 200

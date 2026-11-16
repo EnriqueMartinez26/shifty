@@ -60,7 +60,7 @@ class FakeDb:
     def __init__(self, *execute_results: ScalarResult) -> None:
         self.execute_results = list(execute_results)
         self.added: list[Any] = []
-        self.statements: list[object] = []
+        self.statements: list[Any] = []
         self.execute_with_no_autoflush: list[bool] = []
         self.no_autoflush_depth = 0
         self.commit_count = 0
