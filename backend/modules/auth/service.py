@@ -64,6 +64,7 @@ __all__ = [
     "REVOKED_BY_PASSWORD",
     "REVOKED_BY_ROTATION",
     "REVOKED_BY_REUSE",
+    "REVOKED_BY_SUPERSEDED",
     "RevokedSessionsResult",
     "SessionClientContext",
     "access_token_for_user",
@@ -162,6 +163,7 @@ REVOKED_BY_ADMIN = "admin"
 REVOKED_BY_PASSWORD = "password"
 REVOKED_BY_OWNER = "owner"
 REVOKED_BY_REUSE = "reuse_detected"
+REVOKED_BY_SUPERSEDED = "superseded"
 
 # "Redis no esta" es el criterio unico de core.redis (AUD2-B7-14); ValueError
 # suma el contador ilegible, que se trata igual que no poder leerlo.
@@ -300,30 +302,103 @@ async def revoke_sessions_for_user(
     conservar la sesion desde la que el propio usuario hizo el cambio.
     NO commitea: corre dentro de la transaccion del flujo que la llama.
     """
-    condiciones: list[ColumnElement[bool]] = [AuthSession.user_id == user_id]
-    if preserve_refresh_token:
-        condiciones.append(
-            AuthSession.refresh_token_hash != hash_token(preserve_refresh_token)
+    # The User row is the per-account mutex. Every code path that mutates
+    # sessions takes this lock first, so a login or refresh cannot publish a
+    # new session while this revocation is in flight.
+    locked_user_ids = await _lock_user_rows(db, [user_id])
+    if not locked_user_ids:
+        return 0
+    return await _revoke_sessions(
+        db,
+        user_ids=locked_user_ids,
+        revoked_reason=revoked_reason,
+        preserve_refresh_token=preserve_refresh_token,
+    )
+
+
+async def _lock_user_rows(db: AsyncSession, user_ids: list[str]) -> list[str]:
+    """Lock existing User rows in a stable order, without flushing caller edits."""
+    ids = sorted(set(user_ids))
+    if not ids:
+        return []
+    # Several callers have already changed User attributes in this transaction.
+    # Suppress autoflush so the explicit row lock is acquired before those
+    # changes are written and before any AuthSession row is touched.
+    with db.no_autoflush:
+        result = await db.execute(
+            select(User.id).where(User.id.in_(ids)).order_by(User.id).with_for_update()
         )
-    return await _revoke_sessions(db, *condiciones, revoked_reason=revoked_reason)
+    return list(result.scalars().all())
+
+
+async def _lock_users_matching(
+    db: AsyncSession, *conditions: ColumnElement[bool]
+) -> list[str]:
+    """Lock a set of users in deterministic ID order for broad revocations."""
+    with db.no_autoflush:
+        result = await db.execute(
+            select(User.id).where(*conditions).order_by(User.id).with_for_update()
+        )
+    return list(result.scalars().all())
+
+
+async def _load_locked_user(db: AsyncSession, user_id: str) -> User | None:
+    """Refresh a User ORM object after its row lock has been acquired."""
+    if not await _lock_user_rows(db, [user_id]):
+        return None
+    result = await db.execute(
+        select(User).where(User.id == user_id).execution_options(populate_existing=True)
+    )
+    return result.scalar_one_or_none()
+
+
+async def _supersede_rotated_history(db: AsyncSession, user_ids: list[str]) -> None:
+    """Disarm prior rotated tokens while the caller holds their User locks."""
+    if not user_ids:
+        return
+    await db.execute(
+        update(AuthSession)
+        .where(
+            AuthSession.user_id.in_(user_ids),
+            AuthSession.revoked_reason == REVOKED_BY_ROTATION,
+        )
+        .values(revoked_reason=REVOKED_BY_SUPERSEDED)
+    )
 
 
 async def _revoke_sessions(
     db: AsyncSession,
-    *conditions: ColumnElement[bool],
+    *,
+    user_ids: list[str],
     revoked_reason: str,
+    preserve_refresh_token: str | None = None,
+    conditions: tuple[ColumnElement[bool], ...] = (),
 ) -> int:
-    """Revoca con un solo UPDATE las sesiones vivas que cumplen ``conditions``.
+    """Supersede historial rotado y revoca las sesiones vivas del alcance.
 
     Las cuatro revocaciones hacian SELECT de todas las sesiones vivas, asignaban
     ``revoked_at`` en un ``for`` y contaban a mano; ``revoke_all_sessions`` (el
     boton de panico) hidrataba todas las de todas las tiendas y emitia un UPDATE
-    por fila (B3-10, 2026-09-17). Es el mismo patron que ya usa la rotacion de
-    ``refresh_session``. NO commitea: corre en la transaccion del llamador.
+    por fila (B3-10, 2026-09-17). Ejecuta un UPDATE para desarmar el historial
+    rotado y otro para revocar las sesiones vivas. NO commitea: corre en la
+    transaccion del llamador.
     """
+    # Rotated rows are security evidence, but cease to be replay triggers once
+    # a later security event has invalidated their session family.
+    await _supersede_rotated_history(db, user_ids)
+
+    active_conditions = list(conditions)
+    if preserve_refresh_token:
+        active_conditions.append(
+            AuthSession.refresh_token_hash != hash_token(preserve_refresh_token)
+        )
     result = await db.execute(
         update(AuthSession)
-        .where(AuthSession.revoked_at.is_(None), *conditions)
+        .where(
+            AuthSession.user_id.in_(user_ids),
+            AuthSession.revoked_at.is_(None),
+            *active_conditions,
+        )
         .values(revoked_at=datetime.now(timezone.utc), revoked_reason=revoked_reason)
     )
     return int(getattr(result, "rowcount", 0) or 0)
@@ -388,6 +463,29 @@ async def login_user(
             logger.warning("login_failed", email_fp=email_key, ip=context.ip_address)
             raise AuthenticationException(message="Credenciales incorrectas")
 
+        # Serialize issuance with password/status revocations, then re-read the
+        # credentials after waiting. A login checked against the old password
+        # must not issue a session after a reset or access change committed.
+        user = await _load_locked_user(db, user.id)
+        password_still_valid = bool(
+            user
+            and user.hashed_password
+            and (
+                user.hashed_password == hashed
+                or await verify_password_async(password, user.hashed_password)
+            )
+        )
+        if (
+            not user
+            or not user.is_active
+            or not user.hashed_password
+            or canonical_role(user) == ROLE_CLIENT
+            or not password_still_valid
+        ):
+            await _register_login_failure(email_key)
+            logger.warning("login_failed", email_fp=email_key, ip=context.ip_address)
+            raise AuthenticationException(message="Credenciales incorrectas")
+
         # La sesion se crea ANTES de emitir el token: el access token queda
         # atado a su id (claim sid) y por lo tanto es revocable.
         session = _new_auth_session(
@@ -447,6 +545,12 @@ async def _handle_refresh_reuse(
     Un token revocado por logout, admin o cambio de clave ya esta muerto; su
     repeticion no debe cerrar sesiones creadas despues de esa revocacion.
     """
+    expires_at = session.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if expires_at <= datetime.now(timezone.utc):
+        raise AuthenticationException(message="Sesion expirada")
+
     recent_rotation, revoked_reason = await _revocation_was_recent_rotation(
         db, session.id
     )
@@ -476,9 +580,10 @@ async def _handle_refresh_reuse(
         )
         raise AuthenticationException(message="Sesion expirada")
 
-    # Reclama la cascada una sola vez por token. El UPDATE condicional se
-    # serializa en Postgres: solo una repeticion puede cambiar `rotated` a
-    # `reuse_detected`; las concurrentes quedan como detecciones sin cascada.
+    # Marca primero al token que disparo el incidente. El lock de User que toma
+    # refresh_session serializa la cascada con toda emision/revocacion de esa
+    # cuenta; las demas filas rotadas pasan a `superseded` y ya no pueden
+    # disparar otra cascada mas adelante.
     claim = await db.execute(
         update(AuthSession)
         .where(
@@ -491,8 +596,10 @@ async def _handle_refresh_reuse(
     cascade_claimed = (getattr(claim, "rowcount", 0) or 0) == 1
     revoked = 0
     if cascade_claimed:
-        revoked = await revoke_sessions_for_user(
-            db, session.user_id, revoked_reason=REVOKED_BY_REUSE
+        revoked = await _revoke_sessions(
+            db,
+            user_ids=[session.user_id],
+            revoked_reason=REVOKED_BY_REUSE,
         )
     await db.commit()
     logger.warning(
@@ -512,19 +619,28 @@ async def refresh_session(
         raise AuthenticationException(message="Sesion expirada")
 
     async with tenant_bypass(db):
-        result = await db.execute(
-            select(AuthSession).where(
+        # The token hash is only used to discover the mutex owner. Re-read all
+        # token state after waiting for that User row, since another refresh or
+        # security revocation may have won while this request was queued.
+        user_id_result = await db.execute(
+            select(AuthSession.user_id).where(
                 AuthSession.refresh_token_hash == hash_token(refresh_token)
             )
         )
-        session = result.scalar_one_or_none()
+        user_id = user_id_result.scalar_one_or_none()
+        if user_id is None:
+            raise AuthenticationException(message="Sesion expirada")
 
-        if session and session.revoked_at is not None:
-            # Reuso de un refresh ya revocado: la señal clasica de robo (el
-            # atacante y la victima tienen el mismo token; el segundo en llegar
-            # cae aca), salvo la rotacion reciente (D-20260928-01).
-            await _handle_refresh_reuse(db, session, context.ip_address)
+        user = await _load_locked_user(db, user_id)
+        if not user:
+            raise AuthenticationException(message="Sesion expirada")
 
+        session_result = await db.execute(
+            select(AuthSession)
+            .where(AuthSession.refresh_token_hash == hash_token(refresh_token))
+            .execution_options(populate_existing=True)
+        )
+        session = session_result.scalar_one_or_none()
         expires_at = session.expires_at if session else None
         if expires_at is not None and expires_at.tzinfo is None:
             # SQLite (tests) devuelve naive; Postgres aware.
@@ -536,11 +652,12 @@ async def refresh_session(
         ):
             raise AuthenticationException(message="Sesion expirada")
 
-        user_result = await db.execute(
-            select(User).where(User.id == session.user_id, User.is_active.is_(True))
-        )
-        user = user_result.scalar_one_or_none()
-        if not user:
+        if session.revoked_at is not None:
+            # La expirada ya se rechazo arriba: su repeticion nunca puede
+            # iniciar un efecto lateral de replay/cascade.
+            await _handle_refresh_reuse(db, session, context.ip_address)
+
+        if not user.is_active:
             raise AuthenticationException(message="Sesion expirada")
 
         # Rotacion ATOMICA: revocar la sesion condicionado a que siga viva. Si
@@ -575,13 +692,22 @@ async def logout_session(refresh_token: str | None, db: AsyncSession) -> None:
         return
 
     async with tenant_bypass(db):
-        result = await db.execute(
-            select(AuthSession).where(
+        user_id_result = await db.execute(
+            select(AuthSession.user_id).where(
                 AuthSession.refresh_token_hash == hash_token(refresh_token)
             )
         )
-        session = result.scalar_one_or_none()
+        user_id = user_id_result.scalar_one_or_none()
+        if user_id is None or not await _lock_user_rows(db, [user_id]):
+            return
+        session_result = await db.execute(
+            select(AuthSession)
+            .where(AuthSession.refresh_token_hash == hash_token(refresh_token))
+            .execution_options(populate_existing=True)
+        )
+        session = session_result.scalar_one_or_none()
         if session and session.revoked_at is None:
+            await _supersede_rotated_history(db, [user_id])
             session.revoked_at = datetime.now(timezone.utc)
             session.revoked_reason = REVOKED_BY_LOGOUT
             await db.commit()
@@ -601,20 +727,20 @@ async def revoke_store_sessions(
         )
 
     async with tenant_bypass(db):
-        condiciones: list[ColumnElement[bool]] = [
-            AuthSession.store_id == current_user.store_id
+        condiciones_usuario: list[ColumnElement[bool]] = [
+            User.store_id == current_user.store_id
         ]
         if not current_user.is_global_admin:
             # La cuenta del superadmin no existe para un admin de tienda
             # (S-15): su sesion lleva el store_id de su tienda real, asi que
             # el boton de panico de la tienda la alcanzaba (AUD2-B3-02).
-            condiciones.append(
-                AuthSession.user_id.not_in(
-                    select(User.id).where(User.is_global_admin.is_(True))
-                )
-            )
+            condiciones_usuario.append(User.is_global_admin.is_(False))
+        user_ids = await _lock_users_matching(db, *condiciones_usuario)
         affected = await _revoke_sessions(
-            db, *condiciones, revoked_reason=REVOKED_BY_ADMIN
+            db,
+            user_ids=user_ids,
+            revoked_reason=REVOKED_BY_ADMIN,
+            conditions=(AuthSession.store_id == current_user.store_id,),
         )
         await db.commit()
         return {"revoked_sessions": affected}
@@ -634,17 +760,18 @@ async def revoke_user_sessions(
         )
 
     async with tenant_bypass(db):
-        consulta = select(User).where(
-            User.id == user_public_id, User.store_id == current_user.store_id
-        )
+        condiciones_usuario: list[ColumnElement[bool]] = [
+            User.id == user_public_id,
+            User.store_id == current_user.store_id,
+        ]
         if not current_user.is_global_admin:
             # La cuenta del superadmin no existe para un admin de tienda (S-15).
-            consulta = consulta.where(User.is_global_admin.is_(False))
-        target = (await db.execute(consulta)).scalar_one_or_none()
-        if not target:
+            condiciones_usuario.append(User.is_global_admin.is_(False))
+        user_ids = await _lock_users_matching(db, *condiciones_usuario)
+        if not user_ids:
             raise UserNotFoundException(identifier=user_public_id)
         affected = await _revoke_sessions(
-            db, AuthSession.user_id == target.id, revoked_reason=REVOKED_BY_ADMIN
+            db, user_ids=user_ids, revoked_reason=REVOKED_BY_ADMIN
         )
         await db.commit()
         return {"revoked_sessions": affected}
@@ -657,7 +784,10 @@ async def revoke_all_sessions(
         raise PermissionDeniedException(action="Operacion exclusiva para superadmin")
 
     async with tenant_bypass(db):
-        affected = await _revoke_sessions(db, revoked_reason=REVOKED_BY_ADMIN)
+        user_ids = await _lock_users_matching(db)
+        affected = await _revoke_sessions(
+            db, user_ids=user_ids, revoked_reason=REVOKED_BY_ADMIN
+        )
         await db.commit()
         return {"revoked_sessions": affected}
 
@@ -688,16 +818,18 @@ async def list_user_sessions(
 
 async def revoke_own_session(session_id: str, user: User, db: AsyncSession) -> None:
     """Cierra UNA sesion propia (ej.: 'ese telefono que perdi')."""
+    if not await _lock_user_rows(db, [user.id]):
+        raise ResourceNotFoundException(resource="Sesión", identifier=session_id)
     result = await db.execute(
-        select(AuthSession).where(
-            AuthSession.id == session_id,
-            AuthSession.user_id == user.id,
-        )
+        select(AuthSession)
+        .where(AuthSession.id == session_id, AuthSession.user_id == user.id)
+        .execution_options(populate_existing=True)
     )
     session = result.scalar_one_or_none()
     if session is None:
         raise ResourceNotFoundException(resource="Sesión", identifier=session_id)
     if session.revoked_at is None:
+        await _supersede_rotated_history(db, [user.id])
         session.revoked_at = datetime.now(timezone.utc)
         session.revoked_reason = REVOKED_BY_OWNER
         await db.commit()
@@ -758,6 +890,22 @@ async def reset_password(
         if not user:
             raise InvalidTokenException()
 
+        # Resets sharing a token serialize on User. Re-read after obtaining the
+        # lock so a concurrently consumed or invalidated reset cannot win twice.
+        user = await _load_locked_user(db, user.id)
+        now = datetime.now(timezone.utc)
+        reset_expires_at = user.password_reset_expires_at if user else None
+        if reset_expires_at is not None and reset_expires_at.tzinfo is None:
+            reset_expires_at = reset_expires_at.replace(tzinfo=timezone.utc)
+        if (
+            not user
+            or not user.is_active
+            or user.password_reset_token_hash != token_hash
+            or reset_expires_at is None
+            or reset_expires_at < now
+        ):
+            raise InvalidTokenException()
+
         user.hashed_password = await hash_password_async(data.new_password)
         user.password_reset_token_hash = None
         user.password_reset_expires_at = None
@@ -779,28 +927,33 @@ async def change_password(
     *,
     preserve_refresh_token: str | None = None,
 ) -> MessageResult:
-    if not await verify_password_async(data.current_password, user.hashed_password):
+    locked_user = await _load_locked_user(db, user.id)
+    if not locked_user or not locked_user.is_active:
+        raise AuthenticationException(message="Sesion expirada")
+    if not await verify_password_async(
+        data.current_password, locked_user.hashed_password
+    ):
         raise AppException(
             message="La contraseña actual es incorrecta",
             http_status=status.HTTP_400_BAD_REQUEST,
             error_code="INCORRECT_PASSWORD",
         )
-    if await verify_password_async(data.new_password, user.hashed_password):
+    if await verify_password_async(data.new_password, locked_user.hashed_password):
         raise AppException(
             message="La nueva contraseña no puede ser igual a la actual",
             http_status=status.HTTP_400_BAD_REQUEST,
             error_code="PASSWORD_UNCHANGED",
         )
 
-    user.hashed_password = await hash_password_async(data.new_password)
+    locked_user.hashed_password = await hash_password_async(data.new_password)
     # Un token de reset pendiente (quiza disparado por un atacante) no debe
     # sobrevivir al cambio de contraseña.
-    user.password_reset_token_hash = None
-    user.password_reset_expires_at = None
+    locked_user.password_reset_token_hash = None
+    locked_user.password_reset_expires_at = None
     # Cerrar las demas sesiones; la actual (cookie de refresh) se conserva.
     await revoke_sessions_for_user(
         db,
-        user.id,
+        locked_user.id,
         preserve_refresh_token=preserve_refresh_token,
         revoked_reason=REVOKED_BY_PASSWORD,
     )

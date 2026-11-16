@@ -12,10 +12,12 @@ Regla 15 de CLAUDE.md: la revocacion de la familia entera se conserva; lo que
 cambia es que vive en un solo lugar.
 
 2026-09-28, D-20260928-01; revisada por D-20261113-01. Reusar un refresh
-revocado por rotacion durante la gracia da 401 sin tocar las demas sesiones;
-fuera de la gracia conserva la deteccion de reuso y revoca las sesiones vivas.
-Un token revocado por logout, admin o cambio/reset de clave da 401 sin cerrar
-sesiones nuevas. La carrera concurrente real se prueba en
+rotado durante la gracia da 401 sin tocar las demas sesiones; fuera de la
+ventana, el primer replay no expirado consume el historial rotado y revoca las
+sesiones vivas una sola vez. Logout, revocacion propia o administrativa y
+cambio/reset de clave invalidan el historial anterior; el cambio de clave
+preserva el refresh actual. Un refresh expirado da 401 sin cascada, y un 401
+no borra la cookie. Las carreras reales se prueban en
 ``tests/postgres/test_pg_rafaga_refresh.py``.
 """
 
@@ -34,6 +36,7 @@ from modules.auth.service import (
     REFRESH_REUSE_GRACE_SECONDS,
     REVOKED_BY_ADMIN,
     REVOKED_BY_LOGOUT,
+    REVOKED_BY_OWNER,
     REVOKED_BY_PASSWORD,
     REVOKED_BY_REUSE,
     hash_token,
@@ -73,6 +76,7 @@ def test_el_manejo_de_reuso_esta_escrito_una_sola_vez() -> None:
 
 async def _otro_dispositivo(client: AsyncClient, email: str) -> str:
     """Segundo login del mismo usuario: una sesion independiente de la familia."""
+    client.cookies.clear()
     login = await client.post(
         "/auth/login", json={"email": email, "password": "Password123!"}
     )
@@ -80,6 +84,17 @@ async def _otro_dispositivo(client: AsyncClient, email: str) -> str:
     otro = client.cookies.get(REFRESH_COOKIE)
     assert otro
     return otro
+
+
+async def _rotar(client: AsyncClient, refresh: str) -> tuple[str, str]:
+    """Rota un refresh explícito y devuelve el refresh y access nuevos."""
+    _usar(client, refresh)
+    respuesta = await client.post("/auth/refresh")
+    assert respuesta.status_code == 200, respuesta.text
+    nuevo = respuesta.cookies.get(REFRESH_COOKIE)
+    assert nuevo and nuevo != refresh
+    client.cookies.clear()
+    return nuevo, str(respuesta.json()["access_token"])
 
 
 def _usar(client: AsyncClient, refresh: str) -> None:
@@ -169,26 +184,28 @@ async def test_repetir_reuso_no_revoca_un_login_posterior(
 ) -> None:
     email = "reuso-repetido@test.com"
     await register_and_login(client, slug="reuso-repetido", email=email)
-    viejo = client.cookies.get(REFRESH_COOKIE)
-    assert viejo
+    viejo_a = client.cookies.get(REFRESH_COOKIE)
+    assert viejo_a
+    viejo_b, _ = await _rotar(client, viejo_a)
+    vigente_c, _ = await _rotar(client, viejo_b)
+    assert vigente_c not in {viejo_a, viejo_b}
+    await _envejecer_revocacion(test_session, viejo_a)
+    await _envejecer_revocacion(test_session, viejo_b)
 
-    rotacion = await client.post("/auth/refresh")
-    assert rotacion.status_code == 200, rotacion.text
-    await _envejecer_revocacion(test_session, viejo)
-
-    _usar(client, viejo)
+    _usar(client, viejo_a)
     primer_reuso = await client.post("/auth/refresh")
     assert primer_reuso.status_code == 401, primer_reuso.text
-    assert await _motivo_revocacion(test_session, viejo) == REVOKED_BY_REUSE
+    assert await _motivo_revocacion(test_session, viejo_a) == REVOKED_BY_REUSE
+    assert await _motivo_revocacion(test_session, viejo_b) != "rotated"
     assert await _vivas(test_session) == 0
 
     client.cookies.clear()
     posterior = await _otro_dispositivo(client, email)
-    _usar(client, viejo)
-    segundo_reuso = await client.post("/auth/refresh")
-    assert segundo_reuso.status_code == 401, segundo_reuso.text
-    assert "set-cookie" not in segundo_reuso.headers
-    assert await _motivo_revocacion(test_session, viejo) == REVOKED_BY_REUSE
+    for refresh in (viejo_a, viejo_b):
+        _usar(client, refresh)
+        segundo_reuso = await client.post("/auth/refresh")
+        assert segundo_reuso.status_code == 401, segundo_reuso.text
+        assert "set-cookie" not in segundo_reuso.headers
 
     _usar(client, posterior)
     assert (await client.post("/auth/refresh")).status_code == 200
@@ -273,8 +290,9 @@ async def test_reusar_un_refresh_cerrado_por_logout_no_revoca_sesiones_nuevas(
 ) -> None:
     email = "reuso-logout@test.com"
     await register_and_login(client, slug="reuso-logout", email=email)
-    cerrado = client.cookies.get(REFRESH_COOKIE)
-    assert cerrado
+    historico = client.cookies.get(REFRESH_COOKIE)
+    assert historico
+    cerrado, _ = await _rotar(client, historico)
     otro = await _otro_dispositivo(client, email)
 
     _usar(client, cerrado)
@@ -285,6 +303,7 @@ async def test_reusar_un_refresh_cerrado_por_logout_no_revoca_sesiones_nuevas(
     # Una sesión posterior puede existir después del logout anterior.
     posterior = await _otro_dispositivo(client, email)
 
+    await _envejecer_revocacion(test_session, cerrado)
     _usar(client, cerrado)
     reuso = await client.post("/auth/refresh")
     assert reuso.status_code == 401, reuso.text
@@ -302,23 +321,86 @@ async def test_reusar_un_refresh_cerrado_por_logout_no_revoca_sesiones_nuevas(
 
 
 @pytest.mark.asyncio
+async def test_replay_de_rotacion_anterior_a_logout_no_revoca_login_posterior(
+    client: AsyncClient, test_session: AsyncSession
+) -> None:
+    email = "reuso-logout-historico@test.com"
+    await register_and_login(client, slug="reuso-logout-historico", email=email)
+    viejo_a = client.cookies.get(REFRESH_COOKIE)
+    assert viejo_a
+    refresh_b, _ = await _rotar(client, viejo_a)
+
+    _usar(client, refresh_b)
+    salida = await client.post("/auth/logout")
+    assert salida.status_code == 204, salida.text
+    assert await _motivo_revocacion(test_session, refresh_b) == REVOKED_BY_LOGOUT
+
+    login_d = await _otro_dispositivo(client, email)
+    await _envejecer_revocacion(test_session, viejo_a)
+    _usar(client, viejo_a)
+    replay = await client.post("/auth/refresh")
+    assert replay.status_code == 401, replay.text
+    assert "set-cookie" not in replay.headers
+
+    _usar(client, login_d)
+    assert (await client.post("/auth/refresh")).status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_replay_de_rotacion_anterior_a_revocacion_propia_no_revoca_login_posterior(
+    client: AsyncClient, test_session: AsyncSession
+) -> None:
+    email = "reuso-revocacion-propia@test.com"
+    await register_and_login(client, slug="reuso-revocacion-propia", email=email)
+    viejo_a = client.cookies.get(REFRESH_COOKIE)
+    assert viejo_a
+    refresh_b, access_b = await _rotar(client, viejo_a)
+    sesion_b = (
+        await test_session.execute(
+            select(AuthSession.id).where(
+                AuthSession.refresh_token_hash == hash_token(refresh_b)
+            )
+        )
+    ).scalar_one()
+
+    salida = await client.delete(
+        f"/auth/sessions/{sesion_b}", headers=auth_headers(access_b)
+    )
+    assert salida.status_code == 204, salida.text
+    assert await _motivo_revocacion(test_session, refresh_b) == REVOKED_BY_OWNER
+
+    login_d = await _otro_dispositivo(client, email)
+    await _envejecer_revocacion(test_session, viejo_a)
+    _usar(client, viejo_a)
+    replay = await client.post("/auth/refresh")
+    assert replay.status_code == 401, replay.text
+    assert "set-cookie" not in replay.headers
+
+    _usar(client, login_d)
+    assert (await client.post("/auth/refresh")).status_code == 200
+
+
+@pytest.mark.asyncio
 async def test_reusar_un_refresh_revocado_por_admin_no_revoca_login_posterior(
     client: AsyncClient, test_session: AsyncSession
 ) -> None:
     email = "reuso-admin@test.com"
-    _, token = await register_and_login(client, slug="reuso-admin", email=email)
-    revocado = client.cookies.get(REFRESH_COOKIE)
-    assert revocado
-    await _otro_dispositivo(client, email)
-
-    _usar(client, revocado)
-    salida = await client.post(
-        "/auth/sessions/revoke-store", headers=auth_headers(token)
+    await register_and_login(client, slug="reuso-admin", email=email)
+    historico = client.cookies.get(REFRESH_COOKIE)
+    assert historico
+    revocado, _ = await _rotar(client, historico)
+    # Simula el estado persistido por la revocación administrativa. La ruta
+    # administrativa tiene cobertura propia; aquí interesa el replay después
+    # de que quedó registrado el motivo no relacionado con rotación.
+    await test_session.execute(
+        update(AuthSession)
+        .where(AuthSession.refresh_token_hash == hash_token(revocado))
+        .values(revoked_at=datetime.now(timezone.utc), revoked_reason=REVOKED_BY_ADMIN)
     )
-    assert salida.status_code == 200, salida.text
-    client.cookies.clear()
+    await test_session.commit()
     posterior = await _otro_dispositivo(client, email)
 
+    await _envejecer_revocacion(test_session, revocado)
     _usar(client, revocado)
     reuso = await client.post("/auth/refresh")
     assert reuso.status_code == 401, reuso.text
@@ -330,13 +412,41 @@ async def test_reusar_un_refresh_revocado_por_admin_no_revoca_login_posterior(
 
 
 @pytest.mark.asyncio
+async def test_replay_de_rotacion_anterior_a_revocacion_admin_no_revoca_login_posterior(
+    client: AsyncClient, test_session: AsyncSession
+) -> None:
+    email = "reuso-admin-historico@test.com"
+    await register_and_login(client, slug="reuso-admin-historico", email=email)
+    viejo_a = client.cookies.get(REFRESH_COOKIE)
+    assert viejo_a
+    refresh_b, access_b = await _rotar(client, viejo_a)
+
+    revocacion = await client.post(
+        "/auth/sessions/revoke-store", headers=auth_headers(access_b)
+    )
+    assert revocacion.status_code == 200, revocacion.text
+    assert await _motivo_revocacion(test_session, refresh_b) == REVOKED_BY_ADMIN
+
+    login_d = await _otro_dispositivo(client, email)
+    await _envejecer_revocacion(test_session, viejo_a)
+    _usar(client, viejo_a)
+    replay = await client.post("/auth/refresh")
+    assert replay.status_code == 401, replay.text
+    assert "set-cookie" not in replay.headers
+
+    _usar(client, login_d)
+    assert (await client.post("/auth/refresh")).status_code == 200
+
+
+@pytest.mark.asyncio
 async def test_reusar_un_refresh_revocado_por_cambio_de_clave_no_cierra_sesiones_nuevas(
     client: AsyncClient, test_session: AsyncSession
 ) -> None:
     email = "reuso-password@test.com"
-    _, token_a = await register_and_login(client, slug="reuso-password", email=email)
-    refresh_a = client.cookies.get(REFRESH_COOKIE)
-    assert refresh_a
+    await register_and_login(client, slug="reuso-password", email=email)
+    historico = client.cookies.get(REFRESH_COOKIE)
+    assert historico
+    refresh_a, _ = await _rotar(client, historico)
 
     login_b = await client.post(
         "/auth/login", json={"email": email, "password": "Password123!"}
@@ -355,6 +465,7 @@ async def test_reusar_un_refresh_revocado_por_cambio_de_clave_no_cierra_sesiones
     )
     assert cambio.status_code == 200, cambio.text
     assert await _motivo_revocacion(test_session, refresh_a) == REVOKED_BY_PASSWORD
+    assert await _motivo_revocacion(test_session, refresh_b) is None
 
     login_c = await client.post(
         "/auth/login", json={"email": email, "password": "Password456!"}
@@ -363,10 +474,18 @@ async def test_reusar_un_refresh_revocado_por_cambio_de_clave_no_cierra_sesiones
     refresh_c = client.cookies.get(REFRESH_COOKIE)
     assert refresh_c and refresh_c not in {refresh_a, refresh_b}
 
+    await _envejecer_revocacion(test_session, refresh_a)
     _usar(client, refresh_a)
     reuso = await client.post("/auth/refresh")
     assert reuso.status_code == 401, reuso.text
     assert "set-cookie" not in reuso.headers
+    assert await _motivo_revocacion(test_session, refresh_a) == REVOKED_BY_PASSWORD
+
+    await _envejecer_revocacion(test_session, historico)
+    _usar(client, historico)
+    replay_ancestro = await client.post("/auth/refresh")
+    assert replay_ancestro.status_code == 401, replay_ancestro.text
+    assert "set-cookie" not in replay_ancestro.headers
 
     # La sesión preservada por el cambio y el login posterior siguen activos.
     for refresh in (refresh_b, refresh_c):
@@ -380,8 +499,9 @@ async def test_reusar_un_refresh_revocado_por_reset_no_cierra_login_posterior(
 ) -> None:
     email = "reuso-reset@test.com"
     await register_and_login(client, slug="reuso-reset", email=email)
-    revocado = client.cookies.get(REFRESH_COOKIE)
-    assert revocado
+    historico = client.cookies.get(REFRESH_COOKIE)
+    assert historico
+    revocado, _ = await _rotar(client, historico)
 
     reset_token = "reset-reuso-sesiones-1234567890"
     usuario = (
@@ -407,11 +527,53 @@ async def test_reusar_un_refresh_revocado_por_reset_no_cierra_login_posterior(
     posterior = client.cookies.get(REFRESH_COOKIE)
     assert posterior and posterior != revocado
 
+    await _envejecer_revocacion(test_session, revocado)
     _usar(client, revocado)
     reuso = await client.post("/auth/refresh")
     assert reuso.status_code == 401, reuso.text
+    assert "set-cookie" not in reuso.headers
+    assert await _motivo_revocacion(test_session, revocado) == REVOKED_BY_PASSWORD
+
+    await _envejecer_revocacion(test_session, historico)
+    _usar(client, historico)
+    replay_ancestro = await client.post("/auth/refresh")
+    assert replay_ancestro.status_code == 401, replay_ancestro.text
+    assert "set-cookie" not in replay_ancestro.headers
+
     _usar(client, posterior)
     assert (await client.post("/auth/refresh")).status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_reusar_refresh_rotado_expirado_no_revoca_sesiones_vivas(
+    client: AsyncClient, test_session: AsyncSession
+) -> None:
+    email = "reuso-expirado@test.com"
+    await register_and_login(client, slug="reuso-expirado", email=email)
+    expirado = client.cookies.get(REFRESH_COOKIE)
+    assert expirado
+    vigente, _ = await _rotar(client, expirado)
+    posterior = await _otro_dispositivo(client, email)
+
+    hace_rato = datetime.now(timezone.utc) - timedelta(
+        days=1, seconds=REFRESH_REUSE_GRACE_SECONDS
+    )
+    await test_session.execute(
+        update(AuthSession)
+        .where(AuthSession.refresh_token_hash == hash_token(expirado))
+        .values(revoked_at=hace_rato, expires_at=hace_rato)
+    )
+    await test_session.commit()
+
+    _usar(client, expirado)
+    reuso = await client.post("/auth/refresh")
+    assert reuso.status_code == 401, reuso.text
+    assert "set-cookie" not in reuso.headers
+    assert await _vivas(test_session) == 2
+
+    for refresh in (vigente, posterior):
+        _usar(client, refresh)
+        assert (await client.post("/auth/refresh")).status_code == 200
 
 
 @pytest.mark.asyncio
