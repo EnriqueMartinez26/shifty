@@ -722,7 +722,9 @@ Una instrucción en lenguaje natural no es una garantía.
   tras 20, 40, 80 y 160 s; después, con un tope de 5 min, hasta
   `OUTBOX_EMAIL_MAX_ATTEMPTS = 10`. `attempts` cuenta cada intento real al
   sink SMTP, sea exitoso o fallido; deferrals y guardas previas no suman. Al
-  agotarlos, la fila queda `failed` y se reporta una vez, sin datos personales.
+  agotarlos, la fila queda `failed` y se reporta una vez, sin datos personales
+  (política provisional adoptada por el dueño, D-20261117-03: un recordatorio
+  válido puede perderse durante una interrupción prolongada de SMTP).
   Si el retry cruza el reset, puede consumir una admisión de
   la ventana siguiente. Una denegación de cuota se difiere al siguiente reset
   configurado y una caída de Redis por 60 s; ninguna consume intentos y ambas
@@ -739,7 +741,7 @@ Una instrucción en lenguaje natural no es una garantía.
   `test_email_outbox_delivery_model.py`, `test_mail_budget_retry_window.py`,
   `test_smtp_outbox_protocol.py`)
 - **Presupuesto SMTP (#313)**: el límite queda apagado por defecto. El objetivo
-  aprobado es 250 admisiones diarias, con 20% (50) reservado para OTP y
+  de diseño, adoptado por el dueño (D-20261117-02), es 250 admisiones diarias, con 20% (50) reservado para OTP y
   recuperación de contraseña, no críticos hasta 200 y alerta al llegar a 200
   admisiones totales. Es best-effort: emisores externos a Shifty no se cuentan
   y una restauración de Redis puede perder admisiones recientes. No activar el

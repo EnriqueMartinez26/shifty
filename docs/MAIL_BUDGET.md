@@ -3,9 +3,9 @@
 Shifty applies an optional best-effort budget at the shared SMTP sink. This
 does not guarantee the provider's account quota: it counts sends made through
 Shifty, while other apps or manual sends using the same account are outside
-the counter. `MAIL_DAILY_BUDGET` remains unset by default. The owner-confirmed
-target is 250 admissions per day for the Brevo Free account reported at 300
-emails per day. That leaves a 50-message margin for traffic Shifty cannot
+the counter. `MAIL_DAILY_BUDGET` remains unset by default. The design target,
+adopted by the owner in D-20261117-02 (`docs/DECISIONES.md`), is 250
+admissions per day for the Brevo Free account reported at 300 emails per day. That leaves a 50-message margin for traffic Shifty cannot
 count; it is not a hard provider limit. The reset hour and timezone are not
 confirmed. Do not assume midnight UTC or enable the cap in production until
 Brevo's Plan & Usage counter or support confirms the actual reset window.
@@ -73,7 +73,10 @@ already have accepted the message. An outbox send may retry a transient
 failure positively identified before the message body starts, with the same
 logical ID and budget admission within that quota window, up to 10 SMTP
 attempts total. Delays are 20, 40, 80, and 160 seconds, then capped at 5
-minutes. A refusal of the DATA command before the server's 354 response is
+minutes. After the tenth failed attempt the row is closed as `failed`, with
+its error recorded and one alert subject to the current alert limits. This is
+a provisional owner policy (D-20261117-03): a valid reminder can be lost
+during a prolonged SMTP outage. A refusal of the DATA command before the server's 354 response is
 still pre-body; any uncertain result after body transmission is terminal and
 marked `unknown`. The `failed` metric counts SMTP attempts, so a pre-body
 attempt later delivered successfully can appear in both `failed` and `sent`
