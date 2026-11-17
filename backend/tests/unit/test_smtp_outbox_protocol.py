@@ -133,7 +133,7 @@ def _connect_without_tls(
     server: _ScriptedSMTPServer,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    host, port = server.server_address
+    host, port = server.server_address[0], server.server_address[1]
     monkeypatch.setattr(
         session,
         "_connect",

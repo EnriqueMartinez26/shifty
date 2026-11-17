@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import pytest
+from sqlalchemy import Table
+from typing import cast
 
 import modules.payments.model as payments_model
 from modules.payments.model import OutboxMessage
@@ -22,10 +24,9 @@ def test_smtp_delivery_has_its_own_ten_attempt_limit() -> None:
 
 
 def test_smtp_due_index_includes_legacy_pending_rows() -> None:
+    table = cast(Table, OutboxMessage.__table__)
     index = next(
-        index
-        for index in OutboxMessage.__table__.indexes
-        if index.name == "ix_outbox_email_due"
+        index for index in table.indexes if index.name == "ix_outbox_email_due"
     )
     assert tuple(column.name for column in index.columns) == (
         "next_attempt_at",
@@ -39,10 +40,9 @@ def test_smtp_due_index_includes_legacy_pending_rows() -> None:
 
 
 def test_smtp_claim_index_only_contains_active_claimed_rows() -> None:
+    table = cast(Table, OutboxMessage.__table__)
     index = next(
-        index
-        for index in OutboxMessage.__table__.indexes
-        if index.name == "ix_outbox_email_claimed"
+        index for index in table.indexes if index.name == "ix_outbox_email_claimed"
     )
     assert tuple(column.name for column in index.columns) == ("claimed_at",)
     assert str(index.dialect_options["postgresql"]["where"]) == (

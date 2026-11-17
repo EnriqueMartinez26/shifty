@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import smtplib
-from datetime import datetime, time, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone, tzinfo
 from email.message import EmailMessage
-from typing import Any
+from typing import Any, Self, cast
 
 import pytest
 from sqlalchemy import select
@@ -29,10 +29,10 @@ class _DateTimeCongelado(datetime):
     reloj: _Reloj
 
     @classmethod
-    def now(cls, tz: Any = None) -> datetime:
+    def now(cls, tz: tzinfo | None = None) -> Self:
         if tz is None:
-            return cls.reloj.now.replace(tzinfo=None)
-        return cls.reloj.now.astimezone(tz)
+            return cast(Self, cls.reloj.now.replace(tzinfo=None))
+        return cast(Self, cls.reloj.now.astimezone(tz))
 
 
 class _Smtp450UnaVez:
@@ -114,7 +114,8 @@ def _now_utc() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _as_utc(value: datetime) -> datetime:
+def _as_utc(value: datetime | None) -> datetime:
+    assert value is not None
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
@@ -128,7 +129,7 @@ async def _send_with_smtp(
 ) -> None:
     session.add_all(rows)
     await session.commit()
-    monkeypatch.setattr(notification_tasks.smtplib, "SMTP", lambda *_a, **_k: smtp)
+    monkeypatch.setattr(smtplib, "SMTP", lambda *_a, **_k: smtp)
     await jobs._dispatch_pending_emails(session)
 
 
@@ -151,11 +152,18 @@ async def _reload_rows(
 
 
 def _rows_by_email(rows: list[OutboxMessage]) -> dict[str, OutboxMessage]:
-    return {
-        str(row.payload["args"]["email"]): row
-        for row in rows
-        if isinstance(row.payload, dict) and isinstance(row.payload.get("args"), dict)
-    }
+    rows_by_email: dict[str, OutboxMessage] = {}
+    for row in rows:
+        if not isinstance(row.payload, dict):
+            continue
+        payload = cast(dict[str, Any], row.payload)
+        args = payload.get("args")
+        if not isinstance(args, dict):
+            continue
+        email = args.get("email")
+        if isinstance(email, str):
+            rows_by_email[email] = row
+    return rows_by_email
 
 
 @pytest.mark.asyncio
@@ -325,7 +333,7 @@ async def test_el_mail_agota_el_maximo_de_intentos_y_queda_terminal(
     def new_smtp_session(*_args: Any, **_kwargs: Any) -> _Smtp450UnaVez:
         return _Smtp450UnaVez(destinatario)
 
-    monkeypatch.setattr(notification_tasks.smtplib, "SMTP", new_smtp_session)
+    monkeypatch.setattr(smtplib, "SMTP", new_smtp_session)
     test_session.add(row)
     await test_session.commit()
     retrasos: list[float] = []

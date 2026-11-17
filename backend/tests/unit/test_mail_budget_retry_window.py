@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import smtplib
 from datetime import datetime, timezone, tzinfo
+from typing import Self, cast
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -114,10 +115,10 @@ class _FrozenDateTime(datetime):
     frozen = datetime(2026, 3, 8, 5, 30, tzinfo=ZoneInfo("America/New_York"))
 
     @classmethod
-    def now(cls, tz: tzinfo | None = None) -> datetime:
+    def now(cls, tz: tzinfo | None = None) -> Self:
         if tz is None:
-            return cls.frozen.replace(tzinfo=None)
-        return cls.frozen.astimezone(tz)
+            return cast(Self, cls.frozen.replace(tzinfo=None))
+        return cast(Self, cls.frozen.astimezone(tz))
 
 
 @pytest.mark.asyncio

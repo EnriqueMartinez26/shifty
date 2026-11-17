@@ -14,7 +14,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from functools import partial
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import structlog
 from celery.exceptions import SoftTimeLimitExceeded
@@ -1059,12 +1059,14 @@ async def _send_one_pending_email(fila: OutboxMessage, smtp: Any) -> str | None:
             else "high"
         )
         requested_priority = payload.get("priority")
-        priority: MailPriority = (
-            requested_priority
-            if isinstance(requested_priority, str)
-            and requested_priority in {"critical", "high", "medium", "low"}
-            else default_priority
-        )
+        priority = default_priority
+        if isinstance(requested_priority, str) and requested_priority in {
+            "critical",
+            "high",
+            "medium",
+            "low",
+        }:
+            priority = cast(MailPriority, requested_priority)
         message_id = payload.get("logical_id")
         if not isinstance(message_id, str) or not message_id:
             message_id = f"outbox:{getattr(fila, 'id', None) or getattr(fila, 'public_id', 'unknown')}"

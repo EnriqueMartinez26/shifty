@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 from email.utils import parseaddr
-from typing import Any, Callable
+from typing import Any, Callable, cast
 from uuid import uuid4
 
 import structlog
@@ -321,7 +321,7 @@ class SmtpSession:
                     if not data_reply_seen:
                         data_reply_seen = True
                         data_accepted = response[0] == 354
-                    return response
+                    return cast(tuple[int, bytes], response)
 
                 setattr(smtp, "send", tracked_send)
                 setattr(smtp, "getreply", tracked_getreply)
