@@ -1760,6 +1760,186 @@ def test_checks_le_pregunta_a_redis_desde_el_clon_con_la_version_en_curso(
     assert Path(cwd).resolve() == host.repo.resolve()
 
 
+def test_checks_avisa_alarma_de_rabbitmq_sin_reiniciarlo(host: Host) -> None:
+    resultado = _correr_checks(
+        host,
+        FAKE_RABBIT_ALARMS=(
+            '{"alarms":[{"resource":"memory"}],"node":"rabbit@rabbitmq","result":"ok"}'
+        ),
+    )
+
+    assert resultado.returncode != 0
+    assert "rabbitmq: hay alarmas activas" in resultado.stderr
+    assert _hay(
+        host.llamadas(),
+        r"docker compose exec -T rabbitmq rabbitmq-diagnostics -q --timeout \d+ "
+        r"alarms --formatter json",
+    )
+    assert not _hay(host.llamadas(), r"docker restart .*rabbitmq")
+
+
+def test_checks_avisa_si_no_puede_consultar_alarmas_de_rabbitmq(host: Host) -> None:
+    resultado = _correr_checks(host, FAKE_RABBIT_EXIT="1")
+
+    assert resultado.returncode != 0
+    assert "rabbitmq: no se pudieron consultar las alarmas" in resultado.stderr
+
+
+def test_checks_avisa_respuesta_ilegible_de_alarmas_de_rabbitmq(host: Host) -> None:
+    resultado = _correr_checks(host, FAKE_RABBIT_ALARMS="unexpected output")
+
+    assert resultado.returncode != 0
+    assert "rabbitmq: hay alarmas activas o una respuesta ilegible" in resultado.stderr
+
+
+# Respuesta de RabbitMQ 3.13.7 con la alarma de memoria (alarms_command.ex del
+# tag v3.13.7; la misma que usa test_deploy_script.py).
+_ALARMA_DE_MEMORIA_3_13 = (
+    '{"global":[],"local":["Memory alarm on node rabbit@rabbitmq"],'
+    '"message":"Node rabbit@rabbitmq reported alarms","result":"ok"}'
+)
+
+
+# 2026-11-16 (revision de la PR #308): `timeout` corta solo el cliente de
+# docker; `rabbitmq-diagnostics` sigue corriendo DENTRO del contenedor
+# (`timeout -k 5 3 docker compose exec -T rabbitmq sleep 300` sale 124 y el
+# sleep sigue vivo). El CLI recibe su propio --timeout, por debajo del tope de
+# afuera: `alarms` lo pasa a su rpc_call (alarms_command.ex de v3.13.7). Un
+# valor que no es un numero de segundos vuelve al default (30).
+@pytest.mark.parametrize(
+    ("tope", "tope_del_cli"),
+    [("30", 20), ("15", 10), ("abc", 20)],
+    ids=["default", "corto", "invalido"],
+)
+def test_checks_le_pasa_a_rabbitmq_su_propio_tope(
+    host: Host, tope: str, tope_del_cli: int
+) -> None:
+    resultado = _correr_checks(host, RABBITMQ_CHECK_TIMEOUT_SECONDS=tope)
+
+    assert resultado.returncode == 0, resultado.stderr
+    assert _hay(
+        host.llamadas(),
+        r"docker compose exec -T rabbitmq rabbitmq-diagnostics -q "
+        rf"--timeout {tope_del_cli} alarms --formatter json$",
+    )
+
+
+# 2026-11-16 (PR #308 sobre #316): el chequeo de RabbitMQ no tenia tope; un
+# nodo trabado dejaba checks.sh colgado y las corridas horarias se apilaban.
+@_requiere("timeout")
+def test_checks_con_rabbitmq_colgado_corta_y_avisa(host: Host) -> None:
+    inicio = time.time()
+    resultado = _correr_checks(
+        host, FAKE_RABBIT_CUELGA="1", RABBITMQ_CHECK_TIMEOUT_SECONDS="1"
+    )
+
+    assert time.time() - inicio < 20, "el tope no corto la consulta a rabbitmq"
+    assert resultado.returncode != 0
+    assert "rabbitmq: no se pudieron consultar las alarmas" in resultado.stderr
+    assert "sin respuesta en 1 s" in resultado.stderr
+    assert not _hay(host.llamadas(), r"docker restart")
+
+
+# El aviso sale del host (webhook y mail): la salida cruda del CLI de RabbitMQ
+# puede traer datos del nodo (su diagnostico imprime el hash de la cookie de
+# Erlang) y no viaja en el aviso.
+@pytest.mark.parametrize(
+    "extra",
+    [{"FAKE_RABBIT_EXIT": "69"}, {"FAKE_RABBIT_EXIT": "0"}],
+    ids=["consulta-fallida", "respuesta-ilegible"],
+)
+def test_checks_no_manda_la_salida_cruda_de_rabbitmq(
+    host: Host, extra: dict[str, str]
+) -> None:
+    secreto = "c2VjcmV0by1kZS1wcnVlYmE="
+    resultado = _correr_checks(
+        host,
+        FAKE_RABBIT_ALARMS=(
+            "Error: unable to perform an operation on node 'rabbit@rabbitmq'. "
+            f"Erlang cookie hash: {secreto}"
+        ),
+        ALERT_WEBHOOK_URL="https://hook",
+        **_presupuesto(12, 3),
+        **extra,
+    )
+
+    assert resultado.returncode != 0
+    avisos = _avisos(host)
+    mails = host.mails()
+    assert any("rabbitmq" in aviso for aviso in avisos), avisos
+    assert len(mails) == 1, mails
+    assert all(secreto not in texto for texto in [*avisos, *mails])
+    assert secreto not in resultado.stderr
+
+
+def test_checks_resume_la_alarma_de_rabbitmq_sin_copiarla(host: Host) -> None:
+    resultado = _correr_checks(
+        host, FAKE_RABBIT_ALARMS=_ALARMA_DE_MEMORIA_3_13, **_presupuesto(12, 3)
+    )
+
+    assert resultado.returncode != 0
+    mails = host.mails()
+    assert len(mails) == 1, mails
+    assert "alarmas activas: memoria" in mails[0]
+    assert "reported" not in mails[0]
+
+
+# Una alarma que sigue activa no es una tormenta de mails: misma ruta de
+# alert() que el resto (silencio por clave y presupuesto diario de #316).
+def test_alarma_persistente_de_rabbitmq_respeta_silencio_y_presupuesto(
+    host: Host,
+) -> None:
+    extra = {"FAKE_RABBIT_ALARMS": _ALARMA_DE_MEMORIA_3_13, **_presupuesto(1, 0)}
+    for _ in range(3):
+        _correr_checks(host, **extra)
+
+    assert len(host.mails()) == 1, host.mails()
+
+    # Pasado el silencio de la clave, el presupuesto diario (1) ya se gasto.
+    sello = host.state / "alerts" / "rabbitmq-alarms"
+    viejo = time.time() - 61 * 60
+    os.utime(sello, (viejo, viejo))
+    resultado = _correr_checks(host, **extra)
+
+    assert len(host.mails()) == 1, host.mails()
+    assert "alerta suprimida por presupuesto diario del host" in resultado.stderr
+
+
+@_requiere("timeout")
+def test_checks_colgado_en_rabbitmq_no_frena_al_guard(host: Host) -> None:
+    """El chequeo horario no comparte el lock del guard: un RabbitMQ que no
+    contesta no demora los reinicios de cada minuto."""
+    assert BASH is not None
+    checks = subprocess.Popen(
+        [BASH, str(SCRIPTS / "checks.sh")],
+        cwd=host.repo,
+        env={
+            **host.env,
+            "DOMAIN": "shifty.example.com",
+            "FAKE_CERT_END": _fecha_en(60),
+            "STATS_LOG": (host.raiz / "stats.log").as_posix(),
+            "FAKE_RABBIT_CUELGA": "1",
+            "RABBITMQ_CHECK_TIMEOUT_SECONDS": "15",
+        },
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        limite = time.time() + 30
+        while not _hay(host.llamadas(), r"exec -T rabbitmq"):
+            assert time.time() < limite, "checks.sh no llego a consultar rabbitmq"
+            time.sleep(0.1)
+        inicio = time.time()
+        guard = host.correr("guard.sh", FAKE_UNHEALTHY_IDS="abc123")
+        duracion = time.time() - inicio
+    finally:
+        checks.wait(timeout=60)
+
+    assert guard.returncode == 0, guard.stderr
+    assert duracion < 12, f"el guard espero a checks.sh ({duracion:.1f} s)"
+    assert _hay(host.llamadas(), r"docker restart abc123")
+
+
 def test_checks_corre_el_chequeo_de_endurecimiento(host: Host) -> None:
     (host.fake / "sshd_T").write_text(
         SSHD_SANO.replace("passwordauthentication no", "passwordauthentication yes"),

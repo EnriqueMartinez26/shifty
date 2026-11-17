@@ -39,6 +39,7 @@ CADENCIA = {
     "purge_expired_auth_sessions": (86400, 3600),
     "process_subscription_lifecycle": (86400, 3600),
     "purge_expired_data": (86400, 3600),
+    "monitor_ops_slo": (300, 295),
 }
 
 
