@@ -24,7 +24,11 @@ from typing import Any
 import pytest
 
 import modules.notifications.tasks as tasks
-from tests.unit.test_notifications_resilience import _fila, _FakeSessionFactory
+from tests.unit.test_notifications_resilience import (
+    _configurar_uow_falso,
+    _fila,
+    _FakeSessionFactory,
+)
 
 
 def _pendiente(turno: Any, pending_column: str | None) -> bool:
@@ -42,7 +46,7 @@ class _RepoConVentana:
     """
 
     filas: list[Any] = []
-    claims: list[tuple[str, str]] = []
+    schedules: list[tuple[str, str, datetime, dict[str, Any]]] = []
     consultas: list[tuple[datetime, datetime, int | None, str | None]] = []
 
     def __init__(self, db: Any) -> None:
@@ -74,37 +78,31 @@ class _RepoConVentana:
         dentro.sort(key=lambda fila: fila[0].starts_at)
         return dentro[:limit] if limit is not None else dentro
 
-    async def claim_reminder(
-        self, appointment_id: str, column: str, sent_at: datetime
+    async def schedule_reminder(
+        self,
+        appointment_id: str,
+        column: str,
+        scheduled_at: datetime,
+        payload: dict[str, Any],
     ) -> bool:
-        _RepoConVentana.claims.append((appointment_id, column))
+        _RepoConVentana.schedules.append(
+            (appointment_id, column, scheduled_at, payload)
+        )
         return True
 
     async def release_reminder(self, appointment_id: str, column: str) -> None:
         return None
 
 
-def _preparar(monkeypatch: pytest.MonkeyPatch, filas: list[Any]) -> list[str | None]:
-    enviados: list[str | None] = []
-
-    async def recordar(
-        *,
-        email: str | None,
-        details: dict[str, Any],
-        smtp: Any = None,
-    ) -> dict[str, str]:
-        enviados.append(details.get("public_id"))
-        return {"status": "sent", "channel": "email", "to": email or ""}
-
+def _preparar(
+    monkeypatch: pytest.MonkeyPatch, filas: list[Any]
+) -> list[tuple[str, str, datetime, dict[str, Any]]]:
     _RepoConVentana.filas = filas
-    _RepoConVentana.claims = []
+    _RepoConVentana.schedules = []
     _RepoConVentana.consultas = []
     monkeypatch.setattr(tasks, "AsyncSessionFactory", lambda: _FakeSessionFactory())
-    monkeypatch.setattr(tasks, "notify_client_reminder", recordar)
-    monkeypatch.setattr(
-        "modules.appointments.repository.AppointmentRepository", _RepoConVentana
-    )
-    return enviados
+    _configurar_uow_falso(monkeypatch, _RepoConVentana)
+    return _RepoConVentana.schedules
 
 
 def _turno(now: datetime, horas: float, nombre: str) -> Any:
@@ -124,14 +122,16 @@ async def test_los_turnos_de_una_hora_no_le_comen_el_lote_al_de_24h(
     # el de 23 h, unico candidato a la etapa de 24 h.
     filas = [_turno(now, 1 + i / 100, f"ya-casi-{i}") for i in range(4)]
     filas.append(_turno(now, 23, "manana"))
-    enviados = _preparar(monkeypatch, filas)
+    schedules = _preparar(monkeypatch, filas)
 
     resultado = await tasks.process_due_appointment_reminders(now=now, limit=3)
 
-    assert "manana" in enviados, "el turno de 24 h nunca entro al lote"
-    assert ("manana", "reminder_24h_sent_at") in _RepoConVentana.claims
+    assert any(row[0] == "manana" for row in schedules), (
+        "el turno de 24 h nunca entro al lote"
+    )
+    assert ("manana", "reminder_24h_sent_at") == schedules[-1][:2]
     # El tope sigue vivo: la etapa de 2 h manda a lo sumo ``limit`` por corrida.
-    assert len([p for p in enviados if p != "manana"]) == 3
+    assert len([row for row in schedules if row[0] != "manana"]) == 3
     assert resultado["batch_full"] is True
 
 
@@ -156,14 +156,16 @@ async def test_los_turnos_con_el_24h_ya_mandado_no_le_comen_el_lote_al_fresco(
         fila[0].reminder_24h_sent_at = now - timedelta(hours=19)
         filas.append(fila)
     filas.append(_turno(now, 23, "manana"))
-    enviados = _preparar(monkeypatch, filas)
+    schedules = _preparar(monkeypatch, filas)
 
     await tasks.process_due_appointment_reminders(now=now, limit=3)
 
-    assert "manana" in enviados, "el turno fresco de 24 h quedo afuera del tope"
-    assert ("manana", "reminder_24h_sent_at") in _RepoConVentana.claims
+    assert any(row[0] == "manana" for row in schedules), (
+        "el turno fresco de 24 h quedo afuera del tope"
+    )
+    assert ("manana", "reminder_24h_sent_at") == schedules[0][:2]
     # Los ya avisados no vuelven a mandarse ni ocupan lugar en el lote.
-    assert enviados == ["manana"]
+    assert [row[0] for row in schedules] == ["manana"]
     assert [consulta[3] for consulta in _RepoConVentana.consultas] == [
         "reminder_2h_sent_at",
         "reminder_24h_sent_at",
@@ -225,4 +227,4 @@ async def test_la_tienda_apagada_se_cuenta_una_sola_vez(
     resultado = await tasks.process_due_appointment_reminders(now=now)
 
     assert resultado["skipped"] == 1
-    assert _RepoConVentana.claims == []
+    assert _RepoConVentana.schedules == []

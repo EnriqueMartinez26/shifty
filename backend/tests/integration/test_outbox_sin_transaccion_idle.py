@@ -23,6 +23,7 @@ import re
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -74,13 +75,14 @@ async def test_entre_el_commit_del_lote_y_los_envios_no_hay_transaccion_abierta(
         @asynccontextmanager
         async def smtp_espia() -> AsyncIterator[object]:
             abierta_al_conectar.append(db.in_transaction())
-            yield object()
+            yield SimpleNamespace(last_delivery_attempted=False)
 
         async def envio(
             *, email: str | None, details: dict[str, Any], smtp: Any = None
         ) -> dict[str, str]:
             abierta_al_mandar.append(db.in_transaction())
             if email == "cliente-1@example.com":
+                smtp.last_delivery_attempted = True
                 raise ConnectionRefusedError("smtp caido")
             return {"status": "sent", "to": str(email)}
 

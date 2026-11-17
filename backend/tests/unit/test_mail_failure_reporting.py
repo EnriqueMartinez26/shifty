@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 from structlog.testing import capture_logs
 
+from core.mail_budget import MailReservation
 import modules.auth.service as auth_service
 import modules.notifications.tasks as notification_tasks
 from core import observability
@@ -72,11 +73,18 @@ class _SmtpRechaza:
         )
 
 
-def test_auth_email_sink_reports_smtp_failure_without_logging_recipient(
+@pytest.mark.asyncio
+async def test_auth_email_sink_reports_smtp_failure_without_logging_recipient(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     reports: list[dict[str, str]] = []
     monkeypatch.setattr(smtplib, "SMTP", _SmtpRechaza)
+    monkeypatch.setattr(
+        notification_tasks,
+        "reserve_mail",
+        lambda **kwargs: _admitted_reservation(**kwargs),
+    )
+    monkeypatch.setattr(notification_tasks, "finish_mail", _finish_mail)
     monkeypatch.setattr(
         auth_service,
         "report_mail_failure",
@@ -87,12 +95,32 @@ def test_auth_email_sink_reports_smtp_failure_without_logging_recipient(
     message.set_content("body")
 
     with capture_logs() as events:
-        auth_service._send_email(message, event="password_reset_email_failed")
+        await auth_service._send_email(
+            message,
+            event="password_reset_email_failed",
+            priority="critical",
+            message_id="auth:test-reset",
+        )
 
-    assert reports == [{"component": "auth", "error_type": "SMTPRecipientsRefused"}]
+    assert reports == [{"component": "auth", "error_type": "MailDeliveryRejected"}]
     assert EMAIL not in repr(events)
-    assert events[0]["event"] == "password_reset_email_failed"
-    assert events[0]["error_type"] == "SMTPRecipientsRefused"
+    assert events[-1]["event"] == "password_reset_email_failed"
+    assert events[-1]["error_type"] == "MailDeliveryRejected"
+
+
+async def _admitted_reservation(**kwargs: Any) -> MailReservation:
+    return MailReservation(
+        decision="admitted",
+        window_id="test",
+        message_key="message",
+        attempt_token="attempt",
+        priority=kwargs["priority"],
+        tracked=False,
+    )
+
+
+async def _finish_mail(*_args: Any, **_kwargs: Any) -> None:
+    return None
 
 
 @pytest.mark.asyncio

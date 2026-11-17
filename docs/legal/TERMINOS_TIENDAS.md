@@ -27,7 +27,7 @@
 
 2.3. **Shifty no recibe, retiene ni administra dinero de los clientes de la Tienda.** Las señas se acreditan directamente en la cuenta de Mercado Pago de la Tienda, y Shifty no cobra comisión sobre ellas.
 
-2.4. **Avisos por correo electrónico.** Los avisos automáticos (registro de la reserva, confirmación, recordatorios, reprogramación, cancelación y ofertas de la lista de espera) se envían **una sola vez**. Si un envío falla, no se reintenta, para no duplicar un mensaje que pudo haber llegado. La Tienda no debe depender solo de esos avisos para que su cliente se presente: el turno vale aunque el correo no llegue.
+2.4. **Avisos por correo electrónico.** En los avisos que se envían mediante la cola duradera de Shifty, un fallo transitorio confirmado antes de transmitir el cuerpo puede dar lugar a hasta 10 intentos SMTP en total. Si el resultado es incierto después de transmitir el cuerpo, no se reenvía porque el proveedor pudo haber aceptado el mensaje. Un límite de envío o una indisponibilidad técnica también puede demorar o impedir el aviso; para los demás envíos no se garantiza un reintento. La Tienda no debe depender solo de esos avisos para que su cliente se presente: el turno vale aunque el correo no llegue.
 
 2.5. **Disponibilidad.** Shifty procura que el servicio funcione de forma continua, pero no garantiza que esté disponible sin interrupciones ni sin errores. Puede haber interrupciones:
 

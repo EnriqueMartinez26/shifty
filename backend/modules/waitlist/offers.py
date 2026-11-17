@@ -91,10 +91,28 @@ class ReleasedSlot:
 
 @dataclass(frozen=True)
 class PendingOfferEmail:
-    """Mail listo para mandar FUERA de la transaccion del outbox (regla 5)."""
+    """Mail que se persiste con la oferta y se despacha tras el commit."""
 
+    store_id: str
     email: str
     details: dict[str, Any]
+    entry_id: str
+    offered_staff_id: str
+    offered_starts_at: datetime
+    offered_ends_at: datetime
+    offer_expires_at: datetime
+
+    @property
+    def outbox_guard(self) -> dict[str, str]:
+        """Identidad de la oferta que el dispatcher debe revalidar antes de SMTP."""
+        return {
+            "kind": "waitlist_offer",
+            "entry_id": self.entry_id,
+            "staff_id": self.offered_staff_id,
+            "starts_at": self.offered_starts_at.isoformat(),
+            "ends_at": self.offered_ends_at.isoformat(),
+            "expires_at": self.offer_expires_at.isoformat(),
+        }
 
 
 @dataclass(frozen=True)
@@ -398,14 +416,31 @@ def _offer_email(
     staff_name: str,
 ) -> PendingOfferEmail | None:
     """Arma (no manda) el mail de la oferta; None si no hay a donde mandarlo."""
-    if not (is_deliverable_email(entry.client_email) and entry.client_email):
+    email = entry.client_email
+    if not (is_deliverable_email(email) and email):
         return None
+    offered_staff_id = entry.offered_staff_id
+    offered_starts_at = entry.offered_starts_at
+    offered_ends_at = entry.offered_ends_at
+    offer_expires_at = entry.offer_expires_at
+    # ``offer_released_slot`` sets these fields before building the pending
+    # email; keep that invariant explicit for both runtime and static typing.
+    assert offered_staff_id is not None
+    assert offered_starts_at is not None
+    assert offered_ends_at is not None
+    assert offer_expires_at is not None
     base = settings.FRONTEND_URL.rstrip("/")
     slug = getattr(store, "slug", None)
     fecha_iso = slot.starts_at.astimezone(ARGENTINA_TZ).date().isoformat()
     link = rebook_url(base, slug, service, staff)
     return PendingOfferEmail(
-        email=entry.client_email,
+        store_id=entry.store_id,
+        email=email,
+        entry_id=entry.id,
+        offered_staff_id=offered_staff_id,
+        offered_starts_at=offered_starts_at,
+        offered_ends_at=offered_ends_at,
+        offer_expires_at=offer_expires_at,
         details={
             "public_id": entry.id,
             "client_name": entry.client_name,
@@ -445,7 +480,8 @@ async def expire_lapsed_offers(
 
     Toma las filas con ``FOR UPDATE SKIP LOCKED``: sin eso, dos corridas
     solapadas del beat re-ofrecian el mismo cupo a dos personas. Los mails
-    vuelven en ``pending_emails`` y los manda la tarea despues del commit.
+    vuelven en ``pending_emails``; la tarea los persiste en el outbox en esta
+    transaccion y el dispatcher los manda despues del commit.
 
     El lote tiene tope (``limit``) y orden por vencimiento (B1-16): cada
     vencida cuesta varias consultas para re-ofrecer su cupo, todas con las

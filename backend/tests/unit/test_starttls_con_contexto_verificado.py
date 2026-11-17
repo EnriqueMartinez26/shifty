@@ -17,7 +17,9 @@ from typing import Any
 
 import pytest
 
+from core.mail_budget import MailReservation
 import modules.auth.service as auth_service
+import modules.notifications.tasks as notification_tasks
 
 
 class _SmtpQueRegistra:
@@ -42,14 +44,31 @@ class _SmtpQueRegistra:
         return None
 
 
-def test_el_reset_negocia_starttls_con_certificado_verificado(
+@pytest.mark.asyncio
+async def test_el_reset_negocia_starttls_con_certificado_verificado(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _SmtpQueRegistra.contextos = []
     # auth.service usa ``smtplib.SMTP`` por el modulo: se dobla ahi.
     monkeypatch.setattr(smtplib, "SMTP", _SmtpQueRegistra)
 
-    auth_service.send_password_reset_email(
+    async def admitido(**kwargs: Any) -> MailReservation:
+        return MailReservation(
+            decision="admitted",
+            window_id="test",
+            message_key="message",
+            attempt_token="attempt",
+            priority=kwargs["priority"],
+            tracked=False,
+        )
+
+    async def finish(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    monkeypatch.setattr(notification_tasks, "reserve_mail", admitido)
+    monkeypatch.setattr(notification_tasks, "finish_mail", finish)
+
+    await auth_service.send_password_reset_email(
         "alguien@example.com", "https://shifty.local/reset?token=x"
     )
 

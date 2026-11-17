@@ -75,9 +75,11 @@ os.environ.update(_TEST_ENV)
 
 # Test configuration must exist before importing modules that instantiate Settings.
 from core.config import settings  # noqa: E402
+from core import mail_budget  # noqa: E402
 from main import app  # noqa: E402
 from core.redis import get_availability_cache, get_redis  # noqa: E402
 from tests.redis_pipeline_double import PipelineDouble  # noqa: E402
+from tests.redis_mail_budget_double import AtomicMailBudgetRedis  # noqa: E402
 
 # Disable rate limit globally during tests
 settings.RATE_LIMIT_ENABLED = False
@@ -137,11 +139,19 @@ class MockRedis:
 
 
 @pytest.fixture(autouse=True)
-def override_redis_dependency() -> Generator[None, None, None]:
+def override_redis_dependency(
+    monkeypatch: pytest.MonkeyPatch,
+) -> Generator[None, None, None]:
     mock_redis = MockRedis()
+    budget_redis = AtomicMailBudgetRedis()
 
     async def fake_get_redis() -> MockRedis:
         return mock_redis
+
+    async def fake_get_budget_redis() -> AtomicMailBudgetRedis:
+        return budget_redis
+
+    monkeypatch.setattr(mail_budget, "get_redis", fake_get_budget_redis)
 
     # El cache de disponibilidad tiene su propio Redis en produccion (F0-15);
     # en tests comparte el doble para que las pruebas de cache vean las claves.

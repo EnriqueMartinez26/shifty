@@ -12,8 +12,9 @@ Correccion: cada mail es su propia fila ``email.send`` del outbox, escrita en
 la MISMA transaccion del lote (antes del commit). El despacho reclama las
 filas de a una (``processed_at`` + commit, ``SKIP LOCKED``) y recien despues
 manda; lo que el presupuesto no alcanza sigue pendiente y sale en el tick
-siguiente (20 s). ``processed_at`` nunca se reabre: ni el del evento ni el de
-un mail ya reclamado.
+siguiente (20 s). El evento de negocio queda procesado; se libera el reclamo
+de un mail si la cuota lo difiere o si se confirma un fallo transitorio antes
+de DATA. Un resultado ambiguo desde DATA queda terminal.
 """
 
 from __future__ import annotations

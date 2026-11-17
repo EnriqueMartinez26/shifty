@@ -32,6 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import modules.notifications.tasks as notification_tasks
 from modules.appointments.model import Appointment
 from modules.appointments.repository import AppointmentRepository
+from modules.appointments.service import ReminderScheduleService
 from tests.integration.test_recordatorios_lote_y_presupuesto import (
     _filas_vencidas,
     _RelojFalso,
@@ -104,16 +105,16 @@ async def test_el_resultado_informa_filas_sin_revisar_y_lote_lleno(
         notification_tasks, "time", SimpleNamespace(monotonic=reloj.monotonic)
     )
 
-    async def envio_lento(
-        *,
-        email: str | None,
-        details: dict[str, Any],
-        smtp: Any = None,
-    ) -> dict[str, str]:
-        reloj.ahora += notification_tasks.REMINDER_TIME_BUDGET_SECONDS * 0.6
-        return {"status": "sent", "channel": "email", "to": email or ""}
+    schedule_reminder = ReminderScheduleService.schedule_reminder
 
-    monkeypatch.setattr(notification_tasks, "notify_client_reminder", envio_lento)
+    async def schedule_lento(
+        service: ReminderScheduleService,
+        **kwargs: Any,
+    ) -> bool:
+        reloj.ahora += notification_tasks.REMINDER_TIME_BUDGET_SECONDS * 0.6
+        return await schedule_reminder(service, **kwargs)
+
+    monkeypatch.setattr(ReminderScheduleService, "schedule_reminder", schedule_lento)
 
     # Hay 5 vencidos y el tope es 4: el lote vino lleno y, de los 4 traidos,
     # el presupuesto alcanzo para 2. El quinto nunca se vio: no se cuenta como

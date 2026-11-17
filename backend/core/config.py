@@ -5,6 +5,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import parse_qs, unquote, urlparse
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -429,6 +430,17 @@ class Settings(BaseSettings):
     SMTP_USER: str
     SMTP_PASS: str
     EMAILS_FROM_EMAIL: str
+    # Quota del proveedor de correo. Se deja sin limite hasta verificar el
+    # plan y la ventana real de la cuenta configurada; nunca asumir el limite
+    # publicado de un plan que puede no ser el contratado.
+    MAIL_DAILY_BUDGET: int | None = Field(default=None, gt=0)
+    MAIL_BUDGET_ALERT_PERCENT: int = Field(default=80, ge=1, le=100)
+    MAIL_CRITICAL_RESERVE_PERCENT: int = Field(default=20, ge=0, le=100)
+    # El reinicio de la cuota depende de la cuenta del proveedor. No usar un
+    # valor implicito cuando el presupuesto este activo; hasta confirmar la
+    # ventana, el presupuesto sigue apagado.
+    MAIL_BUDGET_TIMEZONE: str | None = None
+    MAIL_BUDGET_RESET_HOUR: int | None = Field(default=None, ge=0, le=23)
 
     # Versiones vigentes de los textos legales (PV-09, L1 O-3/O-4, 2026-09-25).
     # El portal las lee de ``GET /public/legal/versions`` y las manda con la
@@ -576,6 +588,22 @@ class Settings(BaseSettings):
                 "y no sirve en produccion"
             )
 
+    def _validate_mail_budget_configuration(self) -> None:
+        if self.MAIL_DAILY_BUDGET is not None and (
+            self.MAIL_BUDGET_TIMEZONE is None or self.MAIL_BUDGET_RESET_HOUR is None
+        ):
+            raise ValueError(
+                "MAIL_BUDGET_TIMEZONE y MAIL_BUDGET_RESET_HOUR son obligatorios "
+                "si MAIL_DAILY_BUDGET esta configurado"
+            )
+        if self.MAIL_BUDGET_TIMEZONE is not None:
+            try:
+                ZoneInfo(self.MAIL_BUDGET_TIMEZONE)
+            except (ZoneInfoNotFoundError, ValueError) as exc:
+                raise ValueError(
+                    "MAIL_BUDGET_TIMEZONE debe ser una zona IANA valida"
+                ) from exc
+
     def _validate_operational_limits(self) -> None:
         """Limites que valen en cualquier entorno, desarrollo incluido."""
         for field, minimum, message in _MINIMOS_OPERATIVOS:
@@ -615,6 +643,7 @@ class Settings(BaseSettings):
             self._validate_production_hardening()
             self._validate_production_integrations()
         self._validate_operational_limits()
+        self._validate_mail_budget_configuration()
         return self
 
     model_config = SettingsConfigDict(

@@ -14,28 +14,10 @@ horario) se iba a la casilla equivocada.
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any
-
 import pytest
 
 import modules.notifications.tasks as tasks
 from tests.unit.test_notifications_resilience import _fila, _preparar
-
-
-def _destinos(monkeypatch: pytest.MonkeyPatch) -> list[str | None]:
-    destinos: list[str | None] = []
-
-    async def recordar(
-        *,
-        email: str | None,
-        details: dict[str, Any],
-        smtp: Any = None,
-    ) -> dict[str, str]:
-        destinos.append(email)
-        return {"status": "sent", "channel": "email", "to": email or ""}
-
-    monkeypatch.setattr(tasks, "notify_client_reminder", recordar)
-    return destinos
 
 
 @pytest.mark.asyncio
@@ -47,13 +29,12 @@ async def test_el_recordatorio_usa_el_email_de_la_reserva(
     # El registro quedo con el email viejo; esta reserva trajo el actual.
     fila[3].email = "viejo@example.com"
     fila[0].client_email = "nuevo@example.com"
-    _preparar(monkeypatch, [fila])
-    destinos = _destinos(monkeypatch)
+    schedules = _preparar(monkeypatch, [fila])
 
     resultado = await tasks.process_due_appointment_reminders(now=now)
 
     assert resultado["published"] == 1
-    assert destinos == ["nuevo@example.com"]
+    assert schedules[0][3]["args"]["email"] == "nuevo@example.com"
 
 
 @pytest.mark.asyncio
@@ -64,9 +45,8 @@ async def test_sin_email_en_la_reserva_cae_al_del_registro(
     fila = _fila(now, 23)
     fila[3].email = "registro@example.com"
     fila[0].client_email = None
-    _preparar(monkeypatch, [fila])
-    destinos = _destinos(monkeypatch)
+    schedules = _preparar(monkeypatch, [fila])
 
     await tasks.process_due_appointment_reminders(now=now)
 
-    assert destinos == ["registro@example.com"]
+    assert schedules[0][3]["args"]["email"] == "registro@example.com"

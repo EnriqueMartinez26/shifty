@@ -1,18 +1,15 @@
-"""B4-02 (2026-09-17): el lote de recordatorios tiene tope de filas y de tiempo.
+"""El lote de recordatorios tiene tope de filas y de tiempo.
 
 Sintoma: ``process_due_appointment_reminders`` traia TODOS los turnos de TODAS
-las tiendas de la ventana de 48 h sin ``limit`` y los mandaba en serie; cada
-recordatorio se reclama (``UPDATE ... WHERE col IS NULL`` + commit) ANTES de
-enviarse. Con un SMTP lento el hard time limit de Celery (150 s) mataba el
-proceso a mitad del lote y los turnos ya reclamados quedaban con la marca
-puesta sin mail: la corrida siguiente los descartaba como enviados y ese
-cliente nunca recibia el aviso.
+las tiendas de la ventana de 48 h sin ``limit`` y persistia cada mail dentro
+del presupuesto de tiempo. Con un lote grande el hard time limit de Celery
+(150 s) podia cortar la corrida antes de programar el resto.
 
 Correccion: ``limit`` en la query (con el ``ORDER BY starts_at`` existente) y
-un presupuesto de tiempo que se revisa en el ``for`` externo ANTES de reclamar
-el siguiente. Lo que no entra queda con la marca en NULL y espera al tick
-siguiente (beat cada 15 minutos). El reclamo sigue siendo la exclusion entre
-workers (``tests/postgres/test_pg_recordatorios.py``).
+un presupuesto de tiempo que se revisa antes de programar el siguiente. La
+marca de etapa y el mail del outbox se confirman en una transaccion. Lo que no
+entra queda en NULL y espera al tick siguiente; el outbox sobrevive a un
+reinicio del worker de envio.
 """
 
 from __future__ import annotations
@@ -23,10 +20,13 @@ from typing import Any
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import modules.notifications.tasks as notification_tasks
 from modules.appointments.repository import AppointmentRepository
+from modules.appointments.service import ReminderScheduleService
+from modules.payments.model import OutboxMessage
 from tests.integration.test_feature_flags_finance_and_public_privacy import (
     add_staff_schedule,
     create_service,
@@ -75,7 +75,7 @@ async def test_el_lote_pide_a_lo_sumo_el_tope_de_filas(
     )
     assert _FakeRepo.limits == [2, 2]
     assert result["published"] == 2
-    assert len(_FakeRepo.claims) == 2
+    assert len(_FakeRepo.schedules) == 2
 
 
 @pytest.mark.asyncio
@@ -83,35 +83,32 @@ async def test_presupuesto_agotado_deja_de_reclamar_y_no_pierde_recordatorios(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     now = datetime.now(timezone.utc)
-    enviados = _preparar(monkeypatch, _filas_vencidas(now, 5))
+    _preparar(monkeypatch, _filas_vencidas(now, 5))
     reloj = _RelojFalso()
     monkeypatch.setattr(
         notification_tasks, "time", SimpleNamespace(monotonic=reloj.monotonic)
     )
-    # SMTP lento: cada envio consume mas de la mitad del presupuesto.
+    # Guardar cada mail consume mas de la mitad del presupuesto.
     tardanza = notification_tasks.REMINDER_TIME_BUDGET_SECONDS * 0.6
 
-    async def envio_lento(
-        *,
-        email: str | None,
-        details: dict[str, Any],
-        smtp: Any = None,
-    ) -> dict[str, str]:
-        reloj.ahora += tardanza
-        enviados.append(details)
-        return {"status": "sent", "channel": "email", "to": email or ""}
+    original_schedule = ReminderScheduleService.schedule_reminder
 
-    monkeypatch.setattr(notification_tasks, "notify_client_reminder", envio_lento)
+    async def schedule_slow(
+        service: ReminderScheduleService,
+        **kwargs: Any,
+    ) -> bool:
+        reloj.ahora += tardanza
+        return await original_schedule(service, **kwargs)
+
+    monkeypatch.setattr(ReminderScheduleService, "schedule_reminder", schedule_slow)
 
     result = await notification_tasks.process_due_appointment_reminders(now=now)
 
-    # Se reclaman y mandan dos (0 s y 54 s); al tercero el presupuesto (90 s)
-    # ya esta vencido y NO se reclama: la marca queda en NULL para el proximo
-    # tick en vez de quedar "enviado" sin mail bajo el SIGKILL de Celery.
+    # Se programan dos (0 s y 54 s); al tercero el presupuesto (90 s) ya esta
+    # vencido y queda en NULL para el proximo tick.
     assert result["published"] == 2
     assert result["unexamined"] == 3
-    assert len(enviados) == 2
-    assert _FakeRepo.claims == [
+    assert [row[:2] for row in _FakeRepo.schedules] == [
         ("appt-0", "reminder_24h_sent_at"),
         ("appt-1", "reminder_24h_sent_at"),
     ]
@@ -123,13 +120,13 @@ async def test_sin_presion_de_tiempo_el_lote_se_drena_entero(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     now = datetime.now(timezone.utc)
-    enviados = _preparar(monkeypatch, _filas_vencidas(now, 5))
+    schedules = _preparar(monkeypatch, _filas_vencidas(now, 5))
 
     result = await notification_tasks.process_due_appointment_reminders(now=now)
 
     assert result["published"] == 5
     assert result["unexamined"] == 0
-    assert len(enviados) == 5
+    assert len(schedules) == 5
 
 
 @pytest.mark.asyncio
@@ -199,3 +196,35 @@ async def test_la_query_de_recordatorios_respeta_el_limit_en_sql(
         *ventana, pending_column="reminder_2h_sent_at"
     )
     assert len(para_2h) == 2
+
+    reminder_appointment = para_24h[0][0]
+    logical_id = f"test-reminder-pending:{reminder_appointment.id}"
+    assert await repo.schedule_reminder(
+        reminder_appointment.id,
+        "reminder_24h_sent_at",
+        datetime.now(timezone.utc),
+        {
+            "mail": "reminder",
+            "logical_id": logical_id,
+            "args": {"email": "reminder@example.com"},
+        },
+    )
+    await test_session.flush()
+    reminder_rows = (
+        (
+            await test_session.execute(
+                select(OutboxMessage).where(
+                    OutboxMessage.store_id == reminder_appointment.store_id,
+                    OutboxMessage.event_type == "email.send",
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    reminder_outbox_row = next(
+        row
+        for row in reminder_rows
+        if isinstance(row.payload, dict) and row.payload.get("logical_id") == logical_id
+    )
+    assert reminder_outbox_row.delivery_status == "pending"

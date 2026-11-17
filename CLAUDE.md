@@ -710,18 +710,47 @@ Una instrucción en lenguaje natural no es una garantía.
   confirmación al cliente, cancelación por bloqueo y los eventos del panel
   `appointment.booked_by_panel/confirmed/completed/rescheduled`, F2-02) es su
   propia fila `email.send`, escrita en la transacción del evento que lo
-  genera (F2-03, 2026-09-24). El despacho la reclama de a una
-  (`processed_at` + commit plano, `SKIP LOCKED`) y recién después manda; lo
-  que excede `OUTBOX_EMAIL_BUDGET_SECONDS` queda pendiente y sale en el tick
-  siguiente (cada 20 s): ningún mail se pierde por presupuesto y
-  `processed_at` no se reabre nunca. La entrega es **a lo sumo una vez**: un
-  proceso que muere entre el reclamo y el DATA pierde ese mail, y un envío
-  fallido no se reintenta (el DATA pudo haber llegado): queda con `attempts`
-  y `error` en su fila. El estado del turno se relee al planificar el mail,
-  no al mandarlo: un mail diferido por presupuesto puede salir después de
-  una cancelación ocurrida entre medio.
+  genera (F2-03, 2026-09-24). El despacho reclama una fila debida con
+  `FOR UPDATE SKIP LOCKED`, marca `delivery_status='claimed'` y commitea antes
+  del SMTP; ninguna transacción queda abierta durante la llamada externa. La
+  cola conserva filas heredadas con estado NULL y filas `pending`; `claimed_at`
+  y `next_attempt_at` distinguen un envío en curso y un reintento diferido. Un
+  claim abandonado por más de 120 s termina en `unknown` y no se reenvía,
+  porque el proveedor pudo haber aceptado el mail. El despacho procesa hasta
+  100 filas o 45 s y continúa con las demás cuando una se difiere o falla.
+  Los fallos SMTP transitorios confirmados antes de enviar el cuerpo reintentan
+  tras 20, 40, 80 y 160 s; después, con un tope de 5 min, hasta
+  `OUTBOX_EMAIL_MAX_ATTEMPTS = 10`. `attempts` cuenta cada intento real al
+  sink SMTP, sea exitoso o fallido; deferrals y guardas previas no suman. Al
+  agotarlos, la fila queda `failed` y se reporta una vez, sin datos personales
+  (política provisional adoptada por el dueño, D-20261117-03: un recordatorio
+  válido puede perderse durante una interrupción prolongada de SMTP).
+  Si el retry cruza el reset, puede consumir una admisión de
+  la ventana siguiente. Una denegación de cuota se difiere al siguiente reset
+  configurado y una caída de Redis por 60 s; ninguna consume intentos y ambas
+  dejan avanzar otras filas. Cuando no se confirma aceptación después de
+  empezar a enviar el cuerpo, la fila queda `unknown` sin reintento. No se
+  promete entrega exactly-once: `processed_at`, `delivery_status`, `attempts`
+  y `error` describen el despacho, no la recepción en el buzón. Cada
+  recordatorio vuelve a validar antes del SMTP la tienda, el estado y la hora
+  vigente del turno; uno cancelado, reprogramado o vencido termina como
+  `expired` y no se envía.
   (`test_lista_de_espera_concurrencia.py`, `test_pg_outbox_mails.py`,
-  `test_outbox_mails_diferidos.py`)
+  `test_outbox_mails_diferidos.py`, `test_outbox_retry_fairness.py`,
+  `test_pg_email_outbox_claims.py`, `test_reminder_outbox_lifecycle.py`,
+  `test_email_outbox_delivery_model.py`, `test_mail_budget_retry_window.py`,
+  `test_smtp_outbox_protocol.py`)
+- **Presupuesto SMTP (#313)**: el límite queda apagado por defecto. El objetivo
+  de diseño, adoptado por el dueño (D-20261117-02), es 250 admisiones diarias, con 20% (50) reservado para OTP y
+  recuperación de contraseña, no críticos hasta 200 y alerta al llegar a 200
+  admisiones totales. Es best-effort: emisores externos a Shifty no se cuentan
+  y una restauración de Redis puede perder admisiones recientes. No activar el
+  cap hasta confirmar la hora y zona de reset de la cuenta; si se configura,
+  ambas deben declararse explícitamente. La cuota limita admisiones de Shifty,
+  no garantiza aceptación SMTP ni entrega final. OTP, recuperación/cambio de
+  clave y confirmaciones de reserva pública siguen fuera del outbox SQL; no
+  persistir códigos OTP ni tokens de recuperación en el outbox sin un diseño
+  de seguridad aprobado. (`docs/MAIL_BUDGET.md`)
 - **Un teléfono sin OTP no es de nadie.** No adopta el contacto de un cliente
   existente (`get_or_create_client(adopt_contact=...)`) ni trae su historial
   para la seña (`UNKNOWN_HISTORY`, que NO es "cliente nuevo"). Sin esa
@@ -882,9 +911,15 @@ Una instrucción en lenguaje natural no es una garantía.
 - **Los recordatorios tienen etapas separadas de verdad**: el piso del de 24
   horas está por encima del lead del de 2 horas, y ningún aviso al cliente
   sale sin pasar por `is_deliverable_email`. El lote reutiliza una sesión
-  SMTP (`smtp_session`, sondeada con `NOOP` antes de cada envío) y un envío
-  fallido no se reintenta: el turno se libera
-  (`test_recordatorios_sesion_smtp.py`).
+  SMTP (`smtp_session`, sondeada con `NOOP` antes de cada envío), revalida el
+  turno por `appointment_id` y `store_id` inmediatamente antes del envío, y
+  permite solo `pending`, `pending_payment` o `confirmed` con el mismo
+  `starts_at` futuro que congeló el recordatorio. Un recordatorio obsoleto
+  queda `expired` sin enviar; los fallos transitorios confirmados antes del
+  cuerpo siguen el reintento durable acotado de §3 y los resultados inciertos
+  después del cuerpo quedan `unknown`
+  (`test_recordatorios_sesion_smtp.py`,
+  `test_reminder_outbox_lifecycle.py`).
 - **Un rango liberado no es un turno.** Borrar un bloqueo devuelve un rango
   cuyos extremos no caen en la grilla: ese origen avisa al dueño, no le
   ofrece al cliente un horario inexistente (`ReleasedSlot.aligned_to_grid`).

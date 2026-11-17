@@ -14,6 +14,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    func,
     text,
 )
 from sqlalchemy.ext.hybrid import hybrid_property
@@ -26,6 +27,9 @@ JsonValue: TypeAlias = JsonPrimitive | dict[str, "JsonValue"] | list["JsonValue"
 
 # Reintentos antes de dar por perdido un webhook que no pudimos resolver.
 WEBHOOK_INBOX_MAX_ATTEMPTS = 10
+# Reintentos de SMTP antes de abandonar un mail. Separado del inbox/outbox
+# generico para que cambiar una politica no altere la otra.
+OUTBOX_EMAIL_MAX_ATTEMPTS = 10
 
 
 class PaymentStatus(str, enum.Enum):
@@ -496,6 +500,31 @@ class OutboxMessage(BaseEntity):
             postgresql_where=text("processed_at IS NOT NULL"),
             sqlite_where=text("processed_at IS NOT NULL"),
         ),
+        # Cola de mails SMTP pendientes. La clave efectiva hace elegibles las
+        # filas sin next_attempt_at (incluidas las heredadas) sin un OR y ordena
+        # reintentos vencidos junto con mails nuevos por su siguiente fecha.
+        Index(
+            "ix_outbox_email_due",
+            "event_type",
+            "is_active",
+            func.coalesce(text("next_attempt_at"), text("created_at")),
+            "created_at",
+            postgresql_where=text("processed_at IS NULL"),
+            sqlite_where=text("processed_at IS NULL"),
+        ),
+        # Solo las filas con claim que puede haber quedado abandonado.
+        Index(
+            "ix_outbox_email_claimed",
+            "claimed_at",
+            postgresql_where=text(
+                "event_type = 'email.send' AND is_active IS TRUE AND "
+                "delivery_status = 'claimed' AND claimed_at IS NOT NULL"
+            ),
+            sqlite_where=text(
+                "event_type = 'email.send' AND is_active IS TRUE AND "
+                "delivery_status = 'claimed' AND claimed_at IS NOT NULL"
+            ),
+        ),
     )
 
     store_id: Mapped[str | None] = mapped_column(String, index=True, nullable=True)
@@ -504,9 +533,18 @@ class OutboxMessage(BaseEntity):
     processed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    # Mismo contador y mismo techo que WebhookInbox (regla 7): el intento es
-    # del mensaje, no del lote. Sin esto un mensaje que siempre falla se
-    # reintentaba cada minuto para siempre (2026-09-17, B2-12).
+    # Estado de entrega de email.send. Es nullable para conservar compatibilidad
+    # con otros eventos del outbox y con filas de email heredadas.
+    delivery_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    claimed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # En email.send, cuenta cada intento real al sink SMTP (éxito o fallo);
+    # deferrals de admisión y validación no suman. Para otros eventos conserva
+    # el contador de fallos del outbox genérico.
     attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
@@ -530,6 +568,7 @@ __all__ = [
     "LIVE_CHARGE_PAYMENT_STATUSES",
     "PAYMENT_PROVIDER_MANUAL",
     "PAYMENT_PROVIDER_MERCADOPAGO",
+    "OUTBOX_EMAIL_MAX_ATTEMPTS",
     "WEBHOOK_INBOX_MAX_ATTEMPTS",
     "can_apply_payment_status",
     "is_placeholder_preference_id",

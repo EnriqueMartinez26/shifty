@@ -24,9 +24,11 @@ from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modules.appointments.model import Appointment
 import modules.notifications.tasks as tasks
 import modules.waitlist.tasks as waitlist_tasks
-from modules.payments.jobs import process_outbox_batch
+from modules.payments.jobs import EVENT_EMAIL_SEND, process_outbox_batch
+from modules.payments.model import OutboxMessage
 from modules.waitlist.model import WaitlistEntry
 from modules.waitlist.offers import expire_lapsed_offers
 from tests.integration.test_feature_flags_finance_and_public_privacy import (
@@ -157,7 +159,7 @@ async def test_la_corrida_por_defecto_tambien_tiene_tope(
 
 
 @pytest.mark.asyncio
-async def test_la_corrida_commitea_una_vez_y_manda_los_mails_despues(
+async def test_la_corrida_persiste_el_mail_y_el_dispatch_va_despues_del_commit(
     client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Guarda del bloque "Lista de espera": ningun mail dentro de la transaccion."""
@@ -188,6 +190,24 @@ async def test_la_corrida_commitea_una_vez_y_manda_los_mails_despues(
     commit_original = test_session.commit
 
     async def commit_espiado() -> None:
+        filas_email: list[OutboxMessage] = []
+        for fila in test_session.new:
+            if not isinstance(fila, OutboxMessage) or fila.event_type != "email.send":
+                continue
+            payload = fila.payload
+            if not isinstance(payload, dict):
+                continue
+            argumentos = payload.get("args")
+            if (
+                isinstance(argumentos, dict)
+                and argumentos.get("email") == "marta@example.com"
+            ):
+                filas_email.append(fila)
+        assert len(filas_email) == 1, filas_email
+        assert any(
+            isinstance(entrada, WaitlistEntry) and entrada.status == "offered"
+            for entrada in test_session.dirty
+        )
         eventos.append("commit")
         await commit_original()
 
@@ -210,7 +230,168 @@ async def test_la_corrida_commitea_una_vez_y_manda_los_mails_despues(
     )
 
     assert contadores["reoffered"] == 1, contadores
+    assert eventos == ["commit"], eventos
+
+    await process_outbox_batch(test_session, incluir_vencimientos=False)
+
     assert eventos == ["commit", "mail:marta@example.com"], eventos
+
+
+@pytest.mark.parametrize("reofertar", [True, False], ids=["reoferta", "solo-expirada"])
+@pytest.mark.asyncio
+async def test_retry_de_oferta_expirada_no_manda_datos_viejos_ni_muta_estado(
+    client: AsyncClient,
+    test_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    reofertar: bool,
+) -> None:
+    """Un retry pre-DATA no manda A tras vencerla, aunque el outbox siga pendiente."""
+    slug = f"retry-oferta-{'b' if reofertar else 'expirada'}"
+    email_a = f"lucia-{slug}@example.com"
+    email_b = f"marta-{slug}@example.com"
+    fallar_a = True
+    enviados: list[tuple[str, str, str]] = []
+
+    async def sink(to: str, subject: str, body: str, smtp: Any = None) -> bool:
+        nonlocal fallar_a
+        if to == email_a and fallar_a:
+            fallar_a = False
+            smtp.last_delivery_retryable = True
+            return False
+        enviados.append((to, subject, body))
+        return True
+
+    monkeypatch.setattr(tasks, "_send_email", sink)
+    store, token, service, staff, slot = await _tienda(client, slug)
+    entry_ids: list[str] = []
+    for nombre, telefono, email in (
+        ("Lucia", "+5491155550121", email_a),
+        ("Marta", "+5491155550122", email_b),
+    ):
+        alta = await client.post(
+            "/public/waitlist",
+            json=_alta(
+                store,
+                service,
+                slot,
+                client_name=nombre,
+                client_phone=telefono,
+                client_email=email,
+            ),
+        )
+        assert alta.status_code == 201, alta.text
+        entry_ids.append(str(alta.json()["public_id"]))
+
+    appointment_id = await _reservar(
+        client, store, service, staff, slot, f"{slug}-booking"
+    )
+    cancelar = await client.patch(
+        f"/appointments/{appointment_id}/cancel", headers=auth_headers(token)
+    )
+    assert cancelar.status_code == 200, cancelar.text
+    await process_outbox_batch(test_session, incluir_vencimientos=False)
+    assert not fallar_a, "la primera oferta de A no tuvo fallo pre-DATA"
+
+    async def fila_de_mail(email: str) -> OutboxMessage:
+        filas = list(
+            (
+                await test_session.execute(
+                    select(OutboxMessage).where(
+                        OutboxMessage.event_type == EVENT_EMAIL_SEND
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+        def es_mail_de(fila: OutboxMessage) -> bool:
+            args = fila.payload.get("args")
+            return isinstance(args, dict) and args.get("email") == email
+
+        matches = [fila for fila in filas if es_mail_de(fila)]
+        assert len(matches) == 1, matches
+        return matches[0]
+
+    mail_a = await fila_de_mail(email_a)
+    assert mail_a.attempts == 1
+    assert mail_a.processed_at is None
+    assert mail_a.delivery_status == "pending"
+    assert email_a not in [destino for destino, _asunto, _cuerpo in enviados]
+    raw_guard = mail_a.payload.get("waitlist_offer_guard")
+    assert isinstance(raw_guard, dict)
+    entry_a_id = raw_guard.get("entry_id")
+    assert isinstance(entry_a_id, str)
+    entry_a = await test_session.get(WaitlistEntry, entry_a_id)
+    assert entry_a is not None
+    entry_b_id = entry_ids[1]
+
+    # El outbox conserva el intento A; hacemos vencer esa oferta antes del retry.
+    entry_a.offer_expires_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+    mail_a.next_attempt_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    await test_session.commit()
+    if reofertar:
+
+        @asynccontextmanager
+        async def sesion_de_prueba() -> AsyncIterator[AsyncSession]:
+            yield test_session
+
+        monkeypatch.setattr(waitlist_tasks, "AsyncSessionFactory", sesion_de_prueba)
+        resultado = await waitlist_tasks.process_waitlist_offers_once(
+            now=datetime.now(timezone.utc)
+        )
+        assert resultado["reoffered"] == 1, resultado
+
+    test_session.expire_all()
+
+    async def estado_lista() -> list[tuple[Any, ...]]:
+        resultado = await test_session.execute(
+            select(
+                WaitlistEntry.id,
+                WaitlistEntry.status,
+                WaitlistEntry.offer_expires_at,
+                WaitlistEntry.offered_staff_id,
+                WaitlistEntry.offered_starts_at,
+                WaitlistEntry.offered_ends_at,
+                WaitlistEntry.lapsed_offers,
+            )
+            .where(WaitlistEntry.id.in_([entry_a_id, entry_b_id]))
+            .order_by(WaitlistEntry.id)
+        )
+        return [tuple(fila) for fila in resultado.all()]
+
+    estado_antes = await estado_lista()
+    booking_antes = (
+        await test_session.execute(
+            select(Appointment.status).where(Appointment.id == appointment_id)
+        )
+    ).scalar_one()
+
+    # Re-dispatch claims A first, marks it terminal as stale, then sends B only
+    # when the expiration path handed the slot to B.
+    await process_outbox_batch(test_session, incluir_vencimientos=False)
+
+    test_session.expire_all()
+    estado_despues = await estado_lista()
+    booking_despues = (
+        await test_session.execute(
+            select(Appointment.status).where(Appointment.id == appointment_id)
+        )
+    ).scalar_one()
+    mail_a = await fila_de_mail(email_a)
+    assert mail_a.processed_at is not None
+    assert mail_a.delivery_status == "expired"
+    assert mail_a.error == "waitlist_offer_stale"
+    assert mail_a.attempts == 1
+    assert estado_despues == estado_antes
+    assert booking_despues == booking_antes
+    assert email_a not in [destino for destino, _asunto, _cuerpo in enviados]
+    assert (email_b in [destino for destino, _asunto, _cuerpo in enviados]) is reofertar
+    if reofertar:
+        assert any(
+            destino == email_b and "Marta" in cuerpo
+            for destino, _asunto, cuerpo in enviados
+        )
 
 
 @pytest.mark.asyncio

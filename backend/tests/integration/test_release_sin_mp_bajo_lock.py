@@ -341,11 +341,24 @@ async def test_los_lotes_del_outbox_no_usan_or_y_el_principal_usa_el_indice(
             s.compile().params.values()
         )
 
-    reclamos = [str(s) for s in lotes if _reclamo_de_mail(s)]
+    # El barrido de claims abandonados consulta filas procesadas y usa su
+    # propio indice; esta guardia cubre solo los mails pendientes.
+    reclamos = [
+        s for s in lotes if _reclamo_de_mail(s) and "processed_at IS NULL" in str(s)
+    ]
     assert reclamos, "el despacho no reclamo ningun mail"
-    assert all(" OR " not in t and "processed_at IS NULL" in t for t in reclamos), (
-        reclamos
+    assert all(" OR " not in str(s) for s in reclamos), [str(s) for s in reclamos]
+    email_claim = next(
+        s for s in reclamos if EVENT_EMAIL_SEND in s.compile().params.values()
     )
+    email_compiled = email_claim.compile(
+        dialect=sqlite.dialect(), compile_kwargs={"literal_binds": True}
+    )
+    email_plan = (
+        await test_session.execute(text(f"EXPLAIN QUERY PLAN {email_compiled}"))
+    ).all()
+    assert any("ix_outbox_email_due" in str(row) for row in email_plan), email_plan
+
     lotes = [s for s in lotes if not _reclamo_de_mail(s)]
     textos = [str(s) for s in lotes]
     assert len(textos) == 3, textos

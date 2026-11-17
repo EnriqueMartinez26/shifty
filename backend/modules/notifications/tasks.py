@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import re
 import smtplib
+import socket
 import ssl
 import time
 from collections.abc import AsyncIterator
@@ -11,13 +13,22 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 from email.utils import parseaddr
-from typing import Any
+from typing import Any, Callable, cast
+from uuid import uuid4
 
 import structlog
 from celery.exceptions import SoftTimeLimitExceeded
 
 from core.celery_app import celery_app
 from core.enqueue import enqueue
+from core.mail_budget import (
+    MailPriority,
+    current_mail_context,
+    current_mail_pre_data_retry,
+    finish_mail,
+    mail_delivery_context,
+    reserve_mail,
+)
 from core.worker_loop import run_in_worker_loop
 from core.config import settings
 from core.utils import ARGENTINA_TZ, format_ars
@@ -38,15 +49,12 @@ from modules.notifications.reminders import (
 
 logger = structlog.get_logger()
 
-# B4-02 (2026-09-17): el lote de recordatorios corre bajo el time limit de
-# Celery (120 s soft / 150 s hard, core/config.py) y cada recordatorio se
-# reclama con commit ANTES de mandarse. Sin tope, con un SMTP lento el hard
-# limit mataba el proceso a mitad del lote y los turnos ya reclamados quedaban
-# marcados como enviados sin mail: la corrida siguiente los descartaba. Dos
-# topes: filas por corrida (la query traia 5 objetos ORM por turno de 48 h de
-# TODAS las tiendas) y un presupuesto de tiempo que se revisa ANTES de reclamar
-# el siguiente. Lo que no entra queda con la marca en NULL y espera al tick
-# siguiente (beat cada 15 minutos); el reclamo sigue siendo la exclusion.
+# B4-02 (2026-09-17): el lote tiene un tope de filas y un presupuesto de
+# tiempo. Cada etapa y su email.send se guardan juntos en SQL antes de marcar
+# el recordatorio programado. El SMTP lo procesa el despachador del outbox:
+# un reinicio entre la programacion y el envio deja la fila pendiente para el
+# siguiente tick. Las filas que no entran al presupuesto siguen con la marca
+# en NULL y vuelven a salir en la corrida siguiente.
 #
 # S-06 (2026-09-18): el resultado decia ``deferred`` y contaba solo las filas
 # TRAIDAS que el presupuesto no alcanzo a revisar; lo que quedaba afuera del
@@ -162,30 +170,61 @@ _SMTP_REPLIES: tuple[type[Exception], ...] = (
 )
 
 
+def _is_retryable_pre_data_error(exc: Exception) -> bool:
+    """Only transient SMTP/network failures before DATA can reuse a delivery ID."""
+    if isinstance(exc, smtplib.SMTPRecipientsRefused):
+        codes = [code for code, _response in exc.recipients.values()]
+        return bool(codes) and all(400 <= code < 500 for code in codes)
+    if isinstance(exc, smtplib.SMTPResponseException):
+        return 400 <= exc.smtp_code < 500
+    if isinstance(exc, socket.gaierror):
+        return exc.errno == socket.EAI_AGAIN
+    if isinstance(exc, OSError) and exc.errno in {
+        errno.ENETUNREACH,
+        errno.EHOSTUNREACH,
+    }:
+        return True
+    return isinstance(
+        exc,
+        (ConnectionError, TimeoutError, smtplib.SMTPServerDisconnected),
+    )
+
+
 class SmtpSession:
     """Una conexion SMTP (conexion + STARTTLS + LOGIN) para varios envios.
 
     B4-08 (2026-09-18): ``_send_email`` abria conexion, STARTTLS y LOGIN por
-    cada mensaje, y el lote de recordatorios pagaba N handshakes en serie
-    contra el time limit de Celery. Decision del coordinador: una sesion
-    reutilizable a lo largo del lote (no una API de lista), para conservar el
-    ciclo de B4-02 por turno (presupuesto -> reclamo -> envio -> liberacion).
+    cada mensaje. El dispatcher reutiliza una sesion SMTP a lo largo del lote
+    de outbox para evitar N handshakes en serie contra el time limit de Celery.
 
     La conexion se abre en el primer envio, no al entrar: un lote sin mails
     no toca el SMTP, y el cierre nunca ocurre con el lote de la base sin
     commitear.
 
     Revision V-diff (2026-09-18): una conexion YA USADA se sondea con ``NOOP``
-    antes de cada envio; si esta muerta se descarta y se abre otra. Un fallo
-    del envio en si NUNCA se reintenta: smtplib convierte en
-    ``SMTPServerDisconnected`` hasta el timeout esperando el ``250`` del
-    DATA, y si el servidor ya habia aceptado el mensaje, reenviarlo le
-    mandaba el recordatorio dos veces al cliente. ``send`` devuelve False y
-    el llamador libera su reclamo como en B4-02.
+    antes de cada envio; si esta muerta se descarta y se abre otra. Un error
+    ambiguo durante DATA no se reintenta: smtplib puede esperar el ``250``
+    despues de que el servidor acepto el mensaje. Solo un fallo positivo antes
+    de DATA queda habilitado para el reintento acotado del dispatcher; los
+    demas reclamos permanecen terminales.
     """
 
     def __init__(self) -> None:
         self._smtp: smtplib.SMTP | None = None
+        self.last_budget_decision: str | None = None
+        self.last_budget_retry_at: datetime | None = None
+        self.last_delivery_attempted = False
+        self.last_delivery_retryable = False
+        self.last_delivery_ambiguous = False
+        self._last_pre_data_failure = False
+
+    def _reset_attempt_state(self) -> None:
+        self.last_budget_decision = None
+        self.last_budget_retry_at = None
+        self.last_delivery_attempted = False
+        self.last_delivery_retryable = False
+        self.last_delivery_ambiguous = False
+        self._last_pre_data_failure = False
 
     def _connect(self) -> smtplib.SMTP:
         smtp = smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=10)
@@ -226,30 +265,105 @@ class SmtpSession:
             self._discard()
 
     def _send_sync(self, message: EmailMessage) -> None:
+        self.last_delivery_attempted = True
+        self._last_pre_data_failure = False
+        self.last_delivery_ambiguous = False
         self._probe()
         if self._smtp is None:
-            self._smtp = self._connect()
+            try:
+                self._smtp = self._connect()
+            except Exception as exc:
+                self._last_pre_data_failure = _is_retryable_pre_data_error(exc)
+                raise
+        smtp = self._smtp
+        original_data: Callable[[bytes | str], tuple[int, bytes]] | None = getattr(
+            smtp, "data", None
+        )
+        # If an SMTP test double omits smtplib's ``data`` method, treat any
+        # send_message error conservatively as ambiguous; production smtplib
+        # always exposes it, so stage tracking remains precise there.
+        data_started = original_data is None
+
+        # smtplib.SMTP.data writes DATA and reads the 354 response before it
+        # sends the message body. Track that boundary: a refusal before 354 is
+        # a known pre-body failure, while an error after body transmission may
+        # follow provider acceptance and must remain terminal.
+        if original_data is not None:
+            data_method = original_data
+            original_send = getattr(smtp, "send", None)
+            original_getreply = getattr(smtp, "getreply", None)
+
+            def tracked_data(message_bytes: bytes | str) -> tuple[int, bytes]:
+                nonlocal data_started
+                if not callable(original_send) or not callable(original_getreply):
+                    # Small SMTP test doubles only expose ``data``; without
+                    # smtplib's protocol hooks, keep the conservative behavior.
+                    data_started = True
+                    self.last_delivery_ambiguous = True
+                    response = data_method(message_bytes)
+                    if response[0] == 250:
+                        self.last_delivery_ambiguous = False
+                    return response
+
+                data_accepted = False
+                data_reply_seen = False
+
+                def tracked_send(payload: bytes | str) -> None:
+                    nonlocal data_started
+                    if data_accepted:
+                        data_started = True
+                        self.last_delivery_ambiguous = True
+                    original_send(payload)
+
+                def tracked_getreply() -> tuple[int, bytes]:
+                    nonlocal data_accepted, data_reply_seen
+                    response = original_getreply()
+                    if not data_reply_seen:
+                        data_reply_seen = True
+                        data_accepted = response[0] == 354
+                    return cast(tuple[int, bytes], response)
+
+                setattr(smtp, "send", tracked_send)
+                setattr(smtp, "getreply", tracked_getreply)
+                try:
+                    response = data_method(message_bytes)
+                    if response[0] == 250:
+                        self.last_delivery_ambiguous = False
+                    return response
+                finally:
+                    setattr(smtp, "send", original_send)
+                    setattr(smtp, "getreply", original_getreply)
+
+            setattr(smtp, "data", tracked_data)
         try:
-            self._smtp.send_message(message)
+            smtp.send_message(message)
         except Exception as exc:
-            # Sin reintento: el DATA pudo haber llegado. Si el servidor
-            # respondio con un error la conversacion sigue coherente; si no,
-            # la conexion queda en estado incierto y se descarta.
+            self._last_pre_data_failure = (
+                not data_started and _is_retryable_pre_data_error(exc)
+            )
             if not isinstance(exc, _SMTP_REPLIES):
                 self._discard()
             raise
+        finally:
+            if original_data is not None:
+                setattr(smtp, "data", original_data)
 
     async def send(
-        self, to: str, subject: str, body: str, reply_to: str | None = None
+        self,
+        to: str,
+        subject: str,
+        body: str,
+        reply_to: str | None = None,
+        *,
+        priority: MailPriority = "medium",
+        message_id: str | None = None,
     ) -> bool:
+        self._reset_attempt_state()
         try:
-            # AUD2-B4-08: dentro del try. Afuera, un error del parser de
-            # cabeceras se propagaba con el asunto o la direccion en el
-            # texto, y en el recordatorio liberaba el reclamo, asi que el
-            # mismo turno reintentaba cada 15 minutos hasta su hora.
+            # AUD2-B4-08: dentro del try. Un error del parser de cabeceras se
+            # registra sin PII y no escapa del sink. Como no es un fallo SMTP
+            # transitorio pre-DATA, el outbox no reabre el reclamo.
             message = _build_message(to, subject, body, reply_to)
-            await asyncio.to_thread(self._send_sync, message)
-            return True
         except SoftTimeLimitExceeded:
             raise
         except Exception as exc:
@@ -263,6 +377,55 @@ class SmtpSession:
                 component="notifications", error_type=type(exc).__name__
             )
             return False
+
+        budget_context = current_mail_context()
+        retry_pre_data = current_mail_pre_data_retry()
+        effective_priority, effective_message_id = budget_context or (
+            "medium",
+            f"smtp:{uuid4().hex}",
+        )
+        reservation = await reserve_mail(
+            priority=effective_priority,
+            message_id=effective_message_id,
+        )
+        self.last_budget_decision = reservation.decision
+        self.last_budget_retry_at = reservation.retry_at
+        if reservation.decision != "admitted":
+            logger.warning(
+                "mail_budget_admission_rejected",
+                decision=reservation.decision,
+                priority=effective_priority,
+                window=reservation.window_id,
+            )
+            return False
+
+        try:
+            await asyncio.to_thread(self._send_sync, message)
+        except SoftTimeLimitExceeded:
+            await finish_mail(reservation, sent=False)
+            raise
+        except Exception as exc:
+            self.last_delivery_retryable = (
+                retry_pre_data and self._last_pre_data_failure
+            )
+            await finish_mail(
+                reservation,
+                sent=False,
+                retryable=self.last_delivery_retryable,
+            )
+            logger.error(
+                "smtp_send_failed",
+                to=_mask_email(to),
+                error_type=type(exc).__name__,
+                error=_safe_error(exc),
+            )
+            if not (retry_pre_data and self.last_delivery_retryable):
+                report_mail_failure(
+                    component="notifications", error_type=type(exc).__name__
+                )
+            return False
+        await finish_mail(reservation, sent=True)
+        return True
 
     def close(self) -> None:
         smtp, self._smtp = self._smtp, None
@@ -317,12 +480,28 @@ async def _send_email(
         return await session.send(to, subject, body, reply_to)
 
 
+def _mail_message_id(kind: str, details: dict[str, Any]) -> str:
+    entity_id = details.get("public_id") or details.get("appointment_id")
+    if not entity_id:
+        return f"{kind}:{uuid4().hex}"
+    discriminator = details.get("stage")
+    if kind == "waitlist-offer":
+        # Una entrada puede recibir ofertas para distintos turnos; el id de
+        # entrada solo deduplica el reintento de ESTA oferta, no las siguientes.
+        discriminator = details.get("starts_at") or discriminator
+    suffix = f":{discriminator}" if discriminator else ""
+    return f"{kind}:{entity_id}{suffix}"
+
+
 async def _send_client_email(
     to: str,
     subject: str,
     body: str,
     smtp: SmtpSession | None,
     details: dict[str, Any],
+    *,
+    priority: MailPriority = "high",
+    message_id: str | None = None,
 ) -> bool:
     """Sink de los mails AL CLIENTE: la respuesta va a la tienda (#283).
 
@@ -333,12 +512,28 @@ async def _send_client_email(
     los avisos al dueno no pasan por aca.
     """
     reply_to = _reply_to_header(details.get("reply_to"))
-    if reply_to is None:
-        return await _send_email(to, subject, body, smtp)
-    return await _send_email(to, subject, body, smtp, reply_to=reply_to)
+    effective_context = current_mail_context() or (
+        priority,
+        message_id or _mail_message_id("client", details),
+    )
+    with mail_delivery_context(
+        priority=effective_context[0],
+        message_id=effective_context[1],
+        retry_pre_data=current_mail_pre_data_retry(),
+    ):
+        if reply_to is None:
+            return await _send_email(to, subject, body, smtp)
+        return await _send_email(to, subject, body, smtp, reply_to=reply_to)
 
 
-async def send_email(to: str, subject: str, body: str) -> bool:
+async def send_email(
+    to: str,
+    subject: str,
+    body: str,
+    *,
+    priority: MailPriority = "medium",
+    message_id: str | None = None,
+) -> bool:
     """Envio suelto para otros modulos (p. ej. el OTP). Devuelve si salio.
 
     B4-12 (2026-09-18): ``otp`` importaba ``_send_email`` dentro de la
@@ -346,16 +541,28 @@ async def send_email(to: str, subject: str, body: str) -> bool:
     de la llamada (no es un alias ligado al importar), asi el sink SMTP sigue
     siendo uno solo y los tests que lo reemplazan cubren tambien este camino.
     """
-    return await _send_email(to, subject, body)
+    with mail_delivery_context(
+        priority=priority, message_id=message_id or f"smtp:{uuid4().hex}"
+    ):
+        return await _send_email(to, subject, body)
 
 
-async def deliver_otp_email(to: str, subject: str, body: str) -> dict[str, str]:
+async def deliver_otp_email(
+    to: str,
+    subject: str,
+    body: str,
+    *,
+    message_id: str | None = None,
+) -> dict[str, str]:
     """Cuerpo de la tarea ``send_otp_email``: manda por el sink unico.
 
     Vive aparte del wrapper de Celery para poder probarse con ``await``
     (``run_in_worker_loop`` se niega a anidarse en un loop activo).
     """
-    delivered = await _send_email(to, subject, body)
+    with mail_delivery_context(
+        priority="critical", message_id=message_id or f"otp:{uuid4().hex}"
+    ):
+        delivered = await _send_email(to, subject, body)
     if not delivered:
         # El detalle ya lo logueo el sink, enmascarado. Aca solo queda que
         # este pedido de OTP no llego.
@@ -363,7 +570,7 @@ async def deliver_otp_email(to: str, subject: str, body: str) -> dict[str, str]:
     return {"status": "sent" if delivered else "failed"}
 
 
-def _send_otp_email_task(to: str, subject: str, body: str) -> dict[str, str]:
+def _send_otp_email_task(self: Any, to: str, subject: str, body: str) -> dict[str, str]:
     """Tarea de Celery: el mail del OTP sale del worker, no de la API.
 
     AUD2-B4-06 (2026-09-20): B4-01 saco el envio del camino sincronico con
@@ -377,12 +584,19 @@ def _send_otp_email_task(to: str, subject: str, body: str) -> dict[str, str]:
     razon que en ``SmtpSession``). La durabilidad la da el broker, no el
     reintento de la tarea.
     """
-    return run_in_worker_loop(deliver_otp_email(to, subject, body))
+    return run_in_worker_loop(
+        deliver_otp_email(
+            to,
+            subject,
+            body,
+            message_id=f"otp:{self.request.id or uuid4().hex}",
+        )
+    )
 
 
 # Anotada ``Any``: el nombre publico es la tarea de Celery, y a esta ademas
 # se le llama ``.delay``, que el tipo de la funcion cruda no tiene.
-send_otp_email: Any = celery_app.task(name="send_otp_email", max_retries=0)(
+send_otp_email: Any = celery_app.task(name="send_otp_email", bind=True, max_retries=0)(
     _send_otp_email_task
 )
 
@@ -666,10 +880,27 @@ def _rescheduled_body(details: dict[str, Any]) -> str:
 # los ``partial`` de payments/jobs). Quien necesite asincronia despacha una
 # tarea de verdad; ``tests/architecture/test_enqueue_encola_de_verdad.py``
 # impide que vuelva un ``enqueue_*`` que mande en linea.
+def _reset_smtp_attempt(smtp: SmtpSession | None) -> None:
+    reset = getattr(smtp, "_reset_attempt_state", None)
+    if callable(reset):
+        reset()
+
+
+def _report_mail_wrapper_failure(smtp: SmtpSession | None, exc: Exception) -> None:
+    if (
+        smtp is not None
+        and getattr(smtp, "last_delivery_attempted", False)
+        and getattr(smtp, "last_delivery_retryable", False)
+    ):
+        return
+    report_mail_failure(component="notifications", error_type=type(exc).__name__)
+
+
 async def send_reschedule_email(
     *, email: str | None, details: dict[str, Any], smtp: SmtpSession | None = None
 ) -> dict[str, str]:
     """Mail "te movimos el turno". Nunca aborta la reprogramacion."""
+    _reset_smtp_attempt(smtp)
     if not is_deliverable_email(email):
         return {"status": "skipped", "reason": "no-deliverable"}
     assert email is not None
@@ -680,6 +911,8 @@ async def send_reschedule_email(
             _rescheduled_body(details),
             smtp,
             details,
+            priority="high",
+            message_id=_mail_message_id("reschedule", details),
         )
     except SoftTimeLimitExceeded:
         raise
@@ -689,7 +922,7 @@ async def send_reschedule_email(
             appointment=details.get("public_id"),
             error_type=type(exc).__name__,
         )
-        report_mail_failure(component="notifications", error_type=type(exc).__name__)
+        _report_mail_wrapper_failure(smtp, exc)
         return {"status": "failed", "reason": type(exc).__name__}
     if not success:
         return {"status": "failed", "reason": "smtp"}
@@ -778,6 +1011,8 @@ async def send_appointment_confirmation(
         _confirmation_body(details),
         smtp,
         details,
+        priority="high",
+        message_id=_mail_message_id("confirmation", details),
     )
     if not success:
         raise RuntimeError("SMTP send failed")
@@ -805,18 +1040,25 @@ async def notify_client_reminder(
     queda declarado en ``reminder_sin_canal`` en vez de escondido detras de
     un 201 de Twilio.
 
-    ``smtp`` es la sesion del lote (B4-08); sin ella el mail sale suelto.
+    ``smtp`` es la sesion compartida del lote de outbox; sin ella el mail sale
+    con una sesion suelta.
     """
     # El email tecnico {tel}@store{id}.noreply no recibe nada: mandarle ahi
-    # rebota, ensucia la reputacion del remitente y, como el fallo libera el
-    # reclamo, el job reintentaba cada 15 minutos hasta la hora del turno.
+    # rebota y ensucia la reputacion del remitente. El scheduler lo descarta
+    # antes de crear la fila durable.
     if not is_deliverable_email(email):
         email = None
 
     if email:
         asunto = _reminder_subject(details)
         enviado = await _send_client_email(
-            email, asunto, _reminder_body(details), smtp, details
+            email,
+            asunto,
+            _reminder_body(details),
+            smtp,
+            details,
+            priority="medium",
+            message_id=_mail_message_id("reminder", details),
         )
         if enviado:
             logger.info(
@@ -847,6 +1089,8 @@ async def send_appointment_registration(
         _registration_body(details),
         smtp,
         details,
+        priority="high",
+        message_id=_mail_message_id("registration", details),
     )
     if not success:
         raise RuntimeError("SMTP send failed")
@@ -857,6 +1101,7 @@ async def send_registration_email(
     *, email: str | None, details: dict[str, Any], smtp: SmtpSession | None = None
 ) -> dict[str, str]:
     """Mail "reserva registrada" al crear un turno pendiente. Nunca aborta."""
+    _reset_smtp_attempt(smtp)
     if not is_deliverable_email(email):
         return {"status": "skipped", "reason": "no-deliverable"}
     assert email is not None
@@ -870,7 +1115,7 @@ async def send_registration_email(
             appointment=details.get("public_id"),
             error_type=type(exc).__name__,
         )
-        report_mail_failure(component="notifications", error_type=type(exc).__name__)
+        _report_mail_wrapper_failure(smtp, exc)
         return {"status": "failed", "reason": type(exc).__name__}
 
 
@@ -878,6 +1123,7 @@ async def send_cancellation_email(
     *, email: str | None, details: dict[str, Any], smtp: SmtpSession | None = None
 ) -> dict[str, str]:
     """Mail "turno cancelado" (p.ej. por un bloqueo de agenda). Nunca aborta."""
+    _reset_smtp_attempt(smtp)
     if not is_deliverable_email(email):
         return {"status": "skipped", "reason": "no-deliverable"}
     assert email is not None
@@ -888,6 +1134,8 @@ async def send_cancellation_email(
             _cancellation_body(details),
             smtp,
             details,
+            priority="high",
+            message_id=_mail_message_id("cancellation", details),
         )
     except SoftTimeLimitExceeded:
         raise
@@ -897,7 +1145,7 @@ async def send_cancellation_email(
             appointment=details.get("public_id"),
             error_type=type(exc).__name__,
         )
-        report_mail_failure(component="notifications", error_type=type(exc).__name__)
+        _report_mail_wrapper_failure(smtp, exc)
         return {"status": "failed", "reason": type(exc).__name__}
     if not success:
         return {"status": "failed", "reason": "smtp"}
@@ -908,12 +1156,19 @@ async def send_rebook_email(
     *, email: str | None, details: dict[str, Any], smtp: SmtpSession | None = None
 ) -> dict[str, str]:
     """Mail "reserva tu proximo turno" al completar. Nunca aborta."""
+    _reset_smtp_attempt(smtp)
     if not is_deliverable_email(email):
         return {"status": "skipped", "reason": "no-deliverable"}
     assert email is not None
     try:
         success = await _send_client_email(
-            email, _rebook_subject(details), _rebook_body(details), smtp, details
+            email,
+            _rebook_subject(details),
+            _rebook_body(details),
+            smtp,
+            details,
+            priority="low",
+            message_id=_mail_message_id("rebook", details),
         )
     except SoftTimeLimitExceeded:
         raise
@@ -923,7 +1178,7 @@ async def send_rebook_email(
             appointment=details.get("public_id"),
             error_type=type(exc).__name__,
         )
-        report_mail_failure(component="notifications", error_type=type(exc).__name__)
+        _report_mail_wrapper_failure(smtp, exc)
         return {"status": "failed", "reason": type(exc).__name__}
     if not success:
         return {"status": "failed", "reason": "smtp"}
@@ -954,6 +1209,7 @@ async def send_waitlist_offer_email(
     *, email: str | None, details: dict[str, Any], smtp: SmtpSession | None = None
 ) -> dict[str, str]:
     """Mail "se libero un turno" a quien esta en lista de espera. Nunca aborta."""
+    _reset_smtp_attempt(smtp)
     if not is_deliverable_email(email):
         return {"status": "skipped", "reason": "no-deliverable"}
     assert email is not None
@@ -964,6 +1220,8 @@ async def send_waitlist_offer_email(
             _waitlist_offer_body(details),
             smtp,
             details,
+            priority="high",
+            message_id=_mail_message_id("waitlist-offer", details),
         )
     except SoftTimeLimitExceeded:
         raise
@@ -973,7 +1231,7 @@ async def send_waitlist_offer_email(
             entry=details.get("public_id"),
             error_type=type(exc).__name__,
         )
-        report_mail_failure(component="notifications", error_type=type(exc).__name__)
+        _report_mail_wrapper_failure(smtp, exc)
         return {"status": "failed", "reason": type(exc).__name__}
     if not success:
         return {"status": "failed", "reason": "smtp"}
@@ -984,6 +1242,7 @@ async def send_confirmation_email(
     *, email: str | None, details: dict[str, Any], smtp: SmtpSession | None = None
 ) -> dict[str, str]:
     """Mail "turno confirmado". Nunca aborta la confirmacion."""
+    _reset_smtp_attempt(smtp)
     if not is_deliverable_email(email):
         return {"status": "skipped", "reason": "no-deliverable"}
     assert email is not None
@@ -1000,7 +1259,7 @@ async def send_confirmation_email(
             error_type=type(exc).__name__,
             error=_safe_error(exc),
         )
-        report_mail_failure(component="notifications", error_type=type(exc).__name__)
+        _report_mail_wrapper_failure(smtp, exc)
         return {
             "status": "failed",
             "reason": type(exc).__name__,
@@ -1183,46 +1442,45 @@ async def enqueue_confirmation_email(*, store_id: str, appointment_id: str) -> b
 
 async def _dispatch_reminder(
     repo: Any,
+    reminder_service: Any,
     row: tuple[Any, Any, Any, Any, Any],
     stage: ReminderStage,
     now: datetime,
-    smtp: SmtpSession | None = None,
 ) -> bool:
-    """Reclama la marca durable y manda una etapa. Devuelve si se envio."""
+    """Persists a reminder email and its stage marker as one durable schedule."""
     appointment, service, staff, client, store = row
-    claimed = await repo.claim_reminder(appointment.id, stage.column, now)
-    if not claimed:
-        return False
     details = build_client_details(appointment, service, staff, store)
     details["stage"] = stage.name
-    try:
-        result = await notify_client_reminder(
-            # AUD2-B4-01 (2026-09-20): el email de ESTA reserva, como los
-            # otros cinco mails al cliente. El registro puede tener una
-            # direccion vieja (o una que el titular nunca dio: el flujo
-            # publico no pisa el contacto de una ficha existente) y el
-            # recordatorio era el unico aviso que la usaba. Se cae al registro
-            # si el turno no trae email.
-            email=getattr(appointment, "client_email", None)
-            or getattr(client, "email", None),
-            details=details,
-            smtp=smtp,
-        )
-    except SoftTimeLimitExceeded:
-        raise
-    except Exception as exc:
-        # Se libera la marca para reintentar en la proxima corrida.
-        await repo.release_reminder(appointment.id, stage.column)
-        logger.warning(
-            "appointment_reminder_dispatch_failed",
-            appointment=appointment.public_id,
-            stage=stage.name,
-            error_type=type(exc).__name__,
-            error=_safe_error(exc),
-        )
-        report_mail_failure(component="notifications", error_type=type(exc).__name__)
+    # AUD2-B4-01 (2026-09-20): usa el email de ESTA reserva y cae al registro
+    # si el turno no trae uno. Sin un destino entregable no hay mail que
+    # persistir; sellamos la etapa como una disposición terminal.
+    email = getattr(appointment, "client_email", None) or getattr(client, "email", None)
+    if not is_deliverable_email(email):
+        claimed = await repo.claim_reminder(appointment.id, stage.column, now)
+        if claimed:
+            logger.warning(
+                "reminder_sin_canal",
+                appointment=appointment.public_id,
+                motivo="el cliente no dejo un mail entregable",
+            )
         return False
-    return result.get("status") == "sent"
+
+    logical_id = _mail_message_id("reminder", details)
+    payload = {
+        "mail": "reminder",
+        "args": {"email": email, "details": details},
+        "source_event": "appointment.reminder",
+        "appointment_id": appointment.id,
+        "logical_id": logical_id,
+        "expires_at": appointment.starts_at.isoformat(),
+    }
+    scheduled = await reminder_service.schedule_reminder(
+        appointment_id=appointment.id,
+        column=stage.column,
+        scheduled_at=now,
+        payload=payload,
+    )
+    return bool(scheduled)
 
 
 @dataclass(frozen=True)
@@ -1276,17 +1534,17 @@ def _reminder_windows(now: datetime, lookahead_hours: int) -> list[_ReminderWind
 
 async def _process_reminder_window(
     repo: Any,
+    reminder_service: Any,
     ventana: _ReminderWindow,
     rows: list[tuple[Any, Any, Any, Any, Any]],
     now: datetime,
-    smtp: SmtpSession,
     deadline: float,
     totales: _ReminderTotals,
 ) -> bool:
     """Manda la etapa de esta ventana. False si se agoto el presupuesto.
 
-    El ciclo por turno de B4-02 no cambia: presupuesto -> reclamo -> envio ->
-    liberacion ante fallo.
+    Cada reclamo y su fila de salida se confirman juntos; los limites del lote
+    dejan sin cambios los turnos que esperan al proximo tick.
     """
     for index, row in enumerate(rows):
         if time.monotonic() >= deadline:
@@ -1309,7 +1567,7 @@ async def _process_reminder_window(
         if not getattr(store, "send_email_reminders", True):
             totales.skipped += 1
             continue
-        if await _dispatch_reminder(repo, row, ventana.stage, now, smtp):
+        if await _dispatch_reminder(repo, reminder_service, row, ventana.stage, now):
             totales.published += 1
     return True
 
@@ -1325,21 +1583,21 @@ async def process_due_appointment_reminders(
     # (inyectable en tests) y el presupuesto es tiempo real de proceso.
     deadline = time.monotonic() + REMINDER_TIME_BUDGET_SECONDS
 
-    from modules.appointments.repository import AppointmentRepository
+    from core.uow import AsyncSqlAlchemyUnitOfWork
+    from modules.appointments.service import ReminderScheduleService
 
     totales = _ReminderTotals()
     async with AsyncSessionFactory() as db:
         # Job global cross-tenant: sin request/tenant necesita el bypass RLS para
-        # ver y reclamar los turnos de TODAS las tiendas (shifty_app es
-        # NOBYPASSRLS). Los reclamos commitean PLANO (sin reabrir transaccion,
-        # para no quedar "idle in transaction" durante el SMTP, F1-22) y cada
-        # sentencia del repositorio reaplica este contexto al entrar.
+        # ver los turnos de TODAS las tiendas (shifty_app es NOBYPASSRLS). El
+        # agendado y su fila outbox commitean juntos; el repositorio reaplica
+        # este contexto antes de cada sentencia.
         set_tenant_context(None, True)
         try:
             await _apply_tenant_context(db)
-            repo = AppointmentRepository(db)
-            # B4-08: una sola conexion SMTP para todo el lote.
-            async with smtp_session() as smtp:
+            async with AsyncSqlAlchemyUnitOfWork(db) as uow:
+                repo = uow.appointments
+                reminder_service = ReminderScheduleService(uow)
                 for ventana in _reminder_windows(now, lookahead_hours):
                     rows = await repo.get_upcoming_for_reminders(
                         starts_after=ventana.starts_after,
@@ -1354,7 +1612,13 @@ async def process_due_appointment_reminders(
                     # Ventana llena: puede haber mas turnos afuera del tope.
                     totales.batch_full = totales.batch_full or len(rows) >= limit
                     if not await _process_reminder_window(
-                        repo, ventana, rows, now, smtp, deadline, totales
+                        repo,
+                        reminder_service,
+                        ventana,
+                        rows,
+                        now,
+                        deadline,
+                        totales,
                     ):
                         break
         finally:
@@ -1469,12 +1733,25 @@ async def send_store_notification_email(
     va en el sink del aviso, no en el proveedor, para que cubra a cualquier
     llamador nuevo sin que haya que acordarse.
     """
+    _reset_smtp_attempt(smtp)
     if not is_deliverable_email(email):
         return {"status": "skipped", "reason": "no-deliverable"}
     try:
-        delivered = await _send_email(
-            email, f"Shifty - {title}", _store_notification_body(title, body), smtp
+        effective_context = current_mail_context() or (
+            "high",
+            f"store-notification:{uuid4().hex}",
         )
+        with mail_delivery_context(
+            priority=effective_context[0],
+            message_id=effective_context[1],
+            retry_pre_data=current_mail_pre_data_retry(),
+        ):
+            delivered = await _send_email(
+                email,
+                f"Shifty - {title}",
+                _store_notification_body(title, body),
+                smtp,
+            )
         return {"status": "sent" if delivered else "failed"}
     except SoftTimeLimitExceeded:
         raise
@@ -1484,5 +1761,5 @@ async def send_store_notification_email(
             email=_mask_email(email),
             error_type=type(exc).__name__,
         )
-        report_mail_failure(component="notifications", error_type=type(exc).__name__)
+        _report_mail_wrapper_failure(smtp, exc)
         return {"status": "failed", "reason": type(exc).__name__}

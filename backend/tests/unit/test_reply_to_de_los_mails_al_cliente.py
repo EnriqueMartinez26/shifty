@@ -219,16 +219,23 @@ async def test_el_aviso_al_dueno_nunca_lleva_reply_to(
     ],
     ids=["reset", "clave-cambiada"],
 )
-def test_la_recuperacion_de_clave_nunca_lleva_reply_to(
-    enviar: Callable[[], None], monkeypatch: pytest.MonkeyPatch
+@pytest.mark.asyncio
+async def test_la_recuperacion_de_clave_nunca_lleva_reply_to(
+    enviar: Callable[[], Awaitable[None]], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     capturados: list[EmailMessage] = []
 
-    def _send_email(message: EmailMessage, *, event: str) -> None:
+    async def _send_email(
+        message: EmailMessage,
+        *,
+        event: str,
+        priority: str,
+        message_id: str,
+    ) -> None:
         capturados.append(message)
 
     monkeypatch.setattr(auth_service, "_send_email", _send_email)
-    enviar()
+    await enviar()
 
     [mensaje] = capturados
     assert "Reply-To" not in mensaje

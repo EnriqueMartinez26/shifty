@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from decimal import Decimal
-from typing import TYPE_CHECKING, TypedDict
+from typing import TYPE_CHECKING, Any, TypedDict
 
 import structlog
 import ulid
@@ -109,6 +109,41 @@ class BulkCancelResult:
     cancelled: list[str] = field(default_factory=list)
     # ``(id, codigo)``: el ``error_code`` de la cancelacion de a uno.
     skipped: list[tuple[str, str]] = field(default_factory=list)
+
+
+class ReminderScheduleService:
+    """Owns the reminder marker and outbox transaction for one schedule attempt."""
+
+    def __init__(self, uow: AbstractUnitOfWork) -> None:
+        self.uow = uow
+
+    async def schedule_reminder(
+        self,
+        *,
+        appointment_id: str,
+        column: str,
+        scheduled_at: datetime,
+        payload: dict[str, Any],
+    ) -> bool:
+        """Commit one marker+outbox attempt, including a no-op, then close it.
+
+        A plain ``AsyncSession`` commit returns the connection to the pool;
+        ``TenantSession.commit()`` reapplies RLS context and opens a new
+        transaction, which must not stay alive across reminder dispatch work.
+        SMTP is handled later by the regular outbox worker.
+        """
+        try:
+            scheduled = await self.uow.appointments.schedule_reminder(
+                appointment_id,
+                column,
+                scheduled_at,
+                payload,
+            )
+            await AsyncSession.commit(self.uow.session)
+        except BaseException:
+            await AsyncSession.rollback(self.uow.session)
+            raise
+        return scheduled
 
 
 class AppointmentService:
