@@ -246,6 +246,7 @@ async def test_un_mail_diferido_por_presupuesto_no_bloquea_uno_critico_y_espera_
     medium.created_at = ahora
     invalid_priority.created_at = ahora + timedelta(microseconds=1)
     critical.created_at = ahora + timedelta(microseconds=2)
+    reloj.now = critical.created_at
 
     await _send_with_smtp(
         test_session, monkeypatch, [medium, invalid_priority, critical], smtp
@@ -275,6 +276,7 @@ async def test_fallo_450_persiste_backoff_y_se_reintenta_solo_al_vencer(
     destinatario = "reintento@example.com"
     smtp = _Smtp450UnaVez(destinatario)
     row = _mail(destinatario)
+    row.created_at = ahora - timedelta(seconds=1)
 
     await _send_with_smtp(test_session, monkeypatch, [row], smtp)
 
@@ -315,6 +317,7 @@ async def test_el_mail_agota_el_maximo_de_intentos_y_queda_terminal(
     monkeypatch.setattr(jobs, "datetime", _DateTimeCongelado)
     destinatario = "siempre-450@example.com"
     row = _mail(destinatario)
+    row.created_at = ahora - timedelta(seconds=1)
     avisos_de_agotamiento: list[dict[str, Any]] = []
     avisos_del_sink: list[dict[str, Any]] = []
     monkeypatch.setattr(
@@ -405,6 +408,8 @@ async def test_redis_no_disponible_difiere_sesenta_segundos_sin_gastar_intento_n
     monkeypatch.setattr(mail_budget, "get_redis", get_redis)
     temporal = _mail("redis-temporal@example.com", prioridad="medium")
     critical = _mail("redis-available@example.com", prioridad="critical")
+    temporal.created_at = ahora - timedelta(seconds=2)
+    critical.created_at = ahora - timedelta(seconds=1)
     smtp = _Smtp450UnaVez("no-se-rechaza@example.com")
 
     await _send_with_smtp(test_session, monkeypatch, [temporal, critical], smtp)

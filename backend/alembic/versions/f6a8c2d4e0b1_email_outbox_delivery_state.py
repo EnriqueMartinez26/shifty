@@ -17,10 +17,9 @@ depends_on: Union[str, Sequence[str], None] = None
 
 INDICES = {
     "ix_outbox_email_due": (
-        "outbox_messages (next_attempt_at, created_at) "
-        "WHERE event_type = 'email.send' AND processed_at IS NULL AND "
-        "is_active IS TRUE AND (delivery_status IS NULL OR "
-        "delivery_status = 'pending')"
+        "outbox_messages (event_type, is_active, "
+        "COALESCE(next_attempt_at, created_at), created_at) "
+        "WHERE processed_at IS NULL"
     ),
     "ix_outbox_email_claimed": (
         "outbox_messages (claimed_at) "

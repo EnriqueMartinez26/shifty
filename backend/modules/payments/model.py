@@ -14,6 +14,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    func,
     text,
 )
 from sqlalchemy.ext.hybrid import hybrid_property
@@ -499,22 +500,17 @@ class OutboxMessage(BaseEntity):
             postgresql_where=text("processed_at IS NOT NULL"),
             sqlite_where=text("processed_at IS NOT NULL"),
         ),
-        # Cola de mails SMTP pendientes. NULL conserva las filas creadas antes
-        # del estado durable y sigue permitiendo reclamarlas durante el rollout.
+        # Cola de mails SMTP pendientes. La clave efectiva hace elegibles las
+        # filas sin next_attempt_at (incluidas las heredadas) sin un OR y ordena
+        # reintentos vencidos junto con mails nuevos por su siguiente fecha.
         Index(
             "ix_outbox_email_due",
-            "next_attempt_at",
+            "event_type",
+            "is_active",
+            func.coalesce(text("next_attempt_at"), text("created_at")),
             "created_at",
-            postgresql_where=text(
-                "event_type = 'email.send' AND processed_at IS NULL AND "
-                "is_active IS TRUE AND (delivery_status IS NULL OR "
-                "delivery_status = 'pending')"
-            ),
-            sqlite_where=text(
-                "event_type = 'email.send' AND processed_at IS NULL AND "
-                "is_active IS TRUE AND (delivery_status IS NULL OR "
-                "delivery_status = 'pending')"
-            ),
+            postgresql_where=text("processed_at IS NULL"),
+            sqlite_where=text("processed_at IS NULL"),
         ),
         # Solo las filas con claim que puede haber quedado abandonado.
         Index(

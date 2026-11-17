@@ -983,14 +983,7 @@ async def _claim_next_email(
         OutboxMessage.event_type == EVENT_EMAIL_SEND,
         OutboxMessage.processed_at.is_(None),
         OutboxMessage.is_active.is_(True),
-        or_(
-            OutboxMessage.delivery_status.is_(None),
-            OutboxMessage.delivery_status == "pending",
-        ),
-        or_(
-            OutboxMessage.next_attempt_at.is_(None),
-            OutboxMessage.next_attempt_at <= now,
-        ),
+        func.coalesce(OutboxMessage.next_attempt_at, OutboxMessage.created_at) <= now,
     ]
     if store_id:
         filtros.append(OutboxMessage.store_id == store_id)
@@ -999,7 +992,7 @@ async def _claim_next_email(
             select(OutboxMessage)
             .where(*filtros)
             .order_by(
-                OutboxMessage.next_attempt_at.asc().nulls_first(),
+                func.coalesce(OutboxMessage.next_attempt_at, OutboxMessage.created_at),
                 OutboxMessage.created_at.asc(),
             )
             .limit(1)

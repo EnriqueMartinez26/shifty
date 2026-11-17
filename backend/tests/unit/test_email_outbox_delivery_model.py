@@ -28,15 +28,13 @@ def test_smtp_due_index_includes_legacy_pending_rows() -> None:
     index = next(
         index for index in table.indexes if index.name == "ix_outbox_email_due"
     )
-    assert tuple(column.name for column in index.columns) == (
-        "next_attempt_at",
-        "created_at",
+    assert tuple(str(expression) for expression in index.expressions) == (
+        "outbox_messages.event_type",
+        "outbox_messages.is_active",
+        "coalesce(next_attempt_at, created_at)",
+        "outbox_messages.created_at",
     )
-    assert str(index.dialect_options["postgresql"]["where"]) == (
-        "event_type = 'email.send' AND processed_at IS NULL AND "
-        "is_active IS TRUE AND (delivery_status IS NULL OR "
-        "delivery_status = 'pending')"
-    )
+    assert str(index.dialect_options["postgresql"]["where"]) == ("processed_at IS NULL")
 
 
 def test_smtp_claim_index_only_contains_active_claimed_rows() -> None:
