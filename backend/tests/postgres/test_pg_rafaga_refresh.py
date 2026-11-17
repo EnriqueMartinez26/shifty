@@ -104,9 +104,7 @@ async def _motivos(
         return [cast(str | None, fila[0]) for fila in filas.all()]
 
 
-async def _esperar_bloqueadas(
-    owner_engine: AsyncEngine, esperado: int
-) -> None:
+async def _esperar_bloqueadas(owner_engine: AsyncEngine, esperado: int) -> None:
     """Espera a que Postgres confirme la intercalacion bajo un row lock."""
     # El rol de la app tiene lock_timeout de 5 s; dejar margen al observador.
     limite = asyncio.get_running_loop().time() + 2.5
