@@ -1094,7 +1094,14 @@ Una instrucción en lenguaje natural no es una garantía.
   clave y sin root, ufw con 22/80/443, actualizaciones de seguridad sin
   reinicio automático, fail2ban; pasos en `docs/DEPLOY_RUNBOOK.md` §1), y
   latencia por ruta cada 5 minutos. Se prueban con binarios falsos
-  (`tests/unit/host_falso.py`).
+  (`tests/unit/host_falso.py`). Desde el 2026-11-13 (dockerd colgado) el
+  guard corre de a una corrida (`flock`) y reinicia solo con ese lock y con
+  el contador anotado (si no, observa y avisa), con tope en cada llamada a
+  docker, sin reiniciar con el host saturado y con un solo aviso por corrida; los
+  mails de alerta del host salen por la misma cuenta de Brevo que la app y
+  ningún presupuesto de la app los cuenta (tampoco el `MAIL_DAILY_BUDGET`
+  que propone #313, abierto al 2026-11-15): tienen su propio tope diario
+  (`ALERT_EMAIL_MAX_PER_DAY`, en `alert()` de `scripts/lib/common.sh`).
 
 ### Tiempo
 

@@ -157,6 +157,18 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
+      # Redis real para los scripts Lua del monitor de SLO
+      # (tests/unit/test_ops_slo_monitor_task.py, test_real_lua_*): el doble en
+      # Python de esos tests no ve un script roto (revision de la PR #308).
+      redis:
+        image: redis:7.4-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     env:
       # La migracion de RLS crea el rol shifty_app con esta contrasena. Es un
       # valor de prueba de este job, no un secreto de produccion (C-02).
@@ -174,6 +186,12 @@ jobs:
         run: uv sync --frozen
       - name: Run Postgres-only tests (RLS, GiST, triggers, migrations)
         run: uv run pytest tests/postgres -p no:cacheprovider
+      - name: Run SLO monitor Lua scripts against real Redis
+        # SLO_TEST_REDIS_REQUIRED=1: sin Redis el test falla, no se saltea.
+        env:
+          SLO_TEST_REDIS_URL: redis://127.0.0.1:6379/0
+          SLO_TEST_REDIS_REQUIRED: "1"
+        run: uv run pytest tests/unit/test_ops_slo_monitor_task.py -k real_lua -p no:cacheprovider
 
   secret-scan:
     # Escaneo de secretos con gitleaks: credenciales, tokens o claves reales
