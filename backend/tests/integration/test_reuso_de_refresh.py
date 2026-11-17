@@ -11,12 +11,13 @@ cero: la deteccion de robo de refresh no tenia ninguna prueba.
 Regla 15 de CLAUDE.md: la revocacion de la familia entera se conserva; lo que
 cambia es que vive en un solo lugar.
 
-2026-09-28, D-20260928-01; revisada por D-20261113-01. Reusar un refresh
-rotado durante la gracia da 401 sin tocar las demas sesiones; fuera de la
-ventana, el primer replay no expirado consume el historial rotado y revoca las
-sesiones vivas una sola vez. Logout, revocacion propia o administrativa y
+2026-09-28, D-20260928-01; revisada por D-20261113-01 y D-20261117-01. Reusar
+un refresh rotado durante la gracia da 401 sin tocar las demas sesiones; fuera
+de la ventana, el primer replay no expirado consume el historial rotado y
+revoca las sesiones vivas una sola vez. La revocacion administrativa y el
 cambio/reset de clave invalidan el historial anterior; el cambio de clave
-preserva el refresh actual. Un refresh expirado da 401 sin cascada, y un 401
+preserva el refresh actual. Logout y revocar UNA sesion propia no lo invalidan:
+el reuso posterior de un rotado sigue cascadeando (D-20261117-01). Un refresh expirado da 401 sin cascada, y un 401
 no borra la cookie. Las carreras reales se prueban en
 ``tests/postgres/test_pg_rafaga_refresh.py``.
 """
@@ -39,6 +40,7 @@ from modules.auth.service import (
     REVOKED_BY_OWNER,
     REVOKED_BY_PASSWORD,
     REVOKED_BY_REUSE,
+    REVOKED_BY_ROTATION,
     hash_token,
     refresh_session,
 )
@@ -320,10 +322,27 @@ async def test_reusar_un_refresh_cerrado_por_logout_no_revoca_sesiones_nuevas(
         assert (await client.post("/auth/refresh")).status_code == 200
 
 
+async def _id_de_sesion(test_session: AsyncSession, refresh: str) -> str:
+    return str(
+        (
+            await test_session.execute(
+                select(AuthSession.id).where(
+                    AuthSession.refresh_token_hash == hash_token(refresh)
+                )
+            )
+        ).scalar_one()
+    )
+
+
 @pytest.mark.asyncio
-async def test_replay_de_rotacion_anterior_a_logout_no_revoca_login_posterior(
+async def test_replay_de_rotacion_anterior_a_logout_cascadea(
     client: AsyncClient, test_session: AsyncSession
 ) -> None:
+    """D-20261117-01: un logout individual no desarma el historial rotado.
+
+    Costo aceptado: el replay tardio de A despues del logout de B cascadea y
+    cierra tambien el login posterior D, como antes de D-20261113-01.
+    """
     email = "reuso-logout-historico@test.com"
     await register_and_login(client, slug="reuso-logout-historico", email=email)
     viejo_a = client.cookies.get(REFRESH_COOKIE)
@@ -334,6 +353,7 @@ async def test_replay_de_rotacion_anterior_a_logout_no_revoca_login_posterior(
     salida = await client.post("/auth/logout")
     assert salida.status_code == 204, salida.text
     assert await _motivo_revocacion(test_session, refresh_b) == REVOKED_BY_LOGOUT
+    assert await _motivo_revocacion(test_session, viejo_a) == REVOKED_BY_ROTATION
 
     login_d = await _otro_dispositivo(client, email)
     await _envejecer_revocacion(test_session, viejo_a)
@@ -341,33 +361,31 @@ async def test_replay_de_rotacion_anterior_a_logout_no_revoca_login_posterior(
     replay = await client.post("/auth/refresh")
     assert replay.status_code == 401, replay.text
     assert "set-cookie" not in replay.headers
+    assert await _motivo_revocacion(test_session, viejo_a) == REVOKED_BY_REUSE
+    assert await _vivas(test_session) == 0
 
     _usar(client, login_d)
-    assert (await client.post("/auth/refresh")).status_code == 200
+    assert (await client.post("/auth/refresh")).status_code == 401
 
 
 @pytest.mark.asyncio
-async def test_replay_de_rotacion_anterior_a_revocacion_propia_no_revoca_login_posterior(
+async def test_replay_de_rotacion_anterior_a_revocacion_propia_cascadea(
     client: AsyncClient, test_session: AsyncSession
 ) -> None:
+    """D-20261117-01: revocar UNA sesion propia no desarma el historial rotado."""
     email = "reuso-revocacion-propia@test.com"
     await register_and_login(client, slug="reuso-revocacion-propia", email=email)
     viejo_a = client.cookies.get(REFRESH_COOKIE)
     assert viejo_a
     refresh_b, access_b = await _rotar(client, viejo_a)
-    sesion_b = (
-        await test_session.execute(
-            select(AuthSession.id).where(
-                AuthSession.refresh_token_hash == hash_token(refresh_b)
-            )
-        )
-    ).scalar_one()
+    sesion_b = await _id_de_sesion(test_session, refresh_b)
 
     salida = await client.delete(
         f"/auth/sessions/{sesion_b}", headers=auth_headers(access_b)
     )
     assert salida.status_code == 204, salida.text
     assert await _motivo_revocacion(test_session, refresh_b) == REVOKED_BY_OWNER
+    assert await _motivo_revocacion(test_session, viejo_a) == REVOKED_BY_ROTATION
 
     login_d = await _otro_dispositivo(client, email)
     await _envejecer_revocacion(test_session, viejo_a)
@@ -375,9 +393,81 @@ async def test_replay_de_rotacion_anterior_a_revocacion_propia_no_revoca_login_p
     replay = await client.post("/auth/refresh")
     assert replay.status_code == 401, replay.text
     assert "set-cookie" not in replay.headers
+    assert await _motivo_revocacion(test_session, viejo_a) == REVOKED_BY_REUSE
+    assert await _vivas(test_session) == 0
 
     _usar(client, login_d)
-    assert (await client.post("/auth/refresh")).status_code == 200
+    assert (await client.post("/auth/refresh")).status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_robo_clasico_tras_logout_de_otro_dispositivo_sigue_cascadeando(
+    client: AsyncClient, test_session: AsyncSession
+) -> None:
+    """Revision de PR #311, 2026-11-17 (D-20261117-01).
+
+    Sintoma en 39377b6b: el logout del telefono O desarmaba el historial rotado
+    de todo el usuario, asi que el reuso del A robado daba 401 sin cascada y la
+    sesion B' del atacante seguia viva hasta 30 dias.
+    """
+    email = "reuso-robo-logout@test.com"
+    await register_and_login(client, slug="reuso-robo-logout", email=email)
+    laptop_a = client.cookies.get(REFRESH_COOKIE)
+    assert laptop_a
+    telefono_o = await _otro_dispositivo(client, email)
+    atacante_b, _ = await _rotar(client, laptop_a)
+    await _envejecer_revocacion(test_session, laptop_a)
+
+    _usar(client, telefono_o)
+    salida = await client.post("/auth/logout")
+    assert salida.status_code == 204, salida.text
+    client.cookies.clear()
+
+    _usar(client, laptop_a)
+    reuso = await client.post("/auth/refresh")
+    assert reuso.status_code == 401, reuso.text
+    assert await _motivo_revocacion(test_session, laptop_a) == REVOKED_BY_REUSE
+    assert await _motivo_revocacion(test_session, atacante_b) == REVOKED_BY_REUSE
+    assert await _vivas(test_session) == 0
+
+    _usar(client, atacante_b)
+    assert (await client.post("/auth/refresh")).status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_robo_clasico_atacante_no_desarma_la_deteccion_con_revoke_own(
+    client: AsyncClient, test_session: AsyncSession
+) -> None:
+    """Revision de PR #311, 2026-11-17 (D-20261117-01).
+
+    Sintoma en 39377b6b: el atacante, con el access de B', cerraba la sesion O
+    de la victima (``DELETE /auth/sessions/{id}``); eso desarmaba el historial
+    rotado y el reuso del A robado ya no revocaba B'.
+    """
+    email = "reuso-robo-propia@test.com"
+    await register_and_login(client, slug="reuso-robo-propia", email=email)
+    laptop_a = client.cookies.get(REFRESH_COOKIE)
+    assert laptop_a
+    telefono_o = await _otro_dispositivo(client, email)
+    atacante_b, access_atacante = await _rotar(client, laptop_a)
+    await _envejecer_revocacion(test_session, laptop_a)
+
+    sesion_o = await _id_de_sesion(test_session, telefono_o)
+    borrar = await client.delete(
+        f"/auth/sessions/{sesion_o}", headers=auth_headers(access_atacante)
+    )
+    assert borrar.status_code == 204, borrar.text
+    assert await _motivo_revocacion(test_session, telefono_o) == REVOKED_BY_OWNER
+
+    _usar(client, laptop_a)
+    reuso = await client.post("/auth/refresh")
+    assert reuso.status_code == 401, reuso.text
+    assert await _motivo_revocacion(test_session, laptop_a) == REVOKED_BY_REUSE
+    assert await _motivo_revocacion(test_session, atacante_b) == REVOKED_BY_REUSE
+    assert await _vivas(test_session) == 0
+
+    _usar(client, atacante_b)
+    assert (await client.post("/auth/refresh")).status_code == 401
 
 
 @pytest.mark.asyncio

@@ -353,7 +353,13 @@ async def _load_locked_user(db: AsyncSession, user_id: str) -> User | None:
 
 
 async def _supersede_rotated_history(db: AsyncSession, user_ids: list[str]) -> None:
-    """Disarm prior rotated tokens while the caller holds their User locks."""
+    """Disarm prior rotated tokens while the caller holds their User locks.
+
+    D-20261117-01: only events that revoke EVERY session of the user call this
+    (reuse cascade, password change or reset, admin revocation). Logout and
+    revoking one own session must not: an attacker holding a stolen session
+    could otherwise switch off reuse detection for itself.
+    """
     if not user_ids:
         return
     await db.execute(
@@ -544,6 +550,9 @@ async def _handle_refresh_reuse(
     rotacion fuera de la ventana de gracia revoca las sesiones vivas restantes.
     Un token revocado por logout, admin o cambio de clave ya esta muerto; su
     repeticion no debe cerrar sesiones creadas despues de esa revocacion.
+    D-20261117-01 revisa D-20261113-01: un logout o la revocacion de UNA sesion
+    propia no desarman los ``rotated`` de las demas sesiones, asi que reusar uno
+    de ellos despues sigue cascadeando.
     """
     expires_at = session.expires_at
     if expires_at.tzinfo is None:
@@ -707,7 +716,6 @@ async def logout_session(refresh_token: str | None, db: AsyncSession) -> None:
         )
         session = session_result.scalar_one_or_none()
         if session and session.revoked_at is None:
-            await _supersede_rotated_history(db, [user_id])
             session.revoked_at = datetime.now(timezone.utc)
             session.revoked_reason = REVOKED_BY_LOGOUT
             await db.commit()
@@ -829,7 +837,6 @@ async def revoke_own_session(session_id: str, user: User, db: AsyncSession) -> N
     if session is None:
         raise ResourceNotFoundException(resource="Sesión", identifier=session_id)
     if session.revoked_at is None:
-        await _supersede_rotated_history(db, [user.id])
         session.revoked_at = datetime.now(timezone.utc)
         session.revoked_reason = REVOKED_BY_OWNER
         await db.commit()
