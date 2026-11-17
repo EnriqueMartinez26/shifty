@@ -40,7 +40,8 @@ const store: StoreSettings = {
     advanced_reports: false,
     new_calendar: false,
     otp_booking: false,
-    multi_service_booking: false
+    multi_service_booking: false,
+    suggested_slots_only: false
   }
 }
 
@@ -354,7 +355,8 @@ describe('SettingsPage - funciones (FF-28)', () => {
       advanced_reports: true,
       new_calendar: true,
       otp_booking: false,
-      multi_service_booking: false
+      multi_service_booking: false,
+      suggested_slots_only: false
     }
   }
 

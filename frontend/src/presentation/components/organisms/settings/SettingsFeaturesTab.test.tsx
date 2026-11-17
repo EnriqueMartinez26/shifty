@@ -13,14 +13,15 @@ const flags: StoreFeatureFlags = {
   advanced_reports: true,
   new_calendar: false,
   otp_booking: false,
-  multi_service_booking: false
+  multi_service_booking: false,
+  suggested_slots_only: false
 }
 
 describe('SettingsFeaturesTab', () => {
-  it('muestra solo los cuatro flags que el backend lee', () => {
+  it('muestra solo los cinco flags que el backend lee', () => {
     render(<SettingsFeaturesTab flags={flags} onChange={jest.fn()} />)
 
-    expect(screen.getAllByRole('switch')).toHaveLength(4)
+    expect(screen.getAllByRole('switch')).toHaveLength(5)
     expect(screen.getByRole('switch', { name: 'Deuda / fiado' })).toHaveAttribute(
       'aria-checked',
       'true'
@@ -45,6 +46,17 @@ describe('SettingsFeaturesTab', () => {
     fireEvent.click(screen.getByRole('switch', { name: 'Varios servicios en un turno' }))
 
     expect(onChange).toHaveBeenCalledWith({ ...flags, multi_service_booking: true })
+  })
+
+  // 2026-11-17 (decision de Mateo): saca "Ver todos" de la reserva publica.
+  it('solo horarios sugeridos se prende desde aca y explica que hace', () => {
+    const onChange = jest.fn()
+    render(<SettingsFeaturesTab flags={flags} onChange={onChange} />)
+
+    expect(screen.getByText(/se oculta la opción "Ver todos"/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('switch', { name: 'Solo horarios sugeridos' }))
+
+    expect(onChange).toHaveBeenCalledWith({ ...flags, suggested_slots_only: true })
   })
 
   it('en solo lectura los interruptores se apagan con el motivo', () => {

@@ -34,6 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.config import settings
 from core.database import get_db, tenant_bypass
+from core.feature_flags import SUGGESTED_SLOTS_ONLY_FLAG
 from core.exceptions import (
     AppException,
     AppointmentNotFoundException,
@@ -150,7 +151,12 @@ ExtraServiceQuery = Annotated[
     Query(max_length=EXTRA_SERVICES_INPUT_MAX),
 ]
 # Los flags que la vitrina publica expone (``GET /public/stores/{slug}``).
-PUBLIC_FEATURE_FLAGS = ("payments", "otp_booking", MULTI_SERVICE_FLAG)
+PUBLIC_FEATURE_FLAGS = (
+    "payments",
+    "otp_booking",
+    MULTI_SERVICE_FLAG,
+    SUGGESTED_SLOTS_ONLY_FLAG,
+)
 # Token que ``/public/otp/verify`` le devuelve a quien verifico: la
 # autogestion lo exige ademas de la verificacion en la base (2026-10-14,
 # ``modules/otp/client_token.py``). Opcional en el esquema: faltante o
@@ -551,6 +557,10 @@ async def get_public_availability(
     minutos, 422 ``SERVICES_TOO_LONG``. No mira el flag de la tienda: es de
     lectura, y apagarlo no deja sin grilla la reprogramacion de un turno de
     varios servicios ya tomado.
+
+    ``force_all`` (el "Ver todos" del portal) se ignora si la tienda prendio
+    ``suggested_slots_only`` (decision de Mateo, 2026-11-17): devuelve la
+    grilla filtrada, la misma que sin el parametro.
     """
     search_date = _public_availability_date(date)
 
@@ -580,7 +590,7 @@ async def get_public_availability(
                 store.id,
                 service_id,
                 search_date,
-                force_all=force_all,
+                force_all=force_all and not store.suggested_slots_only,
                 hide_private_reasons=True,
                 store_rules=StoreRules(
                     notice_hours=store.min_booking_notice_hours,

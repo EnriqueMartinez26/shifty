@@ -166,6 +166,26 @@ describe('BookingWizardContainer', () => {
     expect(screen.queryByText(SERVICIO)).not.toBeInTheDocument()
   })
 
+  // 2026-11-17 (decision de Mateo): "Solo horarios sugeridos" saca "Ver todos".
+  it('con "Solo horarios sugeridos" el horario no ofrece "Ver todos"; sin la funcion si', () => {
+    mockServices.mockReturnValue({ data: [servicio('a'), servicio('b')], isLoading: false })
+    const base = tienda(false)
+    const { unmount } = render(
+      <WizardEnRuta
+        store={{ ...base, feature_flags: { ...base.feature_flags, suggested_slots_only: true } }}
+        preselect={{ serviceId: 'a', staffId: 'st-1', date: null }}
+      />
+    )
+    expect(screen.getByText(HORARIO)).toBeInTheDocument()
+    expect(screen.queryByRole('switch', { name: /ver todos/i })).not.toBeInTheDocument()
+    unmount()
+
+    render(
+      <WizardEnRuta store={base} preselect={{ serviceId: 'a', staffId: 'st-1', date: null }} />
+    )
+    expect(screen.getByRole('switch', { name: /ver todos/i })).toBeInTheDocument()
+  })
+
   it('con un solo servicio lo elige solo y salta al horario; "atras" no vuelve al servicio', async () => {
     mockServices.mockReturnValue({ data: [servicio('unico')], isLoading: false })
     render(<WizardEnRuta store={tienda(false)} />)

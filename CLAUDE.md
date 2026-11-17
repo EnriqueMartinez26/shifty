@@ -827,6 +827,13 @@ Una instrucción en lenguaje natural no es una garantía.
   viejo reprograma un turno de varios servicios con la duración del principal.
   (`test_varios_servicios_reglas.py`, `test_reserva_varios_servicios.py`,
   `test_pg_varios_servicios.py`)
+- **"Ver todos" del portal es opcional por tienda** (decisión de Mateo,
+  2026-11-17): con la función `suggested_slots_only` prendida, la reserva y la
+  reprogramación de "Mis turnos" no ofrecen "Ver todos" y
+  `/public/availability` ignora `force_all` (devuelve la grilla filtrada).
+  Apagada, el default, nada cambia. La reserva no valida el inicio contra la
+  grilla sugerida: una llamada armada a mano todavía puede tomar un horario
+  libre que el filtro esconde. (`test_solo_horarios_sugeridos.py`)
 - **Una seña obligatoria se cobra por Mercado Pago o por WhatsApp**
   (decisión de Mateo, 2026-10-03; `payments/deposit_channels.py`).
   Configurarla exige un canal: MP conectado con el flag `payments`, o un

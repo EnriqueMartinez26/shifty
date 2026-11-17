@@ -32,6 +32,8 @@ export interface StoreFeatureFlags {
   otp_booking: boolean
   /** Varios servicios en un turno, con el mismo profesional (apagado por defecto). */
   multi_service_booking: boolean
+  /** Solo horarios sugeridos: la reserva publica no ofrece "Ver todos" (apagado por defecto). */
+  suggested_slots_only: boolean
 }
 
 /**

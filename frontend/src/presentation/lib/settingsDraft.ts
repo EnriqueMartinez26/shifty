@@ -82,7 +82,8 @@ const DEFAULT_FEATURE_FLAGS: StoreFeatureFlags = {
   advanced_reports: false,
   new_calendar: false,
   otp_booking: false,
-  multi_service_booking: false
+  multi_service_booking: false,
+  suggested_slots_only: false
 }
 
 /**

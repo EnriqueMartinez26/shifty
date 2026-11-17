@@ -513,6 +513,7 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
             staffId={bookingState.requestedStaffId}
             selectedDate={bookingState.date}
             selectedTime={bookingState.startTime}
+            allowShowAll={!store.feature_flags?.suggested_slots_only}
             onEmptyAvailability={() => trackBookingEvent('availability_empty')}
             onDatePageChange={() =>
               updateState({

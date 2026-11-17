@@ -47,7 +47,10 @@ const actionClass =
 const actionStyle = { ...buttonStyles2000s.default, outlineColor: colors2000s.orange.accent }
 
 interface ClientAppointmentsContainerProps {
-  store: Pick<PublicStore, 'public_id' | 'name' | 'slug'>
+  store: Pick<PublicStore, 'public_id' | 'name' | 'slug'> & {
+    /** Solo se lee `suggested_slots_only`: sin la clave se ofrece "Ver todos". */
+    feature_flags?: Pick<PublicStore['feature_flags'], 'suggested_slots_only'>
+  }
 }
 
 /**
@@ -348,6 +351,7 @@ export const ClientAppointmentsContainer: React.FC<ClientAppointmentsContainerPr
                   selectedDate={null}
                   selectedTime={null}
                   showWaitlist={false}
+                  allowShowAll={!store.feature_flags?.suggested_slots_only}
                   heading="Elegí el nuevo horario"
                   onBack={() => setRescheduling(null)}
                   onSelect={(_date, _time, _assigned, _requested, startsAt) => {

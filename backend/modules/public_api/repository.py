@@ -20,6 +20,7 @@ from sqlalchemy.sql.elements import ColumnElement
 
 import ulid
 
+from core.feature_flags import SUGGESTED_SLOTS_ONLY_FLAG, is_store_feature_enabled
 from core.security import hash_password
 from infrastructure.persistence.models.appointment import BOOKED_VIA_PANEL
 from modules.appointments.model import Appointment, AppointmentStatus
@@ -113,6 +114,8 @@ class StoreRef:
     min_booking_notice_hours: int
     buffer_minutes: int
     cancellation_hours: int
+    # Prendido, el portal no ofrece "Ver todos" (``suggested_slots_only``).
+    suggested_slots_only: bool = False
 
 
 @dataclass(frozen=True)
@@ -229,6 +232,7 @@ class PublicRepository:
                     Store.min_booking_notice_hours,
                     Store.buffer_minutes,
                     Store.cancellation_hours,
+                    Store.feature_flags,
                 ).where(Store.public_id == public_id, *_visible_en_el_portal())
             )
         ).one_or_none()
@@ -239,6 +243,9 @@ class PublicRepository:
             min_booking_notice_hours=row.min_booking_notice_hours,
             buffer_minutes=row.buffer_minutes,
             cancellation_hours=row.cancellation_hours,
+            suggested_slots_only=is_store_feature_enabled(
+                row.feature_flags, SUGGESTED_SLOTS_ONLY_FLAG
+            ),
         )
 
     async def get_store_by_id(self, store_id: str) -> Store | None:

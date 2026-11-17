@@ -217,6 +217,7 @@ class StoreFeatureFlags(BaseModel):
     new_calendar: bool = False
     otp_booking: bool = False
     multi_service_booking: bool = False
+    suggested_slots_only: bool = False
 
 
 class StoreFeatureFlagsUpdate(BaseModel):
@@ -226,6 +227,7 @@ class StoreFeatureFlagsUpdate(BaseModel):
     new_calendar: bool | None = None
     otp_booking: bool | None = None
     multi_service_booking: bool | None = None
+    suggested_slots_only: bool | None = None
 
 
 class StoreFeatureFlagsResponse(BaseModel):

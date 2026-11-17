@@ -16,6 +16,11 @@ interface PublicStoreFeatureFlags {
    * respuesta sin la clave (backend anterior) es apagado.
    */
   multi_service_booking?: boolean
+  /**
+   * Solo horarios sugeridos: el paso del horario no ofrece "Ver todos".
+   * Opcional: una respuesta sin la clave (backend anterior) es apagado.
+   */
+  suggested_slots_only?: boolean
 }
 
 export interface PublicStore {
