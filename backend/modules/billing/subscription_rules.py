@@ -120,6 +120,7 @@ class DailyAction:
 
     new_status: str | None = None
     send_warning: bool = False
+    notify_suspension_soon: bool = False
 
 
 def daily_action(subscription: Any, *, today: date) -> DailyAction:
@@ -138,5 +139,9 @@ def daily_action(subscription: Any, *, today: date) -> DailyAction:
     if status == SUBSCRIPTION_PAST_DUE:
         if today > end_day + timedelta(days=SUBSCRIPTION_GRACE_DAYS):
             return DailyAction(new_status=SUBSCRIPTION_SUSPENDED)
+        # El cambio a suspended ocurre el día posterior a que termina la
+        # gracia (end_day + GRACE_DAYS + 1); el aviso va dos días antes.
+        if today == end_day + timedelta(days=SUBSCRIPTION_GRACE_DAYS - 1):
+            return DailyAction(notify_suspension_soon=True)
         return DailyAction()
     return DailyAction()

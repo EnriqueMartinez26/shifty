@@ -31,6 +31,7 @@ interface AlertItem {
   tone: 'danger' | 'warning' | 'good'
   title: string
   detail: string
+  actionLabel?: string
 }
 
 const toneStyles = {
@@ -79,18 +80,29 @@ function createAlerts(
       title: 'Sin suscripción',
       detail: 'La tienda no tiene un plan asignado.'
     })
-  } else if (subscription.status !== 'active') {
-    alerts.push({
-      tone: 'warning',
-      title: `Suscripción ${subscriptionStatusLabel(subscription.status).toLowerCase()}`,
-      detail: 'Conviene revisar el cobro y el período vigente antes de seguir operando.'
-    })
   } else {
-    alerts.push({
-      tone: 'good',
-      title: 'Suscripción al día',
-      detail: `Renueva ${formatDateEsAr(subscription.current_period_end)}.`
-    })
+    if (subscription.status !== 'active') {
+      alerts.push({
+        tone: 'warning',
+        title: `Suscripción ${subscriptionStatusLabel(subscription.status).toLowerCase()}`,
+        detail: 'Conviene revisar el cobro y el período vigente antes de seguir operando.'
+      })
+    } else if (subscription.current_period_end) {
+      alerts.push({
+        tone: 'good',
+        title: 'Suscripción al día',
+        detail: `Renueva ${formatDateEsAr(subscription.current_period_end)}.`
+      })
+    }
+
+    if (!subscription.current_period_end) {
+      alerts.push({
+        tone: 'warning',
+        title: 'Período sin fecha de fin',
+        detail: 'No hay una fecha de fin registrada. Revisá la suscripción y completá el período.',
+        actionLabel: 'Revisar período'
+      })
+    }
   }
 
   if (activeAdmins === 0) {
@@ -283,6 +295,16 @@ export function SuperAdminHealthPanel({
           >
             <p className="text-[10px] font-black uppercase tracking-widest">{alert.title}</p>
             <p className="mt-1 text-xs font-bold">{alert.detail}</p>
+            {alert.actionLabel ? (
+              <button
+                type="button"
+                onClick={onAssignPlan}
+                className="mt-3 min-h-11 rounded-xl px-4 py-2 text-[10px] font-black uppercase tracking-widest"
+                style={buttonStyles2000s.default}
+              >
+                {alert.actionLabel}
+              </button>
+            ) : null}
           </div>
         ))}
       </div>
