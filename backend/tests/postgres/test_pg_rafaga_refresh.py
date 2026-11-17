@@ -26,6 +26,7 @@ from httpx import AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from core.exceptions import AuthenticationException
 from modules.auth import service as auth_service
 from modules.auth.router import REFRESH_COOKIE
 from modules.auth.service import REFRESH_REUSE_GRACE_SECONDS, hash_token
@@ -314,7 +315,7 @@ async def test_reuso_y_login_esperan_el_mismo_lock_de_usuario_en_postgres(
                         await auth_service.refresh_session(
                             familia, db, auth_service.SessionClientContext()
                         )
-                    except auth_service.AuthenticationException:
+                    except AuthenticationException:
                         return 401
                     raise AssertionError("el replay viejo debía rechazarse")
 
