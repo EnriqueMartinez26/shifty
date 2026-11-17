@@ -635,10 +635,18 @@ Una instrucción en lenguaje natural no es una garantía.
 - **OTP solo por email** (SMTP existente); `whatsapp`/`sms` existen solo con
   `OTP_PROVIDER=console`. Si el teléfono ya es de un cliente de la tienda
   con email entregable, el código va SOLO a ese email y al tipeado le llega
-  un aviso sin código con el mismo asunto (AUD2-B4-05). Sin
-  `BackgroundTasks`: decidido el destino, el request encola el mail en
-  Celery (`notifications/tasks.py::enqueue_otp_email`, por
-  `core/enqueue.py`, cola `interactive`; AUD2-B4-06) y lo manda el worker.
+  un aviso sin código con el mismo asunto (AUD2-B4-05). OTP y recuperación
+  de contraseña escriben una fila durable `email.send` en SQL en la misma
+  transacción que crea el OTP o cambia el estado del token de recuperación;
+  la prioridad vive en `payload.priority` y es `critical`, también para el
+  aviso sin código. La fila contiene el destinatario, asunto y cuerpo cifrado,
+  nunca el código ni la URL en claro; el dispatcher descifra solo al enviar y
+  vuelve a validar identidad, tienda, destino y credencial vigentes. Un OTP,
+  token reemplazado/consumido o expirado no se envía, y al cerrar una fila
+  terminal se elimina su contenido cifrado. No se persiste un OTP si no se
+  pudo admitir su email por la cuota por destino. Los avisos por cambio de
+  contraseña y las confirmaciones de reserva pública siguen fuera de este
+  outbox durable. Diseño adoptado en D-20261117-04.
   Cada mail consume la cuota de su buzón de destino real: 5 por hora y 10
   por día (`OTP_MAX_MAILS_PER_DESTINATION_PER_HOUR`/`_PER_DAY`, #121), con
   el buzón normalizado y hasheado en la clave y la política `otp`, que
@@ -710,18 +718,50 @@ Una instrucción en lenguaje natural no es una garantía.
   confirmación al cliente, cancelación por bloqueo y los eventos del panel
   `appointment.booked_by_panel/confirmed/completed/rescheduled`, F2-02) es su
   propia fila `email.send`, escrita en la transacción del evento que lo
-  genera (F2-03, 2026-09-24). El despacho la reclama de a una
-  (`processed_at` + commit plano, `SKIP LOCKED`) y recién después manda; lo
-  que excede `OUTBOX_EMAIL_BUDGET_SECONDS` queda pendiente y sale en el tick
-  siguiente (cada 20 s): ningún mail se pierde por presupuesto y
-  `processed_at` no se reabre nunca. La entrega es **a lo sumo una vez**: un
-  proceso que muere entre el reclamo y el DATA pierde ese mail, y un envío
-  fallido no se reintenta (el DATA pudo haber llegado): queda con `attempts`
-  y `error` en su fila. El estado del turno se relee al planificar el mail,
-  no al mandarlo: un mail diferido por presupuesto puede salir después de
-  una cancelación ocurrida entre medio.
+  genera (F2-03, 2026-09-24). El despacho reclama una fila debida con
+  `FOR UPDATE SKIP LOCKED`, marca `delivery_status='claimed'` y commitea antes
+  del SMTP; ninguna transacción queda abierta durante la llamada externa. La
+  cola conserva filas heredadas con estado NULL y filas `pending`; `claimed_at`
+  y `next_attempt_at` distinguen un envío en curso y un reintento diferido. Un
+  claim abandonado por más de 120 s termina en `unknown` y no se reenvía,
+  porque el proveedor pudo haber aceptado el mail. El despacho procesa hasta
+  100 filas o 45 s y continúa con las demás cuando una se difiere o falla.
+  Los fallos SMTP transitorios confirmados antes de enviar el cuerpo reintentan
+  tras 20, 40, 80 y 160 s; después, con un tope de 5 min, hasta
+  `OUTBOX_EMAIL_MAX_ATTEMPTS = 10`. `attempts` cuenta cada intento real al
+  sink SMTP, sea exitoso o fallido; deferrals y guardas previas no suman. Al
+  agotarlos, la fila queda `failed` y se reporta una vez, sin datos personales
+  (política provisional adoptada por el dueño, D-20261117-03: un recordatorio
+  válido puede perderse durante una interrupción prolongada de SMTP).
+  Si el retry cruza el reset, puede consumir una admisión de
+  la ventana siguiente. Una denegación de cuota se difiere al siguiente reset
+  configurado y una caída de Redis por 60 s; ninguna consume intentos y ambas
+  dejan avanzar otras filas. Cuando no se confirma aceptación después de
+  empezar a enviar el cuerpo, la fila queda `unknown` sin reintento. No se
+  promete entrega exactly-once: `processed_at`, `delivery_status`, `attempts`
+  y `error` describen el despacho, no la recepción en el buzón. Cada
+  recordatorio vuelve a validar antes del SMTP la tienda, el estado y la hora
+  vigente del turno; uno cancelado, reprogramado o vencido termina como
+  `expired` y no se envía.
   (`test_lista_de_espera_concurrencia.py`, `test_pg_outbox_mails.py`,
-  `test_outbox_mails_diferidos.py`)
+  `test_outbox_mails_diferidos.py`, `test_outbox_retry_fairness.py`,
+  `test_pg_email_outbox_claims.py`, `test_reminder_outbox_lifecycle.py`,
+  `test_email_outbox_delivery_model.py`, `test_mail_budget_retry_window.py`,
+  `test_smtp_outbox_protocol.py`)
+- **Presupuesto SMTP (#313)**: el límite queda apagado por defecto. El objetivo
+  de diseño, adoptado por el dueño (D-20261117-02), es 250 admisiones diarias, con 20% (50) reservado para OTP y
+  recuperación de contraseña, no críticos hasta 200 y alerta al llegar a 200
+  admisiones totales. Es best-effort: emisores externos a Shifty no se cuentan
+  y una restauración de Redis puede perder admisiones recientes. No activar el
+  cap hasta confirmar la hora y zona de reset de la cuenta; si se configura,
+  ambas deben declararse explícitamente. La cuota limita admisiones de Shifty,
+  no garantiza aceptación SMTP ni entrega final. OTP y recuperación de
+  contraseña usan el outbox SQL con cuerpo cifrado y guardas de vigencia; los
+  avisos de cambio de contraseña y confirmaciones de reserva pública conservan
+  sus caminos directos/en background sin reintentos durables. La cuota no es
+  una garantía de entrega y sigue desactivada hasta verificar el reset de
+  Brevo. D-20261117-04 registra el diseño aprobado; sus límites criptográficos
+  y evidencia de latencia están en `docs/MAIL_BUDGET.md`.
 - **Un teléfono sin OTP no es de nadie.** No adopta el contacto de un cliente
   existente (`get_or_create_client(adopt_contact=...)`) ni trae su historial
   para la seña (`UNKNOWN_HISTORY`, que NO es "cliente nuevo"). Sin esa
@@ -882,9 +922,15 @@ Una instrucción en lenguaje natural no es una garantía.
 - **Los recordatorios tienen etapas separadas de verdad**: el piso del de 24
   horas está por encima del lead del de 2 horas, y ningún aviso al cliente
   sale sin pasar por `is_deliverable_email`. El lote reutiliza una sesión
-  SMTP (`smtp_session`, sondeada con `NOOP` antes de cada envío) y un envío
-  fallido no se reintenta: el turno se libera
-  (`test_recordatorios_sesion_smtp.py`).
+  SMTP (`smtp_session`, sondeada con `NOOP` antes de cada envío), revalida el
+  turno por `appointment_id` y `store_id` inmediatamente antes del envío, y
+  permite solo `pending`, `pending_payment` o `confirmed` con el mismo
+  `starts_at` futuro que congeló el recordatorio. Un recordatorio obsoleto
+  queda `expired` sin enviar; los fallos transitorios confirmados antes del
+  cuerpo siguen el reintento durable acotado de §3 y los resultados inciertos
+  después del cuerpo quedan `unknown`
+  (`test_recordatorios_sesion_smtp.py`,
+  `test_reminder_outbox_lifecycle.py`).
 - **Un rango liberado no es un turno.** Borrar un bloqueo devuelve un rango
   cuyos extremos no caen en la grilla: ese origen avisa al dueño, no le
   ofrece al cliente un horario inexistente (`ReleasedSlot.aligned_to_grid`).
@@ -1059,7 +1105,14 @@ Una instrucción en lenguaje natural no es una garantía.
   clave y sin root, ufw con 22/80/443, actualizaciones de seguridad sin
   reinicio automático, fail2ban; pasos en `docs/DEPLOY_RUNBOOK.md` §1), y
   latencia por ruta cada 5 minutos. Se prueban con binarios falsos
-  (`tests/unit/host_falso.py`).
+  (`tests/unit/host_falso.py`). Desde el 2026-11-13 (dockerd colgado) el
+  guard corre de a una corrida (`flock`) y reinicia solo con ese lock y con
+  el contador anotado (si no, observa y avisa), con tope en cada llamada a
+  docker, sin reiniciar con el host saturado y con un solo aviso por corrida; los
+  mails de alerta del host salen por la misma cuenta de Brevo que la app y
+  ningún presupuesto de la app los cuenta (tampoco el `MAIL_DAILY_BUDGET`
+  que propone #313, abierto al 2026-11-15): tienen su propio tope diario
+  (`ALERT_EMAIL_MAX_PER_DAY`, en `alert()` de `scripts/lib/common.sh`).
 
 ### Tiempo
 

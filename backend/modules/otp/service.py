@@ -5,7 +5,6 @@ import hmac
 import re
 import secrets
 import asyncio
-import inspect
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
 
@@ -251,86 +250,9 @@ def _notice_body(store_name: str) -> str:
     )
 
 
-# Entrega el mail (destino, asunto, cuerpo) FUERA del proceso de la API:
-# ``notifications.tasks.enqueue_otp_email`` en el router (AUD2-B4-06). El
-# servicio decide destino y contenido; quien llama decide el transporte, y
-# nunca manda en linea. Puede ser async (``enqueue_otp_email``, F1-03: encola
-# con tope de tiempo sin bloquear el loop) o sync (dobles de los tests).
-# Devuelve True SOLO si el mail quedo en manos del transporte (la cola lo
-# acepto): de eso depende que el codigo nuevo reemplace al vivo.
+# Retain the callback type during the rolling deployment that still has API
+# callers passing enqueue_otp_email. New delivery is exclusively outbox-backed.
 DispatchScheduler = Callable[[str, str, str], Awaitable[bool] | bool]
-
-
-async def _handed_off(pending: Awaitable[bool] | bool) -> bool:
-    """``True`` literal y nada mas: un ``None`` o un valor raro de un
-    transporte no cuenta como entregado, asi que no pisa el codigo vivo."""
-    result = await pending if inspect.isawaitable(pending) else pending
-    return result is True
-
-
-async def _schedule_otp_mail(
-    schedule_dispatch: DispatchScheduler,
-    *,
-    destination: str | None,
-    notice_to: str | None,
-    code: str,
-    store_name: str,
-) -> bool:
-    """El codigo al buzon que decidio ``_resolve_destination``; el aviso sin
-    codigo (AUD2-B4-05) al email tipeado cuando el codigo fue a otro lado.
-    Devuelve si el mail del CODIGO quedo encolado; el aviso no decide nada.
-
-    Los dos usan el mismo asunto y estan acotados por
-    ``OTP_MAX_REQUESTS_PER_HOUR`` (por telefono) y por el tope de su buzon
-    (``_recipients_within_cap``): un destino ``None`` no se despacha.
-
-    Revision de F1-03 (2026-09-24): los despachos se INICIAN en orden fijo
-    (codigo y despues aviso) y se esperan juntos. En serie, con el broker
-    colgado, el camino de dos mails costaba el doble del tope de encolado que
-    el de uno, y el tiempo volvia a decir si el telefono es cliente. Por eso
-    el aviso sale aunque el codigo no se encole: esperar al codigo para
-    decidir el aviso volveria a sumar los dos topes.
-    """
-    asunto = _otp_subject(store_name)
-    envios: list[tuple[str, str]] = []
-    if destination:
-        envios.append((destination, _code_body(code, store_name)))
-    if notice_to:
-        envios.append((notice_to, _notice_body(store_name)))
-    entregados = await asyncio.gather(
-        *(_handed_off(schedule_dispatch(to, asunto, body)) for to, body in envios)
-    )
-    return bool(destination) and entregados[0]
-
-
-async def _hand_off_code_mail(
-    schedule_dispatch: DispatchScheduler,
-    *,
-    destination: str | None,
-    notice_to: str | None,
-    code: str,
-    store_name: str,
-) -> bool:
-    """Tope por buzon y encolado; ``True`` si el mail del codigo quedo en la
-    cola y el codigo nuevo puede reemplazar al vivo.
-
-    El tope va ANTES de guardar: sin Redis en produccion es 503 y no
-    invalida el codigo vivo de nadie. Con el codigo topeado no sale nada, ni
-    el aviso: diria que se envio un codigo que nadie puede recibir. El aviso
-    topeado no cambia la decision del codigo. El encolado es fuera del
-    proceso de la API y no dice a que buzon fue: eso delataria si el
-    telefono es cliente.
-    """
-    code_to, notice_to = await _recipients_within_cap(destination, notice_to)
-    if code_to is None:
-        return False
-    return await _schedule_otp_mail(
-        schedule_dispatch,
-        destination=code_to,
-        notice_to=notice_to,
-        code=code,
-        store_name=store_name,
-    )
 
 
 def _check_channel(channel: str, email: str | None) -> None:
@@ -602,7 +524,12 @@ class OtpService:
                     subject=_otp_subject(store_name),
                     body=_code_body(code, store_name),
                     priority="critical",
-                    guard={"kind": "otp", "otp_id": otp.id},
+                    guard={
+                        "kind": "otp",
+                        "otp_id": otp.id,
+                        "store_id": store_id,
+                        "email": email,
+                    },
                 )
             )
         if notice_to is not None:
@@ -612,7 +539,7 @@ class OtpService:
                     to=notice_to,
                     subject=_otp_subject(store_name),
                     body=_notice_body(store_name),
-                    priority="low",
+                    priority="critical",
                 )
             )
         await self.db.commit()
@@ -629,8 +556,9 @@ class OtpService:
     ) -> dict[str, object]:
         """Guarda el codigo y el mail cifrado en una sola transaccion.
 
-        ``schedule_dispatch`` se conserva por compatibilidad con los llamadores;
-        el despacho durable del outbox ya no serializa el codigo al broker.
+        ``schedule_dispatch`` se acepta temporalmente para compatibilidad con
+        versiones del router durante un despliegue escalonado; no se invoca.
+        El outbox es la unica autoridad de entrega para credenciales nuevas.
         """
         normalized_phone = normalize_phone(phone)
         _check_channel(channel, email)

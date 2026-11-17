@@ -25,11 +25,11 @@ def encrypted_email_outbox_message(
         "to": to,
         "subject": subject,
         "encrypted_body": encrypted_body,
-        "priority": priority,
     }
     payload: dict[str, JsonValue] = {
         "mail": "encrypted_body",
         "args": arguments,
+        "priority": priority,
     }
     if guard is not None:
         payload["guard"] = cast(JsonValue, guard)

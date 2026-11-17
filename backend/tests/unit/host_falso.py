@@ -8,7 +8,7 @@ el certificado o el disco (R11-02, R11-03, R11-05, R11-17, R11-20).
 Los scripts corren en el VPS, pero su logica se prueba aca: cada test levanta
 el script REAL con `bash` y un PATH con binarios falsos (`docker`, `curl`,
 `rclone`, `df`, `timedatectl`, `openssl`, `sleep`, `sshd`, `ufw`, `apt-config`,
-`fail2ban-client`) que anotan cada llamada en
+`fail2ban-client`, `msmtp`) que anotan cada llamada en
 un archivo. Se afirma sobre el ORDEN y la presencia de esas llamadas: migrar
 antes de recrear, no migrar en el rollback, no pasar de 3 reinicios por hora,
 no marcar exito si la copia fuera del host fallo.
@@ -56,6 +56,11 @@ requiere_bash = pytest.mark.skipif(BASH is None, reason="hace falta bash")
 
 _DOCKER = r"""#!/bin/sh
 printf '%s\n' "docker $*" >> "$FAKE_DIR/calls"
+# FAKE_DOCKER_CUELGA=<subcomando>: el daemon no contesta (13/11: dockerd colgado
+# con "context deadline exceeded"). Duerme con el sleep real, no con el falso.
+if [ -n "${FAKE_DOCKER_CUELGA:-}" ] && [ "$1" = "$FAKE_DOCKER_CUELGA" ]; then
+  exec "$FAKE_SLEEP_REAL" 30
+fi
 # El token de GitHub no tiene por que llegar a docker/compose: se anota si un
 # `docker` lo hereda en el entorno.
 [ -z "${DEPLOY_GITHUB_TOKEN:-}" ] || printf '%s\n' "docker $1 $2" >> "$FAKE_DIR/docker_ve_el_token"
@@ -146,6 +151,11 @@ if [ "$1" = compose ]; then
         exit "${FAKE_REDIS_EXIT:-0}"
       fi
       if [ "$3" = rabbitmq ]; then
+        # FAKE_RABBIT_CUELGA=1: el CLI de RabbitMQ no contesta (nodo trabado o
+        # daemon de docker lento). Duerme con el sleep real.
+        if [ -n "${FAKE_RABBIT_CUELGA:-}" ]; then
+          exec "$FAKE_SLEEP_REAL" 30
+        fi
         # Por defecto, lo que imprime RabbitMQ 3.13.7 sin alarmas. Sin `:`:
         # FAKE_RABBIT_ALARMS='' es una salida vacia de verdad.
         sin_alarmas='{"alarms":[],"node":"rabbit@rabbitmq","result":"ok"}'
@@ -159,7 +169,9 @@ if [ "$1" = compose ]; then
   esac
 fi
 case "$1" in
-  ps) for id in ${FAKE_UNHEALTHY_IDS:-}; do echo "$id"; done ;;
+  # FAKE_PS_EXIT: `docker ps` que falla sin colgarse (daemon caido: "Cannot
+  # connect to the Docker daemon").
+  ps) for id in ${FAKE_UNHEALTHY_IDS:-}; do echo "$id"; done; exit "${FAKE_PS_EXIT:-0}" ;;
   image)
     # docker image inspect [-f FORMATO] IMAGEN
     for imagen in "$@"; do :; done
@@ -180,7 +192,9 @@ case "$1" in
         *.Image*) echo "${FAKE_RUNNING_IMAGE_ID:-sha256:igual}" ;;
         *) echo "/$id" ;;
       esac
-    done ;;
+    done
+    # FAKE_INSPECT_EXIT: `docker inspect` que falla sin colgarse.
+    exit "${FAKE_INSPECT_EXIT:-0}" ;;
   rm)
     shift
     for id in "$@"; do
@@ -191,7 +205,11 @@ case "$1" in
         mv "$ids.tmp" "$ids"
       done
     done ;;
-  restart) exit "${FAKE_RESTART_EXIT:-0}" ;;
+  # FAKE_RESTART_FALLA=<nombre>: solo el restart de ese contenedor falla (13/11:
+  # dockerd devolvia "context deadline exceeded").
+  restart)
+    [ "${FAKE_RESTART_FALLA:-}" != "$2" ] || exit 1
+    exit "${FAKE_RESTART_EXIT:-0}" ;;
   stats) printf 'shifty-backend-1\t1.5%%\t120MiB / 512MiB\t%s\t1kB / 2kB\t0B / 0B\t12\n' "${FAKE_MEM_PERC:-23.4%}" ;;
 esac
 exit 0
@@ -218,6 +236,15 @@ case "$*" in
     exit "${FAKE_GH_EXIT:-0}" ;;
 esac
 exit "${FAKE_CURL_EXIT:-0}"
+"""
+
+# msmtp: anota la llamada y guarda cada mail (cabeceras y cuerpo que llegan por
+# stdin) en `mails`, separados por una linea `=====`. Nunca sale un mail real.
+_MSMTP = r"""#!/bin/sh
+printf '%s\n' "msmtp $*" >> "$FAKE_DIR/calls"
+cat >> "$FAKE_DIR/mails"
+printf '=====\n' >> "$FAKE_DIR/mails"
+exit "${FAKE_MSMTP_EXIT:-0}"
 """
 
 # Endurecimiento del host (scripts/host-hardening-check.sh). Cada falso
@@ -325,6 +352,64 @@ def escribir_corridas_de_quality(ruta: Path, *, verdes: int) -> None:
         encoding="utf-8",
         newline="\n",
     )
+
+
+# date: la hora UTC (HH:MM) que ve la ventana del modo sin estado de alert()
+# sale de FAKE_HORA_UTC; todo lo demas lo contesta el date real.
+_DATE = r"""#!/bin/sh
+if [ "$*" = "-u +%H:%M" ] && [ -n "${FAKE_HORA_UTC:-}" ]; then
+  printf '%s\n' "$FAKE_HORA_UTC"
+  exit 0
+fi
+exec "$FAKE_DATE_REAL" "$@"
+"""
+
+
+def con_hora_utc(host: Host) -> None:
+    """Pone un `date` falso delante del PATH del host: cada corrida elige la
+    hora UTC con FAKE_HORA_UTC=HH:MM. Solo para los tests que la necesitan:
+    un sh por cada `date` (cada linea de log) es lento en Git Bash."""
+    assert BASH is not None
+    herramientas = str(Path(BASH).parent)
+    date_real = shutil.which("date", path=herramientas) or shutil.which("date")
+    assert date_real, "hace falta el date de coreutils"
+    directorio = host.raiz / "hora"
+    directorio.mkdir()
+    _ejecutable(directorio / "date", _DATE)
+    host.env["FAKE_DATE_REAL"] = Path(date_real).as_posix()
+    host.env["PATH"] = os.pathsep.join([str(directorio), host.env["PATH"]])
+
+
+# touch: no puede CREAR un archivo cuya ruta matchee el patron glob
+# FAKE_TOUCH_SIN_ESPACIO (inodos agotados o ENOSPC: el directorio pasa `[ -w ]`
+# y no admite archivos nuevos); uno que ya existe se actualiza. alert() crea con
+# touch la prueba de escritura y los sellos del silencio.
+_TOUCH = r"""#!/bin/sh
+for ultimo in "$@"; do :; done
+if [ -n "${FAKE_TOUCH_SIN_ESPACIO:-}" ] && [ ! -e "$ultimo" ]; then
+  case "$ultimo" in
+    $FAKE_TOUCH_SIN_ESPACIO)
+      printf "touch: cannot touch '%s': No space left on device\n" "$ultimo" >&2
+      exit 1 ;;
+  esac
+fi
+exec "$FAKE_TOUCH_REAL" "$@"
+"""
+
+
+def sin_espacio_para_crear(host: Host, patron: str) -> None:
+    """Pone un `touch` falso delante del PATH del host: no crea los archivos que
+    matcheen `patron` (glob). Solo para los tests que lo necesitan."""
+    assert BASH is not None
+    herramientas = str(Path(BASH).parent)
+    touch_real = shutil.which("touch", path=herramientas) or shutil.which("touch")
+    assert touch_real, "hace falta el touch de coreutils"
+    directorio = host.raiz / "sin-espacio"
+    directorio.mkdir()
+    _ejecutable(directorio / "touch", _TOUCH)
+    host.env["FAKE_TOUCH_REAL"] = Path(touch_real).as_posix()
+    host.env["FAKE_TOUCH_SIN_ESPACIO"] = patron
+    host.env["PATH"] = os.pathsep.join([str(directorio), host.env["PATH"]])
 
 
 _DF = r"""#!/bin/sh
@@ -545,6 +630,29 @@ class Host:
             return []
         return archivo.read_text(encoding="utf-8").splitlines()
 
+    def mails(self) -> list[str]:
+        """Los mails que le llegaron al msmtp falso, en orden."""
+        archivo = self.fake / "mails"
+        if not archivo.exists():
+            return []
+        texto = archivo.read_text(encoding="utf-8")
+        return [m for m in texto.split("=====\n") if m.strip()]
+
+    def alertar(self, *args: str, **extra: str) -> subprocess.CompletedProcess[str]:
+        """`alert <args>` de scripts/lib/common.sh en un proceso bash nuevo,
+        estricto como los scripts que la usan."""
+        assert BASH is not None
+        common = (SCRIPTS / "lib" / "common.sh").as_posix()
+        return subprocess.run(
+            [BASH, "-c", 'set -euo pipefail; . "$0"; alert "$@"', common, *args],
+            cwd=self.repo,
+            env={**self.env, **extra},
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+
     def correr(
         self, script: str, *args: str, **extra: str
     ) -> subprocess.CompletedProcess[str]:
@@ -622,6 +730,7 @@ def crear_host(tmp_path: Path) -> Host:
         _ejecutable(
             bin_dir / nombre, _REGISTRA.format(nombre=nombre, variable=variable)
         )
+    _ejecutable(bin_dir / "msmtp", _MSMTP)
     _ejecutable(bin_dir / "df", _DF)
     _ejecutable(bin_dir / "timedatectl", _TIMEDATECTL)
     _ejecutable(bin_dir / "openssl", _OPENSSL)
@@ -654,18 +763,36 @@ def crear_host(tmp_path: Path) -> Host:
     escribir_redis_info(fake / "redis_info", usada=10 * 1048576)
     # El sha que se despliega paso Quality en main.
     escribir_corridas_de_quality(fake / "gh_runs", verdes=1)
+    # La carga que lee el guard: la de un host tranquilo, salvo que el test la
+    # cambie (la del runner no puede decidir si el guard reinicia).
+    (fake / "loadavg").write_text(
+        "0.10 0.20 0.30 1/200 4242\n", encoding="utf-8", newline="\n"
+    )
     # Git Bash en Windows: /usr/bin (find, sort, sha256sum de GNU) antes que
     # System32, donde `find` es otro programa.
     herramientas = str(Path(BASH).parent)
+    sleep_real = shutil.which("sleep", path=herramientas) or shutil.which("sleep")
+    assert sleep_real, "hace falta el sleep de coreutils"
+    rutas = [str(bin_dir), herramientas, os.environ.get("PATH", "")]
+    # Git Bash no trae flock (util-linux) y sin flock el guard no reinicia
+    # (modo observacion, revision del 2026-11-15). En Windows, al final del
+    # PATH, un falso que siempre da el lock: los tests de reinicio prueban lo
+    # de siempre. La exclusividad real la prueban en Linux los tests con
+    # _requiere("flock").
+    if not (shutil.which("flock", path=herramientas) or shutil.which("flock")):
+        flock_falso = tmp_path / "flock-falso"
+        flock_falso.mkdir()
+        _ejecutable(flock_falso / "flock", "#!/bin/sh\nexit 0\n")
+        rutas.append(str(flock_falso))
     env = {
         **os.environ,
-        "PATH": os.pathsep.join(
-            [str(bin_dir), herramientas, os.environ.get("PATH", "")]
-        ),
+        "PATH": os.pathsep.join(rutas),
         "FAKE_DIR": fake.as_posix(),
         "SHIFTY_OPS_ENV": (tmp_path / "no-existe.env").as_posix(),
         "SHIFTY_DIR": repo.as_posix(),
         "SHIFTY_STATE_DIR": state.as_posix(),
+        # El respaldo en tmpfs (/run/shifty en el host): nunca el del runner.
+        "SHIFTY_RUN_DIR": (tmp_path / "run").as_posix(),
         "BACKUP_DIR": backups.as_posix(),
         "COMPOSE_PROJECT_NAME": "shifty",
         "HOST_MEMINFO": (fake / "meminfo").as_posix(),
@@ -673,12 +800,17 @@ def crear_host(tmp_path: Path) -> Host:
         "HARDENING_REBOOT_FLAG": (fake / "reboot-required").as_posix(),
         "HARDENING_OS_RELEASE": (fake / "os-release").as_posix(),
         "HARDENING_SSHD_CONFIG": (fake / "sshd_config").as_posix(),
+        "GUARD_LOADAVG_FILE": (fake / "loadavg").as_posix(),
+        "FAKE_SLEEP_REAL": Path(sleep_real).as_posix(),
     }
     for variable in (
         "APP_VERSION",
         "DOMAIN",
         "ALERT_WEBHOOK_URL",
         "ALERT_EMAIL",
+        "ALERT_EMAIL_MAX_PER_DAY",
+        "ALERT_EMAIL_RESERVED_PER_DAY",
+        "ALERT_STATELESS_EVERY_HOURS",
         "COMPOSE_FILE",
         "DEPLOY_SKIP_QUALITY_CHECK",
     ):

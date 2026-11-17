@@ -33,7 +33,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import modules.payments.jobs as jobs
 from sqlalchemy import select
 
-from modules.payments.model import OutboxMessage
+from modules.payments.model import EVENT_EMAIL_SEND, OutboxMessage
 from tests.integration.test_recordatorios_sesion_smtp import _SmtpFalso
 
 
@@ -60,7 +60,7 @@ async def _mails(session: AsyncSession) -> dict[str, OutboxMessage]:
         (
             await session.execute(
                 select(OutboxMessage)
-                .where(OutboxMessage.event_type == jobs.EVENT_EMAIL_SEND)
+                .where(OutboxMessage.event_type == EVENT_EMAIL_SEND)
                 .execution_options(populate_existing=True)
             )
         )
@@ -126,8 +126,9 @@ async def test_el_lote_manda_todos_los_mails_con_una_sola_conexion(
     assert _SmtpFalso.quits == 1, "la sesion se cierra al terminar el lote"
     # Guarda viva (regla 5 / "ningun consumidor del outbox manda mail dentro de
     # su transaccion"): el SMTP se toca recien despues del commit del lote (1)
-    # y del commit del reclamo de su primer mail (2, F2-03).
-    assert _SmtpEspia.commits_al_conectar == [2]
+    # y del commit del reclamo de su primer mail (3, F2-03): el barrido de
+    # claims abandonados también cierra su transacción de lectura.
+    assert _SmtpEspia.commits_al_conectar == [3]
 
 
 @pytest.mark.asyncio
@@ -203,6 +204,7 @@ async def test_un_mail_que_falla_no_se_lleva_el_resto_del_lote(
         *, email: str | None, details: dict[str, Any], smtp: Any = None
     ) -> dict[str, str]:
         if email == "cliente-1@example.com":
+            smtp.last_delivery_attempted = True
             raise ConnectionRefusedError("smtp caido")
         enviados.append(str(email))
         return {"status": "sent", "to": str(email)}

@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator, Callable
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import smtplib
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from celery.exceptions import SoftTimeLimitExceeded
 
 from core import mail_budget
 from core.config import settings
@@ -19,14 +20,14 @@ from core.mail_budget import (
     current_mail_reserved_retry,
 )
 from modules.payments import jobs
-from modules.payments.model import WEBHOOK_INBOX_MAX_ATTEMPTS
+from modules.payments.model import OUTBOX_EMAIL_MAX_ATTEMPTS
 from modules.notifications import tasks
-from modules.notifications.reminders import STAGE_24H
 from tests.redis_mail_budget_double import AtomicMailBudgetRedis
 
 _CLIENT_MAIL_BUILDERS = {
     "cancellation": ("_cancellation_subject", "_cancellation_body"),
     "confirmation": ("_confirmation_subject", "_confirmation_body"),
+    "reminder": ("_reminder_subject", "_reminder_body"),
     "rebook": ("_rebook_subject", "_rebook_body"),
     "reschedule": ("_rescheduled_subject", "_rescheduled_body"),
     "waitlist_offer": ("_waitlist_offer_subject", "_waitlist_offer_body"),
@@ -42,12 +43,9 @@ class _OutboxMailRow:
         self.processed_at: datetime | None = None
         self.attempts = 0
         self.error: str | None = None
-
-    def register_failure(self, reason: str) -> None:
-        self.attempts += 1
-        self.error = reason
-        if self.attempts >= WEBHOOK_INBOX_MAX_ATTEMPTS:
-            self.processed_at = datetime.now(timezone.utc)
+        self.delivery_status: str | None = "pending"
+        self.next_attempt_at: datetime | None = None
+        self.claimed_at: datetime | None = None
 
 
 class _ScriptedSMTP:
@@ -86,11 +84,21 @@ def _wire_outbox_dispatch(
     real_sender_kind: str = "confirmation",
 ) -> list[_ScriptedSMTP]:
     connections: list[_ScriptedSMTP] = []
+    monkeypatch.setattr(settings, "MAIL_BUDGET_TIMEZONE", "UTC")
+    monkeypatch.setattr(settings, "MAIL_BUDGET_RESET_HOUR", 0)
 
     async def claim(*_args: Any, **_kwargs: Any) -> Any:
-        if row.processed_at is not None:
+        now = datetime.now(timezone.utc)
+        if (
+            row.processed_at is not None
+            or row.delivery_status not in {None, "pending"}
+            or (row.next_attempt_at is not None and row.next_attempt_at > now)
+        ):
             return None
-        row.processed_at = datetime.now(timezone.utc)
+        row.delivery_status = "claimed"
+        row.claimed_at = now
+        row.next_attempt_at = None
+        row.processed_at = now
         return row
 
     async def apply_context(_db: Any) -> None:
@@ -118,6 +126,9 @@ def _wire_outbox_dispatch(
         delivered = await smtp.send(to, "Subject", "Body")
         return {"status": "sent" if delivered else "failed", "reason": "smtp"}
 
+    async def reminder_guard(_db: Any, _row: Any) -> None:
+        return None
+
     if use_real_sender:
         if real_sender_kind == "store_notification":
             row.payload = {
@@ -132,18 +143,27 @@ def _wire_outbox_dispatch(
             builders = _CLIENT_MAIL_BUILDERS.get(real_sender_kind)
             if builders is None:
                 raise AssertionError(f"unknown real sender kind: {real_sender_kind}")
+            details = {"public_id": "appointment-1"}
+            if real_sender_kind == "reminder":
+                details["stage"] = "24h"
             row.payload = {
                 "mail": real_sender_kind,
                 "args": {
                     "email": "client@example.com",
-                    "details": {"public_id": "appointment-1"},
+                    "details": details,
                 },
             }
+            if real_sender_kind == "reminder":
+                row.payload["logical_id"] = "reminder:appointment-1:24h"
+                row.payload["expires_at"] = (
+                    datetime.now(timezone.utc) + timedelta(hours=1)
+                ).isoformat()
             monkeypatch.setattr(tasks, builders[0], lambda _details: "Subject")
             monkeypatch.setattr(tasks, builders[1], lambda _details: "Body")
 
     monkeypatch.setattr(jobs, "_claim_next_email", claim)
     monkeypatch.setattr(jobs, "_apply_tenant_context", apply_context)
+    monkeypatch.setattr(jobs, "_reminder_delivery_error", reminder_guard)
     monkeypatch.setattr(jobs, "smtp_session", smtp_session)
     if not use_real_sender:
         monkeypatch.setattr(jobs, "_sender", lambda _kind: send)
@@ -172,7 +192,7 @@ async def test_outbox_difiere_sin_consumir_intento_y_libera_el_reclamo(
         reclamos += 1
         return fila if reclamos == 1 else None
 
-    async def deferred(_fila: Any, smtp: Any) -> str:
+    async def deferred(_fila: Any, smtp: Any, **_kwargs: Any) -> str:
         smtp.last_budget_decision = decision
         return "budget"
 
@@ -203,7 +223,7 @@ async def test_outbox_difiere_sin_consumir_intento_y_libera_el_reclamo(
     assert fila.processed_at is None
     assert fila.attempts == 0
     assert commits == [db]
-    assert reclamos == 1
+    assert reclamos == 2
 
 
 @pytest.mark.asyncio
@@ -224,7 +244,7 @@ async def test_outbox_descarta_baja_prioridad_sin_contarla_como_fallo(
         reclamos += 1
         return fila if reclamos == 1 else None
 
-    async def dropped(_fila: Any, smtp: Any) -> str:
+    async def dropped(_fila: Any, smtp: Any, **_kwargs: Any) -> str:
         smtp.last_budget_decision = "dropped"
         return "budget"
 
@@ -237,19 +257,26 @@ async def test_outbox_descarta_baja_prioridad_sin_contarla_como_fallo(
     async def smtp_session() -> AsyncIterator[Smtp]:
         yield smtp
 
+    async def commit_state(_db: Any) -> None:
+        return None
+
     monkeypatch.setattr(jobs, "_claim_next_email", claim)
     monkeypatch.setattr(jobs, "_send_one_pending_email", dropped)
+    monkeypatch.setattr(jobs, "_commit_email_state", commit_state)
     monkeypatch.setattr(jobs, "smtp_session", smtp_session)
 
     await jobs._dispatch_pending_emails(object())  # type: ignore[arg-type]
 
     assert fila.processed_at is not None
     assert fila.attempts == 0
+    assert fila.delivery_status == "dropped"
+    assert fila.error == "mail_budget_dropped"
     assert reclamos == 2
 
 
 @pytest.mark.parametrize(
-    ("mail_kind", "expected_priority"), [("rebook", "low"), ("confirmation", "high")]
+    ("mail_kind", "expected_priority"),
+    [("rebook", "low"), ("confirmation", "high"), ("reminder", "medium")],
 )
 @pytest.mark.asyncio
 async def test_outbox_asigna_prioridad_y_clave_estables_por_fila(
@@ -264,6 +291,20 @@ async def test_outbox_asigna_prioridad_y_clave_estables_por_fila(
         event_type="email.send",
         payload={"mail": mail_kind, "args": {"email": "client@example.com"}},
     )
+    expected_message_id = "outbox:123"
+    if mail_kind == "reminder":
+        fila.payload = {
+            "mail": "reminder",
+            "args": {
+                "email": "client@example.com",
+                "details": {"public_id": "appointment-1", "stage": "24h"},
+            },
+            "logical_id": "reminder:appointment-1:24h",
+            "expires_at": (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat(),
+        }
+        expected_message_id = "reminder:appointment-1:24h"
+        monkeypatch.setattr(tasks, "_reminder_subject", lambda _details: "Subject")
+        monkeypatch.setattr(tasks, "_reminder_body", lambda _details: "Body")
 
     async def send(**_kwargs: Any) -> dict[str, str]:
         contexts.append(current_mail_context())
@@ -272,38 +313,86 @@ async def test_outbox_asigna_prioridad_y_clave_estables_por_fila(
     monkeypatch.setattr(jobs, "_sender", lambda _kind: send)
 
     assert await jobs._send_one_pending_email(fila, object()) is None  # type: ignore[arg-type]
-    assert contexts == [(expected_priority, "outbox:123")]
+    assert contexts == [(expected_priority, expected_message_id)]
     assert current_mail_context() is None
+
+
+@pytest.mark.asyncio
+async def test_recordatorio_vencido_queda_terminal_sin_intentar_smtp(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    row = _OutboxMailRow()
+    connections = _wire_outbox_dispatch(
+        monkeypatch,
+        row,
+        lambda: _ScriptedSMTP("success"),
+        use_real_sender=True,
+        real_sender_kind="reminder",
+    )
+    row.payload["expires_at"] = (
+        datetime.now(timezone.utc) - timedelta(seconds=1)
+    ).isoformat()
+
+    await jobs._dispatch_pending_emails(object())  # type: ignore[arg-type]
+    first_terminal_at = row.processed_at
+    await jobs._dispatch_pending_emails(object())  # type: ignore[arg-type]
+
+    assert first_terminal_at is not None
+    assert row.processed_at == first_terminal_at
+    assert row.error == "reminder_expired"
+    assert row.attempts == 0
+    assert connections == []
+
+
+@pytest.mark.asyncio
+async def test_crash_despues_del_claim_no_reenvia_recordatorio_ambiguo(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    row = _OutboxMailRow()
+    connections = _wire_outbox_dispatch(
+        monkeypatch,
+        row,
+        lambda: _ScriptedSMTP("success"),
+        use_real_sender=True,
+        real_sender_kind="reminder",
+    )
+
+    async def worker_interrupted(_row: Any, _smtp: Any, **_kwargs: Any) -> None:
+        raise SoftTimeLimitExceeded()
+
+    monkeypatch.setattr(jobs, "_send_one_pending_email", worker_interrupted)
+    with pytest.raises(SoftTimeLimitExceeded):
+        await jobs._dispatch_pending_emails(object())  # type: ignore[arg-type]
+    claim_time = row.processed_at
+
+    await jobs._dispatch_pending_emails(object())  # type: ignore[arg-type]
+
+    assert claim_time is not None
+    assert row.processed_at == claim_time
+    assert row.attempts == 0
+    assert connections == []
 
 
 @pytest.mark.parametrize("decision", ["deferred", "unavailable"])
 @pytest.mark.asyncio
-async def test_recordatorio_preserva_reclamo_sin_reportar_fallo_smtp_por_budget(
+async def test_recordatorio_deferido_por_budget_sigue_pendiente_en_outbox(
     monkeypatch: pytest.MonkeyPatch,
     decision: str,
 ) -> None:
-    appointment = SimpleNamespace(
-        id="appointment-1", public_id="public-1", client_email="client@example.com"
+    monkeypatch.setattr(settings, "MAIL_DAILY_BUDGET", 5)
+    row = _OutboxMailRow()
+    connections = _wire_outbox_dispatch(
+        monkeypatch,
+        row,
+        lambda: _ScriptedSMTP("success"),
+        use_real_sender=True,
+        real_sender_kind="reminder",
     )
-    row = (appointment, object(), object(), object(), object())
-    claimed: list[tuple[str, str, datetime]] = []
-    released: list[tuple[str, str]] = []
-    reports: list[dict[str, str]] = []
-
-    class ReminderRepository:
-        async def claim_reminder(
-            self, appointment_id: str, column: str, now: datetime
-        ) -> bool:
-            claimed.append((appointment_id, column, now))
-            return True
-
-        async def release_reminder(self, appointment_id: str, column: str) -> None:
-            released.append((appointment_id, column))
 
     async def reserve(**kwargs: Any) -> MailReservation:
         assert kwargs == {
             "priority": "medium",
-            "message_id": "reminder:public-1:24h",
+            "message_id": "reminder:appointment-1:24h",
         }
         return MailReservation(
             decision=decision,  # type: ignore[arg-type]
@@ -313,34 +402,259 @@ async def test_recordatorio_preserva_reclamo_sin_reportar_fallo_smtp_por_budget(
             priority="medium",
         )
 
-    monkeypatch.setattr(
-        tasks, "build_client_details", lambda *_args: {"public_id": "public-1"}
-    )
-    monkeypatch.setattr(tasks, "_reminder_subject", lambda _details: "Reminder")
-    monkeypatch.setattr(tasks, "_reminder_body", lambda _details: "Body")
     monkeypatch.setattr(tasks, "reserve_mail", reserve)
-    monkeypatch.setattr(
-        tasks, "report_mail_failure", lambda **kwargs: reports.append(kwargs)
-    )
-    smtp = tasks.SmtpSession()
-    monkeypatch.setattr(
-        smtp,
-        "_send_sync",
-        lambda _message: (_ for _ in ()).throw(AssertionError("SMTP must not run")),
-    )
+    await jobs._dispatch_pending_emails(object())  # type: ignore[arg-type]
 
-    result = await tasks._dispatch_reminder(
-        ReminderRepository(),
+    assert row.processed_at is None
+    assert row.attempts == 0
+    assert connections == []
+
+
+@pytest.mark.asyncio
+async def test_recordatorio_preserva_fila_si_redis_falla_con_cap_activo(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "MAIL_DAILY_BUDGET", 5)
+    monkeypatch.setattr(mail_budget, "report_mail_failure", lambda **_kwargs: None)
+    row = _OutboxMailRow()
+    connections = _wire_outbox_dispatch(
+        monkeypatch,
         row,
-        STAGE_24H,
-        datetime.now(timezone.utc),
-        smtp,
+        lambda: _ScriptedSMTP("success"),
+        use_real_sender=True,
+        real_sender_kind="reminder",
+    )
+    redis_attempts = 0
+
+    async def unavailable() -> None:
+        nonlocal redis_attempts
+        redis_attempts += 1
+        raise OSError("redis unavailable")
+
+    monkeypatch.setattr(mail_budget, "get_redis", unavailable)
+    await jobs._dispatch_pending_emails(object())  # type: ignore[arg-type]
+
+    assert redis_attempts == mail_budget._REDIS_RETRIES
+    assert row.processed_at is None
+    assert row.attempts == 0
+    assert connections == []
+
+
+@pytest.mark.asyncio
+async def test_recordatorio_no_se_bloquea_si_el_budget_esta_desactivado(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "MAIL_DAILY_BUDGET", None)
+    row = _OutboxMailRow()
+    connections = _wire_outbox_dispatch(
+        monkeypatch,
+        row,
+        lambda: _ScriptedSMTP("success"),
+        use_real_sender=True,
+        real_sender_kind="reminder",
     )
 
-    assert result is False
-    assert len(claimed) == 1
-    assert released == [("appointment-1", STAGE_24H.column)]
-    assert reports == []
+    async def unavailable() -> None:
+        raise OSError("redis unavailable")
+
+    monkeypatch.setattr(mail_budget, "get_redis", unavailable)
+    await jobs._dispatch_pending_emails(object())  # type: ignore[arg-type]
+
+    assert row.processed_at is not None
+    assert row.attempts == 1
+    assert len(connections) == 1
+    assert connections[0].data_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_recordatorio_al_limite_de_presupuesto_sigue_pendiente(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "MAIL_DAILY_BUDGET", 5)
+    monkeypatch.setattr(settings, "MAIL_CRITICAL_RESERVE_PERCENT", 20)
+    monkeypatch.setattr(mail_budget, "_window", lambda now=None: ("test-window", 3600))
+    redis = AtomicMailBudgetRedis()
+
+    async def get_redis() -> AtomicMailBudgetRedis:
+        return redis
+
+    monkeypatch.setattr(mail_budget, "get_redis", get_redis)
+    for index in range(4):
+        reservation = await mail_budget.reserve_mail(
+            priority="high", message_id=f"seed:{index}"
+        )
+        assert reservation.decision == "admitted"
+
+    row = _OutboxMailRow()
+    connections = _wire_outbox_dispatch(
+        monkeypatch,
+        row,
+        lambda: _ScriptedSMTP("success"),
+        use_real_sender=True,
+        real_sender_kind="reminder",
+    )
+    # _wire_outbox_dispatch leaves the real reservation function installed.
+    await jobs._dispatch_pending_emails(object())  # type: ignore[arg-type]
+
+    assert row.processed_at is None
+    assert row.attempts == 0
+    assert connections == []
+    metrics = await mail_budget.read_mail_budget_metrics()
+    assert metrics["admitted"] == 4
+    assert metrics["deferred"] == 1
+
+
+@pytest.mark.asyncio
+async def test_recordatorio_reintenta_fallo_transitorio_antes_de_data_con_mismo_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Un fallo pre-DATA reabre el recordatorio y reutiliza su cupo."""
+    monkeypatch.setattr(settings, "MAIL_DAILY_BUDGET", 5)
+    redis = AtomicMailBudgetRedis()
+
+    async def get_redis() -> AtomicMailBudgetRedis:
+        return redis
+
+    monkeypatch.setattr(mail_budget, "get_redis", get_redis)
+    monkeypatch.setattr(mail_budget, "_window", lambda now=None: ("test-window", 3600))
+    monkeypatch.setattr(mail_budget, "report_mail_failure", lambda **_kwargs: None)
+    row = _OutboxMailRow()
+    outcomes = iter(["connection-before-data", "success"])
+    connections = _wire_outbox_dispatch(
+        monkeypatch,
+        row,
+        lambda: _ScriptedSMTP(next(outcomes)),
+        use_real_sender=True,
+        real_sender_kind="reminder",
+    )
+    original_reserve_mail = mail_budget.reserve_mail
+    reservations: list[tuple[MailPriority, str, bool]] = []
+
+    async def record_reserve_mail(
+        *, priority: MailPriority, message_id: str
+    ) -> MailReservation:
+        reservations.append((priority, message_id, current_mail_pre_data_retry()))
+        return await original_reserve_mail(priority=priority, message_id=message_id)
+
+    monkeypatch.setattr(tasks, "reserve_mail", record_reserve_mail)
+
+    await jobs._dispatch_pending_emails(object())  # type: ignore[arg-type]
+    assert row.processed_at is None
+    assert row.attempts == 1
+    assert connections[0].data_calls == 0
+
+    row.next_attempt_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    await jobs._dispatch_pending_emails(object())  # type: ignore[arg-type]
+    metrics = await mail_budget.read_mail_budget_metrics()
+
+    assert row.processed_at is not None
+    assert [reservation[0] for reservation in reservations] == ["medium", "medium"]
+    assert [reservation[1] for reservation in reservations] == [
+        "reminder:appointment-1:24h",
+        "reminder:appointment-1:24h",
+    ]
+    assert [reservation[2] for reservation in reservations] == [True, True]
+    assert [connection.data_calls for connection in connections] == [0, 1]
+    assert metrics["admitted"] == 1
+    assert metrics["failed"] == 1
+    assert metrics["sent"] == 1
+
+
+@pytest.mark.parametrize("redis_available", [True, False])
+@pytest.mark.asyncio
+async def test_recordatorio_reintenta_fallo_pre_data_aun_con_budget_desactivado(
+    monkeypatch: pytest.MonkeyPatch,
+    redis_available: bool,
+) -> None:
+    """Una caida SMTP no pierde el outbox aunque el limite diario este apagado."""
+    monkeypatch.setattr(settings, "MAIL_DAILY_BUDGET", None)
+    redis = AtomicMailBudgetRedis()
+
+    async def get_redis() -> AtomicMailBudgetRedis:
+        if not redis_available:
+            raise OSError("redis unavailable")
+        return redis
+
+    monkeypatch.setattr(mail_budget, "get_redis", get_redis)
+    monkeypatch.setattr(mail_budget, "report_mail_failure", lambda **_kwargs: None)
+    row = _OutboxMailRow()
+    outcomes = iter(["connection-before-data", "success"])
+    connections = _wire_outbox_dispatch(
+        monkeypatch,
+        row,
+        lambda: _ScriptedSMTP(next(outcomes)),
+        use_real_sender=True,
+        real_sender_kind="reminder",
+    )
+    original_reserve_mail = mail_budget.reserve_mail
+    reservations: list[tuple[str, bool]] = []
+
+    async def record_reserve_mail(
+        *, priority: MailPriority, message_id: str
+    ) -> MailReservation:
+        assert priority == "medium"
+        reservations.append((message_id, current_mail_pre_data_retry()))
+        return await original_reserve_mail(priority=priority, message_id=message_id)
+
+    monkeypatch.setattr(tasks, "reserve_mail", record_reserve_mail)
+
+    await jobs._dispatch_pending_emails(object())  # type: ignore[arg-type]
+
+    assert row.processed_at is None
+    assert row.attempts == 1
+    assert connections[0].data_calls == 0
+
+    # Una nueva dispatch (incluido tras reiniciar el worker) recupera la fila.
+    row.next_attempt_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    await jobs._dispatch_pending_emails(object())  # type: ignore[arg-type]
+
+    assert row.processed_at is not None
+    assert row.attempts == 2
+    assert [connection.data_calls for connection in connections] == [0, 1]
+    assert reservations == [
+        ("reminder:appointment-1:24h", True),
+        ("reminder:appointment-1:24h", True),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_recordatorio_duplicado_usa_id_logico_y_no_reenvia(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "MAIL_DAILY_BUDGET", 5)
+    monkeypatch.setattr(mail_budget, "_window", lambda now=None: ("test-window", 3600))
+    redis = AtomicMailBudgetRedis()
+
+    async def get_redis() -> AtomicMailBudgetRedis:
+        return redis
+
+    monkeypatch.setattr(mail_budget, "get_redis", get_redis)
+    monkeypatch.setattr(mail_budget, "report_mail_failure", lambda **_kwargs: None)
+    row = _OutboxMailRow()
+    connections = _wire_outbox_dispatch(
+        monkeypatch,
+        row,
+        lambda: _ScriptedSMTP("success"),
+        use_real_sender=True,
+        real_sender_kind="reminder",
+    )
+
+    await jobs._dispatch_pending_emails(object())  # type: ignore[arg-type]
+    row.processed_at = None  # simulate a duplicate SQL dispatch of the same row
+    row.delivery_status = "pending"
+    row.claimed_at = None
+    row.next_attempt_at = None
+    await jobs._dispatch_pending_emails(object())  # type: ignore[arg-type]
+    metrics = await mail_budget.read_mail_budget_metrics()
+
+    assert row.processed_at is not None
+    assert row.attempts == 1
+    assert row.delivery_status == "unknown"
+    assert row.error == "mail_budget_duplicate"
+    assert len(connections) == 1
+    assert connections[0].data_calls == 1
+    assert metrics["admitted"] == 1
+    assert metrics["sent"] == 1
 
 
 def test_cada_reoferta_de_lista_de_espera_tiene_idempotencia_propia() -> None:
@@ -390,6 +704,28 @@ async def test_outbox_reintenta_fallo_pre_data_con_mismo_id_y_un_solo_cupo(
         use_real_sender=True,
         real_sender_kind=real_sender_kind,
     )
+    guard_checks = 0
+    if real_sender_kind == "waitlist_offer":
+        starts_at = datetime(2026, 11, 20, 13, tzinfo=timezone.utc)
+        guard = {
+            "kind": "waitlist_offer",
+            "entry_id": "entry-1",
+            "staff_id": "staff-1",
+            "starts_at": starts_at.isoformat(),
+            "ends_at": (starts_at + timedelta(minutes=30)).isoformat(),
+            "expires_at": (starts_at + timedelta(minutes=10)).isoformat(),
+        }
+        row.payload["waitlist_offer_guard"] = guard
+
+        async def current_offer(_db: Any, store_id: str | None, raw_guard: Any) -> bool:
+            nonlocal guard_checks
+            guard_checks += 1
+            assert store_id == row.store_id
+            assert raw_guard == guard
+            return True
+
+        monkeypatch.setattr(jobs, "_waitlist_offer_guard_is_current", current_offer)
+
     original_reserve_mail = mail_budget.reserve_mail
     reservations: list[tuple[MailPriority, str, bool]] = []
 
@@ -401,11 +737,15 @@ async def test_outbox_reintenta_fallo_pre_data_con_mismo_id_y_un_solo_cupo(
 
     monkeypatch.setattr(tasks, "reserve_mail", record_reserve_mail)
 
+    row.next_attempt_at = datetime.now(timezone.utc) - timedelta(seconds=1)
     await jobs._dispatch_pending_emails(object())  # type: ignore[arg-type]
     assert row.attempts == 1
     assert row.processed_at is None
     assert connections[0].data_calls == 0
+    if real_sender_kind == "waitlist_offer":
+        assert guard_checks == 1
 
+    row.next_attempt_at = datetime.now(timezone.utc) - timedelta(seconds=1)
     await jobs._dispatch_pending_emails(object())  # type: ignore[arg-type]
     metrics = await mail_budget.read_mail_budget_metrics()
 
@@ -421,6 +761,8 @@ async def test_outbox_reintenta_fallo_pre_data_con_mismo_id_y_un_solo_cupo(
         (expected_priority, "outbox:outbox-retry-1", True),
         (expected_priority, "outbox:outbox-retry-1", True),
     ]
+    if real_sender_kind == "waitlist_offer":
+        assert guard_checks == 2
 
 
 @pytest.mark.asyncio
@@ -474,6 +816,7 @@ async def test_outbox_recupera_reserva_si_redis_falla_al_registrar_fallo_pre_dat
     assert connections[0].data_calls == 0
     assert reclaim_flags == [True]
 
+    row.next_attempt_at = datetime.now(timezone.utc) - timedelta(seconds=1)
     await jobs._dispatch_pending_emails(object())  # type: ignore[arg-type]
     metrics = await mail_budget.read_mail_budget_metrics()
 
@@ -543,6 +886,7 @@ async def test_outbox_recupera_reserva_ambigua_antes_de_smtp(
     assert metrics["admitted"] == 1
     assert metrics["sent"] == 0
 
+    row.next_attempt_at = datetime.now(timezone.utc) - timedelta(seconds=1)
     await jobs._dispatch_pending_emails(object())  # type: ignore[arg-type]
     metrics = await mail_budget.read_mail_budget_metrics()
 
@@ -556,7 +900,9 @@ async def test_outbox_recupera_reserva_ambigua_antes_de_smtp(
     assert metrics["sent"] == 1
 
 
-@pytest.mark.parametrize("real_sender_kind", ["confirmation", "store_notification"])
+@pytest.mark.parametrize(
+    "real_sender_kind", ["confirmation", "store_notification", "reminder"]
+)
 @pytest.mark.asyncio
 async def test_fallos_pre_data_respetan_el_maximo_original_del_outbox(
     monkeypatch: pytest.MonkeyPatch,
@@ -572,23 +918,30 @@ async def test_fallos_pre_data_respetan_el_maximo_original_del_outbox(
         real_sender_kind=real_sender_kind,
     )
 
-    for _ in range(WEBHOOK_INBOX_MAX_ATTEMPTS):
+    for _ in range(OUTBOX_EMAIL_MAX_ATTEMPTS):
         await jobs._dispatch_pending_emails(object())  # type: ignore[arg-type]
+        if row.next_attempt_at is not None:
+            row.next_attempt_at = datetime.now(timezone.utc) - timedelta(seconds=1)
     await jobs._dispatch_pending_emails(object())  # type: ignore[arg-type]
     metrics = await mail_budget.read_mail_budget_metrics()
 
-    assert row.attempts == WEBHOOK_INBOX_MAX_ATTEMPTS
+    assert row.attempts == OUTBOX_EMAIL_MAX_ATTEMPTS
     assert row.processed_at is not None
-    assert len(connections) == WEBHOOK_INBOX_MAX_ATTEMPTS
+    assert len(connections) == OUTBOX_EMAIL_MAX_ATTEMPTS
     assert all(connection.send_message_calls == 1 for connection in connections)
     assert all(connection.data_calls == 0 for connection in connections)
     assert metrics["admitted"] == 1
-    assert metrics["priority:high"] == 1
-    assert metrics["failed"] == WEBHOOK_INBOX_MAX_ATTEMPTS
+    assert (
+        metrics[f"priority:{'medium' if real_sender_kind == 'reminder' else 'high'}"]
+        == 1
+    )
+    assert metrics["failed"] == OUTBOX_EMAIL_MAX_ATTEMPTS
     assert metrics["sent"] == 0
 
 
-@pytest.mark.parametrize("real_sender_kind", ["confirmation", "store_notification"])
+@pytest.mark.parametrize(
+    "real_sender_kind", ["confirmation", "store_notification", "reminder"]
+)
 @pytest.mark.parametrize(
     "data_error",
     [
@@ -647,6 +1000,8 @@ async def test_sender_directo_no_habilita_retry_pre_data(
     direct_sender_kind: str,
 ) -> None:
     monkeypatch.setattr(settings, "MAIL_DAILY_BUDGET", 5)
+    monkeypatch.setattr(settings, "MAIL_BUDGET_TIMEZONE", "UTC")
+    monkeypatch.setattr(settings, "MAIL_BUDGET_RESET_HOUR", 0)
     if direct_sender_kind == "confirmation":
         monkeypatch.setattr(tasks, "_confirmation_subject", lambda _details: "Subject")
         monkeypatch.setattr(tasks, "_confirmation_body", lambda _details: "Body")

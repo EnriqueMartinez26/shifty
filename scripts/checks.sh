@@ -19,6 +19,9 @@
 # - redis_state (`INFO memory`): aviso si used_memory pasa
 #   REDIS_STATE_MEM_MAX_PERCENT (80 %) de su maxmemory. Con noeviction, lleno
 #   es 503 en auth, OTP y la reserva publica.
+# - RabbitMQ: alerta ante alarmas activas de memoria/disco, o si no se pueden
+#   consultar en RABBITMQ_CHECK_TIMEOUT_SECONDS (30). No reinicia el broker;
+#   reiniciarlo corta las conexiones.
 # - Endurecimiento del host (scripts/host-hardening-check.sh): sshd solo con
 #   clave, ufw activo con 22/80/443, unattended-upgrades solo de seguridad y
 #   sin reinicio automatico, fail2ban y reinicio pendiente.
@@ -42,6 +45,8 @@ set -euo pipefail
 : "${HOST_SWAP_MAX_PERCENT:=50}"
 : "${REDIS_STATE_SERVICE:=redis_state}"
 : "${REDIS_STATE_MEM_MAX_PERCENT:=80}"
+: "${RABBITMQ_SERVICE:=rabbitmq}"
+: "${RABBITMQ_CHECK_TIMEOUT_SECONDS:=30}"
 
 problemas=0
 problema() {
@@ -204,6 +209,61 @@ chequear_redis_state() {
   fi
 }
 
+# RabbitMQ puede bloquear publicadores por alarmas de memoria/disco aunque el
+# contenedor siga healthy. La compuerta de deploy ya consulta este mismo
+# comando; aca se monitorea cada hora y se alerta sin tomar acciones de repair.
+#
+# Con tope (RABBITMQ_CHECK_TIMEOUT_SECONDS): un nodo trabado dejaba checks.sh
+# colgado y las corridas horarias se apilaban (2026-11-16). El aviso sale del
+# host (webhook y mail): nombra solo los recursos en alarma o el codigo de
+# salida, nunca la salida cruda del CLI, que puede traer datos del nodo (su
+# diagnostico imprime el hash de la cookie de Erlang).
+#
+# `timeout` corta solo el cliente de docker: el rabbitmq-diagnostics de
+# adentro del contenedor seguia corriendo (2026-11-16). El CLI recibe su
+# propio --timeout, 2/3 del tope de afuera (20 de 30 s; el resto es el
+# arranque de la VM de Erlang del CLI): `alarms` lo pasa a su rpc_call
+# (deps/rabbitmq_cli/.../alarms_command.ex del tag v3.13.7;
+# https://www.rabbitmq.com/docs/3.13/man/rabbitmq-diagnostics.8, "-t,
+# --timeout: Operation timeout in seconds").
+chequear_rabbitmq() {
+  local tope="$RABBITMQ_CHECK_TIMEOUT_SECONDS"
+  if ! [[ "$tope" =~ ^[1-9][0-9]*$ ]]; then
+    log "checks: RABBITMQ_CHECK_TIMEOUT_SECONDS=$tope no es un numero de segundos; uso 30"
+    tope=30
+  fi
+  local tope_cli=$((tope * 2 / 3))
+  if [ "$tope_cli" -lt 1 ]; then tope_cli=1; fi
+  local salida rc=0
+  local comando="docker compose exec -T $RABBITMQ_SERVICE rabbitmq-diagnostics -q --timeout $tope_cli alarms --formatter json"
+  salida="$(cd "$SHIFTY_DIR" && usar_version_en_curso &&
+    timeout -k 5 "$tope" \
+      docker compose exec -T "$RABBITMQ_SERVICE" \
+      rabbitmq-diagnostics -q --timeout "$tope_cli" alarms --formatter json 2>&1)" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    local motivo="salio con $rc"
+    if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
+      motivo="sin respuesta en $tope s"
+    fi
+    problema "rabbitmq: no se pudieron consultar las alarmas" \
+      "$comando: $motivo. La salida no viaja en el aviso: correrlo a mano en el host." \
+      rabbitmq-alarms 60
+    return
+  fi
+  salida="$(printf '%s' "$salida" | tr -d '[:space:]')"
+  if ! rabbitmq_sin_alarmas "$salida"; then
+    local recursos="" resumen="respuesta que no se entiende"
+    case "$salida" in *[Mm]emory*[Aa]larm* | *'"resource":"memory"'*) recursos+=" memoria" ;; esac
+    case "$salida" in *[Dd]isk*[Aa]larm* | *'"resource":"disk"'*) recursos+=" disco" ;; esac
+    if [ -n "$recursos" ]; then resumen="alarmas activas:$recursos"; fi
+    problema "rabbitmq: hay alarmas activas o una respuesta ilegible" \
+      "$resumen. Revisar memoria/disco del broker; el guard no reinicia RabbitMQ. Detalle: $comando, a mano en el host." \
+      rabbitmq-alarms 60
+    return
+  fi
+  log "checks: rabbitmq sin alarmas"
+}
+
 # Avisa por su cuenta (alertas con clave propia); aca solo cuenta si hubo
 # problemas.
 chequear_endurecimiento() {
@@ -218,6 +278,7 @@ chequear_disco
 chequear_contenedores
 chequear_memoria_host
 chequear_redis_state
+chequear_rabbitmq
 chequear_endurecimiento
 
 if [ "$problemas" -gt 0 ]; then

@@ -12,7 +12,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
-from datetime import datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Literal, cast
 from zoneinfo import ZoneInfo
 
@@ -147,6 +147,13 @@ class MailReservation:
     attempt_token: str
     priority: MailPriority
     tracked: bool = True
+    retry_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        if self.retry_at is not None and (
+            self.retry_at.tzinfo is None or self.retry_at.utcoffset() is None
+        ):
+            raise ValueError("mail reservation retry_at must be timezone-aware")
 
 
 @contextmanager
@@ -183,26 +190,100 @@ def current_mail_reserved_retry() -> bool:
     return _MAIL_RESERVED_RETRY.get()
 
 
+def _budget_reset_config() -> tuple[ZoneInfo, int]:
+    if settings.MAIL_DAILY_BUDGET is None:
+        # Un bucket estable para metricas internas; no usar configuracion de
+        # reset del proveedor mientras el control de cuota siga apagado.
+        return ZoneInfo("UTC"), 0
+    timezone_name = settings.MAIL_BUDGET_TIMEZONE
+    reset_hour = settings.MAIL_BUDGET_RESET_HOUR
+    if timezone_name is None or reset_hour is None:
+        raise ValueError(
+            "MAIL_BUDGET_TIMEZONE y MAIL_BUDGET_RESET_HOUR son obligatorios "
+            "si MAIL_DAILY_BUDGET esta configurado"
+        )
+    return ZoneInfo(timezone_name), reset_hour
+
+
+def _aware_instant(now: datetime | None) -> datetime:
+    instant = now or datetime.now(timezone.utc)
+    if instant.tzinfo is None or instant.utcoffset() is None:
+        raise ValueError("mail budget window requires an aware datetime")
+    return instant
+
+
+def _local_reset_boundary(day: date, zone: ZoneInfo, reset_hour: int) -> datetime:
+    wall_time = datetime.combine(day, time(hour=reset_hour))
+    candidate = wall_time.replace(tzinfo=zone)
+    # A local reset can fall in a DST gap. Normalize that nonexistent wall
+    # time to the first real local instant after the gap; fold=0 chooses the
+    # first occurrence when a reset lands in a repeated hour.
+    round_trip = candidate.astimezone(timezone.utc).astimezone(zone)
+    if round_trip.replace(tzinfo=None) != wall_time:
+        return round_trip
+    return candidate
+
+
+def _next_reset_boundary(
+    instant: datetime, zone: ZoneInfo, reset_hour: int
+) -> datetime:
+    instant_utc = instant.astimezone(timezone.utc)
+    local_day = instant.astimezone(zone).date()
+    for day_offset in range(3):
+        day = local_day + timedelta(days=day_offset)
+        boundary_utc = _local_reset_boundary(day, zone, reset_hour).astimezone(
+            timezone.utc
+        )
+        if boundary_utc > instant_utc:
+            return boundary_utc
+    raise ValueError("could not resolve the next mail budget reset boundary")
+
+
+def next_mail_budget_reset_at(now: datetime | None = None) -> datetime:
+    """Return the next reset instant as an aware UTC datetime.
+
+    Enabled budgets use the configured IANA timezone and local reset hour.
+    With the cap disabled, UTC midnight remains only the internal metrics
+    bucket; no reservation is deferred based on that fallback.
+    """
+    instant = _aware_instant(now)
+    zone, reset_hour = _budget_reset_config()
+    return _next_reset_boundary(instant, zone, reset_hour)
+
+
+def _next_reset_after_window(window_id: str) -> datetime:
+    """Return the boundary after the window already selected by ``_window``."""
+    try:
+        window_day = datetime.strptime(window_id[:8], "%Y%m%d").date()
+    except ValueError:
+        # Unit doubles may use opaque window IDs; preserve a safe fallback.
+        return next_mail_budget_reset_at()
+    zone, reset_hour = _budget_reset_config()
+    next_day = window_day + timedelta(days=1)
+    return _local_reset_boundary(next_day, zone, reset_hour).astimezone(timezone.utc)
+
+
 def _window(now: datetime | None = None) -> tuple[str, int]:
     """Return this provider calendar window and its remaining TTL.
 
     The quota resets at the configured wall-clock hour in the configured IANA
-    timezone. Redis keeps the counters through the reset plus one day for
+    timezone. An enabled cap requires both values. When the cap is disabled,
+    UTC midnight is only a metrics bucket, not a claim about the provider's
+    reset. Redis keeps the counters through the reset plus one day for
     diagnostics.
     """
-    zone = ZoneInfo(settings.MAIL_BUDGET_TIMEZONE)
-    instant = now or datetime.now(timezone.utc)
-    if instant.tzinfo is None:
-        raise ValueError("mail budget window requires an aware datetime")
+    instant = _aware_instant(now)
+    zone, reset_hour = _budget_reset_config()
     local = instant.astimezone(zone)
-    boundary = datetime.combine(
-        local.date(), time(hour=settings.MAIL_BUDGET_RESET_HOUR), tzinfo=zone
-    )
-    if local < boundary:
-        boundary -= timedelta(days=1)
-    next_boundary = boundary + timedelta(days=1)
+    boundary = _local_reset_boundary(local.date(), zone, reset_hour)
+    instant_utc = instant.astimezone(timezone.utc)
+    if boundary.astimezone(timezone.utc) > instant_utc:
+        boundary = _local_reset_boundary(
+            local.date() - timedelta(days=1), zone, reset_hour
+        )
+    next_boundary = _next_reset_boundary(instant, zone, reset_hour)
     window_id = boundary.strftime("%Y%m%dT%H%z")
-    ttl = max(60, int((next_boundary - local).total_seconds()) + 86_400)
+    ttl = max(60, int((next_boundary - instant_utc).total_seconds()) + 86_400)
     return window_id, ttl
 
 
@@ -243,9 +324,10 @@ async def reserve_mail(*, priority: MailPriority, message_id: str) -> MailReserv
 
     ``message_id`` must identify the logical delivery, not its recipient or
     content. A repeated task/outbox delivery is suppressed without another
-    count. Deferred messages can be reconsidered on the next outbox tick;
-    bounded pre-DATA retries and safe outbox reclaims reuse the existing
-    admission.
+    count within the same quota window. Deferred messages can be reconsidered
+    on the next outbox tick; bounded pre-DATA retries and safe outbox reclaims
+    reuse the admission in that window. A retry after reset can be admitted in
+    the new window.
     """
     if priority not in _PRIORITIES:
         raise ValueError(f"invalid mail priority: {priority}")
@@ -298,6 +380,11 @@ async def reserve_mail(*, priority: MailPriority, message_id: str) -> MailReserv
                 message_key=reservation.message_key,
                 attempt_token=attempt_token,
                 priority=priority,
+                retry_at=(
+                    _next_reset_after_window(window_id)
+                    if decision == "deferred"
+                    else None
+                ),
             )
         except REDIS_UNAVAILABLE_ERRORS as exc:
             redis_error = exc

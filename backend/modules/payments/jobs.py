@@ -36,8 +36,12 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession
 from core.availability_cache import invalidate_availability
 from core.config import settings
 from core.database import _apply_tenant_context, tenant_bypass
-from core.mail_budget import MailPriority, mail_delivery_context
-from core.observability import OncePer, report_exception
+from core.mail_budget import (
+    MailPriority,
+    mail_delivery_context,
+    next_mail_budget_reset_at,
+)
+from core.observability import OncePer, report_exception, report_mail_failure
 from core.redis import REDIS_UNAVAILABLE_ERRORS, get_availability_cache
 from core.utils import ensure_utc_aware, format_ars
 from modules.appointments.model import Appointment, AppointmentStatus
@@ -48,6 +52,7 @@ from modules.notifications.tasks import (
     EVENT_APPOINTMENT_CONFIRMED,
     EVENT_APPOINTMENT_RESCHEDULED,
     build_client_details,
+    notify_client_reminder,
     send_waitlist_offer_email,
     format_local_datetime,
     format_local_deadline,
@@ -65,6 +70,7 @@ from modules.payments.links import RETIRED_LINK_SEARCH_MAX, retired_link_referen
 from modules.payments.model import (
     LIVE_CHARGE_PAYMENT_STATUSES,
     EVENT_EMAIL_SEND as EVENT_EMAIL_SEND,
+    OUTBOX_EMAIL_MAX_ATTEMPTS,
     PAYMENT_PROVIDER_MANUAL,
     PAYMENT_PROVIDER_MERCADOPAGO,
     JsonValue,
@@ -83,7 +89,9 @@ from modules.payments.processing import (
     enrich_mercadopago_webhook_payload,
 )
 from modules.users.model import User, UserRole
+from modules.otp.model import OtpVerification
 from modules.otp.service import otp_email_guard_is_current
+from modules.waitlist.model import WaitlistEntry, WaitlistStatus
 from modules.waitlist.events import EVENT_SLOT_RELEASED, publish_slot_released
 from modules.waitlist.offers import ReleasedSlot, offer_released_slot
 from modules.payments.service import (
@@ -206,7 +214,16 @@ PendingEmail = Callable[..., Awaitable[object]]
 # no llega a matar la conexion antes de anotar los fallos.
 OUTBOX_EMAIL_BUDGET_SECONDS = 45
 _AUTH_GUARD_RETRY_PREFIX = "auth_guard:"
-
+OUTBOX_EMAIL_MAX_PER_DISPATCH = 100
+OUTBOX_EMAIL_CLAIM_STALE_SECONDS = 120
+OUTBOX_EMAIL_RETRY_BASE_SECONDS = 20
+OUTBOX_EMAIL_RETRY_MAX_SECONDS = 300
+OUTBOX_EMAIL_UNAVAILABLE_RETRY_SECONDS = 60
+# Let critical authentication mail cut ahead of the backlog, while forcing a
+# noncritical claim after a bounded burst so sustained OTP traffic cannot starve it.
+OUTBOX_EMAIL_CRITICAL_BURST = 5
+OUTBOX_EMAIL_AUTH_EXPIRY_SCAN_LIMIT = 100
+_EMAIL_PRIORITIES = ("critical", "high", "medium", "low")
 # F2-03 (plan de rendimiento, R9-06, 2026-09-24): lo que el presupuesto no
 # alcanzaba se anotaba con ``register_failure`` y se perdia; con una rafaga, la
 # mitad de los mails de cada tick. Ahora cada mail es su propia fila del outbox,
@@ -214,9 +231,11 @@ _AUTH_GUARD_RETRY_PREFIX = "auth_guard:"
 # del commit): si el worker muere despues del commit, el mail sigue en la base.
 # El despacho reclama esas filas de a una (``processed_at`` + commit, con
 # ``SKIP LOCKED``) y recien despues manda; lo que no entra en el presupuesto
-# queda pendiente y sale en el tick siguiente (20 s). ``processed_at`` nunca se
-# reabre: el reclamo va antes del envio y un envio fallido no se reintenta (el
-# DATA pudo haber llegado), queda con ``attempts`` y ``error``.
+# queda pendiente y sale en el tick siguiente (20 s). El reclamo se reabre si
+# la cuota difiere el envio o si se identifico positivamente un fallo transitorio
+# antes de DATA. Ese reintento acotado conserva el id y la admision originales.
+# Los fallos desde DATA son terminales porque el proveedor pudo haber aceptado
+# el mensaje; quedan anotados en ``attempts`` y ``error``.
 
 
 @dataclass(frozen=True)
@@ -229,6 +248,7 @@ class _Mail:
 
     kind: str
     kwargs: dict[str, Any]
+    guard: dict[str, Any] | None = None
 
 
 def _sender(kind: str) -> PendingEmail | None:
@@ -238,6 +258,7 @@ def _sender(kind: str) -> PendingEmail | None:
         "waitlist_offer": send_waitlist_offer_email,
         "cancellation": send_cancellation_email,
         "confirmation": send_confirmation_email,
+        "reminder": notify_client_reminder,
         "store_notification": send_store_notification_email,
         "rebook": send_rebook_email,
         "reschedule": send_reschedule_email,
@@ -304,7 +325,13 @@ def _persistir_mails(
                     "args": mail.kwargs,
                     "source_event": message.event_type,
                     "appointment_id": contexto["appointment_id"],
+                    **(
+                        {"waitlist_offer_guard": mail.guard}
+                        if mail.kind == "waitlist_offer" and mail.guard is not None
+                        else {}
+                    ),
                 },
+                delivery_status="pending",
             )
         )
 
@@ -500,6 +527,7 @@ async def _plan_outbox_message(
                     "email": oferta.pending_email.email,
                     "details": oferta.pending_email.details,
                 },
+                guard=oferta.pending_email.outbox_guard,
             )
         ]
 
@@ -605,8 +633,8 @@ async def process_outbox_batch(
     # Commit plano de AsyncSession, no el de TenantSession (ver docstring).
     await AsyncSession.commit(db)
     # Recien ahora, con la transaccion cerrada y processed_at persistido, se
-    # mandan los mails. Un SMTP caido no revierte nada, no marca el evento
-    # como fallido ni duplica envios.
+    # mandan los mails. Un SMTP caido no revierte el evento de negocio; el
+    # dispatcher anota el intento y solo reabre fallos seguros pre-DATA.
     await _dispatch_pending_emails(db, store_id=store_id)
     # El commit plano dejo la conexion sin contexto: se reaplica antes de
     # volver a leer, o la RLS le esconderia los eventos al job.
@@ -664,125 +692,502 @@ async def _plan_lote(
 async def _dispatch_pending_emails(
     db: AsyncSession, *, store_id: str | None = None
 ) -> None:
-    """Manda los mails pendientes del outbox fuera de toda transaccion.
-
-    AUD2-B4-02 (2026-09-20): una conexion SMTP para todo el despacho, como el
-    lote de recordatorios desde B4-08, y presupuesto de tiempo para que el
-    hard limit de Celery no corte en silencio.
-
-    F2-03 (2026-09-24): cada mail es una fila ``email.send`` (la escribio el
-    lote antes de su commit). Ciclo por mail: presupuesto -> reclamo
-    (``processed_at`` + commit plano, ``SKIP LOCKED``) -> envio. Lo que el
-    presupuesto no alcanza queda pendiente, sin intento contado, y lo toma el
-    tick siguiente: ya no se pierde. Toma tambien los que dejo un tick
-    anterior. Un fallo transitorio identificado antes de ``DATA`` libera
-    la fila para el proximo tick, conserva el mismo idempotency key y cuenta
-    contra el tope original de intentos. Un error despues de entrar en
-    ``DATA`` queda terminal porque el proveedor pudo haber aceptado el mail.
-    Los intentos y errores se anotan al final en una transaccion nueva.
-
-    Mientras se manda no hay transaccion abierta (regla 5): el reclamo
-    commitea con ``AsyncSession.commit`` y no con el de ``TenantSession``,
-    que reaplica el contexto y deja una idle (v-diff de AUD2-B4-02).
-    """
+    """Dispatch up to 100 due mail rows without holding a DB transaction in SMTP."""
     deadline = time.monotonic() + OUTBOX_EMAIL_BUDGET_SECONDS
-    fallados: list[tuple[OutboxMessage, str]] = []
-    intentados = 0
-    diferido_por_cuota = False
+    despachados = 0
+    if isinstance(db, AsyncSession):
+        await _terminalize_stale_email_claims(db, store_id=store_id)
+        await _expire_deferred_auth_emails(db, store_id=store_id)
+    critical_streak = 0
     async with smtp_session() as smtp:
-        while True:
+        while despachados < OUTBOX_EMAIL_MAX_PER_DISPATCH:
             if time.monotonic() >= deadline:
                 logger.warning(
                     "outbox_email_budget_deferred",
-                    attempted=intentados,
+                    attempted=despachados,
                     budget_seconds=OUTBOX_EMAIL_BUDGET_SECONDS,
                 )
                 break
-            fila = await _claim_next_email(db, store_id=store_id)
+            fila = await _claim_next_email(
+                db,
+                store_id=store_id,
+                prefer_noncritical=critical_streak >= OUTBOX_EMAIL_CRITICAL_BURST,
+            )
             if fila is None:
                 break
-            intentados += 1
-            payload = fila.payload if isinstance(fila.payload, dict) else {}
-            if payload.get("guard") is not None:
-                motivo = await _send_one_pending_email(fila, smtp, db=db)
+            despachados += 1
+            if _mail_priority_from_payload(fila.payload) == "critical":
+                critical_streak += 1
             else:
-                motivo = await _send_one_pending_email(fila, smtp)
-            decision_cuota = getattr(smtp, "last_budget_decision", None)
-            if decision_cuota in {"deferred", "unavailable"}:
-                # El límite temporal o la caída de Redis impiden saber si hay
-                # cupo. Liberar el reclamo conserva la fila para otro tick y no
-                # consume un intento; en ambos casos el SMTP no fue llamado.
-                fila.processed_at = None
-                diferido_por_cuota = True
-                logger.info(
-                    "outbox_email_deferred_by_provider_budget",
-                    admission_decision=decision_cuota,
-                    **_contexto_del_mail(fila),
-                )
-                break
-            if decision_cuota == "dropped":
-                # Los correos de prioridad baja se descartan por decisión de
-                # presupuesto; no son fallos SMTP ni deben volver a la cola.
-                logger.warning(
-                    "outbox_email_dropped_by_provider_budget",
-                    **_contexto_del_mail(fila),
-                )
+                critical_streak = 0
+            if not await _prepare_email_dispatch(db, fila):
                 continue
-            if motivo is not None:
-                retryable_pre_data = getattr(smtp, "last_delivery_retryable", False)
-                retryable_before_send = motivo.startswith(_AUTH_GUARD_RETRY_PREFIX)
-                if retryable_pre_data or retryable_before_send:
-                    # Se reabre solo para el siguiente tick. No se vuelve a
-                    # tomar dentro de este lote ni se pierde el tope de intentos.
-                    fila.processed_at = None
-                    logger.info(
-                        "outbox_email_retry_scheduled_before_send"
-                        if retryable_before_send
-                        else "outbox_email_retry_scheduled_before_data",
-                        **_contexto_del_mail(fila),
-                    )
-                fallados.append((fila, motivo))
-                if retryable_pre_data or retryable_before_send:
-                    break
-    if not fallados and not diferido_por_cuota:
+            try:
+                motivo = await _send_one_pending_email(fila, smtp, db=db)
+            except SoftTimeLimitExceeded:
+                # A stale claim becomes unknown; we cannot prove SMTP acceptance.
+                raise
+            await _record_email_dispatch_result(db, fila, smtp, motivo)
+
+
+async def _prepare_email_dispatch(db: AsyncSession, fila: OutboxMessage) -> bool:
+    """Validate mutable appointment and waitlist state before sending."""
+    payload = fila.payload if isinstance(fila.payload, dict) else {}
+    mail_kind = str(payload.get("mail") or "")
+    if mail_kind == "waitlist_offer":
+        try:
+            vigente = await _waitlist_offer_guard_is_current(
+                db, fila.store_id, payload.get("waitlist_offer_guard")
+            )
+        except SoftTimeLimitExceeded:
+            await _release_email_claim_after_validation_error(
+                db, fila.id, fila.store_id
+            )
+            raise
+        except Exception as exc:
+            logger.warning(
+                "outbox_waitlist_offer_validation_failed",
+                error_type=type(exc).__name__,
+                **_contexto_del_mail(fila),
+            )
+            await _release_email_claim_after_validation_error(
+                db,
+                fila.id,
+                fila.store_id,
+                failure_reason="waitlist_offer_validation_failed",
+            )
+            return False
+        if vigente == "invalid":
+            _terminalize_email(
+                fila, status="failed", reason="waitlist_offer_invalid_guard"
+            )
+            await _commit_email_state(db)
+            return False
+        if not vigente:
+            _terminalize_email(fila, status="expired", reason="waitlist_offer_stale")
+            await _commit_email_state(db)
+            return False
+
+    if mail_kind != "reminder":
+        return True
+    try:
+        reminder_error = await _reminder_delivery_error(db, fila)
+    except SoftTimeLimitExceeded:
+        await _release_email_claim_after_validation_error(db, fila.id, fila.store_id)
+        raise
+    except Exception as exc:
+        logger.warning(
+            "outbox_reminder_validation_failed",
+            error_type=type(exc).__name__,
+            **_contexto_del_mail(fila),
+        )
+        await _release_email_claim_after_validation_error(
+            db,
+            fila.id,
+            fila.store_id,
+            failure_reason="reminder_validation_failed",
+        )
+        return False
+    if reminder_error is None:
+        return True
+    _terminalize_email(fila, status="expired", reason=reminder_error)
+    await _commit_email_state(db)
+    return False
+
+
+async def _record_email_dispatch_result(
+    db: AsyncSession, fila: OutboxMessage, smtp: Any, motivo: str | None
+) -> None:
+    """Persist one sink result or a due-time deferral, without blocking later rows."""
+    if motivo == "auth_guard_stale":
+        _terminalize_email(fila, status="expired", reason="auth_guard_stale")
+        await _commit_email_state(db)
         return
-    if fallados or diferido_por_cuota:
-        await _apply_tenant_context(db)
-        for fila, motivo in fallados:
-            fila.register_failure(motivo)
+    if motivo is not None and motivo.startswith(_AUTH_GUARD_RETRY_PREFIX):
+        contexto = _contexto_del_mail(fila)
+        await _release_email_claim_after_validation_error(
+            db,
+            fila.id,
+            fila.store_id,
+            failure_reason=str(motivo)[:1000],
+        )
+        logger.info(
+            "outbox_auth_email_validation_retry",
+            retry_seconds=OUTBOX_EMAIL_UNAVAILABLE_RETRY_SECONDS,
+            **contexto,
+        )
+        return
+    decision = getattr(smtp, "last_budget_decision", None)
+    if decision in {"deferred", "unavailable"}:
+        retry_at = _mail_budget_retry_at(smtp, decision, datetime.now(timezone.utc))
+        _defer_email(fila, retry_at)
+        await _commit_email_state(db)
+        logger.info(
+            "outbox_email_deferred_by_provider_budget",
+            admission_decision=decision,
+            retry_at=retry_at.isoformat(),
+            **_contexto_del_mail(fila),
+        )
+        return
+    if decision == "dropped":
+        logger.warning(
+            "outbox_email_dropped_by_provider_budget", **_contexto_del_mail(fila)
+        )
+        _terminalize_email(fila, status="dropped", reason="mail_budget_dropped")
+        await _commit_email_state(db)
+        return
+    if decision == "duplicate":
+        _terminalize_email(fila, status="unknown", reason="mail_budget_duplicate")
+        await _commit_email_state(db)
+        return
+    retryable = bool(getattr(smtp, "last_delivery_retryable", False))
+    ambiguous = bool(getattr(smtp, "last_delivery_ambiguous", False))
+    attempted = (
+        bool(getattr(smtp, "last_delivery_attempted", False)) or retryable or ambiguous
+    )
+    if attempted:
+        fila.attempts = (fila.attempts or 0) + 1
+    if motivo is None:
+        _terminalize_email(fila, status="sent", reason=None)
+        await _commit_email_state(db)
+        return
+
+    retry_exhausted = False
+    fila.error = str(motivo)[:1000]
+    fila.claimed_at = None
+    fila.next_attempt_at = None
+    if ambiguous:
+        _terminalize_email(fila, status="unknown", reason="smtp_delivery_unknown")
+    elif retryable and attempted:
+        if fila.attempts >= OUTBOX_EMAIL_MAX_ATTEMPTS:
+            _terminalize_email(
+                fila,
+                status="failed",
+                reason=f"smtp_retry_exhausted:{str(motivo)[:900]}",
+            )
+            retry_exhausted = True
+        else:
+            retry_at = _smtp_retry_at(datetime.now(timezone.utc), fila.attempts)
+            _defer_email(fila, retry_at, error=str(motivo)[:1000])
+            logger.info(
+                "outbox_email_retry_scheduled_before_data",
+                attempt=fila.attempts,
+                retry_at=retry_at.isoformat(),
+                **_contexto_del_mail(fila),
+            )
+    else:
+        _terminalize_email(
+            fila,
+            status="failed",
+            reason=(str(motivo)[:1000] if attempted else str(motivo)),
+        )
+    await _commit_email_state(db)
+    if retry_exhausted:
+        logger.error(
+            "outbox_email_retry_exhausted",
+            attempts=fila.attempts,
+            max_attempts=OUTBOX_EMAIL_MAX_ATTEMPTS,
+            **_contexto_del_mail(fila),
+        )
+        report_mail_failure(
+            component="notifications", error_type="OutboxEmailRetryExhausted"
+        )
+
+
+async def _terminalize_stale_email_claims(
+    db: AsyncSession, *, store_id: str | None
+) -> None:
+    """Mark abandoned SMTP claims unknown; DATA may have reached the provider."""
+    await _apply_tenant_context(db)
+    cutoff = datetime.now(timezone.utc) - timedelta(
+        seconds=OUTBOX_EMAIL_CLAIM_STALE_SECONDS
+    )
+    filtros: list[ColumnElement[bool]] = [
+        OutboxMessage.event_type == EVENT_EMAIL_SEND,
+        OutboxMessage.is_active.is_(True),
+        OutboxMessage.delivery_status == "claimed",
+        OutboxMessage.claimed_at.is_not(None),
+        OutboxMessage.claimed_at <= cutoff,
+    ]
+    if store_id:
+        filtros.append(OutboxMessage.store_id == store_id)
+    filas = list(
+        (
+            await db.execute(
+                select(OutboxMessage)
+                .where(*filtros)
+                .order_by(OutboxMessage.claimed_at.asc())
+                .limit(OUTBOX_EMAIL_MAX_PER_DISPATCH)
+                .with_for_update(skip_locked=True)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for fila in filas:
+        _terminalize_email(fila, status="unknown", reason="stale_claim_unknown")
+    await AsyncSession.commit(db)
+
+
+def _terminalize_email(
+    fila: OutboxMessage,
+    *,
+    status: Literal["sent", "failed", "unknown", "expired", "dropped"],
+    reason: str | None,
+) -> None:
+    fila.delivery_status = status
+    fila.processed_at = datetime.now(timezone.utc)
+    fila.claimed_at = None
+    fila.next_attempt_at = None
+    fila.error = reason
+    _clear_auth_email_material(fila)
+
+
+def _clear_auth_email_material(fila: OutboxMessage) -> None:
+    """Remove encrypted one-time credentials and their guard after termination."""
+    payload = fila.payload if isinstance(fila.payload, dict) else None
+    if not payload or payload.get("mail") != "encrypted_body":
+        return
+    guard = payload.get("guard")
+    if not isinstance(guard, dict) or guard.get("kind") not in {
+        "otp",
+        "password_reset",
+    }:
+        return
+    sanitized = dict(payload)
+    arguments = payload.get("args")
+    if isinstance(arguments, dict):
+        sanitized_arguments = dict(arguments)
+        sanitized_arguments.pop("encrypted_body", None)
+        sanitized["args"] = sanitized_arguments
+    # The token hash is a verifier for the one-time reset secret. Keep only the
+    # event kind as audit context once the dispatcher no longer needs the guard.
+    sanitized["guard"] = {"kind": guard["kind"]}
+    fila.payload = sanitized
+
+
+def _defer_email(
+    fila: OutboxMessage, retry_at: datetime, *, error: str | None = None
+) -> None:
+    fila.delivery_status = "pending"
+    fila.processed_at = None
+    fila.claimed_at = None
+    fila.next_attempt_at = ensure_utc_aware(retry_at)
+    fila.error = error
+
+
+async def _commit_email_state(db: AsyncSession) -> None:
+    await _apply_tenant_context(db)
+    await AsyncSession.commit(db)
+
+
+def _smtp_retry_at(now: datetime, attempts: int) -> datetime:
+    delay = min(
+        OUTBOX_EMAIL_RETRY_BASE_SECONDS * (2 ** max(0, attempts - 1)),
+        OUTBOX_EMAIL_RETRY_MAX_SECONDS,
+    )
+    return ensure_utc_aware(now) + timedelta(seconds=delay)
+
+
+def _mail_budget_retry_at(smtp: Any, decision: str, now: datetime) -> datetime:
+    reported = getattr(smtp, "last_budget_retry_at", None)
+    if isinstance(reported, datetime):
+        return ensure_utc_aware(reported)
+    if decision == "unavailable":
+        return ensure_utc_aware(now) + timedelta(
+            seconds=OUTBOX_EMAIL_UNAVAILABLE_RETRY_SECONDS
+        )
+    if settings.MAIL_DAILY_BUDGET is None:
+        return ensure_utc_aware(now) + timedelta(
+            seconds=OUTBOX_EMAIL_UNAVAILABLE_RETRY_SECONDS
+        )
+    return ensure_utc_aware(next_mail_budget_reset_at(now))
+
+
+async def _release_email_claim_after_validation_error(
+    db: AsyncSession,
+    fila_id: str,
+    store_id: str | None,
+    *,
+    failure_reason: str | None = None,
+) -> None:
+    """Release a pre-SMTP claim after a database validation failure."""
+    await AsyncSession.rollback(db)
+    await _apply_tenant_context(db)
+    fila = (
+        await db.execute(
+            select(OutboxMessage)
+            .where(
+                OutboxMessage.id == fila_id,
+                OutboxMessage.store_id == store_id,
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if fila is not None and fila.is_active:
+        _defer_email(
+            fila,
+            datetime.now(timezone.utc)
+            + timedelta(seconds=OUTBOX_EMAIL_UNAVAILABLE_RETRY_SECONDS),
+            error=failure_reason,
+        )
     await AsyncSession.commit(db)
 
 
 async def _claim_next_email(
-    db: AsyncSession, *, store_id: str | None
+    db: AsyncSession, *, store_id: str | None, prefer_noncritical: bool = False
 ) -> OutboxMessage | None:
-    """Reclama el mail pendiente mas viejo y commitea ANTES de mandarlo.
-
-    Con ``SKIP LOCKED`` dos despachos (el tick y el endpoint del panel) nunca
-    toman la misma fila; con el reclamo commiteado antes del envio, un mail
-    sale a lo sumo una vez.
-    """
+    """Claim a due SMTP row by priority, with bounded critical-mail bursts."""
     await _apply_tenant_context(db)
+    now = datetime.now(timezone.utc)
     filtros: list[ColumnElement[bool]] = [
         OutboxMessage.event_type == EVENT_EMAIL_SEND,
         OutboxMessage.processed_at.is_(None),
         OutboxMessage.is_active.is_(True),
+        func.coalesce(OutboxMessage.next_attempt_at, OutboxMessage.created_at) <= now,
     ]
     if store_id:
         filtros.append(OutboxMessage.store_id == store_id)
+    priority_rank = _email_priority_rank_sql()
+    due_at = func.coalesce(OutboxMessage.next_attempt_at, OutboxMessage.created_at)
+    if prefer_noncritical:
+        # One aged noncritical row after each critical burst. Ordering this slot
+        # by age (not sub-priority) ensures low-priority mail also makes progress.
+        ordering: tuple[ColumnElement[Any], ...] = (
+            case((priority_rank == 0, 1), else_=0),
+            due_at,
+            OutboxMessage.created_at.asc(),
+        )
+    else:
+        ordering = (priority_rank, due_at, OutboxMessage.created_at.asc())
     fila = (
         await db.execute(
             select(OutboxMessage)
             .where(*filtros)
-            .order_by(OutboxMessage.created_at.asc())
+            .order_by(*ordering)
             .limit(1)
             .with_for_update(skip_locked=True)
         )
     ).scalar_one_or_none()
     if fila is not None:
-        fila.processed_at = datetime.now(timezone.utc)
+        fila.delivery_status = "claimed"
+        fila.claimed_at = now
+        fila.processed_at = now
+        fila.next_attempt_at = None
+        fila.error = None
     await AsyncSession.commit(db)
     return fila
+
+
+def _email_priority_rank_sql() -> ColumnElement[int]:
+    """Priority rank from canonical payload field or validated legacy args field."""
+    payload = OutboxMessage.payload
+    canonical = payload["priority"].as_string()
+    legacy = payload["args"]["priority"].as_string()
+    mail_kind = payload["mail"].as_string()
+    explicit = case(
+        (canonical.in_(_EMAIL_PRIORITIES), canonical),
+        (legacy.in_(_EMAIL_PRIORITIES), legacy),
+        else_=None,
+    )
+    default = case(
+        (mail_kind == "reminder", "medium"),
+        (mail_kind == "rebook", "low"),
+        else_="high",
+    )
+    priority = func.coalesce(explicit, default)
+    return case(
+        (priority == "critical", 0),
+        (priority == "high", 1),
+        (priority == "medium", 2),
+        (priority == "low", 3),
+        else_=2,
+    )
+
+
+def _mail_priority_from_payload(raw_payload: object) -> MailPriority:
+    payload = raw_payload if isinstance(raw_payload, dict) else {}
+    arguments = payload.get("args")
+    arguments = arguments if isinstance(arguments, dict) else {}
+    for candidate in (payload.get("priority"), arguments.get("priority")):
+        if isinstance(candidate, str) and candidate in _EMAIL_PRIORITIES:
+            return cast(MailPriority, candidate)
+    kind = payload.get("mail")
+    if kind == "reminder":
+        return "medium"
+    if kind == "rebook":
+        return "low"
+    return "high"
+
+
+async def _expire_deferred_auth_emails(
+    db: AsyncSession, *, store_id: str | None
+) -> int:
+    """Expire stale deferred auth mail before a distant budget retry becomes due."""
+    await _apply_tenant_context(db)
+    now = datetime.now(timezone.utc)
+    payload = OutboxMessage.payload
+    guard_kind = payload["guard"]["kind"].as_string()
+    otp_id = payload["guard"]["otp_id"].as_string()
+    reset_user_id = payload["guard"]["user_id"].as_string()
+    destination = payload["args"]["to"].as_string()
+    token_hash = payload["guard"]["token_hash"].as_string()
+    otp_stale = and_(
+        guard_kind == "otp",
+        or_(
+            OtpVerification.id.is_(None),
+            destination.is_(None),
+            OtpVerification.store_id != OutboxMessage.store_id,
+            OtpVerification.email.is_(None),
+            OtpVerification.email != destination,
+            OtpVerification.consumed_at.is_not(None),
+            OtpVerification.expires_at <= now,
+        ),
+    )
+    reset_stale = and_(
+        guard_kind == "password_reset",
+        or_(
+            User.id.is_(None),
+            destination.is_(None),
+            token_hash.is_(None),
+            User.password_reset_token_hash.is_distinct_from(token_hash),
+            User.password_reset_expires_at.is_(None),
+            User.password_reset_expires_at <= now,
+            User.is_active.is_(False),
+            User.email != destination,
+            User.store_id.is_distinct_from(OutboxMessage.store_id),
+        ),
+    )
+    filters: list[ColumnElement[bool]] = [
+        OutboxMessage.event_type == EVENT_EMAIL_SEND,
+        OutboxMessage.is_active.is_(True),
+        OutboxMessage.processed_at.is_(None),
+        OutboxMessage.next_attempt_at.is_not(None),
+        payload["mail"].as_string() == "encrypted_body",
+        or_(otp_stale, reset_stale),
+    ]
+    if store_id:
+        filters.append(OutboxMessage.store_id == store_id)
+    filas = list(
+        (
+            await db.execute(
+                select(OutboxMessage)
+                .outerjoin(OtpVerification, OtpVerification.id == otp_id)
+                .outerjoin(User, User.id == reset_user_id)
+                .where(*filters)
+                .order_by(OutboxMessage.next_attempt_at.asc())
+                .limit(OUTBOX_EMAIL_AUTH_EXPIRY_SCAN_LIMIT)
+                .with_for_update(skip_locked=True, of=OutboxMessage)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for fila in filas:
+        _terminalize_email(fila, status="expired", reason="auth_guard_stale")
+    if filas:
+        await _commit_email_state(db)
+    return len(filas)
 
 
 async def _auth_email_guard_is_current(
@@ -807,25 +1212,33 @@ async def _auth_email_guard_is_current(
         async with tenant_bypass(db):
             user_id = guard.get("user_id")
             token_hash = guard.get("token_hash")
-            current = (
-                await db.scalar(
-                    select(User.id).where(
+            destination = arguments.get("to")
+            result = (
+                await db.execute(
+                    select(User.email, User.store_id).where(
                         User.id == user_id,
                         User.password_reset_token_hash == token_hash,
                         User.password_reset_expires_at > now,
                         User.is_active.is_(True),
                     )
                 )
-                if isinstance(user_id, str) and isinstance(token_hash, str)
+                if isinstance(user_id, str)
+                and isinstance(token_hash, str)
+                and isinstance(destination, str)
                 else None
             )
+            current = result.one_or_none() if result is not None else None
     except Exception:
         await AsyncSession.rollback(db)
         raise
     # tenant_bypass reapplies RLS after exit; close that read transaction before
     # the SMTP operation, which must run without a transaction open.
     await AsyncSession.commit(db)
-    return current is not None
+    return bool(
+        current is not None
+        and current.email == destination
+        and current.store_id == fila.store_id
+    )
 
 
 async def _send_one_pending_email(
@@ -839,6 +1252,30 @@ async def _send_one_pending_email(
     contexto = _contexto_del_mail(fila)
     payload = fila.payload if isinstance(fila.payload, dict) else {}
     mail_kind = str(payload.get("mail") or "")
+    if hasattr(smtp, "last_budget_decision"):
+        smtp.last_budget_decision = None
+    if hasattr(smtp, "last_budget_retry_at"):
+        smtp.last_budget_retry_at = None
+    if hasattr(smtp, "last_delivery_retryable"):
+        smtp.last_delivery_retryable = False
+    if hasattr(smtp, "last_delivery_attempted"):
+        smtp.last_delivery_attempted = False
+    if hasattr(smtp, "last_delivery_ambiguous"):
+        smtp.last_delivery_ambiguous = False
+    if mail_kind == "reminder":
+        expires_at = payload.get("expires_at")
+        if not isinstance(expires_at, str):
+            return "reminder_invalid_expiry"
+        try:
+            expiry = ensure_utc_aware(datetime.fromisoformat(expires_at))
+        except ValueError:
+            return "reminder_invalid_expiry"
+        if datetime.now(timezone.utc) >= expiry:
+            logger.info(
+                "outbox_reminder_expired",
+                **contexto,
+            )
+            return "reminder_expired"
     enviar = _sender(mail_kind)
     argumentos = payload.get("args")
     if enviar is None or not isinstance(argumentos, dict):
@@ -864,16 +1301,15 @@ async def _send_one_pending_email(
             return f"{_AUTH_GUARD_RETRY_PREFIX}{type(exc).__name__}"
         if not is_current:
             logger.info("outbox_auth_email_stale", **contexto)
-            return None
+            return "auth_guard_stale"
     try:
-        requested_priority = argumentos.get("priority")
-        priority: MailPriority = "low" if mail_kind == "rebook" else "high"
-        if requested_priority in {"critical", "high", "medium", "low"}:
-            priority = cast(MailPriority, requested_priority)
+        priority = _mail_priority_from_payload(payload)
         argumentos_de_envio = {
             key: value for key, value in argumentos.items() if key != "priority"
         }
-        message_id = f"outbox:{getattr(fila, 'id', None) or getattr(fila, 'public_id', 'unknown')}"
+        message_id = payload.get("logical_id")
+        if not isinstance(message_id, str) or not message_id:
+            message_id = f"outbox:{getattr(fila, 'id', None) or getattr(fila, 'public_id', 'unknown')}"
         # La fila solo se reclama cuando SQL la dejó pendiente. Eso cubre un
         # envío nuevo, diferido antes de SMTP o reabierto por un fallo conocido
         # pre-DATA; los resultados ambiguos después de DATA quedan sellados.
@@ -893,11 +1329,120 @@ async def _send_one_pending_email(
             **contexto,
         )
         return type(exc).__name__
-    if not isinstance(resultado, dict) or resultado.get("status") != "failed":
+    if isinstance(resultado, dict) and resultado.get("status") == "sent":
         return None
+    if isinstance(resultado, dict) and resultado.get("status") == "skipped":
+        return str(resultado.get("reason") or "email_not_deliverable")
+    if not isinstance(resultado, dict) or resultado.get("status") != "failed":
+        return "invalid_email_result"
     # El sink ya logueo el error con el destinatario enmascarado.
     logger.warning("outbox_email_skipped", error_type="smtp", **contexto)
     return str(resultado.get("reason") or "smtp")
+
+
+async def _reminder_delivery_error(db: AsyncSession, fila: OutboxMessage) -> str | None:
+    """Validate a reminder's appointment snapshot immediately before SMTP."""
+    payload = fila.payload if isinstance(fila.payload, dict) else {}
+    expires_at = payload.get("expires_at")
+    if not isinstance(expires_at, str):
+        return "reminder_invalid_expiry"
+    try:
+        appointment_starts_at = ensure_utc_aware(datetime.fromisoformat(expires_at))
+    except ValueError:
+        return "reminder_invalid_expiry"
+    if appointment_starts_at <= datetime.now(timezone.utc):
+        return "reminder_expired"
+
+    appointment_id = payload.get("appointment_id")
+    if not isinstance(appointment_id, str) or not appointment_id or not fila.store_id:
+        return "reminder_appointment_stale"
+    await _apply_tenant_context(db)
+    row = (
+        await db.execute(
+            select(Appointment.status, Appointment.starts_at).where(
+                Appointment.id == appointment_id,
+                Appointment.store_id == fila.store_id,
+            )
+        )
+    ).one_or_none()
+    # Close the read transaction before invoking SMTP.
+    await AsyncSession.commit(db)
+    if row is None:
+        return "reminder_appointment_stale"
+    status, starts_at = row
+    allowed_statuses = {
+        AppointmentStatus.PENDING.value,
+        AppointmentStatus.PENDING_PAYMENT.value,
+        AppointmentStatus.CONFIRMED.value,
+    }
+    if (
+        status not in allowed_statuses
+        or starts_at is None
+        or ensure_utc_aware(starts_at) != appointment_starts_at
+    ):
+        return "reminder_appointment_stale"
+    return None
+
+
+async def _waitlist_offer_guard_is_current(
+    db: AsyncSession, store_id: str | None, raw_guard: Any
+) -> bool | Literal["invalid"]:
+    """Comprueba que la oferta concreta siga abierta antes de mandar su mail."""
+    if not isinstance(raw_guard, dict) or raw_guard.get("kind") != "waitlist_offer":
+        return "invalid"
+    entry_id = raw_guard.get("entry_id")
+    staff_id = raw_guard.get("staff_id")
+    if (
+        not store_id
+        or not isinstance(entry_id, str)
+        or not entry_id
+        or not isinstance(staff_id, str)
+        or not staff_id
+    ):
+        return "invalid"
+    parsed: dict[str, datetime] = {}
+    for key in ("starts_at", "ends_at", "expires_at"):
+        value = raw_guard.get(key)
+        if not isinstance(value, str):
+            return "invalid"
+        try:
+            parsed[key] = ensure_utc_aware(datetime.fromisoformat(value))
+        except ValueError:
+            return "invalid"
+
+    await _apply_tenant_context(db)
+    row = (
+        await db.execute(
+            select(
+                WaitlistEntry.is_active,
+                WaitlistEntry.status,
+                WaitlistEntry.offered_staff_id,
+                WaitlistEntry.offered_starts_at,
+                WaitlistEntry.offered_ends_at,
+                WaitlistEntry.offer_expires_at,
+            ).where(
+                WaitlistEntry.store_id == store_id,
+                WaitlistEntry.id == entry_id,
+            )
+        )
+    ).one_or_none()
+    # Cerrar también la transacción de lectura antes de abrir SMTP.
+    await AsyncSession.commit(db)
+    if row is None:
+        return False
+    is_active, status, staff_id_actual, starts_at, ends_at, expires_at = row
+    if not is_active:
+        return False
+    if starts_at is None or ends_at is None or expires_at is None:
+        return False
+    return (
+        status == WaitlistStatus.OFFERED.value
+        and staff_id_actual == staff_id
+        and ensure_utc_aware(starts_at) == parsed["starts_at"]
+        and ensure_utc_aware(ends_at) == parsed["ends_at"]
+        and ensure_utc_aware(expires_at) == parsed["expires_at"]
+        and datetime.now(timezone.utc) < parsed["expires_at"]
+    )
 
 
 async def _claim_and_expire_preferences(

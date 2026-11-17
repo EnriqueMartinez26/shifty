@@ -27,8 +27,8 @@ def _async_returns(fn: Any) -> Any:
 class ScalarResult:
     def __init__(
         self,
-        value: SimpleNamespace | None = None,
-        values: list[SimpleNamespace] | None = None,
+        value: Any = None,
+        values: list[Any] | None = None,
         rowcount: int = 1,
     ) -> None:
         self.value = value
@@ -37,23 +37,44 @@ class ScalarResult:
         # NULL y chequea rowcount==1. Por defecto simulamos "1 fila afectada".
         self.rowcount = rowcount
 
-    def scalar_one_or_none(self) -> SimpleNamespace | None:
+    def scalar_one_or_none(self) -> Any:
         return self.value
 
     def scalars(self) -> "ScalarResult":
         return self
 
-    def all(self) -> list[SimpleNamespace]:
+    def all(self) -> list[Any]:
         return self.values
+
+
+class FakeNoAutoflush:
+    def __init__(self, db: "FakeDb") -> None:
+        self.db = db
+
+    def __enter__(self) -> None:
+        self.db.no_autoflush_depth += 1
+
+    def __exit__(self, *_exc: object) -> None:
+        self.db.no_autoflush_depth -= 1
 
 
 class FakeDb:
     def __init__(self, *execute_results: ScalarResult) -> None:
         self.execute_results = list(execute_results)
         self.added: list[Any] = []
+        self.statements: list[Any] = []
+        self.execute_with_no_autoflush: list[bool] = []
+        self.no_autoflush_depth = 0
         self.commit_count = 0
+        self.rollback_count = 0
 
-    async def execute(self, _statement: object) -> ScalarResult:
+    @property
+    def no_autoflush(self) -> FakeNoAutoflush:
+        return FakeNoAutoflush(self)
+
+    async def execute(self, statement: object) -> ScalarResult:
+        self.statements.append(statement)
+        self.execute_with_no_autoflush.append(self.no_autoflush_depth > 0)
         if self.execute_results:
             return self.execute_results.pop(0)
         # Consultas auxiliares (p. ej. revocacion de sesiones): vacio.
@@ -67,6 +88,9 @@ class FakeDb:
 
     async def commit(self) -> None:
         self.commit_count += 1
+
+    async def rollback(self) -> None:
+        self.rollback_count += 1
 
 
 @pytest.fixture(autouse=True)
@@ -136,7 +160,11 @@ async def test_login_creates_refresh_session_and_returns_access_token(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     user = make_user()
-    db = FakeDb(ScalarResult(value=user))
+    db = FakeDb(
+        ScalarResult(value=user),
+        ScalarResult(values=[user.id]),
+        ScalarResult(value=user),
+    )
     monkeypatch.setattr(
         service, "verify_password_async", _async_returns(lambda *_args: True)
     )
@@ -155,6 +183,10 @@ async def test_login_creates_refresh_session_and_returns_access_token(
     assert tokens.access_token == "access-token"
     assert tokens.refresh_token == "refresh-token"
     assert db.commit_count == 1
+    assert len(db.statements) == 3
+    assert db.execute_with_no_autoflush == [False, True, False]
+    assert getattr(db.statements[1], "_for_update_arg", None) is not None
+    assert db.statements[2].get_execution_options().get("populate_existing") is True
     assert len(db.added) == 1
     session = db.added[0]
     assert session.user_id == user.id
@@ -175,7 +207,12 @@ async def test_refresh_revokes_existing_session_and_creates_replacement(
         revoked_at=None,
         expires_at=datetime.now(timezone.utc) + timedelta(days=1),
     )
-    db = FakeDb(ScalarResult(value=existing_session), ScalarResult(value=user))
+    db = FakeDb(
+        ScalarResult(value=user.id),
+        ScalarResult(values=[user.id]),
+        ScalarResult(value=user),
+        ScalarResult(value=existing_session),
+    )
     monkeypatch.setattr(
         service, "access_token_for_user", lambda _user, _sid: "new-access"
     )
@@ -192,6 +229,11 @@ async def test_refresh_revokes_existing_session_and_creates_replacement(
     # La sesion vieja se revoca via UPDATE atomico (WHERE revoked_at IS NULL),
     # no mutando el objeto; la rotacion se evidencia por la sesion nueva.
     assert db.commit_count == 1
+    assert len(db.statements) == 5
+    assert db.execute_with_no_autoflush == [False, True, False, False, False]
+    assert getattr(db.statements[1], "_for_update_arg", None) is not None
+    assert db.statements[2].get_execution_options().get("populate_existing") is True
+    assert db.statements[3].get_execution_options().get("populate_existing") is True
     assert len(db.added) == 1
     assert db.added[0].refresh_token_hash == service.hash_token("new-refresh")
 
@@ -201,7 +243,7 @@ async def test_change_password_rejects_wrong_current_password(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     user = make_user()
-    db = FakeDb()
+    db = FakeDb(ScalarResult(values=[user.id]), ScalarResult(value=user))
     monkeypatch.setattr(
         service, "verify_password_async", _async_returns(lambda *_args: False)
     )
@@ -218,6 +260,9 @@ async def test_change_password_rejects_wrong_current_password(
     assert exc.value.error_code == "INCORRECT_PASSWORD"
     assert user.hashed_password == "hashed"
     assert db.commit_count == 0
+    assert db.execute_with_no_autoflush == [True, False]
+    assert getattr(db.statements[0], "_for_update_arg", None) is not None
+    assert db.statements[1].get_execution_options().get("populate_existing") is True
 
 
 @pytest.mark.asyncio
@@ -225,7 +270,11 @@ async def test_change_password_hashes_new_password(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     user = make_user()
-    db = FakeDb()
+    db = FakeDb(
+        ScalarResult(values=[user.id]),
+        ScalarResult(value=user),
+        ScalarResult(values=[user.id]),
+    )
     # La actual verifica bien; la nueva NO coincide con el hash vigente (el
     # servicio ahora rechaza reutilizar la misma contraseña).
     monkeypatch.setattr(
@@ -250,6 +299,12 @@ async def test_change_password_hashes_new_password(
     assert result == {"message": "Contraseña actualizada correctamente"}
     assert user.hashed_password == "hashed:new-password9"
     assert db.commit_count == 1
+    assert db.execute_with_no_autoflush == [True, False, True, False, False]
+    assert all(
+        getattr(db.statements[index], "_for_update_arg", None) is not None
+        for index in (0, 2)
+    )
+    assert db.statements[1].get_execution_options().get("populate_existing") is True
 
 
 @pytest.mark.asyncio

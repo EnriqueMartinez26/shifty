@@ -1,18 +1,9 @@
-"""B4-08 (2026-09-18): el lote de recordatorios reusa UNA conexion SMTP.
+"""El scheduler persiste los recordatorios; el outbox se ocupa del SMTP.
 
-Sintoma: ``_send_email`` abria conexion + STARTTLS + LOGIN por cada mensaje;
-el lote de recordatorios pagaba N handshakes en serie contra el time limit de
-Celery (B4-02). Decision del coordinador: una sesion SMTP reutilizable a lo
-largo del lote, conservando EXACTAMENTE el ciclo por turno de B4-02
-(presupuesto -> reclamo -> envio -> liberacion ante fallo).
-
-Revision V-diff (2026-09-18): la primera version reconectaba y REENVIABA si
-el envio por una conexion reusada tiraba ``SMTPServerDisconnected``. smtplib
-convierte en eso cualquier ``OSError`` al leer la respuesta, incluido el
-timeout esperando el ``250`` del DATA: si el servidor ya habia aceptado el
-mensaje, el cliente recibia el recordatorio dos veces. Ahora una conexion
-reusada se sondea con ``NOOP`` ANTES de enviar (si esta muerta se reconecta)
-y un fallo del envio en si nunca se reintenta: el turno se libera.
+Una falla del servidor o un reinicio del worker de recordatorios no puede
+perder una etapa ya marcada: la marca y la fila ``email.send`` se guardan en
+la misma transaccion. El despacho SMTP usa el outbox compartido, que limita
+reintentos a fallos confirmados antes de DATA.
 """
 
 from __future__ import annotations
@@ -107,20 +98,19 @@ def _preparar_lote(
     monkeypatch: pytest.MonkeyPatch, filas: list[Any], **fallas: set[int]
 ) -> None:
     _preparar(monkeypatch, filas)
-    # _preparar reemplaza el envio por un fake: aca se usa el real, que pasa
-    # por is_deliverable_email y por la sesion SMTP del lote.
+    # El scheduler no llama al notifier: el correo sale desde el outbox.
     monkeypatch.setattr(notification_tasks, "notify_client_reminder", _NOTIFY_REAL)
     monkeypatch.setattr(smtplib, "SMTP", _SmtpFalso)
     _SmtpFalso.reset(**fallas)
 
 
 @pytest.mark.asyncio
-async def test_n_recordatorios_usan_una_conexion_y_un_login(
+async def test_scheduler_persiste_recordatorios_sin_conectar_smtp(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     now = datetime.now(timezone.utc)
     filas = _filas_vencidas(now, 5)
-    # Un servicio con CRLF no inyecta cabeceras y un .noreply no recibe nada.
+    # Un mail tecnico .noreply no recibe recordatorios.
     filas[1][1].name = "Corte\r\nBcc: victima@example.com"
     filas[4][3].email = "5491100000000@store1.noreply"
     _preparar_lote(monkeypatch, filas)
@@ -128,46 +118,33 @@ async def test_n_recordatorios_usan_una_conexion_y_un_login(
     result = await notification_tasks.process_due_appointment_reminders(now=now)
 
     assert result["published"] == 4
-    assert _SmtpFalso.conexiones == 1
-    assert _SmtpFalso.logins == 1
-    assert _SmtpFalso.quits == 1, "la sesion se cierra al terminar el lote"
-    assert _SmtpFalso.noops == 3, "cada envio por una conexion reusada la sondea"
-    assert len(_SmtpFalso.enviados) == 4
-    for mensaje in _SmtpFalso.enviados:
-        asunto = str(mensaje["Subject"])
-        assert "\r" not in asunto and "\n" not in asunto
-        assert mensaje["Bcc"] is None
-        assert not str(mensaje["To"]).endswith(".noreply")
+    assert len(_FakeRepo.schedules) == 4
+    assert _SmtpFalso.conexiones == 0
+    assert _SmtpFalso.enviados == []
     assert _FakeRepo.releases == []
 
 
 @pytest.mark.asyncio
-async def test_timeout_durante_el_data_no_reenvia_y_libera_el_turno(
+async def test_scheduler_persiste_sin_depender_de_smtp(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """(a) El tercer envio, por una conexion reusada, falla despues de
-    empezar el DATA: un solo intento para ese mensaje y el turno se libera."""
+    """El outbox retoma el envio despues de reiniciar el worker."""
     now = datetime.now(timezone.utc)
     _preparar_lote(monkeypatch, _filas_vencidas(now, 5), caer_en_intento={2})
 
     result = await notification_tasks.process_due_appointment_reminders(now=now)
 
-    assert _SmtpFalso.intentos == 5, "un intento por mensaje: nunca se reenvia"
-    assert result["published"] == 4
-    assert _FakeRepo.releases == [("appt-2", COLUMNA)]
-    assert len(_FakeRepo.claims) - len(_FakeRepo.releases) == len(
-        _SmtpFalso.enviados
-    ), "reclamos que quedan == envios exitosos"
-    # La conexion que fallo se descarta; el siguiente abre una nueva.
-    assert _SmtpFalso.conexiones == 2
+    assert result["published"] == 5
+    assert len(_FakeRepo.schedules) == 5
+    assert _SmtpFalso.intentos == 0
+    assert _FakeRepo.releases == []
 
 
 @pytest.mark.asyncio
-async def test_conexion_muerta_detectada_por_noop_reconecta_y_envia_una_vez(
+async def test_outbox_schedule_survives_simulated_smtp_outage(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """(b) El NOOP antes del tercer envio encuentra la conexion caida: se
-    reconecta y el mensaje sale una sola vez."""
+    """El SMTP se consulta despues de confirmar la etapa y su fila de salida."""
     now = datetime.now(timezone.utc)
     _preparar_lote(monkeypatch, _filas_vencidas(now, 5), noop_muerto={1})
 
@@ -175,14 +152,12 @@ async def test_conexion_muerta_detectada_por_noop_reconecta_y_envia_una_vez(
 
     assert result["published"] == 5
     assert _FakeRepo.releases == []
-    assert _SmtpFalso.intentos == 5
-    assert len(_SmtpFalso.enviados) == 5
-    assert _SmtpFalso.conexiones == 2
-    assert _SmtpFalso.logins == 2
+    assert len(_FakeRepo.schedules) == 5
+    assert _SmtpFalso.intentos == 0
 
 
 @pytest.mark.asyncio
-async def test_noop_muerto_y_reconexion_fallida_libera_solo_ese_turno(
+async def test_scheduler_no_abre_conexion_smtp(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     now = datetime.now(timezone.utc)
@@ -195,21 +170,18 @@ async def test_noop_muerto_y_reconexion_fallida_libera_solo_ese_turno(
 
     result = await notification_tasks.process_due_appointment_reminders(now=now)
 
-    assert result["published"] == 4
-    assert _FakeRepo.releases == [("appt-2", COLUMNA)]
-    assert len(_FakeRepo.claims) - len(_FakeRepo.releases) == len(
-        _SmtpFalso.enviados
-    ), "reclamos que quedan == envios exitosos"
-    assert _SmtpFalso.intentos == 4, "el turno sin conexion no intento enviar"
-    assert _SmtpFalso.conexiones == 3
+    assert result["published"] == 5
+    assert _FakeRepo.releases == []
+    assert len(_FakeRepo.schedules) == 5
+    assert _SmtpFalso.intentos == 0
+    assert _SmtpFalso.conexiones == 0
 
 
 @pytest.mark.asyncio
 async def test_lote_sin_envios_no_abre_ni_cierra_conexion(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """(c) Regla 5 del cierre: un lote sin mails no toca el SMTP, asi que el
-    QUIT nunca corre con el FOR UPDATE del lote sin commitear."""
+    """Un lote sin filas enviables no escribe outbox ni abre el SMTP."""
     now = datetime.now(timezone.utc)
     filas = _filas_vencidas(now, 3)
     for fila in filas:

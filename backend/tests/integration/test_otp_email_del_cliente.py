@@ -160,6 +160,20 @@ async def test_email_distinto_respuesta_neutra_y_el_codigo_solo_va_a_la_ficha(
     assert sorted(destino for destino, _, _ in cola.enviados) == sorted(
         [EMAIL_CLIENTE, "atacante@example.com"]
     )
+    mensajes = (
+        await test_session.scalars(
+            select(OutboxMessage)
+            .where(OutboxMessage.event_type == EVENT_EMAIL_SEND)
+            .order_by(OutboxMessage.created_at.desc())
+            .limit(2)
+        )
+    ).all()
+    assert len(mensajes) == 2
+    assert {mensaje.payload.get("priority") for mensaje in mensajes} == {"critical"}
+    for mensaje in mensajes:
+        arguments = mensaje.payload.get("args")
+        assert isinstance(arguments, dict)
+        assert "priority" not in arguments
     con_codigo = [d for d, _, cuerpo in cola.enviados if _CODIGO.search(cuerpo)]
     assert con_codigo == [EMAIL_CLIENTE]
     assert _sin_codigo([m for m in cola.enviados if m[0] != EMAIL_CLIENTE])

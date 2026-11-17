@@ -63,7 +63,8 @@ async def test_el_codigo_se_guarda_cifrado_y_verifica(
     argumentos = mensajes_otp[0].payload["args"]
     assert isinstance(argumentos, dict)
     assert argumentos.get("to") == "cliente@example.com"
-    assert argumentos.get("priority") == "critical"
+    assert mensajes_otp[0].payload.get("priority") == "critical"
+    assert "priority" not in argumentos
     cuerpo = decrypt_secret(str(argumentos.get("encrypted_body", "")))
     assert cuerpo is not None and codigo in cuerpo
     assert codigo not in str(mensajes_otp[0].payload)

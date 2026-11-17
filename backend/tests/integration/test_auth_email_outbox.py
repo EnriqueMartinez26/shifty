@@ -63,8 +63,12 @@ async def test_reset_outbox_token_is_atomic_and_only_decrypts_for_current_token(
     assert payload["guard"] == {
         "kind": "password_reset",
         "user_id": user.id,
+        "store_id": user.store_id,
+        "email": user.email,
         "token_hash": user.password_reset_token_hash,
     }
+    assert payload["priority"] == "critical"
+    assert "priority" not in arguments
 
     sent: list[str] = []
 
@@ -132,8 +136,96 @@ async def test_reset_outbox_does_not_send_stale_or_used_token(
     smtp = SimpleNamespace(last_budget_decision=None, last_delivery_retryable=False)
     assert (
         await payment_jobs._send_one_pending_email(message, smtp, db=test_session)
-        is None
+        == "auth_guard_stale"
     )
+
+
+@pytest.mark.parametrize("mutation", ("email", "store"))
+@pytest.mark.asyncio
+async def test_reset_guard_rejects_changed_recipient_or_tenant(
+    mutation: str,
+    client: AsyncClient,
+    test_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        auth_service, "generate_password_reset_token", lambda: "guard-token"
+    )
+    await seed_store_and_admin(
+        slug=f"auth-outbox-guard-{mutation}", email="guard-reset@example.com"
+    )
+    response = await client.post(
+        "/auth/forgot-password", json={"email": "guard-reset@example.com"}
+    )
+    assert response.status_code == 200
+    user = (
+        await test_session.scalars(
+            select(User).where(User.email == "guard-reset@example.com")
+        )
+    ).one()
+    message = (
+        await test_session.scalars(
+            select(OutboxMessage).where(OutboxMessage.event_type == EVENT_EMAIL_SEND)
+        )
+    ).one()
+    if mutation == "email":
+        user.email = "changed-reset@example.com"
+    else:
+        message.store_id = "different-store"
+    await test_session.commit()
+
+    payload = message.payload
+    assert isinstance(payload, dict)
+    arguments = payload["args"]
+    guard = payload["guard"]
+    assert isinstance(arguments, dict)
+    assert isinstance(guard, dict)
+    assert not await payment_jobs._auth_email_guard_is_current(
+        test_session, message, guard, arguments
+    )
+
+
+@pytest.mark.asyncio
+async def test_expired_deferred_reset_clears_sensitive_body_before_retry_time(
+    client: AsyncClient,
+    test_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        auth_service, "generate_password_reset_token", lambda: "deferred-token"
+    )
+    await seed_store_and_admin(
+        slug="auth-outbox-deferred-expiry", email="deferred-reset@example.com"
+    )
+    response = await client.post(
+        "/auth/forgot-password", json={"email": "deferred-reset@example.com"}
+    )
+    assert response.status_code == 200
+    user = (
+        await test_session.scalars(
+            select(User).where(User.email == "deferred-reset@example.com")
+        )
+    ).one()
+    message = (
+        await test_session.scalars(
+            select(OutboxMessage).where(OutboxMessage.event_type == EVENT_EMAIL_SEND)
+        )
+    ).one()
+    user.password_reset_expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    message.next_attempt_at = datetime.now(timezone.utc) + timedelta(days=1)
+    message.delivery_status = "pending"
+    await test_session.commit()
+
+    expired = await payment_jobs._expire_deferred_auth_emails(
+        test_session, store_id=user.store_id
+    )
+
+    await test_session.refresh(message)
+    assert expired == 1
+    assert message.delivery_status == "expired"
+    assert message.next_attempt_at is None
+    assert "encrypted_body" not in message.payload["args"]
+    assert message.payload["guard"] == {"kind": "password_reset"}
 
 
 @pytest.mark.asyncio
@@ -178,7 +270,7 @@ async def test_dispatcher_retries_when_auth_guard_query_fails_before_smtp(
 
     await test_session.refresh(message)
     assert message.processed_at is None
-    assert message.attempts == 1
+    assert message.attempts == 0
     assert message.error == "auth_guard:RuntimeError"
 
 
@@ -288,7 +380,7 @@ async def test_otp_code_and_encrypted_email_share_the_commit(
     await test_session.commit()
     assert (
         await payment_jobs._send_one_pending_email(message, smtp, db=test_session)
-        is None
+        == "auth_guard_stale"
     )
     assert len(sent) == 1
 

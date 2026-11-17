@@ -24,9 +24,11 @@ class AuthSessionModel(Base):
     revoked_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    # D-20260928-01: "rotated" cuando la revoco la rotacion del refresh; NULL
-    # para cualquier otra revocacion (logout, admin, cambio de clave). Solo la
-    # rotacion reciente habilita la ventana de gracia del reuso.
+    # D-20261113-01: distingue rotacion, logout, revocacion propia, admin,
+    # cambio de clave, reuso y `superseded`, que desarma historia rotada cuando
+    # un evento posterior revocó todas las sesiones del usuario (D-20261117-01:
+    # un logout o la revocación de una sola sesión propia no la desarma).
+    # `reuse_detected` en el token viejo tambien reclama la cascada una sola vez.
     revoked_reason: Mapped[str | None] = mapped_column(String(16), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
