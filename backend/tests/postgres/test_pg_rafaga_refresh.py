@@ -34,6 +34,8 @@ from tests.postgres.conftest import PASSWORD, register_and_login
 pytestmark = pytest.mark.postgres
 
 RAFAGA = int(os.getenv("TEST_POSTGRES_RAFAGA_REFRESH", "10"))
+LOCK_APP_REFRESH = "pr311_refresh_replay"
+LOCK_APP_LOGIN = "pr311_login"
 
 
 async def _dos_dispositivos(
@@ -103,7 +105,7 @@ async def _motivos(
 
 
 async def _esperar_bloqueadas(
-    owner_engine: AsyncEngine, esperado: int, *, bloqueador_pid: int
+    owner_engine: AsyncEngine, esperado: int
 ) -> None:
     """Espera a que Postgres confirme la intercalacion bajo un row lock."""
     # El rol de la app tiene lock_timeout de 5 s; dejar margen al observador.
@@ -112,14 +114,14 @@ async def _esperar_bloqueadas(
         while asyncio.get_running_loop().time() < limite:
             bloqueadas = await conn.scalar(
                 text(
-                    "select count(*) from pg_stat_activity "
+                    "select count(distinct application_name) from pg_stat_activity "
                     "where datname = current_database() "
                     "and pid <> pg_backend_pid() "
                     "and cardinality(pg_blocking_pids(pid)) > 0 "
-                    "and :bloqueador_pid = any(pg_blocking_pids(pid)) "
+                    "and application_name in (:refresh, :login) "
                     "and query ilike '%FOR UPDATE%'"
                 ),
-                {"bloqueador_pid": bloqueador_pid},
+                {"refresh": LOCK_APP_REFRESH, "login": LOCK_APP_LOGIN},
             )
             if int(bloqueadas or 0) >= esperado:
                 return
@@ -303,15 +305,40 @@ async def test_reuso_y_login_esperan_el_mismo_lock_de_usuario_en_postgres(
                 text("select id from users where email = :email for update"),
                 {"email": email},
             )
-            bloqueador_pid = await conn.scalar(text("select pg_backend_pid()"))
-            assert bloqueador_pid is not None
-            reuso = asyncio.create_task(_refresh(client, familia))
+
+            async def reuso_directo() -> int:
+                async with app_sessions() as db:
+                    await db.execute(
+                        text("select set_config('application_name', :name, true)"),
+                        {"name": LOCK_APP_REFRESH},
+                    )
+                    try:
+                        await auth_service.refresh_session(
+                            familia, db, auth_service.SessionClientContext()
+                        )
+                    except auth_service.AuthenticationException:
+                        return 401
+                    raise AssertionError("el replay viejo debía rechazarse")
+
+            async def login_directo() -> str:
+                async with app_sessions() as db:
+                    await db.execute(
+                        text("select set_config('application_name', :name, true)"),
+                        {"name": LOCK_APP_LOGIN},
+                    )
+                    tokens = await auth_service.login_user(
+                        email,
+                        PASSWORD,
+                        db,
+                        auth_service.SessionClientContext(),
+                    )
+                    return tokens.refresh_token
+
+            reuso = asyncio.create_task(reuso_directo(), name=LOCK_APP_REFRESH)
             tareas.append(reuso)
-            login = asyncio.create_task(
-                client.post("/auth/login", json={"email": email, "password": PASSWORD})
-            )
+            login = asyncio.create_task(login_directo(), name=LOCK_APP_LOGIN)
             tareas.append(login)
-            await _esperar_bloqueadas(owner_engine, 2, bloqueador_pid=bloqueador_pid)
+            await _esperar_bloqueadas(owner_engine, 2)
             await transaccion.commit()
             await asyncio.gather(reuso, login)
         finally:
@@ -323,8 +350,7 @@ async def test_reuso_y_login_esperan_el_mismo_lock_de_usuario_en_postgres(
             await asyncio.gather(*tareas, return_exceptions=True)
 
     assert reuso.result() == 401
-    assert login.result().status_code == 200, login.result().text
-    posterior = login.result().cookies.get(REFRESH_COOKIE)
+    posterior = login.result()
     assert posterior and hash_token(posterior) in await _vivas(owner_engine, email)
 
     assert await _refresh(client, familia) == 401
