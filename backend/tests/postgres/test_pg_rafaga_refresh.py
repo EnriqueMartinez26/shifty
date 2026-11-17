@@ -111,14 +111,16 @@ async def _esperar_bloqueadas(owner_engine: AsyncEngine, esperado: int) -> None:
     limite = asyncio.get_running_loop().time() + 2.5
     async with owner_engine.connect() as conn:
         while asyncio.get_running_loop().time() < limite:
+            # El rol owner no puede leer el SQL de shifty_app en pg_stat_activity;
+            # application_name y pg_blocking_pids sí identifican los dos waiters.
             bloqueadas = await conn.scalar(
                 text(
                     "select count(distinct application_name) from pg_stat_activity "
                     "where datname = current_database() "
                     "and pid <> pg_backend_pid() "
                     "and cardinality(pg_blocking_pids(pid)) > 0 "
-                    "and application_name in (:refresh, :login) "
-                    "and query ilike '%FOR UPDATE%'"
+                    "and wait_event_type = 'Lock' "
+                    "and application_name in (:refresh, :login)"
                 ),
                 {"refresh": LOCK_APP_REFRESH, "login": LOCK_APP_LOGIN},
             )
