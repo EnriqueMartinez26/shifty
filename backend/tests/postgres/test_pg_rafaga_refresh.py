@@ -19,13 +19,15 @@ from __future__ import annotations
 
 import asyncio
 import os
-from typing import cast
+from typing import Any, cast
 
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from core.exceptions import AuthenticationException
+from modules.auth import service as auth_service
 from modules.auth.router import REFRESH_COOKIE
 from modules.auth.service import REFRESH_REUSE_GRACE_SECONDS, hash_token
 from tests.postgres.conftest import PASSWORD, register_and_login
@@ -33,6 +35,8 @@ from tests.postgres.conftest import PASSWORD, register_and_login
 pytestmark = pytest.mark.postgres
 
 RAFAGA = int(os.getenv("TEST_POSTGRES_RAFAGA_REFRESH", "10"))
+LOCK_APP_REFRESH = "pr311_refresh_replay"
+LOCK_APP_LOGIN = "pr311_login"
 
 
 async def _dos_dispositivos(
@@ -59,6 +63,73 @@ async def _refresh(client: AsyncClient, token: str) -> int:
         "/auth/refresh", headers={"Cookie": f"{REFRESH_COOKIE}={token}"}
     )
     return respuesta.status_code
+
+
+async def _rotar(client: AsyncClient, token: str) -> str:
+    respuesta = await client.post(
+        "/auth/refresh", headers={"Cookie": f"{REFRESH_COOKIE}={token}"}
+    )
+    assert respuesta.status_code == 200, respuesta.text
+    nuevo = respuesta.cookies.get(REFRESH_COOKIE)
+    assert nuevo and nuevo != token
+    return nuevo
+
+
+async def _envejecer(owner_engine: AsyncEngine, *tokens: str) -> None:
+    async with owner_engine.begin() as conn:
+        for token in tokens:
+            await conn.execute(
+                text(
+                    "update auth_sessions "
+                    "set revoked_at = revoked_at - make_interval(secs => :atras) "
+                    "where refresh_token_hash = :hash"
+                ),
+                {
+                    "atras": REFRESH_REUSE_GRACE_SECONDS + 5,
+                    "hash": hash_token(token),
+                },
+            )
+
+
+async def _motivos(
+    owner_engine: AsyncEngine, primero: str, segundo: str
+) -> list[str | None]:
+    async with owner_engine.connect() as conn:
+        filas = await conn.execute(
+            text(
+                "select revoked_reason from auth_sessions "
+                "where refresh_token_hash in (:primero, :segundo)"
+            ),
+            {"primero": hash_token(primero), "segundo": hash_token(segundo)},
+        )
+        return [cast(str | None, fila[0]) for fila in filas.all()]
+
+
+async def _esperar_bloqueadas(owner_engine: AsyncEngine, esperado: int) -> None:
+    """Espera a que Postgres confirme la intercalacion bajo un row lock."""
+    # El rol de la app tiene lock_timeout de 5 s; dejar margen al observador.
+    limite = asyncio.get_running_loop().time() + 2.5
+    async with owner_engine.connect() as conn:
+        while asyncio.get_running_loop().time() < limite:
+            # El rol owner no puede leer el SQL de shifty_app en pg_stat_activity;
+            # application_name y pg_blocking_pids sí identifican los dos waiters.
+            bloqueadas = await conn.scalar(
+                text(
+                    "select count(distinct application_name) from pg_stat_activity "
+                    "where datname = current_database() "
+                    "and pid <> pg_backend_pid() "
+                    "and cardinality(pg_blocking_pids(pid)) > 0 "
+                    "and wait_event_type = 'Lock' "
+                    "and application_name in (:refresh, :login)"
+                ),
+                {"refresh": LOCK_APP_REFRESH, "login": LOCK_APP_LOGIN},
+            )
+            if int(bloqueadas or 0) >= esperado:
+                return
+            # El avance lo determina el estado observable de Postgres; el
+            # intervalo solo evita consultar el catálogo en un loop ocupado.
+            await asyncio.sleep(0.01)
+    raise AssertionError(f"Postgres no mostró {esperado} solicitudes bloqueadas")
 
 
 async def _vivas(owner_engine: AsyncEngine, email: str) -> set[str]:
@@ -128,3 +199,184 @@ async def test_el_reuso_fuera_de_la_ventana_de_gracia_revoca_todo(
         "el reuso de un refresh rotado hace rato no revoco la familia entera"
     )
     assert await _refresh(client, otro) == 401
+
+
+@pytest.mark.asyncio
+async def test_reuso_concurrente_cascadea_una_vez_y_no_toca_login_posterior(
+    client: AsyncClient,
+    app_sessions: async_sessionmaker[AsyncSession],
+    owner_engine: AsyncEngine,
+) -> None:
+    email = "pg-reuso-repetido@demo.com"
+    familia, otro = await _dos_dispositivos(
+        client, app_sessions, slug="pg-reuso-repetido", email=email
+    )
+    assert await _refresh(client, familia) == 200
+
+    async with owner_engine.begin() as conn:
+        await conn.execute(
+            text(
+                "update auth_sessions "
+                "set revoked_at = revoked_at - make_interval(secs => :atras) "
+                "where refresh_token_hash = :hash"
+            ),
+            {"atras": REFRESH_REUSE_GRACE_SECONDS + 5, "hash": hash_token(familia)},
+        )
+
+    codigos = await asyncio.gather(*(_refresh(client, familia) for _ in range(RAFAGA)))
+    assert all(codigo == 401 for codigo in codigos), codigos
+    assert await _vivas(owner_engine, email) == set()
+
+    login = await client.post(
+        "/auth/login", json={"email": email, "password": PASSWORD}
+    )
+    assert login.status_code == 200, login.text
+    posterior = client.cookies.get(REFRESH_COOKIE)
+    assert posterior and posterior not in {familia, otro}
+
+    assert await _refresh(client, familia) == 401
+    assert await _refresh(client, posterior) == 200
+
+
+@pytest.mark.asyncio
+async def test_reusos_concurrentes_de_tokens_distintos_consumen_toda_la_historia(
+    client: AsyncClient,
+    app_sessions: async_sessionmaker[AsyncSession],
+    owner_engine: AsyncEngine,
+) -> None:
+    email = "pg-reuso-distinto@demo.com"
+    familia, otro = await _dos_dispositivos(
+        client, app_sessions, slug="pg-reuso-distinto", email=email
+    )
+    viejo_b = await _rotar(client, familia)
+    vigente_c = await _rotar(client, viejo_b)
+    await _envejecer(owner_engine, familia, viejo_b)
+
+    codigos = await asyncio.gather(
+        *(_refresh(client, familia if i % 2 == 0 else viejo_b) for i in range(RAFAGA))
+    )
+    assert all(codigo == 401 for codigo in codigos), codigos
+    assert await _vivas(owner_engine, email) == set()
+    motivos = await _motivos(owner_engine, familia, viejo_b)
+    assert len(motivos) == 2
+    assert {motivo for motivo in motivos if motivo is not None} == {
+        "reuse_detected",
+        "superseded",
+    }
+
+    login = await client.post(
+        "/auth/login", json={"email": email, "password": PASSWORD}
+    )
+    assert login.status_code == 200, login.text
+    posterior = client.cookies.get(REFRESH_COOKIE)
+    assert posterior and posterior not in {familia, viejo_b, vigente_c, otro}
+
+    replays = await asyncio.gather(_refresh(client, familia), _refresh(client, viejo_b))
+    assert tuple(replays) == (401, 401), replays
+    vivas = await _vivas(owner_engine, email)
+    assert vivas == {hash_token(posterior)}, vivas
+    assert await _refresh(client, posterior) == 200
+
+
+@pytest.mark.asyncio
+async def test_reuso_y_login_esperan_el_mismo_lock_de_usuario_en_postgres(
+    client: AsyncClient,
+    app_sessions: async_sessionmaker[AsyncSession],
+    owner_engine: AsyncEngine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    email = "pg-reuso-login-lock@demo.com"
+    familia, _otro = await _dos_dispositivos(
+        client, app_sessions, slug="pg-reuso-login-lock", email=email
+    )
+    await _rotar(client, familia)
+    await _envejecer(owner_engine, familia)
+
+    async def password_valida(_password: str, _hashed_password: str) -> bool:
+        # Aisla el intercalado de locks del coste variable de bcrypt en CI.
+        return True
+
+    monkeypatch.setattr(auth_service, "verify_password_async", password_valida)
+
+    tareas: list[asyncio.Task[Any]] = []
+    async with owner_engine.connect() as conn:
+        transaccion = await conn.begin()
+        try:
+            await conn.execute(
+                text("select id from users where email = :email for update"),
+                {"email": email},
+            )
+
+            async def reuso_directo() -> int:
+                async with app_sessions() as db:
+                    await db.execute(
+                        text("select set_config('application_name', :name, true)"),
+                        {"name": LOCK_APP_REFRESH},
+                    )
+                    try:
+                        await auth_service.refresh_session(
+                            familia, db, auth_service.SessionClientContext()
+                        )
+                    except AuthenticationException:
+                        return 401
+                    raise AssertionError("el replay viejo debía rechazarse")
+
+            async def login_directo() -> str:
+                async with app_sessions() as db:
+                    await db.execute(
+                        text("select set_config('application_name', :name, true)"),
+                        {"name": LOCK_APP_LOGIN},
+                    )
+                    tokens = await auth_service.login_user(
+                        email,
+                        PASSWORD,
+                        db,
+                        auth_service.SessionClientContext(),
+                    )
+                    return tokens.refresh_token
+
+            reuso = asyncio.create_task(reuso_directo(), name=LOCK_APP_REFRESH)
+            tareas.append(reuso)
+            login = asyncio.create_task(login_directo(), name=LOCK_APP_LOGIN)
+            tareas.append(login)
+            await _esperar_bloqueadas(owner_engine, 2)
+            await transaccion.commit()
+            await asyncio.gather(reuso, login)
+        finally:
+            if transaccion.is_active:
+                await transaccion.rollback()
+            for tarea in tareas:
+                if not tarea.done():
+                    tarea.cancel()
+            await asyncio.gather(*tareas, return_exceptions=True)
+
+    assert reuso.result() == 401
+    posterior = login.result()
+    assert posterior and hash_token(posterior) in await _vivas(owner_engine, email)
+
+    assert await _refresh(client, familia) == 401
+    assert await _vivas(owner_engine, email) == {hash_token(posterior)}
+    assert await _refresh(client, posterior) == 200
+
+
+@pytest.mark.asyncio
+async def test_refresh_y_logout_concurrentes_no_revocan_otro_dispositivo(
+    client: AsyncClient,
+    app_sessions: async_sessionmaker[AsyncSession],
+    owner_engine: AsyncEngine,
+) -> None:
+    email = "pg-refresh-logout-race@demo.com"
+    familia, otro = await _dos_dispositivos(
+        client, app_sessions, slug="pg-refresh-logout-race", email=email
+    )
+    refresh_response, logout_response = await asyncio.gather(
+        client.post("/auth/refresh", headers={"Cookie": f"{REFRESH_COOKIE}={familia}"}),
+        client.post("/auth/logout", headers={"Cookie": f"{REFRESH_COOKIE}={familia}"}),
+    )
+    assert refresh_response.status_code in {200, 401}, refresh_response.text
+    assert logout_response.status_code == 204, logout_response.text
+    vivas = await _vivas(owner_engine, email)
+    assert hash_token(otro) in vivas
+    if refresh_response.status_code == 200:
+        nuevo = refresh_response.cookies.get(REFRESH_COOKIE)
+        assert nuevo and hash_token(nuevo) in vivas
