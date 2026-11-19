@@ -27,7 +27,6 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import core.rate_limit as rate_limit
-import modules.notifications.tasks as tasks
 import modules.otp.service as otp_service
 from core.config import settings
 from modules.otp.model import OtpVerification
@@ -49,24 +48,9 @@ EMAIL_TIPEADO = "tipeado@example.com"
 _CODIGO = re.compile(r"\b\d{6}\b")
 
 
-class _BrokerCaido:
-    """``send_otp_email`` con el broker inalcanzable: ``enqueue`` da False."""
-
-    name = "send_otp_email"
-
-    def __init__(self) -> None:
-        self.intentos = 0
-
-    def delay(self, *_args: object) -> None:
-        self.intentos += 1
-        raise ConnectionError("broker down")
-
-
 @pytest.fixture
-def cola(monkeypatch: pytest.MonkeyPatch) -> Cola:
-    encolados = Cola()
-    monkeypatch.setattr(tasks, "send_otp_email", encolados)
-    return encolados
+def cola() -> Cola:
+    return Cola()
 
 
 def _topear(
@@ -156,14 +140,13 @@ async def test_tope_del_destino_conserva_el_codigo_vivo(
 
 
 @pytest.mark.asyncio
-async def test_encolado_fallido_conserva_el_codigo_vivo(
+async def test_outbox_persistido_reemplaza_el_codigo_vivo_sin_broker(
     client: AsyncClient,
     test_session: AsyncSession,
     cola: Cola,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """2026-10-05: con el broker caido, pedir otro codigo mataba el de la
-    casilla sin mandar reemplazo. Ahora no se guarda nada y A sigue."""
+    """El outbox es la entrega durable; el broker no recibe el OTP en claro."""
     tienda, _ = await register_and_login(
         client, slug="otp-no-pisa-broker", email="otp-no-pisa-broker@example.com"
     )
@@ -171,18 +154,17 @@ async def test_encolado_fallido_conserva_el_codigo_vivo(
     codigo_a = _ultimo_codigo(cola, EMAIL)
     filas = await _filas(test_session, tienda, TELEFONO)
 
-    broker = _BrokerCaido()
-    monkeypatch.setattr(tasks, "send_otp_email", broker)
+    monkeypatch.setattr(settings, "OTP_DEBUG_EXPOSE_CODE", False)
     cuerpos = [await _pedir(client, tienda, TELEFONO, EMAIL) for _ in range(3)]
 
-    assert broker.intentos == 3
-    assert await _verifica(client, tienda, TELEFONO, codigo_a), (
-        "un encolado fallido invalido el codigo que el titular ya tenia"
-    )
-    assert await _filas(test_session, tienda, TELEFONO) == filas
+    assert await _filas(test_session, tienda, TELEFONO) == filas + 3
     for cuerpo in cuerpos:
         assert cuerpo["ok"] is True
-        assert "debug_code" not in cuerpo, "se expuso un codigo que nadie recibe"
+        assert "debug_code" not in cuerpo
+    codigo_b = _ultimo_codigo(cola, EMAIL)
+    assert codigo_b != codigo_a
+    assert not await _verifica(client, tienda, TELEFONO, codigo_a)
+    assert await _verifica(client, tienda, TELEFONO, codigo_b)
 
 
 @pytest.mark.asyncio
@@ -232,26 +214,19 @@ async def test_el_tope_del_aviso_no_frena_el_codigo(
 
 
 @pytest.mark.asyncio
-async def test_el_codigo_a_la_ficha_que_no_se_encola_conserva_el_vivo(
+async def test_tope_del_destino_del_codigo_conserva_el_codigo_vivo(
     client: AsyncClient,
     test_session: AsyncSession,
     cola: Cola,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Con aviso al tipeado, lo que decide es el mail del CODIGO: si no se
-    encola, A (en la casilla de la ficha) sigue valido."""
+    """Si el codigo se topea, tampoco se persiste un aviso de mismatch."""
     tienda = await _tienda_con_cliente(client, test_session, "otp-no-pisa-ficha")
     await _pedir(client, tienda, TELEFONO_CLIENTE, EMAIL_CLIENTE)
     codigo_a = _ultimo_codigo(cola, EMAIL_CLIENTE)
     filas = await _filas(test_session, tienda, TELEFONO_CLIENTE)
 
-    async def encola_solo_el_aviso(task: Any, to: str, *args: Any, **_: Any) -> bool:
-        if to == EMAIL_CLIENTE:
-            return False
-        task.delay(to, *args)
-        return True
-
-    monkeypatch.setattr(tasks, "enqueue", encola_solo_el_aviso)
+    _topear(monkeypatch, topeados={EMAIL_CLIENTE})
     await _pedir(client, tienda, TELEFONO_CLIENTE, EMAIL_TIPEADO)
 
     assert await _filas(test_session, tienda, TELEFONO_CLIENTE) == filas
@@ -264,8 +239,7 @@ async def test_la_respuesta_es_la_misma_en_todos_los_caminos(
     cola: Cola,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Produccion (sin debug_code): normal, topeado y broker caido responden
-    el mismo status y la misma forma de sobre."""
+    """Produccion (sin debug_code): normal, repetido y topeado son neutros."""
     tienda, _ = await register_and_login(
         client, slug="otp-no-pisa-forma", email="otp-no-pisa-forma@example.com"
     )
@@ -287,15 +261,13 @@ async def test_la_respuesta_es_la_misma_en_todos_los_caminos(
         return respuesta.status_code, (sorted(cuerpo), sorted(data))
 
     normal = await pedir()
-    with monkeypatch.context() as caido:
-        caido.setattr(tasks, "send_otp_email", _BrokerCaido())
-        sin_broker = await pedir()
+    repetido = await pedir()
     with monkeypatch.context() as tope:
         _topear(tope, topeados={EMAIL})
         topeado = await pedir()
 
     assert normal[0] == 200
-    assert normal == sin_broker == topeado
+    assert normal == repetido == topeado
 
 
 @pytest.mark.asyncio
@@ -316,8 +288,6 @@ async def test_los_contadores_cuentan_igual_aunque_el_mail_no_salga(
     monkeypatch.setattr(rate_limit, "get_redis", fake_get_redis)
     monkeypatch.setattr(otp_service, "get_redis", fake_get_redis)
     monkeypatch.setattr(settings, "RATE_LIMIT_ENABLED", True)
-    monkeypatch.setattr(tasks, "send_otp_email", _BrokerCaido())
-
     for _ in range(2):
         await _pedir(client, tienda, TELEFONO, EMAIL)
 

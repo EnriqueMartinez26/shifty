@@ -18,6 +18,8 @@ from tests.integration.test_feature_flags_finance_and_public_privacy import (
     seed_store_and_admin,
 )
 from core.security import hash_password_reset_token
+from core.crypto import decrypt_secret
+from modules.payments.model import EVENT_EMAIL_SEND, OutboxMessage
 
 # Import all modules so Base.metadata knows about all tables for SQLite test database
 import modules.stores.model
@@ -114,9 +116,6 @@ async def test_password_reset_flow(
     monkeypatch.setattr(
         "modules.auth.service.generate_password_reset_token", lambda: reset_token
     )
-    monkeypatch.setattr(
-        "modules.auth.router.send_password_reset_email", lambda *_args, **_kwargs: None
-    )
 
     await seed_store_and_admin(
         slug="tienda-reset", email="reset@demo.com", last_name="Reset"
@@ -137,6 +136,18 @@ async def test_password_reset_flow(
     user = result.scalar_one()
     assert user.password_reset_token_hash == hash_password_reset_token(reset_token)
     assert user.password_reset_expires_at is not None
+    outbox = (
+        await test_session.scalars(
+            select(OutboxMessage).where(OutboxMessage.event_type == EVENT_EMAIL_SEND)
+        )
+    ).one()
+    payload = outbox.payload
+    assert "test-reset-token-1234567890" not in str(payload)
+    args = payload["args"]
+    assert isinstance(args, dict)
+    body = decrypt_secret(str(args["encrypted_body"]))
+    assert body is not None
+    assert f"token={reset_token}" in body
 
     reset_response = await client.post(
         "/auth/reset-password",

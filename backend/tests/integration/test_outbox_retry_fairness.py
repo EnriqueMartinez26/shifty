@@ -15,7 +15,11 @@ from core import mail_budget
 from core.config import settings
 import modules.notifications.tasks as notification_tasks
 import modules.payments.jobs as jobs
-from modules.payments.model import OUTBOX_EMAIL_MAX_ATTEMPTS, OutboxMessage
+from modules.payments.model import (
+    EVENT_EMAIL_SEND,
+    OUTBOX_EMAIL_MAX_ATTEMPTS,
+    OutboxMessage,
+)
 from core.mail_budget import mail_delivery_context
 from tests.redis_mail_budget_double import AtomicMailBudgetRedis
 
@@ -141,7 +145,7 @@ async def _reload_rows(
         (
             await session.execute(
                 select(OutboxMessage)
-                .where(OutboxMessage.event_type == jobs.EVENT_EMAIL_SEND)
+                .where(OutboxMessage.event_type == EVENT_EMAIL_SEND)
                 .order_by(OutboxMessage.created_at.asc())
                 .execution_options(populate_existing=True)
             )
@@ -266,6 +270,32 @@ async def test_un_mail_diferido_por_presupuesto_no_bloquea_uno_critico_y_espera_
 
 
 @pytest.mark.asyncio
+async def test_critical_claims_cut_ahead_and_noncritical_mail_makes_progress(
+    test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(jobs, "OUTBOX_EMAIL_MAX_PER_DISPATCH", 7)
+    monkeypatch.setattr(jobs, "OUTBOX_EMAIL_CRITICAL_BURST", 5)
+    now = _now_utc()
+    oldest_low = _mail("old-low@example.com", prioridad="low")
+    oldest_low.created_at = now - timedelta(minutes=1)
+    critical_rows = [
+        _mail(f"critical-{index}@example.com", prioridad="critical")
+        for index in range(6)
+    ]
+    for index, row in enumerate(critical_rows):
+        row.created_at = now + timedelta(microseconds=index)
+    smtp = _Smtp450UnaVez("never-rejected@example.com")
+
+    await _send_with_smtp(test_session, monkeypatch, [oldest_low, *critical_rows], smtp)
+
+    assert smtp.deliveries == [
+        *(f"critical-{index}@example.com" for index in range(5)),
+        "old-low@example.com",
+        "critical-5@example.com",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_fallo_450_persiste_backoff_y_se_reintenta_solo_al_vencer(
     test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -384,7 +414,7 @@ async def test_resultado_ambiguo_despues_de_data_queda_unknown_y_no_se_reenvia(
 
 
 @pytest.mark.asyncio
-async def test_redis_no_disponible_difiere_sesenta_segundos_sin_gastar_intento_ni_bloquear(
+async def test_redis_no_disponible_difiere_critical_y_deja_avanzar_el_siguiente_mail(
     test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(settings, "MAIL_DAILY_BUDGET", 250)
@@ -414,16 +444,16 @@ async def test_redis_no_disponible_difiere_sesenta_segundos_sin_gastar_intento_n
 
     await _send_with_smtp(test_session, monkeypatch, [temporal, critical], smtp)
 
-    assert smtp.deliveries == ["redis-available@example.com"], (
-        "una denegación de cuota por Redis debe liberar esa fila y seguir con la cola"
+    assert smtp.deliveries == ["redis-temporal@example.com"], (
+        "un fallo de Redis en el correo crítico debe diferirlo sin bloquear el resto"
     )
     rows = _rows_by_email(await _reload_rows(test_session))
-    assert rows["redis-temporal@example.com"].delivery_status == "pending"
-    assert rows["redis-temporal@example.com"].attempts == 0
-    assert _as_utc(rows["redis-temporal@example.com"].next_attempt_at) == (
+    assert rows["redis-available@example.com"].delivery_status == "pending"
+    assert rows["redis-available@example.com"].attempts == 0
+    assert _as_utc(rows["redis-available@example.com"].next_attempt_at) == (
         ahora + timedelta(seconds=60)
     )
-    assert rows["redis-available@example.com"].delivery_status == "sent"
+    assert rows["redis-temporal@example.com"].delivery_status == "sent"
 
 
 @pytest.mark.asyncio

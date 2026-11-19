@@ -635,10 +635,18 @@ Una instrucción en lenguaje natural no es una garantía.
 - **OTP solo por email** (SMTP existente); `whatsapp`/`sms` existen solo con
   `OTP_PROVIDER=console`. Si el teléfono ya es de un cliente de la tienda
   con email entregable, el código va SOLO a ese email y al tipeado le llega
-  un aviso sin código con el mismo asunto (AUD2-B4-05). Sin
-  `BackgroundTasks`: decidido el destino, el request encola el mail en
-  Celery (`notifications/tasks.py::enqueue_otp_email`, por
-  `core/enqueue.py`, cola `interactive`; AUD2-B4-06) y lo manda el worker.
+  un aviso sin código con el mismo asunto (AUD2-B4-05). OTP y recuperación
+  de contraseña escriben una fila durable `email.send` en SQL en la misma
+  transacción que crea el OTP o cambia el estado del token de recuperación;
+  la prioridad vive en `payload.priority` y es `critical`, también para el
+  aviso sin código. La fila contiene el destinatario, asunto y cuerpo cifrado,
+  nunca el código ni la URL en claro; el dispatcher descifra solo al enviar y
+  vuelve a validar identidad, tienda, destino y credencial vigentes. Un OTP,
+  token reemplazado/consumido o expirado no se envía, y al cerrar una fila
+  terminal se elimina su contenido cifrado. No se persiste un OTP si no se
+  pudo admitir su email por la cuota por destino. Los avisos por cambio de
+  contraseña y las confirmaciones de reserva pública siguen fuera de este
+  outbox durable. Diseño adoptado en D-20261117-04.
   Cada mail consume la cuota de su buzón de destino real: 5 por hora y 10
   por día (`OTP_MAX_MAILS_PER_DESTINATION_PER_HOUR`/`_PER_DAY`, #121), con
   el buzón normalizado y hasheado en la clave y la política `otp`, que
@@ -747,10 +755,13 @@ Una instrucción en lenguaje natural no es una garantía.
   y una restauración de Redis puede perder admisiones recientes. No activar el
   cap hasta confirmar la hora y zona de reset de la cuenta; si se configura,
   ambas deben declararse explícitamente. La cuota limita admisiones de Shifty,
-  no garantiza aceptación SMTP ni entrega final. OTP, recuperación/cambio de
-  clave y confirmaciones de reserva pública siguen fuera del outbox SQL; no
-  persistir códigos OTP ni tokens de recuperación en el outbox sin un diseño
-  de seguridad aprobado. (`docs/MAIL_BUDGET.md`)
+  no garantiza aceptación SMTP ni entrega final. OTP y recuperación de
+  contraseña usan el outbox SQL con cuerpo cifrado y guardas de vigencia; los
+  avisos de cambio de contraseña y confirmaciones de reserva pública conservan
+  sus caminos directos/en background sin reintentos durables. La cuota no es
+  una garantía de entrega y sigue desactivada hasta verificar el reset de
+  Brevo. D-20261117-04 registra el diseño aprobado; sus límites criptográficos
+  y evidencia de latencia están en `docs/MAIL_BUDGET.md`.
 - **Un teléfono sin OTP no es de nadie.** No adopta el contacto de un cliente
   existente (`get_or_create_client(adopt_contact=...)`) ni trae su historial
   para la seña (`UNKNOWN_HISTORY`, que NO es "cliente nuevo"). Sin esa
