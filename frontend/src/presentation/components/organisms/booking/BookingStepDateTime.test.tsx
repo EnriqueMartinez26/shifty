@@ -548,6 +548,29 @@ describe('BookingStepDateTime', () => {
     expect(mockAvailability).toHaveBeenLastCalledWith('store-1', 'svc-1', hoyArgentina, true, [])
   })
 
+  // 2026-11-17 (decision de Mateo): una tienda con "Solo horarios sugeridos"
+  // no quiere que la clienta vea los horarios que dejan huecos.
+  it('sin "Ver todos" permitido no ofrece el interruptor y pide la grilla filtrada', () => {
+    mockAvailability.mockReturnValue({ isLoading: false, data: [] })
+    const hoyArgentina = formatArgentinaDate(new Date().toISOString())
+
+    render(
+      <BookingStepDateTime
+        storePublicId="store-1"
+        serviceId="svc-1"
+        staffId={null}
+        selectedDate={hoyArgentina}
+        selectedTime={null}
+        onSelect={() => undefined}
+        onBack={() => undefined}
+        allowShowAll={false}
+      />
+    )
+
+    expect(screen.queryByRole('switch', { name: /ver todos/i })).not.toBeInTheDocument()
+    expect(mockAvailability).toHaveBeenLastCalledWith('store-1', 'svc-1', hoyArgentina, false, [])
+  })
+
   it('pagina el horizonte argentino en bloques de 14 y conserva una ultima pagina de 9 fechas', () => {
     mockAvailability.mockReturnValue({ isLoading: false, data: [] })
     const today = parseISO(formatArgentinaDate(new Date().toISOString()))

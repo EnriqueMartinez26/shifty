@@ -4656,6 +4656,7 @@ Type: `enum("efectivo", "transferencia", "mercadopago", "otro")`
 | `new_calendar` | boolean | no | default=false |
 | `otp_booking` | boolean | no | default=false |
 | `multi_service_booking` | boolean | no | default=false |
+| `suggested_slots_only` | boolean | no | default=false |
 
 ### StoreFeatureFlagsResponse
 
@@ -4673,6 +4674,7 @@ Type: `enum("efectivo", "transferencia", "mercadopago", "otro")`
 | `new_calendar` | boolean \| null | no |  |
 | `otp_booking` | boolean \| null | no |  |
 | `multi_service_booking` | boolean \| null | no |  |
+| `suggested_slots_only` | boolean \| null | no |  |
 
 ### StoreGlobalResponse
 
@@ -5085,4 +5087,4 @@ Type: `enum("admin", "staff", "receptionist", "client")`
 | `terms_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 | `privacy_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 
-Generado desde app.openapi() el 2026-11-11, commit d619702f
+Generado desde app.openapi() el 2026-11-17, commit 1869c98b

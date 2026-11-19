@@ -58,6 +58,11 @@ interface BookingStepDateTimeProps {
   onEmptyAvailability?: () => void
   /** Invalida el horario elegido cuando se navega a otra página de fechas. */
   onDatePageChange?: () => void
+  /**
+   * En false no se ofrece "Ver todos" y la grilla siempre es la filtrada
+   * (funcion "Solo horarios sugeridos" de la tienda, 2026-11-17).
+   */
+  allowShowAll?: boolean
 }
 
 const NO_EXTRA_SERVICES: readonly string[] = []
@@ -98,7 +103,8 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
   showWaitlist = true,
   heading = 'Elegí fecha y hora',
   onEmptyAvailability,
-  onDatePageChange
+  onDatePageChange,
+  allowShowAll = true
 }) => {
   // `yyyy-MM-dd` representa el día del calendario argentino, no una fecha UTC.
   const [today] = useState(() => parseISO(formatArgentinaDate(new Date().toISOString())))
@@ -496,27 +502,30 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
           </div>
           {/* Un boton real con role="switch": entra en el orden de Tab y
               Enter/Espacio lo activan. Antes era un div con onClick dentro de
-              un label sin control, inalcanzable por teclado (F11a-09). */}
-          <button
-            type="button"
-            role="switch"
-            aria-checked={forceAll}
-            onClick={() => setForceAll(!forceAll)}
-            className="min-h-11 min-w-11 px-2 flex items-center gap-2 cursor-pointer opacity-80 hover:opacity-100 transition-opacity rounded-full bg-transparent border-0 p-1 focus:outline-none focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-brand-accent focus-visible:ring-offset-2"
-          >
-            <span className="text-[9px] font-black uppercase text-gray-500 tracking-wider">
-              Ver todos
-            </span>
-            <span
-              aria-hidden="true"
-              className={`block w-9 h-5 rounded-full p-1 transition-colors ${forceAll ? '' : 'bg-gray-300'}`}
-              style={forceAll ? { background: brandColor.fill } : undefined}
+              un label sin control, inalcanzable por teclado (F11a-09). Sin
+              `allowShowAll` no se ofrece: el backend tambien ignora force_all. */}
+          {allowShowAll && (
+            <button
+              type="button"
+              role="switch"
+              aria-checked={forceAll}
+              onClick={() => setForceAll(!forceAll)}
+              className="min-h-11 min-w-11 px-2 flex items-center gap-2 cursor-pointer opacity-80 hover:opacity-100 transition-opacity rounded-full bg-transparent border-0 p-1 focus:outline-none focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-brand-accent focus-visible:ring-offset-2"
             >
+              <span className="text-[9px] font-black uppercase text-gray-500 tracking-wider">
+                Ver todos
+              </span>
               <span
-                className={`block w-3 h-3 bg-white rounded-full shadow-sm transform transition-transform ${forceAll ? 'translate-x-4' : 'translate-x-0'}`}
-              />
-            </span>
-          </button>
+                aria-hidden="true"
+                className={`block w-9 h-5 rounded-full p-1 transition-colors ${forceAll ? '' : 'bg-gray-300'}`}
+                style={forceAll ? { background: brandColor.fill } : undefined}
+              >
+                <span
+                  className={`block w-3 h-3 bg-white rounded-full shadow-sm transform transition-transform ${forceAll ? 'translate-x-4' : 'translate-x-0'}`}
+                />
+              </span>
+            </button>
+          )}
         </div>
 
         {!activeDate ? (

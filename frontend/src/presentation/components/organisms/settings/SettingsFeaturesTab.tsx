@@ -32,6 +32,12 @@ const FEATURE_LABELS = [
     key: 'multi_service_booking',
     title: 'Varios servicios en un turno',
     description: `El cliente puede elegir hasta ${MAX_SERVICES_PER_BOOKING} servicios que hace el mismo profesional, uno detrás de otro. El turno dura la suma y la seña sale sobre el total.`
+  },
+  {
+    key: 'suggested_slots_only',
+    title: 'Solo horarios sugeridos',
+    description:
+      'Al reservar o reprogramar, el cliente ve solo los horarios que no dejan huecos en la agenda: se oculta la opción "Ver todos".'
   }
 ] as const
 

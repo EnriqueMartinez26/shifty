@@ -313,7 +313,9 @@ describe('ClientAppointmentsContainer', () => {
     }
     const pregunta = '¿Mover tu turno del 15/09/2026 10:00 hs al 16/09/2026 16:00 hs?'
 
-    const abrirGrilla = async () => {
+    const abrirGrilla = async (
+      tienda: Parameters<typeof ClientAppointmentsContainer>[0]['store'] = store
+    ) => {
       mockAppointments.mockReturnValue({
         data: { client_name: 'Yo', client_phone: '1155550101', appointments: [turno] },
         isLoading: false,
@@ -328,11 +330,22 @@ describe('ClientAppointmentsContainer', () => {
           { public_id: 'staff-2', kind: 'person', display_name: 'Bruno', service_ids: ['svc-1'] }
         ]
       })
-      render(<ClientAppointmentsContainer store={store} />)
+      render(<ClientAppointmentsContainer store={tienda} />)
       await entrar()
       fireEvent.click(screen.getByRole('button', { name: /Cambiar/ }))
       await screen.findByRole('heading', { name: titulo })
     }
+
+    // 2026-11-17 (decision de Mateo): reprogramar respeta "Solo horarios sugeridos".
+    it('con "Solo horarios sugeridos" la grilla no ofrece "Ver todos"; sin la funcion si', async () => {
+      await abrirGrilla({ ...store, feature_flags: { suggested_slots_only: true } })
+      expect(screen.queryByRole('switch', { name: /ver todos/i })).not.toBeInTheDocument()
+    })
+
+    it('sin "Solo horarios sugeridos" la grilla sigue ofreciendo "Ver todos"', async () => {
+      await abrirGrilla()
+      expect(screen.getByRole('switch', { name: /ver todos/i })).toBeInTheDocument()
+    })
 
     const elegirLibre = () => {
       fireEvent.click(screen.getByRole('button', { name: /16:00/ }))

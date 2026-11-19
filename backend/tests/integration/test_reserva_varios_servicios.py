@@ -260,6 +260,8 @@ async def test_el_flag_nace_apagado_y_la_vitrina_lo_expone(client: AsyncClient) 
         "payments": False,
         "otp_booking": False,
         "multi_service_booking": True,
+        # 2026-11-17: "Solo horarios sugeridos" tambien se publica (oculta "Ver todos").
+        "suggested_slots_only": False,
     }
 
 

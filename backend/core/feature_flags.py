@@ -13,7 +13,13 @@ DEFAULT_STORE_FEATURE_FLAGS: dict[str, bool] = {
     # 2026-10-16). Apagado: ``extra_service_ids`` no vacio es 422
     # ``MULTI_SERVICE_DISABLED`` en la reserva y en la disponibilidad.
     "multi_service_booking": False,
+    # Solo horarios sugeridos (decision de Mateo, 2026-11-17). Prendido, el
+    # portal no ofrece "Ver todos" y ``/public/availability`` ignora
+    # ``force_all``: la clienta solo ve los horarios que no dejan huecos.
+    "suggested_slots_only": False,
 }
+
+SUGGESTED_SLOTS_ONLY_FLAG = "suggested_slots_only"
 
 
 def normalize_store_feature_flags(raw_flags: dict[str, Any] | None) -> dict[str, bool]:
