@@ -510,6 +510,7 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
             storePublicId={store.public_id}
             serviceId={selectedServiceId}
             extraServiceIds={bookingState.extraServiceIds}
+            checkFarBookingDepositLimit
             staffId={bookingState.requestedStaffId}
             selectedDate={bookingState.date}
             selectedTime={bookingState.startTime}
