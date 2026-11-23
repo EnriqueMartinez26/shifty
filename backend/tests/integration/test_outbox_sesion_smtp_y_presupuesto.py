@@ -33,7 +33,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import modules.payments.jobs as jobs
 from sqlalchemy import select
 
-from modules.payments.model import OutboxMessage
+from modules.payments.model import EVENT_EMAIL_SEND, OutboxMessage
 from tests.integration.test_recordatorios_sesion_smtp import _SmtpFalso
 
 
@@ -60,7 +60,7 @@ async def _mails(session: AsyncSession) -> dict[str, OutboxMessage]:
         (
             await session.execute(
                 select(OutboxMessage)
-                .where(OutboxMessage.event_type == jobs.EVENT_EMAIL_SEND)
+                .where(OutboxMessage.event_type == EVENT_EMAIL_SEND)
                 .execution_options(populate_existing=True)
             )
         )

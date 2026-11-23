@@ -15,15 +15,17 @@ from __future__ import annotations
 
 import asyncio
 import re
-import threading
+from datetime import datetime, timezone
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-import modules.notifications.tasks as tasks
+from core.crypto import decrypt_secret
 from core.config import settings
+from modules.otp.model import OtpVerification
+from modules.payments.model import EVENT_EMAIL_SEND, OutboxMessage
 from tests.postgres.conftest import seed_store_and_admin
 
 pytestmark = pytest.mark.postgres
@@ -32,34 +34,6 @@ TELEFONO = "5491160008888"
 VICTIMA = "victima@example.com"
 ATACANTE = "atacante@example.com"
 _CODIGO = re.compile(r"\b\d{6}\b")
-
-
-class _Broker:
-    """``send_otp_email`` que acepta todo y guarda lo encolado."""
-
-    name = "send_otp_email"
-
-    def __init__(self) -> None:
-        self.aceptados: list[tuple[str, str]] = []
-        self._lock = threading.Lock()
-
-    def delay(self, to: str, _subject: str, body: str) -> None:
-        with self._lock:
-            self.aceptados.append((to, body))
-
-    def ultimo_codigo(self, destino: str) -> str:
-        cuerpos = [body for to, body in self.aceptados if to == destino]
-        assert cuerpos, destino
-        encontrado = _CODIGO.search(cuerpos[-1])
-        assert encontrado is not None
-        return encontrado.group(0)
-
-
-@pytest.fixture
-def broker(monkeypatch: pytest.MonkeyPatch) -> _Broker:
-    doble = _Broker()
-    monkeypatch.setattr(tasks, "send_otp_email", doble)
-    return doble
 
 
 async def _pedir(client: AsyncClient, tienda: str, email: str) -> int:
@@ -73,6 +47,59 @@ async def _pedir(client: AsyncClient, tienda: str, email: str) -> int:
         },
     )
     return respuesta.status_code
+
+
+async def _codigo_actual_en_outbox(
+    owner_engine: AsyncEngine, tienda: str, destino: str
+) -> str:
+    async with owner_engine.connect() as conn:
+        rows = (
+            (
+                await conn.execute(
+                    select(OutboxMessage.payload)
+                    .where(
+                        OutboxMessage.store_id == tienda,
+                        OutboxMessage.event_type == EVENT_EMAIL_SEND,
+                    )
+                    .order_by(OutboxMessage.created_at, OutboxMessage.id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for payload in reversed(rows):
+            if not isinstance(payload, dict):
+                continue
+            arguments = payload.get("args")
+            guard = payload.get("guard")
+            if (
+                not isinstance(arguments, dict)
+                or not isinstance(guard, dict)
+                or guard.get("kind") != "otp"
+                or arguments.get("to") != destino
+            ):
+                continue
+            otp_id = guard.get("otp_id")
+            current = await conn.scalar(
+                select(OtpVerification.id).where(
+                    OtpVerification.id == otp_id,
+                    OtpVerification.store_id == tienda,
+                    OtpVerification.email == destino,
+                    OtpVerification.consumed_at.is_(None),
+                    OtpVerification.expires_at > datetime.now(timezone.utc),
+                )
+            )
+            if current is None:
+                continue
+            encrypted_body = arguments.get("encrypted_body")
+            body = decrypt_secret(
+                encrypted_body if isinstance(encrypted_body, str) else None
+            )
+            assert body is not None
+            encontrado = _CODIGO.search(body)
+            assert encontrado is not None
+            return encontrado.group(0)
+    raise AssertionError(f"no hay un OTP vivo en el outbox para {destino}")
 
 
 async def _verificar(client: AsyncClient, tienda: str, codigo: str) -> int:
@@ -107,13 +134,12 @@ async def test_rafaga_de_pedidos_a_otras_casillas_no_mata_el_codigo_de_la_victim
     client: AsyncClient,
     app_sessions: async_sessionmaker[AsyncSession],
     owner_engine: AsyncEngine,
-    broker: _Broker,
 ) -> None:
     tienda = await seed_store_and_admin(
         app_sessions, slug="pg-otp-destino", email="pg-otp-destino@demo.com"
     )
     assert await _pedir(client, tienda, VICTIMA) == 200
-    codigo_a = broker.ultimo_codigo(VICTIMA)
+    codigo_a = await _codigo_actual_en_outbox(owner_engine, tienda, VICTIMA)
     otras = [f"otra{n}@example.com" for n in range(3)]
 
     estados = await asyncio.gather(
@@ -131,15 +157,15 @@ async def test_intentos_concurrentes_suman_en_todos_los_codigos_vivos(
     client: AsyncClient,
     app_sessions: async_sessionmaker[AsyncSession],
     owner_engine: AsyncEngine,
-    broker: _Broker,
 ) -> None:
     tienda = await seed_store_and_admin(
         app_sessions, slug="pg-otp-intentos", email="pg-otp-intentos@demo.com"
     )
     assert await _pedir(client, tienda, VICTIMA) == 200
     assert await _pedir(client, tienda, ATACANTE) == 200
-    codigo_a = broker.ultimo_codigo(VICTIMA)
-    errado = _otro_codigo(codigo_a, broker.ultimo_codigo(ATACANTE))
+    codigo_a = await _codigo_actual_en_outbox(owner_engine, tienda, VICTIMA)
+    codigo_b = await _codigo_actual_en_outbox(owner_engine, tienda, ATACANTE)
+    errado = _otro_codigo(codigo_a, codigo_b)
     rafaga = settings.OTP_MAX_ATTEMPTS - 1
 
     estados = await asyncio.gather(
@@ -160,7 +186,6 @@ async def test_pedidos_a_la_misma_casilla_y_verificaciones_no_se_trancan(
     client: AsyncClient,
     app_sessions: async_sessionmaker[AsyncSession],
     owner_engine: AsyncEngine,
-    broker: _Broker,
 ) -> None:
     """Pedidos que reemplazan el codigo de una casilla mientras otros
     verifican: los dos lados toman las filas vivas en el mismo orden, asi que
@@ -170,7 +195,9 @@ async def test_pedidos_a_la_misma_casilla_y_verificaciones_no_se_trancan(
     )
     assert await _pedir(client, tienda, VICTIMA) == 200
     assert await _pedir(client, tienda, ATACANTE) == 200
-    errado = _otro_codigo(broker.ultimo_codigo(VICTIMA), broker.ultimo_codigo(ATACANTE))
+    codigo_victima = await _codigo_actual_en_outbox(owner_engine, tienda, VICTIMA)
+    codigo_atacante = await _codigo_actual_en_outbox(owner_engine, tienda, ATACANTE)
+    errado = _otro_codigo(codigo_victima, codigo_atacante)
 
     estados = await asyncio.gather(
         *(_pedir(client, tienda, (VICTIMA, ATACANTE)[n % 2]) for n in range(4)),

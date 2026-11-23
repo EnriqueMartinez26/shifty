@@ -18,7 +18,7 @@ from typing import Any
 import pytest
 
 from core.mail_budget import MailReservation
-import modules.auth.service as auth_service
+from core.crypto import encrypt_secret
 import modules.notifications.tasks as notification_tasks
 
 
@@ -49,7 +49,7 @@ async def test_el_reset_negocia_starttls_con_certificado_verificado(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _SmtpQueRegistra.contextos = []
-    # auth.service usa ``smtplib.SMTP`` por el modulo: se dobla ahi.
+    # El mail durable sale por el sink SMTP compartido.
     monkeypatch.setattr(smtplib, "SMTP", _SmtpQueRegistra)
 
     async def admitido(**kwargs: Any) -> MailReservation:
@@ -68,9 +68,16 @@ async def test_el_reset_negocia_starttls_con_certificado_verificado(
     monkeypatch.setattr(notification_tasks, "reserve_mail", admitido)
     monkeypatch.setattr(notification_tasks, "finish_mail", finish)
 
-    await auth_service.send_password_reset_email(
-        "alguien@example.com", "https://shifty.local/reset?token=x"
-    )
+    encrypted_body = encrypt_secret("https://shifty.local/reset?token=x")
+    assert encrypted_body is not None
+    async with notification_tasks.smtp_session() as smtp:
+        resultado = await notification_tasks.send_encrypted_outbox_email(
+            smtp=smtp,
+            to="alguien@example.com",
+            subject="Restablecer contraseña - Shifty",
+            encrypted_body=encrypted_body,
+        )
+    assert resultado["status"] == "sent"
 
     assert len(_SmtpQueRegistra.contextos) == 1
     contexto = _SmtpQueRegistra.contextos[0]

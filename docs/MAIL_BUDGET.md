@@ -58,7 +58,7 @@ provider limit.
 
 | Priority | Examples | At the noncritical limit |
 | --- | --- | --- |
-| Critical | OTP and password recovery | Uses reserved capacity; denied at the configured hard cap. |
+| Critical | OTP, password recovery, and the no-code OTP notice | Uses reserved capacity; denied at the configured hard cap. |
 | High | Password-change notices, bookings, cancellations, reschedules, waitlist offers, store alerts | Deferred in the outbox where available. |
 | Medium | Appointment reminders | Deferred in the outbox until the next quota window. |
 | Low | Rebook invitations | Dropped and recorded. |
@@ -101,38 +101,48 @@ deferred or Redis is unavailable. A budget denial schedules the row for the
 configured provider reset; Redis unavailability schedules it 60 seconds
 later. Neither counts as an SMTP attempt, and the dispatcher continues to
 other eligible rows. A reminder's appointment stage marker and its
-`email.send` row commit in one SQL transaction. Before SMTP, the dispatcher
+email.send row commit in one SQL transaction. Before SMTP, the dispatcher
 checks that the appointment still belongs to the outbox store, remains in an
 open status, and has the same future start time captured by the reminder. A
 cancelled, rescheduled, missing, or expired appointment makes the row
-terminal `expired`. A pending row stays in SQL if the dispatcher or Celery
+terminal expired. A pending row stays in SQL if the dispatcher or Celery
 broker is unavailable, and a later outbox tick can resume it. Low-priority
-rebook invitations are intentionally discarded at saturation. OTP uses a
-Celery task without automatic retry;
-password reset and password-change emails use request background tasks. Public
-booking registration/confirmation emails use a separate Celery task with no
-retry; budget denials return a failure result and the task finishes. Re-offers
-from `waitlist.tasks` now commit the `OFFERED` state, expiry, and `email.send`
-row together. The normal outbox dispatcher sends after commit and retries only
+rebook invitations are intentionally discarded at saturation. Re-offers from
+waitlist.tasks commit the OFFERED state, expiry, and email.send row
+together. The normal outbox dispatcher sends after commit and retries only
 failures positively identified before message-body transmission, up to 10
 SMTP attempts total. Ambiguous results after body transmission remain
-terminal as `unknown`. Waitlist `OFFERED` state,
-offer expiry, and its `email.send` row are still committed together. Offer
-expiry starts when the offer is created, so a long dispatch delay can reduce
-the customer's remaining time to accept it.
+terminal as unknown. Offer expiry starts when the offer is created, so a long
+dispatch delay can reduce the customer's remaining time to accept it.
 
-OTP, password reset/change, and public booking registration/confirmation still
-use direct delivery paths without durable outbox retries. This PR does not
-promise that those messages will be deferred or recovered after a process or
-broker failure.
+OTP delivery and password reset use durable email.send rows. Each row is
+committed in the same transaction as the OTP record or reset-token state. The
+row stores the recipient and subject plus an encrypted body; the OTP code and
+reset URL are not stored in plaintext in the outbox payload or sent through
+the broker. Producers store priority at the top level of the payload
+(`payload.priority`), not inside sender arguments. The dispatcher decrypts the
+body only for SMTP delivery and checks that the OTP or reset token, user
+identity, store and recipient are still current immediately before sending.
+Expired, consumed, replaced, or otherwise stale messages are discarded. OTP
+requests also need the per-destination Redis quota to admit a new code; if
+that check is unavailable, no new OTP or email row is created. After an OTP
+or reset row has been committed, temporary SMTP-budget unavailability leaves
+the row pending for a later dispatch tick. Critical messages can still be
+denied at the configured hard cap; this does not guarantee delivery after the
+cap is reached. Terminal auth-email rows have their encrypted body scrubbed.
+This is retention hygiene, not cryptographic erasure: database backups made
+before scrubbing may retain ciphertext. Fernet encryption does not protect
+against an attacker who can obtain both the database and the field-encryption
+key; API and worker processes must share the correct key. A wrong or unavailable
+key prevents decryption and delivery. SMTP remains at-most-one automatic attempt
+after an ambiguous body/DATA result (`unknown`), not exactly-once delivery.
 
-If Redis is unavailable with a cap configured, OTP and password reset fail
-closed; users can request another OTP or reset email, but password-change
-notices and public booking emails have no automatic retry. Critical messages
-also stop at the configured hard cap. This differs from the inherited issue
-wording that said OTP and password reset would continue above budget; this
-implementation preserves the configured cap and does not promise delivery
-after it is reached.
+Password-change notices and public booking registration/confirmation still use
+their existing direct or background-task paths without durable outbox retries;
+budget denials on those paths finish without automatic retry. If Redis is
+unavailable with a cap configured, OTP issuance fails before it persists a new
+code when the per-destination quota cannot be checked. The application preserves the
+configured limit and does not promise delivery after it is reached.
 
 Redis stores current-window counters for `admitted`, `sent`, `failed`,
 `deferred`, and `dropped`, plus admitted counts by priority. `deferred` counts
@@ -140,20 +150,13 @@ unique logical messages deferred in that window; a message later admitted in
 the same window can appear in both counters. The internal reader is
 `core.mail_budget.read_mail_budget_metrics()`.
 
-## Authentication delivery boundary
+## Latency evidence and limits
 
-The OTP task currently receives `to`, `subject`, and `body` as Celery
-arguments; the OTP code is in the body serialized to the RabbitMQ broker.
-The repository sets late acknowledgements and rejects tasks when a worker is
-lost, but does not set an OTP task expiry or queue TTL. The actual RabbitMQ
-retention policy cannot be confirmed from this repository. This is a
-preexisting sensitive-payload exposure, not a security guarantee approved by
-this budget change. The PR does not add OTP or password-reset material to the
-SQL outbox; do not add durable auth delivery or retries until a separate
-security design validates storage, access, expiry, and redelivery behavior.
-
-Password-reset email is currently scheduled with web-process background tasks
-after the token hash is committed. The raw reset URL is not sent through the
-Celery broker or written to the outbox, but a process failure can lose the
-email. Password-change notices and public booking emails also remain outside
-the durable SQL outbox in this PR.
+An isolated local experiment used SQLite and a mock SMTP sink only. With 100
+backlog rows, observed dispatch latency was 0.342 s median, 0.621 s P95, and
+0.677 s maximum; with 1,000 rows it was 3.908 s median, 6.928 s P95, and
+7.246 s maximum. A deferred row was not attempted in this experiment. It did
+not exercise PostgreSQL, Redis contention/concurrency, a real SMTP provider,
+or production load, and it establishes neither a production performance SLA
+nor a production claim. These measurements are workload-specific observations,
+not acceptance thresholds.

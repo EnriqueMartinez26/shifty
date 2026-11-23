@@ -192,7 +192,7 @@ async def test_outbox_difiere_sin_consumir_intento_y_libera_el_reclamo(
         reclamos += 1
         return fila if reclamos == 1 else None
 
-    async def deferred(_fila: Any, smtp: Any) -> str:
+    async def deferred(_fila: Any, smtp: Any, **_kwargs: Any) -> str:
         smtp.last_budget_decision = decision
         return "budget"
 
@@ -244,7 +244,7 @@ async def test_outbox_descarta_baja_prioridad_sin_contarla_como_fallo(
         reclamos += 1
         return fila if reclamos == 1 else None
 
-    async def dropped(_fila: Any, smtp: Any) -> str:
+    async def dropped(_fila: Any, smtp: Any, **_kwargs: Any) -> str:
         smtp.last_budget_decision = "dropped"
         return "budget"
 
@@ -357,7 +357,7 @@ async def test_crash_despues_del_claim_no_reenvia_recordatorio_ambiguo(
         real_sender_kind="reminder",
     )
 
-    async def worker_interrupted(_row: Any, _smtp: Any) -> None:
+    async def worker_interrupted(_row: Any, _smtp: Any, **_kwargs: Any) -> None:
         raise SoftTimeLimitExceeded()
 
     monkeypatch.setattr(jobs, "_send_one_pending_email", worker_interrupted)

@@ -32,7 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 import modules.payments.jobs as jobs
 from core.database import TenantSession
-from modules.payments.model import OutboxMessage
+from modules.payments.model import EVENT_EMAIL_SEND, OutboxMessage
 from tests.integration.test_outbox_sesion_smtp_y_presupuesto import (
     _mensajes,
     destino_del_mail,
@@ -103,7 +103,7 @@ async def test_entre_el_commit_del_lote_y_los_envios_no_hay_transaccion_abierta(
         filas = (
             await otra.scalars(
                 select(OutboxMessage).where(
-                    OutboxMessage.event_type == jobs.EVENT_EMAIL_SEND
+                    OutboxMessage.event_type == EVENT_EMAIL_SEND
                 )
             )
         ).all()

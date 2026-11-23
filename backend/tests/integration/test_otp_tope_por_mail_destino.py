@@ -27,7 +27,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from structlog.testing import capture_logs
 
 import core.rate_limit as rate_limit
-import modules.notifications.tasks as tasks
 import modules.otp.service as otp_service
 from core.config import settings
 from core.exceptions import AppException
@@ -91,10 +90,8 @@ def redis_de_estado(monkeypatch: pytest.MonkeyPatch) -> _RedisContador:
 
 
 @pytest.fixture
-def cola(monkeypatch: pytest.MonkeyPatch) -> Cola:
-    encolados = Cola()
-    monkeypatch.setattr(tasks, "send_otp_email", encolados)
-    return encolados
+def cola() -> Cola:
+    return Cola()
 
 
 def _con_limites(monkeypatch: pytest.MonkeyPatch) -> None:

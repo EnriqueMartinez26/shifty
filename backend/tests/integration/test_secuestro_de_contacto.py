@@ -278,7 +278,6 @@ async def test_el_otp_a_un_email_propio_no_abre_los_turnos_de_otro(
     """
     monkeypatch.setattr(tasks, "_send_email", Buzon())
     cola = Cola()
-    monkeypatch.setattr(tasks, "send_otp_email", cola)
     store, _token, service, staff, slot = await _tienda(client, "otp-ajeno")
 
     reserva = await client.post(
@@ -391,7 +390,6 @@ async def test_el_despacho_encuentra_la_ficha_en_las_tres_formas_de_telefono(
     """
     monkeypatch.setattr(tasks, "_send_email", Buzon())
     cola = Cola()
-    monkeypatch.setattr(tasks, "send_otp_email", cola)
     store, _token, _service, _staff, _slot = await _tienda(client, "otp-formas")
     store_id = await _store_id(test_session, "otp-formas")
 
@@ -496,7 +494,6 @@ async def test_el_duenio_del_email_de_la_ficha_lista_y_cancela_sus_turnos(
     """El camino legitimo sigue abierto: el codigo va al email de la ficha."""
     monkeypatch.setattr(tasks, "_send_email", Buzon())
     cola = Cola()
-    monkeypatch.setattr(tasks, "send_otp_email", cola)
     store, _token, service, staff, slot = await _tienda(client, "otp-duenio")
 
     reserva = await client.post(
@@ -563,7 +560,7 @@ async def test_reservar_sin_email_no_abre_la_autogestion(
     El front no ofrece el boton y manda a escribirle a la tienda.
     """
     monkeypatch.setattr(tasks, "_send_email", Buzon())
-    monkeypatch.setattr(tasks, "send_otp_email", Cola())
+    Cola()
     store, _token, service, staff, slot = await _tienda(client, "sin-email-autogestion")
 
     reserva = await client.post(
@@ -631,7 +628,6 @@ async def test_el_email_del_request_se_ignora_cuando_hay_ficha_con_contacto(
     """Quien pide el codigo no elige el buzon si hay ficha que proteger."""
     monkeypatch.setattr(tasks, "_send_email", Buzon())
     cola = Cola()
-    monkeypatch.setattr(tasks, "send_otp_email", cola)
     store, _token, service, staff, slot = await _tienda(client, "otp-buzon")
 
     reserva = await client.post(

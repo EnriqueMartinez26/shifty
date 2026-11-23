@@ -36,7 +36,6 @@ from httpx import AsyncClient, Response
 from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
-import modules.notifications.tasks as tasks
 from core.config import settings
 from core.exceptions import OTPException
 from modules.otp.model import OtpVerification
@@ -66,10 +65,8 @@ DOS_CODIGOS_VIVOS = [("SELECT", False), ("UPDATE", True)]
 
 
 @pytest.fixture
-def cola(monkeypatch: pytest.MonkeyPatch) -> Cola:
-    encolados = Cola()
-    monkeypatch.setattr(tasks, "send_otp_email", encolados)
-    return encolados
+def cola() -> Cola:
+    return Cola()
 
 
 async def _tienda(client: AsyncClient, slug: str) -> str:
