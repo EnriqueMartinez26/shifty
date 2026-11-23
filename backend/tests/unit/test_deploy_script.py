@@ -24,6 +24,7 @@ from tests.unit.host_falso import (
     _hay,
     _indice,
     _ultimo_indice,
+    corrida_de_quality,
     crear_host,
     escribir_corridas_de_quality,
     flags_rechazados_por_compose,
@@ -995,15 +996,14 @@ def test_deploy_pregunta_si_quality_paso_en_main_para_ese_sha(host: Host) -> Non
         "https://api.github.com/repos/EnriqueMartinez26/shifty/actions/workflows/quality.yml/runs?"
         in url
     )
-    for parametro in (
-        f"head_sha={SHA}",
-        "branch=main",
-        "event=push",
-        "status=success",
-    ):
-        assert parametro in url, parametro
+    assert f"head_sha={SHA}" in url
+    # Los filtros de GitHub por estado, rama o evento salen de un indice que se
+    # atrasa (2026-11-23): se verifican en la respuesta, no en la consulta.
+    for filtro in ("status=", "branch=", "event="):
+        assert filtro not in url, filtro
     llamadas = host.llamadas()
     assert _indice(llamadas, r"api\.github\.com") < _indice(llamadas, r"compose pull")
+    assert "Quality verde en main" in resultado.stderr
 
 
 @pytest.mark.parametrize(
@@ -1033,6 +1033,187 @@ def test_deploy_frena_sin_un_quality_verde_antes_de_tocar_nada(
 def test_una_respuesta_de_github_ilegible_frena(host: Host) -> None:
     _preparar_deploy(host)
     (host.fake / "gh_runs").write_text('{"message": "API rate limit exceeded"}\n')
+
+    resultado = host.correr("deploy.sh", "deploy", APP_VERSION=SHA, **_BASE_DEPLOY)
+
+    assert resultado.returncode != 0
+    assert "respuesta inesperada de GitHub" in resultado.stderr
+    assert not _hay(host.llamadas(), r"compose (pull|run|up)")
+
+
+# --- Quality sin el indice de `status=success` (2026-11-23) -------------------
+#
+# El preflight de 9c984669 freno con "Quality no paso en main": la corrida
+# 45080249904 estaba completed/success desde las 23:07 UTC, pero la API con
+# `status=success` (o `completed`) no la devolvia 4 h despues; sin ese filtro
+# si. Ahora se piden las corridas del sha y se verifica cada campo en la
+# respuesta, fallando cerrado ante cualquier duda.
+
+
+def test_una_corrida_verde_que_el_filtro_de_status_no_mostraba_pasa(
+    host: Host,
+) -> None:
+    """El caso de produccion: la respuesta trae la corrida real (sin el filtro
+    que la escondia) y el deploy sigue."""
+    _preparar_deploy(host)
+    escribir_corridas_de_quality(
+        host.fake / "gh_runs",
+        corridas=[corrida_de_quality(id=45080249904, head_sha=SHA)],
+    )
+
+    resultado = host.correr("deploy.sh", "deploy", APP_VERSION=SHA, **_BASE_DEPLOY)
+
+    assert resultado.returncode == 0, resultado.stderr
+    assert "status=" not in _consultas_a_github(host)[0]
+    assert f"Quality verde en main para {SHA} (corrida 45080249904)" in resultado.stderr
+    assert (host.repo / ".deploy" / "current").read_text().strip() == SHA
+
+
+OTRO_SHA = "fedcba9876543210fedcba9876543210fedcba98"
+
+
+@pytest.mark.parametrize(
+    ("corridas", "version", "motivo"),
+    [
+        ([corrida_de_quality(conclusion="failure")], SHA, "esta completed/failure"),
+        ([corrida_de_quality(conclusion="cancelled")], SHA, "esta completed/cancelled"),
+        (
+            [corrida_de_quality(status="in_progress", conclusion=None)],
+            SHA,
+            "esta in_progress/null",
+        ),
+        (
+            [corrida_de_quality(status="queued", conclusion="")],
+            SHA,
+            "esta queued/-",
+        ),
+        (
+            [corrida_de_quality(path=".github/workflows/security-scan.yml")],
+            SHA,
+            "no hay una corrida de un push a main",
+        ),
+        ([corrida_de_quality(head_sha=OTRO_SHA)], SHA, "no hay una corrida"),
+        ([corrida_de_quality(head_sha=SHA)], SHA[:12], "no hay una corrida"),
+        ([corrida_de_quality(head_branch="feat/x")], SHA, "no hay una corrida"),
+        ([corrida_de_quality(event="workflow_dispatch")], SHA, "no hay una corrida"),
+        ([corrida_de_quality(event="pull_request")], SHA, "no hay una corrida"),
+        (
+            # La verde vieja no tapa un reintento posterior en rojo.
+            [
+                corrida_de_quality(id=20, conclusion="failure"),
+                corrida_de_quality(id=10),
+            ],
+            SHA,
+            "la corrida 20 esta completed/failure",
+        ),
+        (
+            # El orden de la respuesta no decide: decide el id mas nuevo.
+            [
+                corrida_de_quality(id=10),
+                corrida_de_quality(id=20, status="in_progress", conclusion=None),
+            ],
+            SHA,
+            "la corrida 20 esta in_progress/null",
+        ),
+        (
+            # Lo verde esta solo en objetos anidados, no en la corrida.
+            [
+                corrida_de_quality(
+                    status="in_progress",
+                    conclusion=None,
+                    head_commit={"status": "completed", "conclusion": "success"},
+                    repository={"path": ".github/workflows/quality.yml"},
+                )
+            ],
+            SHA,
+            "esta in_progress/null",
+        ),
+    ],
+    ids=[
+        "fallida",
+        "cancelada",
+        "en-curso",
+        "encolada-conclusion-vacia",
+        "otro-workflow",
+        "otro-sha",
+        "sha-corto",
+        "otra-rama",
+        "a-mano",
+        "pull-request",
+        "reintento-rojo-mas-nuevo",
+        "reintento-en-curso-mas-nuevo",
+        "verde-solo-en-anidados",
+    ],
+)
+def test_quality_frena_si_la_corrida_del_sha_no_es_un_verde_de_main(
+    host: Host, corridas: list[dict[str, object]], version: str, motivo: str
+) -> None:
+    _preparar_deploy(host)
+    escribir_corridas_de_quality(host.fake / "gh_runs", corridas=corridas)
+
+    resultado = host.correr("deploy.sh", "deploy", APP_VERSION=version, **_BASE_DEPLOY)
+
+    assert resultado.returncode != 0
+    assert "Quality no paso en main" in resultado.stderr
+    assert motivo in resultado.stderr
+    assert not _hay(host.llamadas(), r"compose (pull|run|up)")
+    assert (host.repo / ".deploy" / "current").read_text().strip() == "v1"
+
+
+def test_un_reintento_verde_mas_nuevo_que_uno_rojo_pasa(host: Host) -> None:
+    _preparar_deploy(host)
+    escribir_corridas_de_quality(
+        host.fake / "gh_runs",
+        corridas=[
+            corrida_de_quality(id=10, conclusion="failure"),
+            corrida_de_quality(id=20),
+        ],
+    )
+
+    resultado = host.correr("deploy.sh", "deploy", APP_VERSION=SHA, **_BASE_DEPLOY)
+
+    assert resultado.returncode == 0, resultado.stderr
+    assert "(corrida 20)" in resultado.stderr
+
+
+def test_mas_corridas_que_las_de_una_pagina_frena(host: Host) -> None:
+    """Si la ultima corrida pudo quedar en otra pagina, no se adivina."""
+    _preparar_deploy(host)
+    escribir_corridas_de_quality(
+        host.fake / "gh_runs", corridas=[corrida_de_quality()], total=101
+    )
+
+    resultado = host.correr("deploy.sh", "deploy", APP_VERSION=SHA, **_BASE_DEPLOY)
+
+    assert resultado.returncode != 0
+    assert "solo se leyeron 1" in resultado.stderr
+    assert not _hay(host.llamadas(), r"compose (pull|run|up)")
+
+
+@pytest.mark.parametrize(
+    "cuerpo",
+    [
+        '{"total_count": 1, "workflow_runs": [{"id": 1, "status": "completed"',
+        '{"total_count": 1, "workflow_runs": [{"id": 1,}]}',
+        '{"total_count": 1, "workflow_runs": [{"id": 1, "path": "a\\"}]}',
+        '{"total_count": "1", "workflow_runs": []}',
+        '[{"total_count": 1}]',
+        "<html>502 Bad Gateway</html>",
+        "",
+    ],
+    ids=[
+        "cortada",
+        "coma-de-mas",
+        "string-sin-cerrar",
+        "total-como-string",
+        "raiz-no-objeto",
+        "html",
+        "vacia",
+    ],
+)
+def test_una_respuesta_de_github_malformada_frena(host: Host, cuerpo: str) -> None:
+    _preparar_deploy(host)
+    (host.fake / "gh_runs").write_text(cuerpo + "\n", encoding="utf-8", newline="\n")
 
     resultado = host.correr("deploy.sh", "deploy", APP_VERSION=SHA, **_BASE_DEPLOY)
 

@@ -185,8 +185,13 @@ quality_verde() {
   case "$token" in
     *[!A-Za-z0-9_]*) die "preflight: DEPLOY_GITHUB_TOKEN tiene caracteres que un token de GitHub no tiene (solo letras, digitos y _)" ;;
   esac
-  local url respuesta total
-  url="https://api.github.com/repos/$DEPLOY_GITHUB_REPO/actions/workflows/$DEPLOY_QUALITY_WORKFLOW/runs?head_sha=$version&branch=main&event=push&status=success&per_page=1"
+  local url respuesta
+  # Sin `status=success` (ni `branch`/`event`): esos filtros salen de un indice
+  # de GitHub que puede atrasarse horas. El 2026-11-23 la corrida 45080249904
+  # (completed/success desde las 23:07 UTC) no aparecia con `status=success`
+  # 4 h despues y el preflight frenaba un sha verde. Se piden todas las
+  # corridas del sha y la identidad y el resultado se verifican aca.
+  url="https://api.github.com/repos/$DEPLOY_GITHUB_REPO/actions/workflows/$DEPLOY_QUALITY_WORKFLOW/runs?head_sha=$version&exclude_pull_requests=true&per_page=100"
   if [ -n "$token" ]; then
     # printf es un builtin: el token no pasa por argv de ningun proceso.
     respuesta="$(printf 'header = "Authorization: Bearer %s"\n' "$token" |
@@ -195,13 +200,125 @@ quality_verde() {
   elif ! respuesta="$(curl -fsS -m 15 -H 'Accept: application/vnd.github+json' "$url")"; then
     die "preflight: no pude preguntarle a GitHub si Quality paso para $version (repo privado sin DEPLOY_GITHUB_TOKEN?); reintentar, o DEPLOY_SKIP_QUALITY_CHECK=1 si se verifico a mano en Actions"
   fi
-  total="$(printf '%s\n' "$respuesta" |
-    sed -n 's/.*"total_count"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n 1)"
-  [ -n "$total" ] || die "preflight: respuesta inesperada de GitHub al buscar Quality para $version: ${respuesta:0:200}"
-  if [ "$total" -lt 1 ]; then
-    die "preflight: Quality no paso en main para $version (o no es el sha completo de 40 caracteres de un commit de main); ver Actions > Quality"
+  local leidas total vistas
+  leidas="$(printf '%s\n' "$respuesta" | corridas_de_quality)"
+  total="$(printf '%s\n' "$leidas" | sed -n 's/^total \([0-9][0-9]*\)$/\1/p')"
+  vistas="$(printf '%s\n' "$leidas" | sed -n 's/^vistas \([0-9][0-9]*\)$/\1/p')"
+  if [ -z "$total" ] || [ -z "$vistas" ]; then
+    die "preflight: respuesta inesperada de GitHub al buscar Quality para $version: ${respuesta:0:200}"
   fi
-  log "preflight: Quality verde en main para $version"
+  # Mas corridas que las de una pagina: la ultima podria no estar entre las
+  # vistas. No pasa con un sha (una corrida por push y sus reintentos).
+  if [ "$total" -gt "$vistas" ]; then
+    die "preflight: GitHub tiene $total corridas de Quality para $version y solo se leyeron $vistas; ver Actions > Quality"
+  fi
+  # La corrida de Quality (path exacto) de un push a main para ESTE sha (igual
+  # caracter a caracter: GitHub da el sha completo de 40, asi que un sha corto
+  # nunca coincide). Si hay varias, decide la mas nueva (id mayor): una verde
+  # vieja no tapa una corrida posterior roja o en curso.
+  local tipo id path sha rama evento estado conclusion
+  local mejor=0 mejor_estado='' mejor_conclusion=''
+  while IFS=$'\t' read -r tipo id path sha rama evento estado conclusion; do
+    [ "$tipo" = corrida ] || continue
+    [ "$path" = ".github/workflows/$DEPLOY_QUALITY_WORKFLOW" ] || continue
+    [ "$sha" = "$version" ] || continue
+    [ "$rama" = main ] || continue
+    [ "$evento" = push ] || continue
+    case "$id" in '' | *[!0-9]*) continue ;; esac
+    if [ "$id" -gt "$mejor" ]; then
+      mejor="$id" mejor_estado="$estado" mejor_conclusion="$conclusion"
+    fi
+  done <<<"$leidas"
+  if [ "$mejor" = 0 ]; then
+    die "preflight: Quality no paso en main para $version (no hay una corrida de un push a main para ese sha completo de 40 caracteres); ver Actions > Quality"
+  fi
+  if [ "$mejor_estado" != completed ] || [ "$mejor_conclusion" != success ]; then
+    die "preflight: Quality no paso en main para $version: la corrida $mejor esta $mejor_estado/$mejor_conclusion; ver Actions > Quality"
+  fi
+  log "preflight: Quality verde en main para $version (corrida $mejor)"
+}
+
+# Lee la respuesta de GitHub (`.../runs`) por stdin e imprime:
+#   total <total_count>
+#   vistas <objetos de workflow_runs leidos>
+#   corrida<TAB>id<TAB>path<TAB>head_sha<TAB>head_branch<TAB>event<TAB>status<TAB>conclusion
+# Solo los campos directos de cada corrida: los anidados (repository.name,
+# head_commit.message...) no se confunden con los de la corrida. Un campo que
+# falta o viene vacio sale como `-`. Sin jq ni python3 garantizados en el host, awk (mawk en
+# Ubuntu) recorre el JSON caracter a caracter respetando strings y escapes.
+# Un JSON mal formado (llaves sin cerrar, string cortado, una coma de mas)
+# imprime solo `error`, y quality_verde falla cerrada.
+corridas_de_quality() {
+  awk '
+    function valor() {
+      if (d == 0) { if (raiz) err = 1; raiz = 1; return }
+      if (ty[d] == "{") { if (st[d] != "valor") err = 1 }
+      else if (st[d] != "primero" && st[d] != "valor") err = 1
+      st[d] = "coma"
+    }
+    function abrir(t) {
+      if (d == 0 && t != "{") err = 1
+      valor()
+      if (d == 1 && t == "[" && k[1] == "workflow_runs") runs = 2
+      d++
+      ty[d] = t; st[d] = "primero"; k[d] = ""
+      if (d == runs + 1 && t == "{") { split("", campo); vistas++ }
+    }
+    function cerrar(t) {
+      if (d == 0 || (t == "}" && ty[d] != "{") || (t == "]" && ty[d] != "[") ||
+          (st[d] != "primero" && st[d] != "coma")) { err = 1; return }
+      if (d == runs + 1 && ty[d] == "{") {
+        printf "corrida\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", f("id"), f("path"),
+          f("head_sha"), f("head_branch"), f("event"), f("status"), f("conclusion")
+      }
+      if (d == runs) runs = -10
+      d--
+    }
+    # Nunca vacio: `read` con IFS de tabulador junta dos tabuladores seguidos.
+    function f(nombre) { return (nombre in campo && campo[nombre] != "") ? campo[nombre] : "-" }
+    function escalar(v, es_string) {
+      if (d > 0 && ty[d] == "{" && (st[d] == "primero" || st[d] == "clave")) {
+        if (!es_string) { err = 1; return }
+        k[d] = v; st[d] = "dos_puntos"; return
+      }
+      valor()
+      if (d == 1 && k[1] == "total_count" && !es_string) total = v
+      if (d == runs + 1) campo[k[d]] = v
+    }
+    { buf = buf $0 "\n" }
+    END {
+      runs = -10; n = length(buf)
+      for (i = 1; i <= n && !err; i++) {
+        c = substr(buf, i, 1)
+        if (c == "\"") {
+          s = ""; i++
+          while (i <= n && (c = substr(buf, i, 1)) != "\"") {
+            if (c == "\\") { s = s c substr(buf, i + 1, 1); i += 2 }
+            else { s = s c; i++ }
+          }
+          if (i > n) { err = 1; break }
+          escalar(s, 1)
+        } else if (c == "{" || c == "[") abrir(c)
+        else if (c == "}" || c == "]") cerrar(c)
+        else if (c == ":") {
+          if (d == 0 || ty[d] != "{" || st[d] != "dos_puntos") err = 1
+          else st[d] = "valor"
+        } else if (c == ",") {
+          if (d == 0 || st[d] != "coma") err = 1
+          else st[d] = (ty[d] == "{") ? "clave" : "valor"
+        } else if (c != " " && c != "\t" && c != "\r" && c != "\n") {
+          s = ""
+          while (i <= n && substr(buf, i, 1) ~ /[A-Za-z0-9.+-]/) { s = s substr(buf, i, 1); i++ }
+          i--
+          if (s !~ /^(true|false|null|-?[0-9]+([.][0-9]+)?([eE][+-]?[0-9]+)?)$/) err = 1
+          else escalar(s, 0)
+        }
+      }
+      if (err || d != 0 || !raiz || total !~ /^[0-9]+$/) { print "error"; exit }
+      print "total " total
+      print "vistas " (vistas + 0)
+    }
+  '
 }
 
 preflight() {
