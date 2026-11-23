@@ -16,6 +16,7 @@ no marcar exito si la copia fuera del host fallo.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -222,9 +223,10 @@ exit "${{{variable}:-0}}"
 
 # curl: la API de GitHub (deploy.sh pregunta si Quality paso para el sha)
 # contesta lo que diga gh_runs, con su propio codigo de salida; el resto
-# (compuerta, alertas) sale con FAKE_CURL_EXIT, como siempre. Lo que curl lee
-# por stdin con `-K -` (cabeceras con secretos, fuera de argv) queda en
-# curl_config.
+# (compuerta, alertas) sale con FAKE_CURL_EXIT, como siempre. En gh_runs,
+# `__SHA__` se reemplaza por el `head_sha` de la URL (la corrida del sha que se
+# pidio). Lo que curl lee por stdin con `-K -` (cabeceras con secretos, fuera
+# de argv) queda en curl_config.
 _CURL = r"""#!/bin/sh
 printf '%s\n' "curl $*" >> "$FAKE_DIR/calls"
 case " $* " in
@@ -232,7 +234,8 @@ case " $* " in
 esac
 case "$*" in
   *api.github.com/*/actions/workflows/*)
-    cat "$FAKE_DIR/gh_runs" 2>/dev/null
+    sha="$(printf '%s\n' "$*" | sed -n 's/.*head_sha=\([A-Za-z0-9_.-]*\).*/\1/p')"
+    [ -f "$FAKE_DIR/gh_runs" ] && sed "s/__SHA__/$sha/g" "$FAKE_DIR/gh_runs"
     exit "${FAKE_GH_EXIT:-0}" ;;
 esac
 exit "${FAKE_CURL_EXIT:-0}"
@@ -340,18 +343,54 @@ def escribir_redis_info(ruta: Path, *, usada: int, maxima: int = 48 * 1048576) -
     )
 
 
-def escribir_corridas_de_quality(ruta: Path, *, verdes: int) -> None:
-    """Respuesta de la API de GitHub a la busqueda de corridas verdes de
-    Quality, indentada como la devuelve api.github.com."""
-    corrida = (
-        '    {\n      "conclusion": "success",\n      "head_branch": "main"\n    }\n'
+def corrida_de_quality(**cambios: object) -> dict[str, object]:
+    """Una corrida de `GET .../actions/workflows/quality.yml/runs`, con los
+    campos que mira deploy.sh y objetos anidados como los reales (repository
+    tiene su propio `name`, head_commit un mensaje con llaves y comillas). Por
+    defecto: Quality de un push a main, terminada en verde, para el sha que se
+    pidio (`__SHA__`, ver _CURL)."""
+    corrida: dict[str, object] = {
+        "id": 45080249904,
+        "name": "Quality",
+        "head_branch": "main",
+        "head_sha": "__SHA__",
+        "path": ".github/workflows/quality.yml",
+        "event": "push",
+        "status": "completed",
+        "conclusion": "success",
+        "run_attempt": 1,
+        "pull_requests": [],
+        "head_commit": {
+            "id": "__SHA__",
+            "message": 'Merge "x" {status: "completed", conclusion: "failure"} \\ [y]',
+        },
+        "repository": {"id": 1, "name": "shifty", "full_name": "o/shifty"},
+    }
+    corrida.update(cambios)
+    return corrida
+
+
+def escribir_corridas_de_quality(
+    ruta: Path,
+    *,
+    verdes: int = 0,
+    corridas: list[dict[str, object]] | None = None,
+    total: int | None = None,
+) -> None:
+    """Respuesta de la API de GitHub a la busqueda de corridas de Quality de
+    un sha, indentada como la devuelve api.github.com. `verdes` corridas por
+    defecto (corrida_de_quality) o la lista `corridas`; `total_count` es la
+    cantidad de corridas salvo que se pase `total`."""
+    lista = (
+        corridas
+        if corridas is not None
+        else [corrida_de_quality(id=45080249904 + i) for i in range(verdes)]
     )
-    ruta.write_text(
-        f'{{\n  "total_count": {verdes},\n  "workflow_runs": [\n'
-        f"{corrida if verdes else ''}  ]\n}}\n",
-        encoding="utf-8",
-        newline="\n",
-    )
+    cuerpo = {
+        "total_count": len(lista) if total is None else total,
+        "workflow_runs": lista,
+    }
+    ruta.write_text(json.dumps(cuerpo, indent=2) + "\n", encoding="utf-8", newline="\n")
 
 
 # date: la hora UTC (HH:MM) que ve la ventana del modo sin estado de alert()
