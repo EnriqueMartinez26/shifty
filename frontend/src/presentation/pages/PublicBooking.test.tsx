@@ -1,5 +1,7 @@
-import { fireEvent, render, screen } from '@testing-library/react'
-import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
+import { StrictMode } from 'react'
+
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router'
 
 import { isAnalyticsConfigured } from '@infrastructure/analytics/bookingAnalytics'
 
@@ -77,16 +79,44 @@ const Ubicacion = () => {
   return <output aria-label="ubicacion">{`${location.pathname}${location.search}`}</output>
 }
 
-const renderEn = (entrada: string) =>
+const BotonAtras = () => {
+  const navigate = useNavigate()
+  return (
+    <button type="button" onClick={() => void navigate(-1)}>
+      Atrás
+    </button>
+  )
+}
+
+const arbolEn = (entrada: string) => (
+  <MemoryRouter initialEntries={[entrada]}>
+    <Routes>
+      <Route
+        path="/booking/:slug"
+        element={
+          <>
+            <PublicBooking />
+            <Ubicacion />
+          </>
+        }
+      />
+    </Routes>
+  </MemoryRouter>
+)
+
+const renderEn = (entrada: string) => render(arbolEn(entrada))
+
+const renderConHistorial = () =>
   render(
-    <MemoryRouter initialEntries={[entrada]}>
+    <MemoryRouter initialEntries={['/anterior', '/booking/sol?payment_id=p1']} initialIndex={1}>
       <Routes>
+        <Route path="/anterior" element={<p>Página anterior</p>} />
         <Route
           path="/booking/:slug"
           element={
             <>
               <PublicBooking />
-              <Ubicacion />
+              <BotonAtras />
             </>
           }
         />
@@ -327,6 +357,64 @@ describe('PublicBooking: diseño previo al volver de Mercado Pago', () => {
 
     expect(screen.getByRole('heading', { name: 'Reserva confirmada' })).toBeInTheDocument()
     expect(screen.queryByRole('link', { name: BOTON })).not.toBeInTheDocument()
+  })
+
+  // 2026-11-02 (#285): el resumen ya no queda guardado al salir de la vuelta.
+  it('"Volver a la tienda" borra el resumen guardado', () => {
+    guardarResumen()
+    renderEn('/booking/sol?payment_id=p1')
+    expect(screen.getByRole('link', { name: BOTON })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Volver a la tienda' }))
+
+    expect(window.sessionStorage.getItem('shifty:prior-design:store-1')).toBeNull()
+  })
+
+  it('conserva el handoff y el CTA mientras cambia el estado del mismo pago', () => {
+    pagoCon('pending', 'pending_payment')
+    guardarResumen()
+    const page = renderEn('/booking/sol?payment_id=p1')
+
+    expect(screen.getByRole('link', { name: BOTON })).toBeInTheDocument()
+    expect(window.sessionStorage.getItem('shifty:prior-design:store-1')).not.toBeNull()
+
+    pagoCon('approved', 'confirmed')
+    page.rerender(arbolEn('/booking/sol?payment_id=p1'))
+
+    expect(screen.getByRole('link', { name: BOTON })).toBeInTheDocument()
+    expect(window.sessionStorage.getItem('shifty:prior-design:store-1')).not.toBeNull()
+  })
+
+  it('conserva el handoff durante la ida y vuelta a Mercado Pago', () => {
+    guardarResumen()
+    renderEn('/booking/sol?payment_id=p1')
+
+    fireEvent(window, new Event('pagehide'))
+    fireEvent(window, new Event('pageshow'))
+
+    expect(window.sessionStorage.getItem('shifty:prior-design:store-1')).not.toBeNull()
+    expect(screen.getByRole('link', { name: BOTON })).toBeInTheDocument()
+  })
+
+  it('conserva el handoff durante la repetición de efectos de StrictMode', () => {
+    guardarResumen()
+    render(<StrictMode>{arbolEn('/booking/sol?payment_id=p1')}</StrictMode>)
+
+    expect(screen.getByRole('link', { name: BOTON })).toBeInTheDocument()
+    expect(window.sessionStorage.getItem('shifty:prior-design:store-1')).not.toBeNull()
+  })
+
+  it('al salir con Browser Back limpia el resumen guardado', async () => {
+    guardarResumen()
+    renderConHistorial()
+    expect(screen.getByRole('link', { name: BOTON })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Atrás' }))
+
+    expect(screen.getByText('Página anterior')).toBeInTheDocument()
+    await waitFor(() => {
+      expect(window.sessionStorage.getItem('shifty:prior-design:store-1')).toBeNull()
+    })
   })
 
   it('sin storage no muestra el bloque y el estado del pago sigue igual', () => {

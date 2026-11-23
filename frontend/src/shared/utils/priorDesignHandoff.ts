@@ -62,7 +62,23 @@ export const savePriorDesignHandoff = (
   }
 }
 
-/** El resumen guardado para ese turno de la tienda, o null. */
+/**
+ * Borra el resumen de esta tienda; sin storage no hace nada. Se llama al salir
+ * de la vuelta del pago: el resumen ya cumplio su funcion (#285).
+ */
+export const clearPriorDesignHandoff = (storePublicId: string): void => {
+  try {
+    window.sessionStorage.removeItem(storageKey(storePublicId))
+  } catch {
+    // sin storage: no hay nada que borrar
+  }
+}
+
+/**
+ * El resumen guardado para ese turno de la tienda, o null. Uno de otro turno
+ * o ilegible ya no sirve y se borra. El del mismo turno se conserva: la vuelta
+ * lo relee en cada consulta del estado del pago.
+ */
 export const readPriorDesignHandoff = (
   storePublicId: string,
   appointmentPublicId: string
@@ -74,11 +90,13 @@ export const readPriorDesignHandoff = (
     return null
   }
   if (!raw) return null
+  let parsed: unknown = null
   try {
-    const parsed: unknown = JSON.parse(raw)
-    return isHandoff(parsed) && parsed.appointmentPublicId === appointmentPublicId ? parsed : null
+    parsed = JSON.parse(raw)
   } catch {
-    // valor ilegible: como si no hubiera nada
-    return null
+    // valor ilegible: se borra abajo
   }
+  if (isHandoff(parsed) && parsed.appointmentPublicId === appointmentPublicId) return parsed
+  clearPriorDesignHandoff(storePublicId)
+  return null
 }
