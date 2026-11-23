@@ -14,7 +14,7 @@ bash scripts/deploy.sh edge                       # only when nginx's image or n
 
 The VPS has no `make`. Where it is installed, `make deploy APP_VERSION=<sha>`, `make rollback` and `make deploy-edge` are the same commands; the rest of this runbook names them either way.
 
-To create and prepare a store before announcing it, follow the [store onboarding runbook](ALTA_TIENDA_RUNBOOK.md).
+To create and prepare a store before announcing it, follow the [store onboarding guide](ALTA_DE_TIENDA.md) for the current routes and defaults, then use the [detailed launch runbook](ALTA_TIENDA_RUNBOOK.md) for publication and evidence handling.
 
 ## 1. One-time server setup
 
