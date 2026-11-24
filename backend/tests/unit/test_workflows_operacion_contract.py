@@ -646,6 +646,21 @@ def test_perf_verifica_el_destino_antes_de_tocar_staging() -> None:
     assert "PERF_ALLOW_LOCAL_TARGET" not in PERF.read_text(encoding="utf-8")
 
 
+def test_perf_carga_contra_el_mismo_destino_que_verifico() -> None:
+    """El manifiesto y Locust apuntan al `STAGING_URL` que paso el preflight.
+
+    Un `--host` escrito a mano, o leido de otra variable, cargaria un destino
+    que el preflight nunca vio.
+    """
+    pasos = _pasos_perf()
+    secreto = pasos[_indice_perf(PREFLIGHT)]["env"]["STAGING_URL"]
+    for script in ("loadtests/aceptacion.py", "locust_aceptacion.py"):
+        paso = pasos[_indice_perf(script)]
+        assert '--host "$STAGING_URL"' in paso["run"], script
+        assert paso["run"].count("--host") == 1, script
+        assert paso["env"]["STAGING_URL"] == secreto, script
+
+
 @pytest.mark.parametrize(
     ("url", "origen", "motivo"),
     [
