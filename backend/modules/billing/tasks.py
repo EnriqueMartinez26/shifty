@@ -13,6 +13,7 @@ from typing import Any, cast
 
 import structlog
 from celery.exceptions import SoftTimeLimitExceeded
+from sqlalchemy import select
 
 from core.celery_app import celery_app
 from core.database import AsyncSessionFactory, _apply_tenant_context, set_tenant_context
@@ -20,8 +21,11 @@ from core.worker_loop import run_in_worker_loop
 from modules.billing.service import advance_subscriptions
 from modules.notifications.model import NotificationType
 from modules.payments.model import OutboxMessage
+from modules.stores.model import Store
+from modules.users.model import User
 
 logger = structlog.get_logger()
+SUBSCRIPTION_ADMIN_NOTICE = "billing.subscription_admin_notice"
 
 
 async def run_subscription_lifecycle(*, now: datetime | None = None) -> dict[str, int]:
@@ -44,6 +48,83 @@ async def run_subscription_lifecycle(*, now: datetime | None = None) -> dict[str
                         },
                     )
                 )
+            if run.admin_notices:
+                recipients = list(
+                    (
+                        await db.execute(
+                            select(User.email).where(
+                                User.is_active.is_(True),
+                                User.is_global_admin.is_(True),
+                            )
+                        )
+                    ).scalars()
+                )
+                store_rows = await db.execute(
+                    select(Store.id, Store.name).where(
+                        Store.id.in_({notice[0] for notice in run.admin_notices})
+                    )
+                )
+                stores = dict(store_rows.tuples().all())
+                for admin_notice in list(run.admin_notices):
+                    store_id, subscription_id, notice, period_end = admin_notice
+                    marker_payload = {
+                        "subscription_id": subscription_id,
+                        "notice": notice,
+                        "period_end": period_end,
+                    }
+                    marker_exists = await db.scalar(
+                        select(OutboxMessage.id)
+                        .where(
+                            OutboxMessage.store_id == store_id,
+                            OutboxMessage.event_type == SUBSCRIPTION_ADMIN_NOTICE,
+                            OutboxMessage.payload["subscription_id"].as_string()
+                            == subscription_id,
+                            OutboxMessage.payload["notice"].as_string() == notice,
+                            OutboxMessage.payload["period_end"].as_string()
+                            == period_end,
+                        )
+                        .limit(1)
+                    )
+                    if marker_exists:
+                        run.admin_notices.remove(admin_notice)
+                        continue
+                    db.add(
+                        OutboxMessage(
+                            store_id=store_id,
+                            event_type=SUBSCRIPTION_ADMIN_NOTICE,
+                            payload=marker_payload,
+                            # Es una llave de deduplicación, no un evento a
+                            # despachar en el worker del outbox.
+                            processed_at=now,
+                        )
+                    )
+                    store_name = stores.get(store_id, "Una tienda")
+                    title = (
+                        "Suscripción vencida"
+                        if notice == "past_due"
+                        else "La página de reservas se suspende en 2 días"
+                    )
+                    body = (
+                        f"{store_name}: el período de la suscripción terminó el "
+                        f"{period_end}."
+                    )
+                    for email in recipients:
+                        db.add(
+                            OutboxMessage(
+                                store_id=store_id,
+                                event_type="email.send",
+                                payload={
+                                    "mail": "store_notification",
+                                    "args": {
+                                        "email": email,
+                                        "title": title,
+                                        "body": body,
+                                    },
+                                    "source_event": SUBSCRIPTION_ADMIN_NOTICE,
+                                    "appointment_id": None,
+                                },
+                            )
+                        )
             await db.commit()
         finally:
             set_tenant_context(None, False)

@@ -44,6 +44,31 @@ const overviewWithNoSubscription: SuperAdminStoreOverview = {
   recent_redemptions: []
 }
 
+const overviewWithSubscription = (currentPeriodEnd: string | null): SuperAdminStoreOverview => ({
+  ...overviewWithNoSubscription,
+  subscription: {
+    public_id: 'subscription-1',
+    store_id: store.public_id,
+    plan_id: 'plan-1',
+    status: 'active',
+    base_amount: '1000',
+    discount_amount: '0',
+    total_amount: '1000',
+    currency: 'ARS',
+    current_period_start: '2026-11-01T00:00:00Z',
+    current_period_end: currentPeriodEnd,
+    coupon_id: null,
+    is_active: true,
+    created_at: '2026-11-01T00:00:00Z',
+    updated_at: '2026-11-01T00:00:00Z',
+    plan_name: 'Inicial',
+    billing_interval: 'monthly',
+    max_staff: null,
+    max_services: null,
+    applied_coupon: null
+  }
+})
+
 const renderPanel = (
   selectedStore: SuperAdminStoreRow | null,
   options: {
@@ -52,6 +77,7 @@ const renderPanel = (
     overviewError?: boolean
     overviewFetching?: boolean
     onRetryOverview?: () => void
+    onAssignPlan?: () => void
   } = {}
 ) =>
   render(
@@ -63,7 +89,7 @@ const renderPanel = (
       overviewFetching={options.overviewFetching ?? false}
       onRetryOverview={options.onRetryOverview ?? jest.fn()}
       onCreateAdmin={jest.fn()}
-      onAssignPlan={jest.fn()}
+      onAssignPlan={options.onAssignPlan ?? jest.fn()}
       onRedeemCoupon={jest.fn()}
       onEditStore={jest.fn()}
       activePlansCount={1}
@@ -113,6 +139,27 @@ describe('SuperAdminHealthPanel', () => {
     expect(screen.getByText('Sin suscripción')).toBeInTheDocument()
     expect(screen.getByText('Sin admins activos')).toBeInTheDocument()
     expect(screen.getAllByText('0')).toHaveLength(3)
+  })
+
+  it('advierte si la suscripción no tiene fecha de fin y permite revisarla', () => {
+    const onAssignPlan = jest.fn()
+    renderPanel(store, { overview: overviewWithSubscription(null), onAssignPlan })
+
+    expect(screen.getByText('Período sin fecha de fin')).toBeInTheDocument()
+    expect(screen.getByText(/No hay una fecha de fin registrada/)).toBeInTheDocument()
+    expect(screen.queryByText('Suscripción al día')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Revisar período' }))
+
+    expect(onAssignPlan).toHaveBeenCalledTimes(1)
+  })
+
+  it('muestra la fecha de renovación cuando el período sí tiene fecha de fin', () => {
+    renderPanel(store, { overview: overviewWithSubscription('2026-12-01T00:00:00Z') })
+
+    expect(screen.getByText('Suscripción al día')).toBeInTheDocument()
+    expect(screen.getByText(/Renueva/)).toBeInTheDocument()
+    expect(screen.queryByText('Período sin fecha de fin')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Revisar período' })).not.toBeInTheDocument()
   })
 
   it('explica cuando todavía no hay una tienda seleccionada', () => {

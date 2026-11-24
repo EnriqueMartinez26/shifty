@@ -60,6 +60,15 @@ def test_al_agotar_la_gracia_pasa_a_suspended() -> None:
     assert SUBSCRIPTION_GRACE_DAYS == 7 and SUBSCRIPTION_WARN_DAYS == 7
 
 
+def test_avisa_dos_dias_antes_de_suspender_y_solo_ese_dia() -> None:
+    dos_dias_antes = _sub("past_due", "2026-09-04")  # suspensión el 12/9
+    assert daily_action(dos_dias_antes, today=HOY).notify_suspension_soon is True
+    un_dia_antes = _sub("past_due", "2026-09-03")
+    assert daily_action(un_dia_antes, today=HOY).notify_suspension_soon is False
+    assert daily_action(un_dia_antes, today=HOY).new_status is None
+    assert daily_action(un_dia_antes, today=date(2026, 9, 11)).new_status == "suspended"
+
+
 def test_cancelada_y_suspendida_no_se_mueven_solas() -> None:
     assert daily_action(_sub("cancelled", "2026-01-01"), today=HOY).new_status is None
     assert daily_action(_sub("suspended", "2026-01-01"), today=HOY).new_status is None
