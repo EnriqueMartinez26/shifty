@@ -9,6 +9,8 @@ dev y prod no se separen y ningun cambio las pierda en silencio.
 Trampas de nginx que el contrato vigila:
 - `proxy_set_header` y `add_header` se heredan SOLO si el nivel actual no
   define ninguno: uno solo en un location borra todos los del server.
+  `limit_conn` igual: por eso /assets/ cuenta en su propia zona sin sumar al
+  tope de la app.
 - Un `return` a nivel server corre antes de elegir location.
 - Los nombres de zona de memoria compartida son globales: `upstream` y
   `limit_req_zone` no pueden repetir nombre.
@@ -485,13 +487,42 @@ def _conexiones_por_ip(http: list[Directiva], server: list[Directiva]) -> int:
     return int(limite[1])
 
 
+# SHIFTY-FRONTEND-5 (2026-11-24, produccion): una carga de /b/<tienda> pide
+# decenas de chunks en paralelo y, en HTTP/2, cada stream cuenta como una
+# conexion de limit_conn. Con `perip 40` a nivel server compartido por todo,
+# dos cargas superpuestas de la misma IPv4 agotaron el tope: el edge devolvio
+# 429 a un chunk de PublicBooking y a /api/public/stores/<slug>, y la reserva
+# no cargo. Los assets cuentan en su propia zona.
+ASSETS = ("^~", "/assets/")
+# Un navegador abre una conexion HTTP/2 por origen, con hasta 128 streams
+# (http2_max_concurrent_streams por defecto): debajo de eso, el tope de assets
+# cortaria a un solo navegador.
+STREAMS_POR_CONEXION_H2 = 128
+
+
+def _tope_de_conexiones(
+    http: list[Directiva], server: list[Directiva], loc: Directiva
+) -> tuple[str, int]:
+    limite = efectivo("limit_conn", http, server, loc.bloque)
+    assert limite is not None and len(limite) == 2, (loc.args, limite)
+    return limite[0], int(limite[1])
+
+
+def _locations_de_la_app(server: list[Directiva]) -> list[Directiva]:
+    """Las que eligen un request externo (las `@` solo son destino interno)."""
+    return [loc for loc in locations(server) if not loc.args[0].startswith("@")]
+
+
 @EDGES
 def test_el_edge_corta_inundaciones_por_ip(ruta: Path) -> None:
     http = leer(ruta)
     _tasa_por_segundo(http, "api")
     _tasa_por_segundo(http, "auth")
     _tasa_por_segundo(http, "webhooks")
-    assert una(http, "limit_conn_zone").args == (CLAVE_DE_LIMITE, "zone=perip:10m")
+    assert [d.args for d in todas(http, "limit_conn_zone")] == [
+        (CLAVE_DE_LIMITE, "zone=perip:10m"),
+        (CLAVE_DE_LIMITE, "zone=perip_assets:10m"),
+    ]
     # 429 y no el 503 por defecto: el front y el backoff lo leen como limite.
     assert una(http, "limit_req_status").args == ("429",)
     assert una(http, "limit_conn_status").args == ("429",)
@@ -507,6 +538,36 @@ def test_el_edge_corta_inundaciones_por_ip(ruta: Path) -> None:
         assert zona == _zona_esperada(loc), loc.args
 
 
+@EDGES
+def test_los_assets_no_consumen_el_tope_de_conexiones_de_la_app(ruta: Path) -> None:
+    http = leer(ruta)
+    server = server_de_la_app(http)
+    assets = next(loc for loc in locations(server) if loc.args == ASSETS)
+    zona, tope = _tope_de_conexiones(http, server, assets)
+    # Un limit_conn en la location reemplaza al heredado del server: si
+    # /assets/ declarara tambien `perip`, sus streams volverian a contar ahi.
+    assert [d.args[0] for d in todas(assets.bloque, "limit_conn")] == ["perip_assets"]
+    assert zona == "perip_assets"
+    assert tope >= STREAMS_POR_CONEXION_H2
+    assert tope > _conexiones_por_ip(http, server)
+
+
+@EDGES
+def test_toda_ruta_dinamica_sigue_con_el_tope_de_la_app(ruta: Path) -> None:
+    # Exactas y regex incluidas (subidas, medios, catalogo, auth, webhook,
+    # tunel de Sentry): solo /assets/ cuenta aparte. El tope vive a nivel
+    # server, asi que una location nueva nace protegida.
+    http = leer(ruta)
+    server = server_de_la_app(http)
+    tope_de_la_app = _conexiones_por_ip(http, server)
+    dinamicas = [loc for loc in _locations_de_la_app(server) if loc.args != ASSETS]
+    assert len(dinamicas) >= 10, [loc.args for loc in dinamicas]
+    for loc in dinamicas:
+        assert _tope_de_conexiones(http, server, loc) == ("perip", tope_de_la_app), (
+            loc.args
+        )
+
+
 def test_produccion_limita_muy_por_encima_de_la_app() -> None:
     # Solo corta inundaciones: el limite fino (por ruta, por sujeto) es el de
     # core/rate_limit.py. Si el edge cortara antes, el front veria un 429 sin
@@ -520,6 +581,9 @@ def test_produccion_limita_muy_por_encima_de_la_app() -> None:
     assert _tasa_por_segundo(http, "webhooks") == 10
     assert _limit_req(location(server, *WEBHOOK_MP)) == ("webhooks", 60)
     assert _conexiones_por_ip(http, server) == 40
+    assets = next(loc for loc in locations(server) if loc.args == ASSETS)
+    # Dos conexiones HTTP/2 llenas: una IP compartida (CGNAT) tiene margen.
+    assert _tope_de_conexiones(http, server, assets) == ("perip_assets", 256)
 
 
 def test_desarrollo_no_limita_mas_que_produccion() -> None:
@@ -531,6 +595,12 @@ def test_desarrollo_no_limita_mas_que_produccion() -> None:
     assert _conexiones_por_ip(dev, server_de_la_app(dev)) >= _conexiones_por_ip(
         prod, server_de_la_app(prod)
     )
+    topes = []
+    for http in (dev, prod):
+        server = server_de_la_app(http)
+        assets = next(loc for loc in locations(server) if loc.args == ASSETS)
+        topes.append(_tope_de_conexiones(http, server, assets)[1])
+    assert topes[0] >= topes[1], topes
 
 
 # --- #277: IPv6 con la direccion real, agrupada por /64 -----------------------
@@ -1087,12 +1157,44 @@ def test_el_backend_recibe_el_id_del_edge_sin_pisar_el_de_mercado_pago(
         assert cabeceras.get("x-edge-request-id") == "$request_id", loc.args
 
 
+def _loguea_el_asset(mapa: Directiva, status: str) -> bool:
+    """Evalua `map $status $log_asset_error` como nginx (regex en orden, si
+    ninguna calza `default`); el `if=` de access_log descarta "0" y "".
+    """
+    valor = None
+    for entrada in mapa.bloque:
+        if entrada.nombre != "default" and re.search(entrada.nombre[1:], status):
+            valor = entrada.args[0]
+            break
+    if valor is None:
+        (default,) = [e.args[0] for e in mapa.bloque if e.nombre == "default"]
+        valor = default
+    return valor not in {"0", ""}
+
+
 @EDGES
-def test_los_assets_con_hash_no_se_loguean(ruta: Path) -> None:
-    server = server_de_la_app(leer(ruta))
-    assets = location(server, "^~", "/assets/")
-    assert una(assets, "access_log").args == ("off",)
+def test_los_assets_con_hash_solo_loguean_errores(ruta: Path) -> None:
+    # Por volumen los assets no se loguean, salvo un error: el 429 de
+    # SHIFTY-FRONTEND-5 en un chunk solo quedaba en el error log, sin status
+    # ni tiempos, y no se podia medir.
+    http = leer(ruta)
+    server = server_de_la_app(http)
+    assets = location(server, *ASSETS)
+    assert una(assets, "access_log").args == (
+        "/var/log/nginx/access.log",
+        "shifty_json",
+        "if=$log_asset_error",
+    )
     assert una(assets, "proxy_pass").args == ("http://spa",)
+    (mapa,) = [
+        d for d in todas(http, "map") if d.args == ("$status", "$log_asset_error")
+    ]
+    for entrada in mapa.bloque:
+        assert entrada.nombre == "default" or entrada.nombre.startswith("~"), entrada
+    for status in ("200", "206", "304"):
+        assert not _loguea_el_asset(mapa, status), status
+    for status in ("400", "404", "429", "499", "500", "502", "503", "504"):
+        assert _loguea_el_asset(mapa, status), status
 
 
 # --- F0-12: renovacion de certificados por webroot ----------------------------
