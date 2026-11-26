@@ -1662,10 +1662,25 @@ def test_produccion_no_construye_ninguna_imagen() -> None:
 def test_el_borde_de_produccion_corre_la_imagen_oficial_de_nginx() -> None:
     nginx = _servicios_de_produccion()["nginx"]
     assert nginx.get("image") == "nginx:1.30.7-alpine", nginx.get("image")
-    montajes = [str(v) for v in nginx.get("volumes") or []]  # type: ignore[attr-defined]
+    volumes_raw = nginx.get("volumes")
+    activos = volumes_raw if isinstance(volumes_raw, list) else []
+    montajes = [str(v) for v in activos]
     assert any(m.endswith(":/etc/nginx/conf.d/default.conf:ro") for m in montajes), (
         montajes
     )
+    assets = [
+        v
+        for v in activos
+        if isinstance(v, dict) and v.get("target") == "/srv/shifty-assets/assets"
+    ]
+    assert len(assets) == 1, montajes
+    assert (
+        assets[0].get("source")
+        == "${ASSET_STORE_PATH:?prepare asset store first}/assets"
+    )
+    assert assets[0].get("type") == "bind"
+    assert assets[0].get("read_only") is True
+    assert assets[0].get("bind", {}).get("create_host_path") is False
 
 
 # --- Nombres de contenedor por proyecto (revision independiente del lane C) --

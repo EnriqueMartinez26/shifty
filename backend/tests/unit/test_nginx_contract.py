@@ -1243,7 +1243,6 @@ def test_los_assets_con_hash_solo_loguean_errores(ruta: Path) -> None:
         "shifty_json",
         "if=$log_asset_error",
     )
-    assert una(assets, "proxy_pass").args == ("http://spa",)
     (mapa,) = [
         d for d in todas(http, "map") if d.args == ("$status", "$log_asset_error")
     ]
@@ -1253,6 +1252,61 @@ def test_los_assets_con_hash_solo_loguean_errores(ruta: Path) -> None:
         assert not _loguea_el_asset(mapa, status), status
     for status in ("400", "404", "429", "499", "500", "502", "503", "504"):
         assert _loguea_el_asset(mapa, status), status
+
+
+def test_los_assets_produccion_con_hash_se_sirven_desde_el_store_con_tope_y_seguridad() -> (
+    None
+):
+    server = server_de_la_app(leer(EDGE_PROD))
+    assets = location(server, *ASSETS)
+    assert una(assets, "root").args == ("/srv/shifty-assets",)
+    assert not todas(assets, "proxy_pass")
+    assert una(assets, "try_files").args == ("$uri", "=404")
+    assert una(assets, "limit_conn").args == ("perip_assets", "256")
+    assert una(assets, "access_log").args == (
+        "/var/log/nginx/access.log",
+        "shifty_json",
+        "if=$log_asset_error",
+    )
+    cache_headers = [
+        directive
+        for directive in todas(assets, "add_header")
+        if directive.args[0].lower() == "cache-control"
+    ]
+    assert len(cache_headers) == 1
+    assert cache_headers[0].args == (
+        "Cache-Control",
+        "public, max-age=31536000, immutable",
+    )
+    assert not todas(assets, "types"), (
+        "MIME mapping is inherited from nginx's mime.types"
+    )
+    assert not todas(assets, "default_type")
+    security = {
+        tuple(d.args)
+        for d in todas(assets, "add_header")
+        if d.args[0].lower() != "cache-control"
+    }
+    assert security == {
+        ("Strict-Transport-Security", "max-age=31536000; includeSubDomains", "always"),
+        ("X-Content-Type-Options", "nosniff", "always"),
+        ("X-Frame-Options", "DENY", "always"),
+        ("Referrer-Policy", "strict-origin-when-cross-origin", "always"),
+        ("Permissions-Policy", "camera=(), microphone=(), geolocation=()", "always"),
+        ("Content-Security-Policy", _csp_base_de_la_spa(), "always"),
+    }
+
+
+def test_los_assets_de_desarrollo_siguen_proxy_a_la_spa() -> None:
+    server = server_de_la_app(leer(EDGE_DEV))
+    assets = location(server, *ASSETS)
+    assert una(assets, "proxy_pass").args == ("http://spa",)
+    assert una(assets, "limit_conn").args == ("perip_assets", "2560")
+    assert una(assets, "access_log").args == (
+        "/var/log/nginx/access.log",
+        "shifty_json",
+        "if=$log_asset_error",
+    )
 
 
 # --- F0-12: renovacion de certificados por webroot ----------------------------

@@ -10,15 +10,18 @@ rollback sin migrar.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import sys
+import subprocess
 from pathlib import Path
 
 import pytest
 
 from tests.unit.host_falso import (
     REPO_ROOT,
+    BASH,
     Host,
     _backup_fresco,
     _hay,
@@ -36,6 +39,20 @@ def host(tmp_path: Path) -> Host:
     return crear_host(tmp_path)
 
 
+def _sembrar_borde(host: Host, conf: str = "server {}\n") -> Path:
+    (host.repo / "nginx").mkdir(exist_ok=True)
+    archivo = host.repo / "nginx" / "nginx.prod.conf"
+    archivo.write_text(conf, encoding="utf-8", newline="\n")
+    (host.repo / ".deploy").mkdir(exist_ok=True)
+    huella = hashlib.sha256(
+        f"{conf}\nasset-store={host.env['DEPLOY_ASSET_STORE']}\n".encode("utf-8")
+    ).hexdigest()
+    (host.repo / ".deploy" / "edge-conf.sha256").write_text(
+        f"{huella}\n", encoding="utf-8", newline="\n"
+    )
+    return archivo
+
+
 def _preparar_deploy(host: Host, actual: str = "v1") -> None:
     (host.repo / ".deploy").mkdir(exist_ok=True)
     (host.repo / ".deploy" / "current").write_text(f"{actual}\n", encoding="utf-8")
@@ -47,11 +64,50 @@ def _preparar_deploy(host: Host, actual: str = "v1") -> None:
     (host.fake / "frontend_ids").write_text(
         "front-old1\n", encoding="utf-8", newline="\n"
     )
+    host.env["FAKE_RUNNING_VERSION"] = actual
     _backup_fresco(host)
+    _sembrar_borde(host)
     # El .env del servidor: compose lo lee del directorio del proyecto.
     (host.repo / ".env").write_text(
         "COMPOSE_FILE=docker-compose.yml:docker-compose.prod.yml\n", encoding="utf-8"
     )
+
+
+def _assets_falsos(host: Host, release: str, shared: str = "shared") -> Path:
+    root = Path(host.env["FAKE_ASSET_FIXTURES"]) / release
+    root.mkdir(parents=True, exist_ok=True)
+    (root / f"chunk-{release}.js").write_text(
+        f"window.release = '{release}';\n", encoding="utf-8", newline="\n"
+    )
+    (root / "shared.js").write_text(shared + "\n", encoding="utf-8", newline="\n")
+    return root
+
+
+def _importar_assets(host: Host, release: str) -> None:
+    image_id = "sha256:" + hashlib.sha256(release.encode()).hexdigest()
+    fixture_root = Path(host.env["FAKE_ASSET_FIXTURES"])
+    source = fixture_root / release
+    if not source.is_dir():
+        source = fixture_root / "default"
+    assert BASH is not None
+    resultado = subprocess.run(
+        [
+            BASH,
+            str(REPO_ROOT / "scripts" / "release-assets.sh"),
+            "import",
+            host.env["DEPLOY_ASSET_STORE"],
+            release,
+            image_id,
+            source.as_posix(),
+        ],
+        cwd=host.repo,
+        env=host.env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert resultado.returncode == 0, resultado.stderr
 
 
 _BASE_DEPLOY = {
@@ -68,6 +124,23 @@ def test_deploy_exige_app_version(host: Host) -> None:
 
     assert resultado.returncode != 0
     assert "APP_VERSION" in resultado.stderr
+
+
+def test_preflight_rechaza_asset_store_dentro_del_checkout(host: Host) -> None:
+    dentro = host.repo / "var" / "assets"
+
+    resultado = host.correr(
+        "deploy.sh",
+        "deploy",
+        APP_VERSION="v2",
+        DEPLOY_ASSET_STORE=dentro.as_posix(),
+        **_BASE_DEPLOY,
+    )
+
+    assert resultado.returncode != 0
+    assert "fuera del checkout" in resultado.stderr
+    assert not dentro.exists()
+    assert not host.llamadas()
     assert not _hay(host.llamadas(), r"compose (pull|run|up)")
 
 
@@ -146,7 +219,6 @@ def test_deploy_migra_con_el_codigo_viejo_sirviendo_y_despues_recrea(
     frontend = _indice(
         llamadas, r"compose up -d --no-deps --no-build .*--scale frontend=2 frontend$"
     )
-    # El borde NO se recrea en un deploy normal (solo `make deploy-edge`).
     resto = _indice(
         llamadas,
         r"compose up -d --no-deps --no-build --remove-orphans "
@@ -154,7 +226,9 @@ def test_deploy_migra_con_el_codigo_viejo_sirviendo_y_despues_recrea(
     )
     reload = _ultimo_indice(llamadas, r"compose exec -T nginx nginx -s reload")
     assert pull < verifica < migra < backend < frontend < resto < reload
-    assert not _hay(llamadas, r"compose (pull|up) .*\bnginx\b")
+    assert not _hay(llamadas, r"compose pull nginx")
+    assert not _hay(llamadas, r"compose up .*nginx$")
+    assert _indice(llamadas, r"docker cp .*assets/\.") < migra
     # Rolling: las viejas se bajan despues de que las nuevas estan sanas.
     assert _indice(llamadas, r"docker stop .*old1") > backend
     assert _hay(llamadas, r"docker rm old1 old2$")
@@ -173,9 +247,212 @@ def test_una_migracion_fallida_no_recrea_nada(host: Host) -> None:
     )
 
     assert resultado.returncode != 0
-    assert not _hay(host.llamadas(), r"compose up")
+    assert not _hay(host.llamadas(), r"compose up .*--scale (backend|frontend)=")
+    assert not _hay(host.llamadas(), r"compose up .*nginx$")
     assert (host.repo / ".deploy" / "current").read_text().strip() == "v1"
     assert not (host.repo / ".deploy" / "lock").exists()
+
+
+def test_importa_current_rollback_y_candidate_antes_de_migrar(host: Host) -> None:
+    _preparar_deploy(host, actual="v1")
+    # The live frontend can lag the app marker during an earlier partial rollout.
+    host.env["FAKE_RUNNING_VERSION"] = "v0"
+    (host.repo / ".deploy" / "previous").write_text("v0\n", encoding="utf-8")
+    _assets_falsos(host, "v0")
+    _assets_falsos(host, "v1")
+    _assets_falsos(host, "v2")
+
+    resultado = host.correr("deploy.sh", "deploy", APP_VERSION="v2", **_BASE_DEPLOY)
+
+    assert resultado.returncode == 0, resultado.stderr
+    store = Path(host.env["DEPLOY_ASSET_STORE"])
+    assert {
+        "v0.manifest",
+        "v1.manifest",
+        "v2.manifest",
+    } <= {p.name for p in (store / ".manifests").glob("*.manifest")}
+    llamadas = host.llamadas()
+    extracciones = [i for i, line in enumerate(llamadas) if "docker cp " in line]
+    migra = _indice(
+        llamadas, r"compose run --rm --no-deps -T backend alembic upgrade head$"
+    )
+    frontend = _indice(llamadas, r"compose up .*--scale frontend=2 frontend$")
+    assert len(extracciones) == 3, llamadas
+    assert not _hay(llamadas, r"compose up .*nginx$")
+    assert max(extracciones) < migra < frontend
+
+
+def test_primer_deploy_en_host_vacio_importa_candidate_sin_front_activo(
+    host: Host,
+) -> None:
+    _preparar_deploy(host, actual="v1")
+    (host.repo / ".deploy" / "current").unlink()
+    (host.repo / ".deploy" / "previous").unlink(missing_ok=True)
+    (host.fake / "frontend_ids").write_text("", encoding="utf-8")
+    (host.fake / "backend_ids").write_text("", encoding="utf-8")
+    _assets_falsos(host, "v2")
+
+    resultado = host.correr("deploy.sh", "deploy", APP_VERSION="v2", **_BASE_DEPLOY)
+
+    assert resultado.returncode == 0, resultado.stderr
+    store = Path(host.env["DEPLOY_ASSET_STORE"])
+    assert (store / ".manifests" / "v2.manifest").is_file()
+    llamadas = host.llamadas()
+    estimate = _indice(llamadas, r"docker run .*du -sk /usr/share/nginx/html/assets")
+    create = _indice(llamadas, r"docker create --name shifty-assets-v2")
+    copy = _indice(llamadas, r"docker cp .*assets/\.")
+    migrate = _indice(
+        llamadas,
+        r"compose run --rm --no-deps -T backend alembic upgrade head$",
+    )
+    assert not _hay(llamadas, r"compose up .*nginx$")
+    assert estimate < create < copy < migrate
+    assert (host.repo / ".deploy" / "current").read_text().strip() == "v2"
+
+
+def test_host_con_current_registrado_sin_front_falla_cerrado(host: Host) -> None:
+    _preparar_deploy(host, actual="v1")
+    (host.fake / "frontend_ids").write_text("", encoding="utf-8")
+
+    resultado = host.correr("deploy.sh", "deploy", APP_VERSION="v2", **_BASE_DEPLOY)
+
+    assert resultado.returncode != 0
+    assert "release registrado" in resultado.stderr
+    assert not _hay(host.llamadas(), r"docker run .*du -sk")
+    assert not _hay(host.llamadas(), r"docker (create|cp) ")
+    assert not _hay(host.llamadas(), r"compose (run|up)")
+    assert (host.repo / ".deploy" / "current").read_text().strip() == "v1"
+
+
+def test_importa_cada_imagen_frontend_activa_si_hay_replicas_mixtas(host: Host) -> None:
+    _preparar_deploy(host, actual="v1")
+    # Simulate an interrupted older rollout: the app marker points to the
+    # rollback target v0 while both v1 and v3 frontend replicas are serving.
+    (host.repo / ".deploy" / "current").write_text("v0\n", encoding="utf-8")
+    (host.fake / "frontend_ids").write_text(
+        "front-old1\nfront-new3-v3\n", encoding="utf-8", newline="\n"
+    )
+    for release in ("v0", "v1", "v2", "v3"):
+        _assets_falsos(host, release)
+
+    resultado = host.correr("deploy.sh", "deploy", APP_VERSION="v2", **_BASE_DEPLOY)
+
+    assert resultado.returncode == 0, resultado.stderr
+    store = Path(host.env["DEPLOY_ASSET_STORE"])
+    assert {
+        "v0.manifest",
+        "v1.manifest",
+        "v2.manifest",
+        "v3.manifest",
+    } <= {p.name for p in (store / ".manifests").glob("*.manifest")}
+    llamadas = host.llamadas()
+    extracciones = [i for i, line in enumerate(llamadas) if "docker cp " in line]
+    assert len(extracciones) == 4, llamadas
+    assert max(extracciones) < _indice(
+        llamadas, r"compose run --rm --no-deps -T backend alembic upgrade head$"
+    )
+
+
+def test_falla_capacity_antes_de_migrar_o_recrear_aplicacion(host: Host) -> None:
+    _preparar_deploy(host, actual="v1")
+
+    resultado = host.correr(
+        "deploy.sh",
+        "deploy",
+        APP_VERSION="v2",
+        FAKE_ASSET_AVAILABLE_KB="0",
+        **_BASE_DEPLOY,
+    )
+
+    assert resultado.returncode != 0
+    assert "espacio insuficiente" in resultado.stderr
+    llamadas = host.llamadas()
+    assert _hay(llamadas, r"docker run .*du -sk /usr/share/nginx/html/assets")
+    assert not _hay(llamadas, r"docker (create|cp) ")
+    assert not _hay(host.llamadas(), r"compose (run|up) .*--scale")
+    assert not _hay(host.llamadas(), r"compose up .*--force-recreate .*nginx$")
+    assert (host.repo / ".deploy" / "current").read_text().strip() == "v1"
+    assert not (host.repo / ".deploy" / "previous").exists()
+    store = Path(host.env["DEPLOY_ASSET_STORE"])
+    assert not list((store / ".manifests").glob("*.manifest"))
+    assert not list((store / "assets").rglob("*"))
+
+
+def test_release_ya_verificado_no_exige_espacio_ni_se_vuelve_a_extraer(
+    host: Host,
+) -> None:
+    _preparar_deploy(host, actual="v1")
+    _assets_falsos(host, "v1")
+    _importar_assets(host, "v1")
+    store = Path(host.env["DEPLOY_ASSET_STORE"])
+    manifest = (store / ".manifests" / "v1.manifest").read_bytes()
+
+    resultado = host.correr(
+        "deploy.sh",
+        "deploy",
+        APP_VERSION="v1",
+        FAKE_ASSET_AVAILABLE_KB="0",
+        **_BASE_DEPLOY,
+    )
+
+    assert resultado.returncode == 0, resultado.stderr
+    assert "capacidad ok (sin bytes nuevos)" in resultado.stderr
+    assert not _hay(host.llamadas(), r"docker run .*du -sk")
+    assert not _hay(host.llamadas(), r"docker (create|cp) ")
+    assert (store / ".manifests" / "v1.manifest").read_bytes() == manifest
+
+
+def test_import_collision_leaves_live_assets_and_app_state_untouched(
+    host: Host,
+) -> None:
+    _preparar_deploy(host, actual="v1")
+    _assets_falsos(host, "v1", shared="old immutable bytes")
+    _assets_falsos(host, "v2", shared="different bytes")
+
+    resultado = host.correr("deploy.sh", "deploy", APP_VERSION="v2", **_BASE_DEPLOY)
+
+    assert resultado.returncode != 0
+    assert "colision de asset" in resultado.stderr
+    assert not _hay(host.llamadas(), r"compose run")
+    assert not _hay(host.llamadas(), r"compose up .*--force-recreate .*nginx$")
+    assert not _hay(host.llamadas(), r"compose up .*--scale")
+    store = Path(host.env["DEPLOY_ASSET_STORE"])
+    assert (store / ".manifests" / "v1.manifest").is_file()
+    assert not (store / ".manifests" / "v2.manifest").exists()
+    assert (store / "assets" / "shared.js").read_text(
+        encoding="utf-8"
+    ) == "old immutable bytes\n"
+    assert (host.repo / ".deploy" / "current").read_text().strip() == "v1"
+    assert not (host.repo / ".deploy" / "previous").exists()
+
+
+def test_falla_extraccion_preserva_manifest_y_app_actual(host: Host) -> None:
+    _preparar_deploy(host, actual="v1")
+    _assets_falsos(host, "v1", shared="existing release")
+    _importar_assets(host, "v1")
+    store = Path(host.env["DEPLOY_ASSET_STORE"])
+    manifest = (store / ".manifests" / "v1.manifest").read_bytes()
+
+    resultado = host.correr(
+        "deploy.sh",
+        "deploy",
+        APP_VERSION="v2",
+        FAKE_ASSET_COPY_EXIT="1",
+        **_BASE_DEPLOY,
+    )
+
+    assert resultado.returncode != 0
+    assert "no pude extraer" in resultado.stderr
+    assert not _hay(host.llamadas(), r"compose run")
+    assert not _hay(host.llamadas(), r"compose up .*--scale")
+    assert not _hay(host.llamadas(), r"compose up .*--force-recreate .*nginx$")
+    assert (store / ".manifests" / "v1.manifest").read_bytes() == manifest
+    assert (store / "assets" / "shared.js").read_text(encoding="utf-8") == (
+        "existing release\n"
+    )
+    assert not (store / ".manifests" / "v2.manifest").exists()
+    assert (host.repo / ".deploy" / "current").read_text().strip() == "v1"
+    assert not (host.repo / ".deploy" / "previous").exists()
 
 
 def test_backend_nuevo_que_no_queda_sano_se_descarta_y_quedan_los_viejos(
@@ -218,6 +495,11 @@ def test_compuerta_fallida_vuelve_a_la_version_anterior_sin_migrar(
     ids = (host.fake / "backend_ids").read_text().split()
     assert ids and all(i.endswith("-v1") for i in ids), ids
     assert (host.repo / ".deploy" / "current").read_text().strip() == "v1"
+    store = Path(host.env["DEPLOY_ASSET_STORE"])
+    assert (store / ".manifests" / "v1.manifest").is_file()
+    assert (store / ".manifests" / "v2.manifest").is_file()
+    assert (store / "assets" / "chunk-default.js").is_file()
+    assert not _hay(llamadas, r"compose (down|rm) .*nginx")
 
 
 # --- redeploy del mismo sha (2026-10-12, produccion) ---------------------------
@@ -647,7 +929,11 @@ def test_un_borde_que_no_recarga_tras_el_frontend_lo_dice_en_la_alerta(
     _preparar_deploy(host, actual="v1")
 
     resultado = host.correr(
-        "deploy.sh", "deploy", APP_VERSION="v2", FAKE_NGINX_EXIT="1", **_BASE_DEPLOY
+        "deploy.sh",
+        "deploy",
+        APP_VERSION="v2",
+        FAKE_NGINX_FAIL_ON_TEST="1",
+        **_BASE_DEPLOY,
     )
 
     assert resultado.returncode != 0
@@ -690,7 +976,7 @@ def test_sin_rolling_el_frontend_se_recrea_directo(host: Host) -> None:
     assert not _hay(llamadas, r"--scale")
 
 
-def test_un_deploy_sin_frontend_en_la_lista_no_lo_toca(host: Host) -> None:
+def test_un_deploy_sin_frontend_en_la_lista_no_recrea_frontend(host: Host) -> None:
     _preparar_deploy(host, actual="v1")
 
     llamadas = _llamadas_de_un_deploy_ok(
@@ -698,18 +984,33 @@ def test_un_deploy_sin_frontend_en_la_lista_no_lo_toca(host: Host) -> None:
         DEPLOY_SERVICES="backend celery_worker celery_worker_interactive celery_beat",
     )
 
-    assert not _hay(llamadas, r"\bfrontend\b")
+    assert not _hay(llamadas, r"compose up .*\bfrontend\b")
 
 
 # --- make deploy-edge: el borde se recrea solo si cambio --------------------
 
 
+def test_deploy_edge_falla_cerrado_si_faltan_assets_del_frontend_activo(
+    host: Host,
+) -> None:
+    _preparar_deploy(host, actual="v1")
+    _assets_falsos(host, "v1")
+    _importar_assets(host, "v1")
+    host.env["FAKE_RUNNING_VERSION"] = "v3"
+
+    resultado = host.correr(
+        "deploy.sh", "edge", FAKE_ASSET_COPY_EXIT="1", **_BASE_DEPLOY
+    )
+
+    assert resultado.returncode != 0
+    assert "no pude extraer" in resultado.stderr
+    assert not _hay(host.llamadas(), r"compose up .*nginx$")
+
+
 def _preparar_borde(host: Host, conf: str = "server {}\n") -> Path:
     _preparar_deploy(host, actual="v2")
-    (host.repo / "nginx").mkdir()
-    archivo = host.repo / "nginx" / "nginx.prod.conf"
-    archivo.write_text(conf, encoding="utf-8")
-    return archivo
+    _importar_assets(host, "v2")
+    return _sembrar_borde(host, conf=conf)
 
 
 def test_deploy_edge_sin_cambios_solo_recarga(host: Host) -> None:
@@ -725,6 +1026,21 @@ def test_deploy_edge_sin_cambios_solo_recarga(host: Host) -> None:
     assert not _hay(llamadas, r"--force-recreate")
     assert _hay(llamadas, r"compose exec -T nginx nginx -t")
     assert _hay(llamadas, r"compose exec -T nginx nginx -s reload")
+
+
+def test_deploy_edge_verifica_frontend_activo_no_el_marker_de_app(host: Host) -> None:
+    _preparar_borde(host)
+    inicial = host.correr("deploy.sh", "edge", **_BASE_DEPLOY)
+    assert inicial.returncode == 0, inicial.stderr
+    (host.fake / "calls").unlink()
+    # A backend-only deployment advances this marker without changing frontend.
+    (host.repo / ".deploy" / "current").write_text("v3\n", encoding="utf-8")
+
+    resultado = host.correr("deploy.sh", "edge", **_BASE_DEPLOY)
+
+    assert resultado.returncode == 0, resultado.stderr
+    assert "verificado v2" in resultado.stderr
+    assert not _hay(host.llamadas(), r"compose up .*nginx$")
 
 
 def test_deploy_edge_recrea_si_cambio_la_config(host: Host) -> None:
@@ -761,7 +1077,7 @@ def test_deploy_edge_recrea_si_cambio_la_imagen(host: Host) -> None:
 # invalida dejaba un borde nuevo que no arrancaba y el sitio caido hasta el
 # rollback. Ahora se prueba antes, en un contenedor efimero con la misma imagen
 # y los mismos montajes, mientras el borde actual sigue sirviendo.
-_NGINX_T_EFIMERO = r"compose run --rm --no-deps -T nginx nginx -t$"
+_NGINX_T_EFIMERO = r"compose run --rm --no-deps --entrypoint nginx -T nginx -t$"
 
 
 def test_deploy_edge_prueba_la_config_nueva_antes_de_recrear(host: Host) -> None:
@@ -1583,3 +1899,753 @@ def test_backup_dir_que_no_se_puede_crear_sugiere_root_deploy_0750(
 
     assert resultado.returncode != 0
     assert "install -d -o root -g deploy -m 0750" in resultado.stderr
+
+
+def test_redeploy_del_mismo_sha_protege_assets_del_previous(host: Host) -> None:
+    _con_previous(host, actual="v2", previa="v1")
+    _assets_falsos(host, "v1")
+    _assets_falsos(host, "v2")
+
+    resultado = host.correr("deploy.sh", "deploy", APP_VERSION="v2", **_BASE_DEPLOY)
+
+    assert resultado.returncode == 0, resultado.stderr
+    store = Path(host.env["DEPLOY_ASSET_STORE"])
+    assert (store / ".manifests" / "v1.manifest").is_file()
+    assert (store / ".manifests" / "v2.manifest").is_file()
+    assert (host.repo / ".deploy" / "previous").read_text().strip() == "v1"
+
+
+def test_deploy_solo_backend_no_traba_el_siguiente_deploy_completo(
+    host: Host,
+) -> None:
+    _preparar_deploy(host, actual="v1")
+    _assets_falsos(host, "v1")
+    _assets_falsos(host, "v3")
+
+    backend_only = host.correr(
+        "deploy.sh",
+        "deploy",
+        APP_VERSION="v2",
+        DEPLOY_SERVICES="backend celery_worker celery_worker_interactive celery_beat",
+        **_BASE_DEPLOY,
+    )
+    assert backend_only.returncode == 0, backend_only.stderr
+    assert (host.repo / ".deploy" / "current").read_text().strip() == "v2"
+    assert (host.repo / ".deploy" / "frontend-current").read_text().strip() == "v1"
+
+    full_next = host.correr("deploy.sh", "deploy", APP_VERSION="v3", **_BASE_DEPLOY)
+    assert full_next.returncode == 0, full_next.stderr
+    assert (host.repo / ".deploy" / "current").read_text().strip() == "v3"
+    assert (host.repo / ".deploy" / "frontend-current").read_text().strip() == "v3"
+    assert (host.repo / ".deploy" / "frontend-previous").read_text().strip() == "v1"
+
+    (host.repo / "nginx").mkdir(exist_ok=True)
+    (host.repo / "nginx" / "nginx.prod.conf").write_text(
+        "server {}\n", encoding="utf-8", newline="\n"
+    )
+    edge = host.correr("deploy.sh", "edge", **_BASE_DEPLOY)
+    assert edge.returncode == 0, edge.stderr
+
+
+def test_common_sh_exporta_asset_store_path_fallback_y_respeta_env(
+    tmp_path: Path,
+) -> None:
+    assert BASH is not None
+    repo = tmp_path / "repo"
+    (repo / "scripts" / "lib").mkdir(parents=True)
+    common = REPO_ROOT / "scripts" / "lib" / "common.sh"
+    (repo / "scripts" / "lib" / "common.sh").write_bytes(common.read_bytes())
+
+    (repo / ".env").write_text("COMPOSE_PROJECT_NAME=shifty\n", encoding="utf-8")
+    env_clean = {
+        k: v
+        for k, v in os.environ.items()
+        if k not in {"ASSET_STORE_PATH", "DEPLOY_ASSET_STORE", "SHIFTY_DIR"}
+    }
+    res_default = subprocess.run(
+        [
+            BASH,
+            "-c",
+            'source scripts/lib/common.sh && printf "%s" "${ASSET_STORE_PATH:-}"',
+        ],
+        cwd=repo,
+        env={**env_clean, "SHIFTY_DIR": repo.as_posix()},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert res_default.returncode == 0, res_default.stderr
+    assert res_default.stdout == "/var/lib/shifty-assets"
+
+    (repo / ".env").write_text(
+        "COMPOSE_PROJECT_NAME=shifty\nASSET_STORE_PATH=/srv/custom-assets\n",
+        encoding="utf-8",
+    )
+    res_explicit = subprocess.run(
+        [
+            BASH,
+            "-c",
+            'source scripts/lib/common.sh && printf "%s" "${ASSET_STORE_PATH:-UNSET}"',
+        ],
+        cwd=repo,
+        env={**env_clean, "SHIFTY_DIR": repo.as_posix()},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert res_explicit.returncode == 0, res_explicit.stderr
+    assert res_explicit.stdout == "UNSET"
+
+
+def test_rollback_sin_contenedor_frontend_corriendo_conserva_assets_y_recupera(
+    host: Host,
+) -> None:
+    _preparar_deploy(host, actual="v2")
+    (host.repo / ".deploy" / "previous").write_text("v1\n", encoding="utf-8")
+    (host.repo / ".deploy" / "frontend-current").write_text("v2\n", encoding="utf-8")
+    _assets_falsos(host, "v1")
+    _assets_falsos(host, "v2")
+    _importar_assets(host, "v1")
+    _importar_assets(host, "v2")
+    (host.fake / "frontend_ids").write_text("", encoding="utf-8")
+
+    resultado = host.correr("deploy.sh", "rollback", **_BASE_DEPLOY)
+
+    assert resultado.returncode == 0, resultado.stderr
+    assert (host.repo / ".deploy" / "current").read_text().strip() == "v1"
+    store = Path(host.env["DEPLOY_ASSET_STORE"])
+    assert (store / ".manifests" / "v1.manifest").is_file()
+    assert (store / ".manifests" / "v2.manifest").is_file()
+
+
+def test_preflight_rechaza_asset_store_distinto_entre_ops_y_env(
+    host: Host, tmp_path: Path
+) -> None:
+    _preparar_deploy(host, actual="v1")
+    otro_store = (tmp_path / "otro-asset-store").as_posix()
+    (host.repo / ".env").write_text(
+        f"COMPOSE_FILE=docker-compose.yml:docker-compose.prod.yml\nASSET_STORE_PATH={otro_store}\n",
+        encoding="utf-8",
+    )
+
+    resultado = host.correr("deploy.sh", "preflight", APP_VERSION="v2", **_BASE_DEPLOY)
+
+    assert resultado.returncode != 0
+    assert "difiere de ASSET_STORE_PATH" in resultado.stderr
+
+
+def test_segundo_deploy_con_borde_sin_cambios_no_recrea_nginx(host: Host) -> None:
+    _preparar_deploy(host, actual="v1")
+    (host.repo / "nginx").mkdir(exist_ok=True)
+    (host.repo / "nginx" / "nginx.prod.conf").write_text(
+        "server {}\n", encoding="utf-8", newline="\n"
+    )
+    primero = host.correr("deploy.sh", "deploy", APP_VERSION="v2", **_BASE_DEPLOY)
+    assert primero.returncode == 0, primero.stderr
+    (host.fake / "calls").unlink()
+
+    segundo = host.correr("deploy.sh", "deploy", APP_VERSION="v3", **_BASE_DEPLOY)
+
+    assert segundo.returncode == 0, segundo.stderr
+    assert not _hay(host.llamadas(), r"--force-recreate .*nginx$")
+    assert _hay(host.llamadas(), r"compose exec -T nginx nginx -s reload")
+
+
+# --- V5 regressions: P2-1, P2-4, P2-04 -------------------------------------
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"FAKE_NGINX_DOWN": "1"},
+        {"FAKE_NGINX_MOUNT_MISSING": "1"},
+        {"FAKE_NGINX_MOUNT_RW": "true"},
+        {"FAKE_NGINX_STATE": "exited"},
+        {"FAKE_NGINX_MOUNT_SOURCE": "/otro/store/assets"},
+    ],
+    ids=[
+        "nginx-caido",
+        "sin-mount-assets",
+        "mount-rw-en-vez-de-ro",
+        "nginx-no-running",
+        "mount-fuera-de-store",
+    ],
+)
+def test_p2_1_deploy_falla_cerrado_si_borde_no_tiene_mount_ro(
+    host: Host, extra: dict[str, str]
+) -> None:
+    _preparar_deploy(host, actual="v1")
+
+    resultado = host.correr(
+        "deploy.sh", "deploy", APP_VERSION="v2", **_BASE_DEPLOY, **extra
+    )
+
+    assert resultado.returncode != 0
+    assert "scripts/deploy.sh edge" in resultado.stderr
+    assert not _hay(host.llamadas(), r"compose up .*nginx$")
+    assert not _hay(host.llamadas(), r"alembic upgrade")
+    assert (host.repo / ".deploy" / "current").read_text().strip() == "v1"
+
+
+@pytest.mark.parametrize(
+    "cambio",
+    ["conf-cambiada", "sin-fingerprint", "imagen-cambiada"],
+)
+def test_p2_1_deploy_falla_cerrado_si_cambio_borde_sin_correr_edge(
+    host: Host, cambio: str
+) -> None:
+    _preparar_deploy(host, actual="v1")
+    extra: dict[str, str] = {}
+    if cambio == "conf-cambiada":
+        (host.repo / "nginx" / "nginx.prod.conf").write_text(
+            "server { listen 443; }\n", encoding="utf-8", newline="\n"
+        )
+    elif cambio == "sin-fingerprint":
+        (host.repo / ".deploy" / "edge-conf.sha256").unlink()
+    elif cambio == "imagen-cambiada":
+        extra["FAKE_IMAGE_ID"] = "sha256:nueva"
+
+    resultado = host.correr(
+        "deploy.sh", "deploy", APP_VERSION="v2", **_BASE_DEPLOY, **extra
+    )
+
+    assert resultado.returncode != 0
+    assert "scripts/deploy.sh edge" in resultado.stderr
+    assert not _hay(host.llamadas(), r"compose up .*nginx$")
+    assert not _hay(host.llamadas(), r"alembic upgrade")
+
+
+def test_p2_1_edge_prevalida_nginx_t_y_deja_vivo_intacto_si_falla(host: Host) -> None:
+    _preparar_borde(host, conf="server {}\n")
+    fingerprint_antes = (host.repo / ".deploy" / "edge-conf.sha256").read_text()
+    (host.repo / "nginx" / "nginx.prod.conf").write_text(
+        "server { broken; }\n", encoding="utf-8", newline="\n"
+    )
+
+    resultado = host.correr(
+        "deploy.sh", "edge", FAKE_NGINX_TEST_EXIT="1", **_BASE_DEPLOY
+    )
+
+    assert resultado.returncode != 0
+    assert "nginx -t" in resultado.stderr
+    llamadas = host.llamadas()
+    assert _hay(llamadas, r"compose pull nginx$")
+    assert _hay(llamadas, _NGINX_T_EFIMERO)
+    assert not _hay(llamadas, r"compose up .*nginx$")
+    assert (host.repo / ".deploy" / "edge-conf.sha256").read_text() == fingerprint_antes
+
+
+def test_p2_1_edge_importa_assets_pre_retencion_y_verifica_mount_ro(
+    host: Host,
+) -> None:
+    _preparar_deploy(host, actual="v1")
+    (host.repo / ".deploy" / "previous").write_text("v0\n", encoding="utf-8")
+    # Backend-only advance: current is v2 while running frontend is v1.
+    (host.repo / ".deploy" / "current").write_text("v2\n", encoding="utf-8")
+    (host.repo / ".deploy" / "edge-conf.sha256").unlink()
+    _assets_falsos(host, "v0")
+    _assets_falsos(host, "v1")
+
+    resultado = host.correr(
+        "deploy.sh", "edge", FAKE_NGINX_MOUNT_MISSING="", **_BASE_DEPLOY
+    )
+
+    assert resultado.returncode == 0, resultado.stderr
+    store = Path(host.env["DEPLOY_ASSET_STORE"])
+    assert (store / ".manifests" / "v0.manifest").is_file()
+    assert (store / ".manifests" / "v1.manifest").is_file()
+    assert not (store / ".manifests" / "v2.manifest").exists()
+    llamadas = host.llamadas()
+    assert _indice(llamadas, r"docker cp .*assets/\.") < _indice(
+        llamadas, _NGINX_T_EFIMERO
+    )
+    assert _hay(llamadas, r"--force-recreate .*nginx$")
+    assert (host.repo / ".deploy" / "edge-conf.sha256").is_file()
+
+
+def test_p2_1_edge_en_host_vacio_usa_app_version_y_siembra_fingerprint(
+    host: Host,
+) -> None:
+    _preparar_deploy(host, actual="v1")
+    (host.repo / ".deploy" / "current").unlink()
+    (host.repo / ".deploy" / "edge-conf.sha256").unlink()
+    (host.fake / "frontend_ids").write_text("", encoding="utf-8")
+    (host.fake / "backend_ids").write_text("", encoding="utf-8")
+
+    sin_version = host.correr("deploy.sh", "edge", **_BASE_DEPLOY)
+    assert sin_version.returncode != 0
+    assert "APP_VERSION" in sin_version.stderr
+
+    resultado = host.correr(
+        "deploy.sh",
+        "edge",
+        APP_VERSION="v1",
+        FAKE_NGINX_DOWN="1",
+        FAKE_NGINX_MOUNT_MISSING="1",
+        **_BASE_DEPLOY,
+    )
+    # Because FAKE_NGINX_DOWN=1 stays set after compose up, post-recreate check fails closed.
+    assert resultado.returncode != 0
+    assert "solo lectura" in resultado.stderr
+
+    (host.fake / "calls").unlink()
+    ok = host.correr("deploy.sh", "edge", APP_VERSION="v1", **_BASE_DEPLOY)
+    assert ok.returncode == 0, ok.stderr
+    assert (host.repo / ".deploy" / "edge-conf.sha256").is_file()
+    assert _hay(host.llamadas(), _NGINX_T_EFIMERO)
+
+
+def test_p2_1_edge_con_marker_y_sin_frontend_activo_falla_cerrado(host: Host) -> None:
+    _preparar_deploy(host, actual="v1")
+    (host.fake / "frontend_ids").write_text("", encoding="utf-8")
+
+    resultado = host.correr("deploy.sh", "edge", **_BASE_DEPLOY)
+
+    assert resultado.returncode != 0
+    assert "release registrado" in resultado.stderr
+    assert not _hay(host.llamadas(), r"compose up .*nginx$")
+
+
+def test_p2_4_recupera_deploy_inicial_interrumpido_sin_previous_falso(
+    host: Host,
+) -> None:
+    (host.repo / ".env").write_text(
+        "COMPOSE_FILE=docker-compose.yml:docker-compose.prod.yml\n", encoding="utf-8"
+    )
+    _backup_fresco(host)
+    _sembrar_borde(host)
+    (host.fake / "backend_ids").write_text("new1-v1\n", encoding="utf-8", newline="\n")
+    (host.fake / "frontend_ids").write_text("", encoding="utf-8", newline="\n")
+    host.env["FAKE_RUNNING_VERSION"] = "v1"
+    _assets_falsos(host, "v1")
+
+    resultado = host.correr("deploy.sh", "deploy", APP_VERSION="v1", **_BASE_DEPLOY)
+
+    assert resultado.returncode == 0, resultado.stderr
+    assert (host.repo / ".deploy" / "current").read_text().strip() == "v1"
+    assert (host.repo / ".deploy" / "frontend-current").read_text().strip() == "v1"
+    assert not (host.repo / ".deploy" / "previous").exists()
+    assert not (host.repo / ".deploy" / "frontend-previous").exists()
+
+
+@pytest.mark.parametrize(
+    "marker",
+    ["current", "previous", "frontend-current", "frontend-previous"],
+)
+def test_p2_4_host_con_marker_y_sin_frontend_sigue_fallando_cerrado(
+    host: Host, marker: str
+) -> None:
+    _preparar_deploy(host, actual="v1")
+    (host.repo / ".deploy" / "current").unlink()
+    (host.repo / ".deploy" / marker).write_text("v1\n", encoding="utf-8")
+    (host.fake / "frontend_ids").write_text("", encoding="utf-8")
+
+    resultado = host.correr("deploy.sh", "deploy", APP_VERSION="v2", **_BASE_DEPLOY)
+
+    assert resultado.returncode != 0
+    assert "release registrado" in resultado.stderr
+    assert not _hay(host.llamadas(), r"alembic upgrade")
+    assert not _hay(host.llamadas(), r"compose up")
+
+
+def test_p2_04_asset_js_valido_pasa_compuerta(host: Host) -> None:
+    _preparar_deploy(host, actual="v1")
+    _assets_falsos(host, "v1")
+    _assets_falsos(host, "v2")
+
+    resultado = host.correr("deploy.sh", "deploy", APP_VERSION="v2", **_BASE_DEPLOY)
+
+    assert resultado.returncode == 0, resultado.stderr
+    assert "asset JS chunk-v2.js ok" in resultado.stderr
+    asset_curls = [
+        ll
+        for ll in host.llamadas()
+        if re.search(r"^curl .*https://shifty\.example\.com/assets/chunk-v2\.js$", ll)
+    ]
+    assert len(asset_curls) == 1, host.llamadas()
+    assert "Accept-Encoding: identity" in asset_curls[0]
+    assert " -L " not in asset_curls[0]
+    assert " -k " not in asset_curls[0]
+
+
+@pytest.mark.parametrize(
+    ("extra", "motivo"),
+    [
+        ({"FAKE_ASSET_HTTP_CODE": "404"}, "devolvio HTTP 404"),
+        (
+            {
+                "FAKE_ASSET_HTTP_CODE": "200",
+                "FAKE_ASSET_HTTP_MIME": "text/html; charset=utf-8",
+                "FAKE_ASSET_HTTP_BODY": "<!DOCTYPE html><html></html>",
+            },
+            "Content-Type invalido",
+        ),
+        (
+            {
+                "FAKE_ASSET_HTTP_CODE": "200",
+                "FAKE_ASSET_HTTP_MIME": "application/javascript",
+                "FAKE_ASSET_HTTP_BODY": "\n  <!doctype html><html></html>",
+            },
+            "devolvio HTML en vez de JavaScript",
+        ),
+        (
+            {
+                "FAKE_ASSET_HTTP_CODE": "200",
+                "FAKE_ASSET_HTTP_MIME": "application/javascript",
+                "FAKE_ASSET_HTTP_BODY": "console.log('corrupted');\n",
+            },
+            "no coincide en hash/tamano",
+        ),
+        ({"FAKE_ASSET_HTTP_EXIT": "28"}, "curl exit 28"),
+        ({"FAKE_ASSET_HTTP_CODE": "403"}, "devolvio HTTP 403"),
+    ],
+    ids=[
+        "http-404",
+        "mime-html",
+        "cuerpo-html-con-mime-js",
+        "contenido-distinto",
+        "timeout-curl-28",
+        "http-403",
+    ],
+)
+def test_p2_04_asset_smoke_fallido_dispara_rollback(
+    host: Host, extra: dict[str, str], motivo: str
+) -> None:
+    _preparar_deploy(host, actual="v1")
+    _assets_falsos(host, "v1")
+    _assets_falsos(host, "v2")
+
+    resultado = host.correr(
+        "deploy.sh", "deploy", APP_VERSION="v2", **_BASE_DEPLOY, **extra
+    )
+
+    assert resultado.returncode != 0
+    assert motivo in resultado.stderr
+    assert "rollback a v1" in resultado.stderr
+    assert (host.repo / ".deploy" / "current").read_text().strip() == "v1"
+    ids = (host.fake / "backend_ids").read_text().split()
+    assert ids and all(i.endswith("-v1") for i in ids), ids
+
+
+def test_p2_04_rollback_verifica_el_asset_js_del_target_de_rollback(
+    host: Host,
+) -> None:
+    _preparar_deploy(host, actual="v2")
+    (host.repo / ".deploy" / "previous").write_text("v1\n", encoding="utf-8")
+    _assets_falsos(host, "v1")
+    _assets_falsos(host, "v2")
+
+    resultado = host.correr("deploy.sh", "rollback", **_BASE_DEPLOY)
+
+    assert resultado.returncode == 0, resultado.stderr
+    assert "asset JS chunk-v1.js ok" in resultado.stderr
+    assert _hay(
+        host.llamadas(),
+        r"^curl .*https://shifty\.example\.com/assets/chunk-v1\.js$",
+    )
+    assert (host.repo / ".deploy" / "current").read_text().strip() == "v1"
+
+
+def test_p0_deploy_resuelve_imagen_exacta_de_nginx_y_frontend_con_dependencias_delante(
+    host: Host,
+) -> None:
+    _preparar_deploy(host, actual="v1")
+    _assets_falsos(host, "v1")
+    _assets_falsos(host, "v2")
+
+    resultado = host.correr(
+        "deploy.sh",
+        "deploy",
+        APP_VERSION="v2",
+        FAKE_NGINX_IMAGE="ghcr.io/x/nginx-custom:1.30.7-alpine",
+        **_BASE_DEPLOY,
+    )
+
+    assert resultado.returncode == 0, resultado.stderr
+    llamadas = host.llamadas()
+    assert _hay(llamadas, r"^docker compose config nginx$")
+    assert _hay(llamadas, r"^docker compose config frontend$")
+    assert _hay(
+        llamadas,
+        r"^docker image inspect -f \{\{\.Id\}\} ghcr\.io/x/nginx-custom:1\.30\.7-alpine$",
+    )
+    assert _hay(
+        llamadas,
+        r"^docker image inspect -f \{\{\.Id\}\} ghcr\.io/x/shifty-frontend:v2$",
+    )
+    assert not _hay(llamadas, r"docker image inspect -f \{\{\.Id\}\} postgres:")
+    assert not _hay(
+        llamadas, r"docker image inspect -f \{\{\.Id\}\} ghcr\.io/x/shifty-backend:"
+    )
+
+
+def test_p0_edge_resuelve_imagen_exacta_de_nginx_con_dependencias_delante(
+    host: Host,
+) -> None:
+    _preparar_borde(host)
+
+    resultado = host.correr(
+        "deploy.sh",
+        "edge",
+        FAKE_NGINX_IMAGE="ghcr.io/x/nginx-custom:1.30.7-alpine",
+        FAKE_NGINX_RUNNING_IMAGE_ID="sha256:vieja",
+        FAKE_IMAGE_ID="sha256:nueva",
+        **_BASE_DEPLOY,
+    )
+
+    assert resultado.returncode == 0, resultado.stderr
+    llamadas = host.llamadas()
+    assert _hay(llamadas, r"^docker compose config nginx$")
+    assert _hay(
+        llamadas,
+        r"^docker image inspect -f \{\{\.Id\}\} ghcr\.io/x/nginx-custom:1\.30\.7-alpine$",
+    )
+    assert not _hay(llamadas, r"docker image inspect -f \{\{\.Id\}\} postgres:")
+    assert _hay(llamadas, r"--force-recreate .*nginx$")
+
+
+def _hook_falla_escritura_current(host: Host) -> Path:
+    hook = host.raiz / "fail-write-current.sh"
+    hook.write_text(
+        """printf() {
+  if [ "${FUNCNAME[1]:-}" = "escribir_estado" ] && [ "${destino:-}" != "${destino%/current}" ]; then
+    return 28
+  fi
+  builtin printf "$@"
+}
+""",
+        encoding="utf-8",
+        newline="\n",
+    )
+    return hook
+
+
+def test_escribir_estado_fallido_en_deploy_falla_y_preserva_current(
+    host: Host,
+) -> None:
+    _preparar_deploy(host, actual="v1")
+    hook = _hook_falla_escritura_current(host)
+
+    resultado = host.correr(
+        "deploy.sh",
+        "deploy",
+        APP_VERSION="v2",
+        DEPLOY_AUTO_ROLLBACK="0",
+        BASH_ENV=hook.as_posix(),
+        **_BASE_DEPLOY,
+    )
+
+    assert resultado.returncode != 0
+    assert (host.repo / ".deploy" / "current").read_text(
+        encoding="utf-8"
+    ).strip() == "v1"
+    assert not list((host.repo / ".deploy").glob("current.*"))
+
+
+def test_escribir_estado_fallido_en_rollback_falla_y_preserva_current(
+    host: Host,
+) -> None:
+    _preparar_deploy(host, actual="v2")
+    (host.repo / ".deploy" / "previous").write_text("v1\n", encoding="utf-8")
+    hook = _hook_falla_escritura_current(host)
+
+    resultado = host.correr(
+        "deploy.sh",
+        "rollback",
+        BASH_ENV=hook.as_posix(),
+        **_BASE_DEPLOY,
+    )
+
+    assert resultado.returncode != 0
+    assert (host.repo / ".deploy" / "current").read_text(
+        encoding="utf-8"
+    ).strip() == "v2"
+    assert not list((host.repo / ".deploy").glob("current.*"))
+
+
+def test_asset_extract_release_usa_nombres_unicos_por_indice(host: Host) -> None:
+    _preparar_deploy(host, actual="v1")
+    host.env["FAKE_RUNNING_VERSION"] = "v0"
+    (host.repo / ".deploy" / "previous").write_text("v0\n", encoding="utf-8")
+    for release in ("v0", "v1", "v2"):
+        _assets_falsos(host, release)
+
+    resultado = host.correr("deploy.sh", "deploy", APP_VERSION="v2", **_BASE_DEPLOY)
+
+    assert resultado.returncode == 0, resultado.stderr
+    nombres: list[str] = []
+    for llamada in host.llamadas():
+        match = re.search(r"^docker create --name (\S+) ", llamada)
+        if match:
+            nombres.append(match.group(1))
+    assert len(nombres) == 3, nombres
+    assert len(set(nombres)) == 3, nombres
+    indices = [nombre.rsplit("-", 1)[-1] for nombre in nombres]
+    assert indices == ["0", "1", "2"], nombres
+
+
+def test_leer_env_repo_valida_clave_y_normaliza_valores(tmp_path: Path) -> None:
+    assert BASH is not None
+    repo = tmp_path / "repo"
+    (repo / "scripts" / "lib").mkdir(parents=True)
+    common = REPO_ROOT / "scripts" / "lib" / "common.sh"
+    (repo / "scripts" / "lib" / "common.sh").write_bytes(common.read_bytes())
+    (repo / ".env").write_bytes(
+        b'COMPOSE_FILE="docker-compose.yml"  \r\n'
+        b"COMPOSE_FILE = 'docker-compose.yml:docker-compose.prod.yml' \r\n"
+    )
+
+    ok = subprocess.run(
+        [
+            BASH,
+            "-c",
+            "set -euo pipefail; source scripts/lib/common.sh; leer_env_repo COMPOSE_FILE",
+        ],
+        cwd=repo,
+        env={**os.environ, "SHIFTY_DIR": repo.as_posix()},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert ok.returncode == 0, ok.stderr
+    assert ok.stdout.strip() == "docker-compose.yml:docker-compose.prod.yml"
+
+    invalida = subprocess.run(
+        [
+            BASH,
+            "-c",
+            'source scripts/lib/common.sh; leer_env_repo "BAD/KEY"',
+        ],
+        cwd=repo,
+        env={**os.environ, "SHIFTY_DIR": repo.as_posix()},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert invalida.returncode != 0
+
+
+def test_deploy_edge_rollback_pre_retencion_recrea_sin_exigir_montaje_assets(
+    host: Host,
+) -> None:
+    archivo = _preparar_borde(
+        host, conf="server { location ^~ /assets/ { root /srv/shifty-assets; } }\n"
+    )
+    inicial = host.correr("deploy.sh", "edge", **_BASE_DEPLOY)
+    assert inicial.returncode == 0, inicial.stderr
+    huella_anterior = (host.repo / ".deploy" / "edge-conf.sha256").read_text(
+        encoding="utf-8"
+    )
+
+    # Also verify that if only compose drops the mount while the live container
+    # still mounts assets (huella unchanged), edge still recreates to drop it.
+    (host.repo / "docker-compose.prod.yml").write_text(
+        "services:\n  nginx:\n    image: nginx:1.30.7-alpine\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    archivo.write_text("server { listen 443; }\n", encoding="utf-8", newline="\n")
+    (host.repo / ".deploy" / "edge-conf.sha256").write_text(
+        hashlib.sha256(
+            f"server {{ listen 443; }}\n\nasset-store={host.env['DEPLOY_ASSET_STORE']}\n".encode(
+                "utf-8"
+            )
+        ).hexdigest()
+        + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    (host.fake / "calls").unlink()
+
+    recrea_por_mount = host.correr(
+        "deploy.sh",
+        "edge",
+        FAKE_EDGE_WITHOUT_ASSETS_MOUNT="1",
+        **_BASE_DEPLOY,
+    )
+    assert recrea_por_mount.returncode == 0, recrea_por_mount.stderr
+    llamadas_mount = host.llamadas()
+    assert _hay(llamadas_mount, _NGINX_T_EFIMERO)
+    assert _hay(llamadas_mount, r"--force-recreate .*nginx$")
+
+    # Now restore the previous fingerprint and verify full rollback with mount gone.
+    (host.repo / ".deploy" / "edge-conf.sha256").write_text(
+        huella_anterior, encoding="utf-8", newline="\n"
+    )
+    (host.fake / "calls").unlink()
+
+    resultado = host.correr(
+        "deploy.sh",
+        "edge",
+        FAKE_EDGE_WITHOUT_ASSETS_MOUNT="1",
+        FAKE_NGINX_MOUNT_MISSING="1",
+        **_BASE_DEPLOY,
+    )
+
+    assert resultado.returncode == 0, resultado.stderr
+    llamadas = host.llamadas()
+    prueba = next(i for i, c in enumerate(llamadas) if re.search(_NGINX_T_EFIMERO, c))
+    recrea = next(i for i, c in enumerate(llamadas) if "--force-recreate" in c)
+    assert prueba < recrea, llamadas
+    assert _hay(llamadas, r"compose exec -T nginx nginx -s reload")
+    huella_nueva = (host.repo / ".deploy" / "edge-conf.sha256").read_text(
+        encoding="utf-8"
+    )
+    assert huella_nueva != huella_anterior
+
+
+def test_deploy_edge_falla_cerrado_si_nginx_conf_usa_assets_sin_montaje_compose(
+    host: Host,
+) -> None:
+    _preparar_borde(
+        host, conf="server { location ^~ /assets/ { root /srv/shifty-assets; } }\n"
+    )
+    (host.repo / "docker-compose.prod.yml").write_text(
+        "services:\n  nginx:\n    image: nginx:1.30.7-alpine\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    (host.repo / ".deploy" / "edge-conf.sha256").unlink()
+    (host.fake / "calls").unlink(missing_ok=True)
+
+    resultado = host.correr(
+        "deploy.sh",
+        "edge",
+        FAKE_EDGE_WITHOUT_ASSETS_MOUNT="1",
+        FAKE_NGINX_MOUNT_MISSING="1",
+        **_BASE_DEPLOY,
+    )
+
+    assert resultado.returncode != 0
+    assert "solo lectura" in resultado.stderr
+    assert not _hay(host.llamadas(), r"nginx -s reload")
+    assert not (host.repo / ".deploy" / "edge-conf.sha256").exists()
+
+
+def test_deploy_edge_recupera_con_imagen_local_si_registro_no_responde(
+    host: Host,
+) -> None:
+    _preparar_borde(host)
+    (host.fake / "calls").unlink(missing_ok=True)
+
+    con_local = host.correr(
+        "deploy.sh",
+        "edge",
+        FAKE_PULL_EXIT="1",
+        FAKE_IMAGE_ID="sha256:igual",
+        **_BASE_DEPLOY,
+    )
+    assert con_local.returncode == 0, con_local.stderr
+    assert _hay(host.llamadas(), r"compose exec -T nginx nginx -s reload")
+
+    (host.fake / "calls").unlink()
+    sin_local = host.correr(
+        "deploy.sh",
+        "edge",
+        FAKE_PULL_EXIT="1",
+        FAKE_IMAGE_ID="",
+        **_BASE_DEPLOY,
+    )
+    assert sin_local.returncode != 0
+    assert "falta la imagen" in sin_local.stderr
+    assert not _hay(host.llamadas(), r"--force-recreate")

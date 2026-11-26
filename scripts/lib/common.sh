@@ -46,10 +46,28 @@ export -n DEPLOY_GITHUB_TOKEN
 # nunca actua sobre produccion. No fijarlo en ops.env si ese archivo se
 # comparte entre los dos.
 : "${SHIFTY_DIR:=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+# Lee el ultimo valor de KEY=... en $SHIFTY_DIR/.env (sin evaluarlo).
+leer_env_repo() {
+  local clave="${1:-}" env_file="$SHIFTY_DIR/.env"
+  [[ "$clave" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || return 1
+  [ -r "$env_file" ] || return 0
+  sed -n "s/^[[:space:]]*${clave}[[:space:]]*=[[:space:]]*//p" "$env_file" 2>/dev/null |
+    tail -n 1 | tr -d '"'"'"'\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
+}
 # Estado de los scripts (contadores del guard, silencios de alertas).
 : "${SHIFTY_STATE_DIR:=/var/lib/shifty}"
 # Directorio del host montado como volumen en /backups del servicio db.
 : "${BACKUP_DIR:=/var/backups/shifty}"
+# Directorio persistente del host para assets inmutables del frontend.
+# Vive fuera de SHIFTY_STATE_DIR (/var/lib/shifty, propiedad de root:root).
+: "${DEPLOY_ASSET_STORE:=/var/lib/shifty-assets}"
+if [ -z "${ASSET_STORE_PATH:-}" ]; then
+  _env_asset_store="$(leer_env_repo ASSET_STORE_PATH)"
+  if [ -z "$_env_asset_store" ]; then
+    export ASSET_STORE_PATH="$DEPLOY_ASSET_STORE"
+  fi
+  unset _env_asset_store
+fi
 # Proyecto de compose (label com.docker.compose.project). Tiene que coincidir
 # con COMPOSE_PROJECT_NAME del .env del servidor.
 : "${COMPOSE_PROJECT_NAME:=shifty}"

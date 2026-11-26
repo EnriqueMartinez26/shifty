@@ -11,25 +11,32 @@
 # Secuencia del deploy (docs/DEPLOY_RUNBOOK.md):
 #   1. Preflight: COMPOSE_FILE incluye docker-compose.prod.yml, Compose >=
 #      2.24 (`!reset`), `docker compose config` valido, los servicios de
-#      DEPLOY_SERVICES existen, la base corre, disco < 80 %, backup exitoso de
-#      menos de 24 h, y Quality paso en main para APP_VERSION (API de GitHub,
-#      con DEPLOY_GITHUB_TOKEN si el repo es privado; `workflow_dispatch` de
+#      DEPLOY_SERVICES existen, la base corre, disco < 80 %, store y politica
+#      de retencion de assets validos, backup exitoso de menos de 24 h, y
+#      Quality paso en main para APP_VERSION (API de GitHub, con
+#      DEPLOY_GITHUB_TOKEN si el repo es privado; `workflow_dispatch` de
 #      build-images.yml publica sin esa compuerta). El rollback no pregunta:
 #      es el camino de emergencia.
-#   2. Guarda la version que corre hoy en .deploy/previous, salvo en un
-#      redeploy del mismo sha: ahi previous queda como estaba.
-#   3. `pull` de las imagenes de APP_VERSION y verificacion de que cada
+#   2. `pull` de las imagenes de APP_VERSION y verificacion de que cada
 #      `imagen:tag` quedo local (las construye CI:
 #      .github/workflows/build-images.yml). El VPS NUNCA construye: todo `up`
 #      lleva --no-build y --remove-orphans (un servicio renombrado, como
 #      `redis` -> `redis_cache`/`redis_state`, dejaba vivo el contenedor viejo
 #      con su puerto). `run` no tiene --no-build en ninguna version de
 #      Compose (ver `migrar`).
-#   4. MIGRA ANTES DE RECREAR, con el codigo viejo sirviendo:
-#      `compose run --rm --no-deps backend alembic upgrade head`. Por eso las
+#   3. Assets y borde antes de migrar: extrae, importa y verifica los assets
+#      inmutables de cada replica frontend activa, el destino de rollback y la
+#      version candidata; confirma que `nginx` corre con el montaje `:ro` del
+#      store y la huella/imagen esperada (un deploy normal nunca recrea el
+#      borde). Cualquier error frena antes de migrar o recrear la app.
+#   4. Guarda la version que corre hoy en .deploy/previous (y frontend-previous
+#      cuando cambia el frontend), salvo en un redeploy del mismo sha: ahi
+#      previous queda como estaba.
+#   5. MIGRA ANTES DE RECREAR, con el codigo viejo sirviendo:
+#      `compose run --rm --no-deps -T backend alembic upgrade head`. Por eso las
 #      migraciones son expand/contract (CLAUDE.md §3): el codigo viejo tiene
 #      que funcionar contra el esquema nuevo.
-#   5. Backend y frontend graduales (los dos servicios detras del borde):
+#   6. Backend y frontend graduales (los dos servicios detras del borde):
 #      levanta las replicas nuevas AL LADO de las viejas (`--no-recreate
 #      --scale`), espera que esten sanas (`--wait`), deja que nginx las
 #      resuelva (`resolve`), baja las viejas. Si las nuevas no quedan sanas se
@@ -39,35 +46,44 @@
 #      vieja, `nginx -t` + reload para que el borde la saque de sus peers en
 #      el momento (si no, la tiene hasta 5 s mas).
 #      DEPLOY_ROLLING=0: `up` directo (5-10 s de 502 mientras se recrean).
-#   6. Resto de la app (workers, beat) con `up -d --no-deps`: nunca recrea
+#   7. Resto de la app (workers, beat) con `up -d --no-deps`: nunca recrea
 #      db/redis/rabbitmq ni el borde.
-#   7. `nginx -t` + `nginx -s reload`. El borde (nginx) solo se RECARGA en un
+#   8. `nginx -t` + `nginx -s reload`, escribe `.deploy/current` y
+#      `.deploy/frontend-current`. El borde (nginx) solo se RECARGA en un
 #      deploy normal; se recrea unicamente con `edge` (make deploy-edge),
-#      cuando cambio su imagen o su config. Ojo: el reload NO toma un
-#      nginx.prod.conf nuevo despues de un `git pull` (bind mount de un
-#      archivo: el contenedor sigue viendo el inodo viejo); eso pide `edge`.
-#   8. Compuerta de 60 s: /api/ops/health/ready y la home responden, ningun
+#      cuando cambio su imagen, su config o el store montado.
+#   9. Compuerta de 60 s: /api/ops/health/ready y la home responden, ningun
 #      contenedor unhealthy, `rabbitmq-diagnostics alarms` sin alarmas, 5xx < 0,5 %
-#      en el log de nginx de los ultimos 2 minutos. Si falla: rollback
-#      automatico (sin migrar); en un redeploy del mismo sha, alerta sin
-#      rollback (antes ya corria esa version).
+#      en el log de nginx de los ultimos 2 minutos, y smoke HTTP de un asset JS
+#      del release contra su SHA-256 y tamano del manifest. Si pasa, ejecuta GC
+#      no bloqueante de releases vencidos. Si falla: rollback automatico (sin
+#      migrar); en un redeploy del mismo sha, alerta sin rollback (antes ya
+#      corria esa version).
 #
-# Rollback: APP_VERSION = .deploy/previous; pull, pasos 5 a 8, NUNCA migra.
+# Rollback: APP_VERSION = .deploy/previous; pull, verifica/importa assets y
+# montaje `:ro` del borde (sin recrear nginx), pasos 6 a 9, NUNCA migra.
 # Si el pull falla sigue con las imagenes locales, pero solo si estan todas:
 # si falta una, sale con 2 y alerta sin tocar nada.
 #
-# Edge: pull de nginx y recreacion SOLO si cambio el id de su imagen o la
-# config montada (un bind mount de un archivo sigue viendo el inodo viejo
-# cuando git lo reemplaza: hace falta recrear, no alcanza con reload).
-# Antes de recrear prueba la config con `nginx -t` en un contenedor efimero:
-# si falla, no recrea y el borde actual sigue sirviendo.
+# Edge: prepara/importa/verifica los assets activos y previos, hace pull de
+# nginx y recrea SOLO si falta el contenedor, cambio el id de su imagen,
+# cambio la huella (config + asset store) o falta el montaje `:ro` (un bind
+# mount de un archivo sigue viendo el inodo viejo cuando git lo reemplaza:
+# hace falta recrear, no alcanza con reload). Cuando hace falta recrear,
+# primero prueba la config con `nginx -t` en un contenedor efimero
+# (`--entrypoint nginx -T nginx -t`): si falla, no recrea ni registra huella
+# y el borde actual sigue sirviendo. Si no hubo cambios, omite el contenedor
+# efimero y solo recarga nginx.
 #
 # Sin sudo ni docker.sock: el usuario que lo corre tiene que estar en el grupo
 # docker. Las variables de abajo se pueden fijar en /etc/shifty/ops.env.
 set -euo pipefail
 
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+RELEASE_ASSET_HELPER="$script_dir/release-assets.sh"
+
 # shellcheck source=lib/common.sh
-. "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh"
+. "$script_dir/lib/common.sh"
 
 # Compose toma el proyecto, el .env y COMPOSE_FILE del directorio actual.
 cd "$SHIFTY_DIR"
@@ -115,6 +131,18 @@ cd "$SHIFTY_DIR"
 # Archivos que el borde monta por bind mount (relativos al clon).
 : "${DEPLOY_EDGE_CONF_FILES:=nginx/nginx.prod.conf}"
 : "${DEPLOY_PROD_COMPOSE:=docker-compose.prod.yml}"
+: "${DEPLOY_ASSET_MIN_FREE_BYTES:=536870912}"
+: "${DEPLOY_ASSET_RETENTION_DAYS:=14}"
+: "${DEPLOY_ASSET_MIN_RELEASES:=3}"
+: "${DEPLOY_ASSET_PROTECTED_RELEASES:=}"
+
+asset_tmp_dirs=()
+asset_container_ids=()
+asset_releases=()
+asset_image_ids=()
+asset_sources=()
+asset_estimated_bytes=()
+asset_needs_extract=()
 
 estado_dir="$SHIFTY_DIR/.deploy"
 lock="$estado_dir/lock"
@@ -126,7 +154,64 @@ tomar_lock() {
   if ! mkdir "$lock" 2>/dev/null; then
     die "hay otro deploy en curso (lock $lock). Si no lo hay, borrar el directorio a mano."
   fi
-  trap 'rm -rf -- "$lock"' EXIT
+  trap limpiar_deploy EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+}
+
+escribir_estado() {
+  local destino="$1" valor="$2" tmp
+  mkdir -p "$(dirname "$destino")" || return 1
+  tmp="$(mktemp "${destino}.XXXXXX")" || return 1
+  if ! printf '%s\n' "$valor" >"$tmp" || ! mv -f "$tmp" "$destino"; then
+    rm -f "$tmp" || true
+    return 1
+  fi
+}
+
+frontend_previous_release() {
+  if [ -s "$estado_dir/frontend-previous" ]; then
+    head -n 1 "$estado_dir/frontend-previous"
+    return
+  fi
+  if [ -s "$estado_dir/frontend-current" ]; then
+    return
+  fi
+  head -n 1 "$estado_dir/previous" 2>/dev/null || true
+}
+
+limpiar_deploy() {
+  local id dir
+  for id in "${asset_container_ids[@]:-}"; do
+    [ -n "$id" ] && docker rm -f "$id" >/dev/null 2>&1 || true
+  done
+  for dir in "${asset_tmp_dirs[@]:-}"; do
+    [ -n "$dir" ] && rm -rf -- "$dir" || true
+  done
+  rm -rf -- "$lock"
+}
+
+configurar_asset_store() {
+  [[ "$DEPLOY_ASSET_RETENTION_DAYS" =~ ^(0|[1-9][0-9]*)$ &&
+    "$DEPLOY_ASSET_MIN_RELEASES" =~ ^(0|[1-9][0-9]*)$ ]] ||
+    die "preflight: politica de retencion de assets invalida"
+  (( DEPLOY_ASSET_RETENTION_DAYS >= 14 && DEPLOY_ASSET_MIN_RELEASES >= 3 )) ||
+    die "preflight: assets requiere al menos 14 dias y 3 releases"
+  ASSET_STORE_PATH="$(asset_helper store "$DEPLOY_ASSET_STORE")" ||
+    die "preflight: no se pudo preparar el asset store persistente"
+  local env_store="" norm_env_store
+  env_store="$(leer_env_repo ASSET_STORE_PATH)"
+  if [ -n "$env_store" ]; then
+    norm_env_store="$(asset_helper store "$env_store")" ||
+      die "preflight: ASSET_STORE_PATH invalido en .env: $env_store"
+    [ "$norm_env_store" = "$ASSET_STORE_PATH" ] ||
+      die "preflight: DEPLOY_ASSET_STORE ($ASSET_STORE_PATH) difiere de ASSET_STORE_PATH en .env ($norm_env_store)"
+  fi
+  export ASSET_STORE_PATH
+}
+
+asset_helper() {
+  SHIFTY_DIR="$SHIFTY_DIR" bash "$RELEASE_ASSET_HELPER" "$@"
 }
 
 version_en_curso() {
@@ -154,8 +239,7 @@ compose_file_efectivo() {
     printf '%s\n' "$COMPOSE_FILE"
     return
   fi
-  sed -n 's/^[[:space:]]*COMPOSE_FILE[[:space:]]*=[[:space:]]*//p' .env 2>/dev/null |
-    tail -n 1 | tr -d '"'"'"'\r'
+  leer_env_repo COMPOSE_FILE
 }
 
 # Quality (quality.yml) tiene que haber pasado en un push a main para ESTE sha.
@@ -326,6 +410,8 @@ corridas_de_quality() {
 preflight() {
   local completo="$1"
 
+  configurar_asset_store
+
   # El volumen pg_backups es un bind (docker-compose.prod.yml): si el
   # directorio del host no existe, `db` no puede recrearse.
   # mkdir + chmod aparte: si el chmod no se puede (otro dueno), el directorio
@@ -368,10 +454,16 @@ preflight() {
 
   [ "$completo" = 1 ] || return 0
 
-  local uso
+  local uso uso_assets
   uso="$(disk_use_percent "$SHIFTY_DIR")"
   if [ "${uso:-100}" -ge "$DEPLOY_DISK_MAX_PERCENT" ]; then
     die "preflight: disco al ${uso} % (maximo $DEPLOY_DISK_MAX_PERCENT %); un pull puede llenarlo"
+  fi
+  if [ -d "$ASSET_STORE_PATH" ]; then
+    uso_assets="$(disk_use_percent "$ASSET_STORE_PATH")"
+    if [ "${uso_assets:-100}" -ge "$DEPLOY_DISK_MAX_PERCENT" ]; then
+      die "preflight: disco del asset store al ${uso_assets} % (maximo $DEPLOY_DISK_MAX_PERCENT %)"
+    fi
   fi
 
   if [ "$DEPLOY_SKIP_BACKUP_CHECK" != 1 ]; then
@@ -492,6 +584,37 @@ resto_de_la_app() {
   docker compose up -d --no-deps --no-build --remove-orphans "${resto[@]}" || return 1
 }
 
+# Resuelve la imagen exacta de un unico servicio de compose.
+# `docker compose config --images <svc>` incluye dependencias transitivas
+# (`depends_on`) en orden no deterministico; parsear `services:` de la
+# salida canonica de `docker compose config <svc>` devuelve solo la imagen
+# del servicio pedido.
+compose_service_image() {
+  local servicio="$1"
+  docker compose config "$servicio" | awk -v svc="$servicio" '
+    found { next }
+    { sub(/\r$/, "") }
+    /^services:[[:space:]]*$/ { in_services = 1; in_target = 0; next }
+    in_services && /^[^[:space:]]/ { in_services = 0; in_target = 0 }
+    in_services && substr($0, 1, 2) == "  " && substr($0, 3, 1) != " " {
+      line = substr($0, 3)
+      sub(/[[:space:]]*$/, "", line)
+      in_target = (line == svc ":")
+      next
+    }
+    !found && in_target && /^    image:[[:space:]]+/ {
+      sub(/^    image:[[:space:]]+/, "")
+      sub(/[[:space:]]+$/, "")
+      if ((substr($0, 1, 1) == "\"" && substr($0, length($0), 1) == "\"") ||
+          (substr($0, 1, 1) == "'"'"'" && substr($0, length($0), 1) == "'"'"'")) {
+        $0 = substr($0, 2, length($0) - 2)
+      }
+      print
+      found = 1
+    }
+  '
+}
+
 # Cada `imagen:tag` que va a correr tiene que estar local: sin esto, un pull
 # a medias terminaba en un `up` que construia o que fallaba a mitad de camino.
 imagenes_locales() {
@@ -506,13 +629,443 @@ imagenes_locales() {
   fi
 }
 
+asset_plan_release() {
+  local release="$1" image_id="$2" i size_output size_kb bytes manifest
+  for i in "${!asset_releases[@]}"; do
+    if [[ "${asset_releases[$i]}" = "$release" ]]; then
+      [[ "${asset_image_ids[$i]}" = "$image_id" ]] ||
+        die "assets: replicas del release $release usan imagenes distintas"
+      return 0
+    fi
+  done
+  manifest="$ASSET_STORE_PATH/.manifests/$release.manifest"
+  asset_releases+=("$release")
+  asset_image_ids+=("$image_id")
+  asset_sources+=("")
+  if [[ -e "$manifest" || -L "$manifest" ]]; then
+    asset_helper verify "$ASSET_STORE_PATH" "$release" "$image_id" ||
+      die "assets: el manifest existente de $release no coincide con la imagen activa"
+    asset_estimated_bytes+=(0)
+    asset_needs_extract+=(0)
+    return 0
+  fi
+  # The frontend image uses nginx:alpine, so BusyBox du is already available.
+  # Estimate before docker cp writes any files into the persistent store.
+  size_output="$(docker run --rm --network none --entrypoint sh "$image_id" \
+    -c 'du -sk /usr/share/nginx/html/assets')" ||
+    die "assets: no pude estimar el tamano de $release antes de extraerlo"
+  size_kb="$(awk 'NR == 1 && $1 ~ /^[0-9]+$/ { print $1 }' <<<"$size_output")"
+  [[ "$size_kb" =~ ^[0-9]+$ ]] || die "assets: estimacion invalida para $release: $size_output"
+  bytes=$((10#$size_kb * 1024))
+  asset_estimated_bytes+=("$bytes")
+  asset_needs_extract+=(1)
+}
+
+asset_extract_release() {
+  local i="$1" release image_id name container tmp actual
+  [[ "${asset_needs_extract[$i]}" = 1 ]] || return 0
+  release="${asset_releases[$i]}"
+  image_id="${asset_image_ids[$i]}"
+  tmp="$(mktemp -d "$ASSET_STORE_PATH/.staging/shifty-assets.XXXXXX")" ||
+    die "assets: no pude crear el directorio temporal de extraccion"
+  asset_tmp_dirs+=("$tmp")
+  mkdir -p "$tmp/assets" ||
+    die "assets: no pude crear el directorio temporal de assets"
+  name="shifty-assets-$release-$$-$i"
+  container="$(docker create --name "$name" "$image_id")" ||
+    die "assets: no pude crear un contenedor detenido de $release"
+  [ -n "$container" ] || die "assets: docker create no devolvio un id para $release"
+  asset_container_ids+=("$container")
+  actual="$(docker inspect -f '{{.Image}}' "$container")" ||
+    die "assets: no pude verificar la identidad de la imagen $release"
+  [ "$actual" = "$image_id" ] ||
+    die "assets: la imagen del contenedor de extraccion no coincide para $release"
+  docker cp "$container:/usr/share/nginx/html/assets/." "$tmp/assets/" ||
+    die "assets: no pude extraer /usr/share/nginx/html/assets de $release"
+  asset_sources[i]="$tmp/assets"
+}
+
+frontend_image_id() {
+  local release="$1" image
+  image="$(APP_VERSION="$release" compose_service_image "$DEPLOY_FRONTEND_SERVICE")"
+  [ -n "$image" ] || return 1
+  docker image inspect -f '{{.Id}}' "$image"
+}
+
+frontend_release_running() {
+  local id image release
+  id="$(docker compose ps -q "$DEPLOY_FRONTEND_SERVICE" | head -n 1)"
+  [ -n "$id" ] || return 1
+  image="$(docker inspect -f '{{.Config.Image}}' "$id")" ||
+    die "assets: no pude identificar el release del frontend actual"
+  release="${image##*:}"
+  [[ "$release" =~ ^[A-Za-z0-9_.-]+$ ]] || die "assets: tag de frontend actual invalido"
+  printf '%s\n' "$release"
+}
+
+importar_frontends_activos() {
+  local ids id image release image_id
+  ids="$(docker compose ps -q "$DEPLOY_FRONTEND_SERVICE")"
+  [ -n "$ids" ] || die "assets: no hay frontend actual para proteger sus chunks"
+  while IFS= read -r id; do
+    [ -n "$id" ] || continue
+    image="$(docker inspect -f '{{.Config.Image}}' "$id")" ||
+      die "assets: no pude identificar la imagen de un frontend activo"
+    release="${image##*:}"
+    [[ "$release" =~ ^[A-Za-z0-9_.-]+$ ]] || die "assets: tag de frontend activo invalido"
+    image_id="$(docker inspect -f '{{.Image}}' "$id")" ||
+      die "assets: no pude leer la identidad de un frontend activo"
+    asset_plan_release "$release" "$image_id"
+  done <<<"$ids"
+}
+
+frontend_release_target() {
+  local requested="$1" current="$2"
+  case " $DEPLOY_SERVICES " in
+    *" $DEPLOY_FRONTEND_SERVICE "*) printf '%s\n' "$requested" ;;
+    *) printf '%s\n' "$current" ;;
+  esac
+}
+
+reiniciar_plan_assets() {
+  asset_releases=()
+  asset_image_ids=()
+  asset_sources=()
+  asset_estimated_bytes=()
+  asset_needs_extract=()
+}
+
+planificar_release_previa() {
+  local release="$1" etiqueta="$2" faltante_msg="$3" image_id
+  [ -n "$release" ] || return 0
+  if image_id="$(frontend_image_id "$release" 2>/dev/null)"; then
+    asset_plan_release "$release" "$image_id"
+  else
+    if [ "$etiqueta" = "rollback" ]; then
+      log "assets: la imagen rollback $release no esta local; se conserva si ya fue importada"
+    fi
+    if [ -f "$ASSET_STORE_PATH/.manifests/$release.manifest" ]; then
+      asset_helper verify "$ASSET_STORE_PATH" "$release" ||
+        die "assets: el manifest $etiqueta existente no se pudo verificar"
+    else
+      die "$faltante_msg"
+    fi
+  fi
+}
+
+materializar_assets_planificados() {
+  local capacidad_msg="$1" import_suffix="${2:-}" i
+  [ "${#asset_releases[@]}" -gt 0 ] || return 0
+  asset_helper capacity-bytes "$ASSET_STORE_PATH" "$DEPLOY_ASSET_MIN_FREE_BYTES" \
+    "${asset_estimated_bytes[@]}" ||
+    die "$capacidad_msg"
+  for i in "${!asset_releases[@]}"; do
+    asset_extract_release "$i"
+  done
+  for i in "${!asset_sources[@]}"; do
+    [ -n "${asset_sources[$i]}" ] || continue
+    asset_helper import "$ASSET_STORE_PATH" "${asset_releases[$i]}" \
+      "${asset_image_ids[$i]}" "${asset_sources[$i]}" ||
+      die "assets: importacion fallida para ${asset_releases[$i]}${import_suffix}"
+    rm -rf -- "${asset_sources[$i]%/assets}"
+    asset_sources[i]=""
+  done
+  for i in "${!asset_releases[@]}"; do
+    asset_helper verify "$ASSET_STORE_PATH" "${asset_releases[$i]}" \
+      "${asset_image_ids[$i]}" || die "assets: verificacion final fallida para ${asset_releases[$i]}"
+  done
+}
+
+preparar_assets_release() {
+  local candidate="$1" actual_release="$2" rollback_release="$3"
+  local candidate_image live_frontends
+  reiniciar_plan_assets
+  ASSET_STORE_PATH="$(asset_helper prepare "$ASSET_STORE_PATH")" ||
+    die "assets: no pude preparar el store persistente"
+  export ASSET_STORE_PATH
+
+  live_frontends="$(docker compose ps -q "$DEPLOY_FRONTEND_SERVICE")"
+  if [ -n "$live_frontends" ]; then
+    importar_frontends_activos
+  else
+    planificar_release_previa "$actual_release" "actual" \
+      "assets: falta el frontend actual $actual_release y no hay assets ya importados"
+  fi
+
+  if [ -n "$rollback_release" ] && [ "$rollback_release" != "$actual_release" ]; then
+    planificar_release_previa "$rollback_release" "rollback" \
+      "assets: la imagen rollback $rollback_release no esta local y no hay assets ya importados; no se cambiara la app"
+  fi
+
+  candidate_image="$(frontend_image_id "$candidate")" ||
+    die "assets: no esta disponible la imagen frontend candidata $candidate"
+  asset_plan_release "$candidate" "$candidate_image"
+
+  materializar_assets_planificados \
+    "assets: capacidad insuficiente; no se migro ni recreo ningun servicio" \
+    "; la app sigue sin cambios"
+}
+
+require_asset_release() {
+  local release="$1"
+  [ -n "$release" ] || return 0
+  asset_helper verify "$ASSET_STORE_PATH" "$release" ||
+    die "assets: falta un manifest valido para $release; no se activara el edge"
+}
+
+edge_fingerprint() {
+  # shellcheck disable=SC2086
+  { cat $DEPLOY_EDGE_CONF_FILES; printf '\nasset-store=%s\n' "$ASSET_STORE_PATH"; } | sha256sum | cut -d' ' -f1
+}
+
+borde_monta_assets_ro() {
+  local id="$1" state restarting mounts src rw expected_src
+  [ -n "$id" ] || return 1
+  state="$(docker inspect -f '{{.State.Status}}' "$id" 2>/dev/null || true)"
+  restarting="$(docker inspect -f '{{.State.Restarting}}' "$id" 2>/dev/null || true)"
+  [ "$state" = "running" ] && [ "$restarting" != "true" ] || return 1
+  mounts="$(docker inspect -f '{{range .Mounts}}{{if and (eq .Type "bind") (eq .Destination "/srv/shifty-assets/assets")}}{{.Source}}|{{.RW}}{{end}}{{end}}' "$id" 2>/dev/null || true)"
+  [ -n "$mounts" ] || return 1
+  src="${mounts%%|*}"
+  rw="${mounts#*|}"
+  [ -n "$src" ] && [ "$rw" = "false" ] || return 1
+  expected_src="$(realpath -m -- "$ASSET_STORE_PATH/assets")"
+  [ "$(realpath -m -- "$src")" = "$expected_src" ]
+}
+
+borde_requiere_montaje_assets() {
+  local servicio="${1:-$DEPLOY_EDGE_SERVICE}" conf
+  if docker compose config "$servicio" 2>/dev/null | grep -F '/srv/shifty-assets/assets' >/dev/null; then
+    return 0
+  fi
+  # shellcheck disable=SC2086
+  for conf in $DEPLOY_EDGE_CONF_FILES; do
+    [ -f "$conf" ] && grep -F '/srv/shifty-assets' "$conf" >/dev/null && return 0
+  done
+  return 1
+}
+
+recrear_borde() {
+  local servicio="$1" imagen deseada corriendo id huella anterior requiere_assets=0
+  docker compose pull "$servicio" || log "edge: pull de $servicio fallo; sigo solo si la imagen ya esta local"
+  imagen="$(compose_service_image "$servicio")"
+  [ -n "$imagen" ] || die "edge: no pude resolver la imagen de $servicio"
+  deseada="$(docker image inspect -f '{{.Id}}' "$imagen")" || die "edge: falta la imagen $imagen"
+  id="$(docker compose ps -q "$servicio" | head -n 1)"
+  corriendo=""
+  [ -z "$id" ] || corriendo="$(docker inspect -f '{{.Image}}' "$id")"
+  # El store tambien forma parte del fingerprint: cambiar su ruta requiere
+  # recrear el bind mount, aunque el archivo nginx no haya cambiado.
+  huella="$(edge_fingerprint)"
+  anterior="$(cat "$estado_dir/edge-conf.sha256" 2>/dev/null || true)"
+  borde_requiere_montaje_assets "$servicio" && requiere_assets=1
+  if [ -z "$id" ] || [ "$deseada" != "$corriendo" ] || [ "$huella" != "$anterior" ] ||
+    { [ "$requiere_assets" = 1 ] && ! borde_monta_assets_ro "$id"; } ||
+    { [ "$requiere_assets" = 0 ] && borde_monta_assets_ro "$id"; }; then
+    # nginx -t ANTES de recrear, en un contenedor efimero con la misma imagen
+    # y los mismos montajes (2026-11-25): una config invalida deja el borde
+    # actual sirviendo, no un borde nuevo que no arranca. `run` no publica los
+    # puertos del servicio ni usa su container_name. Sin registrar la huella,
+    # el proximo `edge` vuelve a intentarlo.
+    docker compose run --rm --no-deps --entrypoint nginx -T "$servicio" -t ||
+      die "edge: la configuracion candidata de $servicio no pasa nginx -t; no se recrea y el borde actual sigue sirviendo"
+    log "edge: recreo $servicio (imagen ${corriendo:-ninguna} -> $deseada, config ${anterior:-sin registro} -> $huella)"
+    docker compose up -d --no-deps --no-build --remove-orphans --force-recreate --wait \
+      --wait-timeout "$DEPLOY_WAIT_TIMEOUT" "$servicio" ||
+      die "edge: $servicio no quedo sano despues de recrearlo"
+    id="$(docker compose ps -q "$servicio" | head -n 1)"
+    if [ "$requiere_assets" = 1 ]; then
+      if [ -z "$id" ] || ! borde_monta_assets_ro "$id"; then
+        die "edge: $servicio recreado pero no monta $ASSET_STORE_PATH/assets en modo solo lectura"
+      fi
+    elif [ -z "$id" ] || [ "$(docker inspect -f '{{.State.Status}}' "$id" 2>/dev/null || true)" != "running" ]; then
+      die "edge: $servicio recreado pero no esta corriendo"
+    fi
+  else
+    log "edge: sin cambios de imagen, config ni asset store; solo reload"
+  fi
+  recargar_nginx || die "edge: nginx -t o reload fallo"
+  escribir_estado "$estado_dir/edge-conf.sha256" "$huella" ||
+    die "edge: no pude guardar la huella en $estado_dir/edge-conf.sha256"
+}
+
+verificar_borde_assets() {
+  local candidate="$1" current="$2" rollback="$3" es_rollback="${4:-0}"
+  require_asset_release "$current"
+  require_asset_release "$candidate"
+  [ -z "$rollback" ] || [ ! -f "$ASSET_STORE_PATH/.manifests/$rollback.manifest" ] ||
+    require_asset_release "$rollback"
+
+  local id
+  id="$(docker compose ps -q "$DEPLOY_EDGE_SERVICE" | head -n 1)"
+  if [ -z "$id" ] || ! borde_monta_assets_ro "$id"; then
+    die "edge: el contenedor $DEPLOY_EDGE_SERVICE no esta corriendo o no monta $ASSET_STORE_PATH/assets en modo solo lectura; correr 'bash scripts/deploy.sh edge' primero"
+  fi
+
+  if [ "$es_rollback" != 1 ]; then
+    local huella imagen deseada corriendo anterior
+    huella="$(edge_fingerprint)"
+    imagen="$(compose_service_image "$DEPLOY_EDGE_SERVICE")"
+    [ -n "$imagen" ] || die "edge: no pude resolver la imagen de $DEPLOY_EDGE_SERVICE"
+    deseada="$(docker image inspect -f '{{.Id}}' "$imagen" 2>/dev/null || true)"
+    corriendo="$(docker inspect -f '{{.Image}}' "$id" 2>/dev/null || true)"
+    anterior="$(cat "$estado_dir/edge-conf.sha256" 2>/dev/null || true)"
+    if [ ! -s "$estado_dir/edge-conf.sha256" ] || [ "$huella" != "$anterior" ] || [ -z "$deseada" ] || [ "$deseada" != "$corriendo" ]; then
+      die "edge: la configuracion, imagen o asset store del borde cambio (o falta .deploy/edge-conf.sha256); el deploy ordinario no recrea $DEPLOY_EDGE_SERVICE: correr 'bash scripts/deploy.sh edge' primero"
+    fi
+  fi
+}
+
+gc_assets_despues_de_exito() {
+  local current="$1" previous
+  previous="$(frontend_previous_release)"
+  if [ -n "$previous" ] && [ ! -f "$ASSET_STORE_PATH/.manifests/$previous.manifest" ]; then
+    previous=""
+  fi
+  local id image release active=""
+  id="$(docker compose ps -q "$DEPLOY_FRONTEND_SERVICE" 2>/dev/null || true)"
+  for id in $id; do
+    image="$(docker inspect -f '{{.Config.Image}}' "$id" 2>/dev/null || true)"
+    release="${image##*:}"
+    [[ "$release" =~ ^[A-Za-z0-9_.-]+$ ]] && active="$active $release"
+  done
+  if ! DEPLOY_ASSET_PROTECTED_RELEASES="$DEPLOY_ASSET_PROTECTED_RELEASES $active" \
+    asset_helper gc "$ASSET_STORE_PATH" "$current" "$previous" \
+      "$((DEPLOY_ASSET_RETENTION_DAYS * 86400))" "$DEPLOY_ASSET_MIN_RELEASES"; then
+    log "assets: GC non-blocking fallido; no se libera espacio automaticamente"
+  fi
+}
+
 # --- compuerta --------------------------------------------------------------
+
+seleccionar_asset_js_smoke() {
+  local target_release="$1" retired_release="${2:-}"
+  local target_manifest="$ASSET_STORE_PATH/.manifests/$target_release.manifest"
+  local retired_manifest=""
+  [ -f "$target_manifest" ] || {
+    log "compuerta: falta manifest $target_manifest para smoke de asset JS"
+    return 1
+  }
+  if [ -n "$retired_release" ] && [ "$retired_release" != "$target_release" ] &&
+    [ -f "$ASSET_STORE_PATH/.manifests/$retired_release.manifest" ]; then
+    retired_manifest="$ASSET_STORE_PATH/.manifests/$retired_release.manifest"
+  fi
+  local seleccion
+  seleccion="$(awk -F '\t' -v retired="$retired_manifest" '
+    BEGIN {
+      if (retired != "") {
+        in_files = 0
+        while ((getline line < retired) > 0) {
+          gsub(/\r$/, "", line)
+          if (line == "files_begin") { in_files = 1; continue }
+          if (!in_files) continue
+          n = split(line, cols, "\t")
+          if (n == 3) prev_paths[cols[3]] = 1
+        }
+        close(retired)
+      }
+      in_files = 0
+      first = ""
+      preferred = ""
+    }
+    {
+      gsub(/\r$/, "", $0)
+      if ($0 == "files_begin") { in_files = 1; next }
+      if (!in_files || NF != 3) next
+      if (tolower($3) ~ /\.(js|mjs)$/) {
+        row = $1 "\t" $2 "\t" $3
+        if (first == "") first = row
+        if (retired != "" && !(($3) in prev_paths) && preferred == "") {
+          preferred = row
+        }
+      }
+    }
+    END {
+      if (preferred != "") print preferred
+      else if (first != "") print first
+    }
+  ' "$target_manifest")"
+  if [ -z "$seleccion" ]; then
+    log "compuerta: no hay ningun asset .js/.mjs en $target_manifest"
+    return 1
+  fi
+  printf '%s\n' "$seleccion"
+}
+
+verificar_asset_http() {
+  local target_release="$1" retired_release="${2:-}"
+  local seleccion expected_hash expected_size rel_path
+  seleccion="$(seleccionar_asset_js_smoke "$target_release" "$retired_release")" || return 1
+  IFS=$'\t' read -r expected_hash expected_size rel_path <<<"$seleccion"
+
+  local base_src origin asset_url
+  base_src="${DEPLOY_ASSET_SMOKE_BASE_URL:-}"
+  [ -n "$base_src" ] || base_src="${DEPLOY_SMOKE_URLS%% *}"
+  [ -n "$base_src" ] || base_src="${DEPLOY_HEALTH_URL%% *}"
+  [ -n "$base_src" ] || base_src="${DOMAIN:+https://$DOMAIN}"
+  origin="$(printf '%s' "$base_src" | sed -n 's#^\([A-Za-z][A-Za-z0-9+.-]*://[^/?#]*\).*#\1#p')"
+  if [ -z "$origin" ]; then
+    log "compuerta: no pude derivar origin para smoke HTTP de asset JS (base: ${base_src:-vacia})"
+    return 1
+  fi
+  asset_url="$origin/assets/$rel_path"
+
+  local tmp_body curl_out curl_rc=0 http_code ctype ctype_norm prefix actual_hash actual_size
+  tmp_body="$(mktemp)" || {
+    log "compuerta: no pude crear archivo temporal para smoke de $asset_url"
+    return 1
+  }
+  if [ -n "${CURL_CA_BUNDLE:-}" ]; then
+    curl_out="$(curl -sS --connect-timeout 3 -m 5 --cacert "$CURL_CA_BUNDLE" \
+      -H 'Accept-Encoding: identity' -o "$tmp_body" \
+      -w '%{http_code}\n%{content_type}\n' "$asset_url")" || curl_rc=$?
+  else
+    curl_out="$(curl -sS --connect-timeout 3 -m 5 \
+      -H 'Accept-Encoding: identity' -o "$tmp_body" \
+      -w '%{http_code}\n%{content_type}\n' "$asset_url")" || curl_rc=$?
+  fi
+  if [ "$curl_rc" -ne 0 ]; then
+    rm -f -- "$tmp_body"
+    log "compuerta: fallo HTTP al pedir asset JS $asset_url (curl exit $curl_rc)"
+    return 1
+  fi
+  http_code="$(printf '%s\n' "$curl_out" | sed -n '1p' | tr -d '\r')"
+  ctype="$(printf '%s\n' "$curl_out" | sed -n '2p' | tr -d '\r')"
+  if [ "$http_code" != "200" ]; then
+    rm -f -- "$tmp_body"
+    log "compuerta: asset JS $asset_url devolvio HTTP $http_code (esperado 200)"
+    return 1
+  fi
+  ctype_norm="$(printf '%s' "${ctype%%;*}" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+  if ! [[ "$ctype_norm" =~ ^(application|text)/(javascript|ecmascript|x-javascript)$ ]]; then
+    rm -f -- "$tmp_body"
+    log "compuerta: asset JS $asset_url devolvio Content-Type invalido: ${ctype:-vacio}"
+    return 1
+  fi
+  prefix="$(head -c 256 "$tmp_body" | tr '\r\n\t' '   ' | tr -d '\0' | tr '[:upper:]' '[:lower:]' | sed 's/^ *//')"
+  case "$prefix" in
+    '<!doctype'* | '<html'*)
+      rm -f -- "$tmp_body"
+      log "compuerta: asset JS $asset_url devolvio HTML en vez de JavaScript"
+      return 1 ;;
+  esac
+  actual_hash="$(sha256sum <"$tmp_body")"
+  actual_hash="${actual_hash%% *}"
+  actual_size="$(wc -c <"$tmp_body" | tr -d '[:space:]')"
+  rm -f -- "$tmp_body"
+  if [ "${actual_hash,,}" != "${expected_hash,,}" ] || [ "$actual_size" != "$expected_size" ]; then
+    log "compuerta: asset JS $asset_url no coincide en hash/tamano (esperado ${expected_hash}:${expected_size}, obtenido ${actual_hash}:${actual_size})"
+    return 1
+  fi
+  log "compuerta: asset JS $rel_path ok ($actual_size bytes)"
+}
 
 # Las alarmas de RabbitMQ se leen con rabbitmq_sin_alarmas (lib/common.sh,
 # compartida con el chequeo horario de scripts/checks.sh): cualquier salida
 # que no sea la de "sin alarmas" de 3.13.7 cuenta como alarma y la compuerta
 # falla cerrada.
 compuerta() {
+  local target_release="${1:-}" retired_release="${2:-}"
   local fallos=0 i url
   for ((i = 1; i <= DEPLOY_GATE_CHECKS; i++)); do
     for url in $DEPLOY_HEALTH_URL $DEPLOY_SMOKE_URLS; do
@@ -561,6 +1114,7 @@ compuerta() {
     log "compuerta: 5xx $errores de $total en $DEPLOY_GATE_LOG_WINDOW (> 0,5 %)"
     return 1
   fi
+  verificar_asset_http "$target_release" "$retired_release" || return 1
   log "compuerta: ok ($fallos fallos sueltos, 5xx $errores/$total)"
 }
 
@@ -577,12 +1131,40 @@ desplegar_version() {
       "Sin pull y sin las imagenes en el host no hay a que volver. No se toco nada."
     return 2
   fi
+  local actual rollback target frontend_en_deploy=0
+  case " $DEPLOY_SERVICES " in
+    *" $DEPLOY_FRONTEND_SERVICE "*) frontend_en_deploy=1 ;;
+  esac
+  if ! actual="$(frontend_release_running)"; then
+    if [ "$frontend_en_deploy" != 1 ]; then
+      die "rollback: no hay una imagen frontend activa para conservar sus assets"
+    fi
+    actual=""
+    if [ -s "$estado_dir/frontend-current" ]; then
+      actual="$(head -n 1 "$estado_dir/frontend-current")"
+    elif [ -s "$estado_dir/current" ]; then
+      actual="$(head -n 1 "$estado_dir/current")"
+    fi
+    if [ -n "$actual" ] && [ ! -f "$ASSET_STORE_PATH/.manifests/$actual.manifest" ] &&
+      ! frontend_image_id "$actual" >/dev/null 2>&1; then
+      actual=""
+    fi
+  fi
+  rollback="$(frontend_previous_release)"
+  target="$(frontend_release_target "$version" "$actual")"
+  if [ -n "$actual" ] && [ "$target" = "$actual" ]; then rollback="$actual"; fi
+  preparar_assets_release "$target" "$actual" "$rollback"
+  verificar_borde_assets "$target" "$actual" "$rollback" 1
   backend_gradual || return 1
   frontend_gradual || return 1
   resto_de_la_app || return 1
   recargar_nginx || return 1
-  printf '%s\n' "$version" >"$estado_dir/current"
-  compuerta
+  escribir_estado "$estado_dir/current" "$version" || return 1
+  if [ -n "$target" ]; then
+    escribir_estado "$estado_dir/frontend-current" "$target" || return 1
+  fi
+  compuerta "$target" "$actual" || return 1
+  gc_assets_despues_de_exito "$target"
 }
 
 cmd_rollback() {
@@ -608,16 +1190,50 @@ cmd_deploy() {
   tomar_lock
   preflight 1
 
+  local frontend_ids hay_registro=0
+  frontend_ids="$(docker compose ps -q "$DEPLOY_FRONTEND_SERVICE")" ||
+    die "assets: no pude consultar las replicas frontend actuales"
+  if [ -s "$estado_dir/current" ] || [ -s "$estado_dir/previous" ] ||
+    [ -s "$estado_dir/frontend-current" ] || [ -s "$estado_dir/frontend-previous" ]; then
+    hay_registro=1
+  fi
+
   # Un redeploy del sha que ya corre (re-correr un deploy que salio bien) no
   # toca previous: pisarlo con ese mismo sha perdia el destino del rollback
   # (2026-10-12, produccion: previous paso de a203ee54 a 494f5072).
-  local anterior redeploy=0
-  anterior="$(version_en_curso)"
-  if [ -n "$anterior" ] && [ "$anterior" = "$nueva" ]; then
-    redeploy=1
-    log "deploy: redeploy de la misma version $nueva; previous sigue en $(head -n 1 "$estado_dir/previous" 2>/dev/null || echo '(ninguna)')"
-  elif [ -n "$anterior" ]; then
-    printf '%s\n' "$anterior" >"$estado_dir/previous"
+  local anterior="" redeploy=0 rollback_protegido="" asset_actual=""
+  if [ -n "$frontend_ids" ]; then
+    anterior="$(version_en_curso)"
+    if [ -n "$anterior" ] && [ "$anterior" = "$nueva" ]; then
+      redeploy=1
+      log "deploy: redeploy de la misma version $nueva; previous sigue en $(head -n 1 "$estado_dir/previous" 2>/dev/null || echo '(ninguna)')"
+    fi
+    if [ "$redeploy" = 1 ]; then
+      rollback_protegido="$(frontend_previous_release)"
+    elif [ -s "$estado_dir/frontend-current" ]; then
+      local fc
+      fc="$(head -n 1 "$estado_dir/frontend-current")"
+      if [ "$fc" = "$anterior" ]; then
+        rollback_protegido="$anterior"
+      else
+        rollback_protegido="$(frontend_previous_release)"
+      fi
+    else
+      rollback_protegido="$anterior"
+    fi
+    asset_actual="$(frontend_release_running)" ||
+      die "assets: no pude identificar la imagen frontend activa"
+  else
+    if [ "$hay_registro" = 1 ]; then
+      die "assets: falta el frontend de un host con release registrado; no se omitiran assets actuales/rollback"
+    fi
+    case " $DEPLOY_SERVICES " in
+      *" $DEPLOY_FRONTEND_SERVICE "*) ;;
+      *) die "assets: primer deploy sin frontend; incluir $DEPLOY_FRONTEND_SERVICE en DEPLOY_SERVICES" ;;
+    esac
+    if [ -n "$(docker compose ps -q "$DEPLOY_BACKEND_SERVICE")" ]; then
+      log "deploy: recuperando deploy inicial interrumpido (backend sin frontend ni estado registrado; sin previous)"
+    fi
   fi
   log "deploy: ${anterior:-(sin version previa)} -> $nueva"
 
@@ -625,6 +1241,20 @@ cmd_deploy() {
   # shellcheck disable=SC2086
   docker compose pull $DEPLOY_SERVICES || die "deploy: pull de $nueva fallo (la imagen esta publicada en GHCR? docker login ghcr.io?)"
   imagenes_locales || die "deploy: despues del pull faltan imagenes de $nueva; no se migra ni se recrea nada"
+
+  local asset_candidato asset_rollback
+  asset_candidato="$(frontend_release_target "$nueva" "$asset_actual")"
+  [ -n "$asset_candidato" ] ||
+    die "assets: no hay frontend actual ni candidato para servir desde el edge"
+  asset_rollback="$rollback_protegido"
+  preparar_assets_release "$asset_candidato" "$asset_actual" "$asset_rollback"
+  verificar_borde_assets "$asset_candidato" "$asset_actual" "$asset_rollback" 0
+  if [ "$redeploy" != 1 ] && [ -n "$anterior" ]; then
+    escribir_estado "$estado_dir/previous" "$anterior"
+  fi
+  if [ "$redeploy" != 1 ] && [ -n "$asset_actual" ] && [ "$asset_candidato" != "$asset_actual" ]; then
+    escribir_estado "$estado_dir/frontend-previous" "$asset_actual"
+  fi
   migrar
 
   if ! backend_gradual; then
@@ -638,8 +1268,11 @@ cmd_deploy() {
   frontend_gradual || codigo_front=$?
   case "$codigo_front" in
     0)
-      if resto_de_la_app && recargar_nginx && printf '%s\n' "$nueva" >"$estado_dir/current" && compuerta; then
+      if resto_de_la_app && recargar_nginx && escribir_estado "$estado_dir/current" "$nueva" &&
+        escribir_estado "$estado_dir/frontend-current" "$asset_candidato" &&
+        compuerta "$asset_candidato" "$asset_actual"; then
         log "deploy: ok, corre $nueva"
+        gc_assets_despues_de_exito "$asset_candidato"
         return 0
       fi
       ;;
@@ -671,35 +1304,37 @@ cmd_deploy() {
 cmd_edge() {
   tomar_lock
   usar_version_en_curso
-  [ -n "${APP_VERSION:-}" ] || die "edge: no hay version en curso (.deploy/current); hacer un deploy primero"
-  local servicio="$DEPLOY_EDGE_SERVICE" imagen deseada corriendo id huella anterior
-  docker compose pull "$servicio" || die "edge: pull de $servicio fallo"
-  imagen="$(docker compose config --images "$servicio" | head -n 1)"
-  deseada="$(docker image inspect -f '{{.Id}}' "$imagen")" || die "edge: falta la imagen $imagen"
-  id="$(docker compose ps -q "$servicio" | head -n 1)"
-  corriendo=""
-  [ -z "$id" ] || corriendo="$(docker inspect -f '{{.Image}}' "$id")"
-  # shellcheck disable=SC2086
-  huella="$(cat $DEPLOY_EDGE_CONF_FILES | sha256sum | cut -d' ' -f1)"
-  anterior="$(cat "$estado_dir/edge-conf.sha256" 2>/dev/null || true)"
+  [ -n "${APP_VERSION:-}" ] || die "edge: falta APP_VERSION o .deploy/current; pasar APP_VERSION=<sha> en un host vacio"
+  configurar_asset_store
+  ASSET_STORE_PATH="$(asset_helper prepare "$ASSET_STORE_PATH")" ||
+    die "edge: no pude preparar el store persistente"
+  export ASSET_STORE_PATH
 
-  if [ "$deseada" != "$corriendo" ] || [ "$huella" != "$anterior" ]; then
-    # nginx -t ANTES de recrear, en un contenedor efimero con la misma imagen
-    # y los mismos montajes (2026-11-25): una config invalida deja el borde
-    # actual sirviendo, no un borde nuevo que no arranca. `run` no publica los
-    # puertos del servicio ni usa su container_name. Sin registrar la huella,
-    # el proximo `edge` vuelve a intentarlo.
-    docker compose run --rm --no-deps -T "$servicio" nginx -t ||
-      die "edge: la config nueva no pasa nginx -t; no se recrea y el borde actual sigue sirviendo"
-    log "edge: recreo $servicio (imagen ${corriendo:-ninguna} -> $deseada, config ${anterior:-sin registro} -> $huella)"
-    docker compose up -d --no-deps --no-build --remove-orphans --force-recreate --wait \
-      --wait-timeout "$DEPLOY_WAIT_TIMEOUT" "$servicio" ||
-      die "edge: $servicio no quedo sano despues de recrearlo"
+  local previous running
+  previous="$(frontend_previous_release)"
+  running="$(docker compose ps -q "$DEPLOY_FRONTEND_SERVICE")" ||
+    die "edge: no pude consultar las replicas frontend actuales"
+
+  reiniciar_plan_assets
+
+  # `.deploy/current` tracks the whole application. A backend-only deploy can
+  # advance it while the frontend still serves an older image, so the running
+  # frontend image tags below (plus frontend_previous_release) are the asset
+  # releases of record for the edge.
+  if [ -n "$running" ]; then
+    importar_frontends_activos
+    planificar_release_previa "$previous" "rollback" \
+      "assets: la imagen previa $previous no esta local y no hay manifest ya importado para el borde"
+    materializar_assets_planificados "assets: capacidad insuficiente para preparar el borde"
   else
-    log "edge: sin cambios de imagen ni de config, solo reload"
+    if [ -s "$estado_dir/current" ] || [ -s "$estado_dir/previous" ] ||
+      [ -s "$estado_dir/frontend-current" ] || [ -s "$estado_dir/frontend-previous" ]; then
+      die "edge: hay release registrado pero no hay frontend activo para verificar sus assets"
+    fi
+    log "edge: host sin releases registrados ni frontend activo; se prepara store vacio"
   fi
-  recargar_nginx || die "edge: nginx -t o reload fallo"
-  printf '%s\n' "$huella" >"$estado_dir/edge-conf.sha256"
+
+  recrear_borde "$DEPLOY_EDGE_SERVICE"
   log "edge: ok"
 }
 

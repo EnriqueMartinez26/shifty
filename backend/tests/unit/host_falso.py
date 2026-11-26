@@ -85,7 +85,7 @@ if [ "$1" = compose ]; then
         for s in ${FAKE_SERVICES:-db redis_cache redis_state rabbitmq backend celery_worker celery_worker_interactive celery_beat frontend nginx}; do echo "$s"; done
         exit 0
       fi
-      if [ "$2" = --images ]; then
+      if [ "${2:-}" = --images ]; then
         shift 2
         for s in "$@"; do
           case "$s" in
@@ -95,19 +95,39 @@ if [ "$1" = compose ]; then
         done
         exit 0
       fi
+      if [ -n "${2:-}" ] && [ "${2#-}" = "$2" ]; then
+        printf 'services:\n'
+        printf '  db:\n    image: postgres:16.14-alpine\n'
+        printf '  backend:\n    image: ghcr.io/x/shifty-backend:%s\n' "${APP_VERSION:-}"
+        printf '  frontend:\n    image: ghcr.io/x/shifty-frontend:%s\n' "${APP_VERSION:-}"
+        printf '  nginx:\n    image: %s\n' "${FAKE_NGINX_IMAGE:-nginx:1.30.7-alpine}"
+        incluir_mount=1
+        if [ -n "${FAKE_EDGE_WITHOUT_ASSETS_MOUNT:-}" ]; then
+          incluir_mount=0
+        elif [ -f docker-compose.prod.yml ] && ! grep -q '/srv/shifty-assets/assets' docker-compose.prod.yml; then
+          incluir_mount=0
+        fi
+        if [ "$incluir_mount" = 1 ]; then
+          printf '    volumes:\n      - type: bind\n        source: %s/assets\n        target: /srv/shifty-assets/assets\n        read_only: true\n' "${DEPLOY_ASSET_STORE:-/srv/shifty-assets}"
+        fi
+        exit "${FAKE_CONFIG_EXIT:-0}"
+      fi
       exit "${FAKE_CONFIG_EXIT:-0}" ;;
     ps)
       case "$*" in
         *" backend"*) cat "$ids_backend" 2>/dev/null; exit 0 ;;
         *" frontend"*) cat "$ids_frontend" 2>/dev/null; exit 0 ;;
         *" db"*) [ -n "${FAKE_DB_DOWN:-}" ] || echo dbid; exit 0 ;;
-        *" nginx"*) echo nginxid; exit 0 ;;
-        *) echo dbid; cat "$ids_backend" "$ids_frontend" 2>/dev/null; echo nginxid; exit 0 ;;
+        *" nginx"*) [ -n "${FAKE_NGINX_DOWN:-}" ] || echo nginxid; exit 0 ;;
+        *) echo dbid; cat "$ids_backend" "$ids_frontend" 2>/dev/null; [ -n "${FAKE_NGINX_DOWN:-}" ] || echo nginxid; exit 0 ;;
       esac ;;
     pull) exit "${FAKE_PULL_EXIT:-0}" ;;
     run)
       # deploy.sh edge prueba la config nueva en un contenedor efimero.
-      case "$*" in *" nginx nginx -t") exit "${FAKE_EDGE_NGINX_T_EXIT:-0}" ;; esac
+      case " $* " in
+        *" --entrypoint nginx "*|*" nginx -t "*|*" nginx nginx -t "*)
+          exit "${FAKE_NGINX_TEST_EXIT:-${FAKE_EDGE_NGINX_T_EXIT:-0}}" ;;
+      esac
       exit "${FAKE_MIGRATE_EXIT:-0}" ;;
     up)
       escala=$(printf '%s\n' "$*" | sed -n 's/.*--scale backend=\([0-9]*\).*/\1/p')
@@ -167,6 +187,15 @@ if [ "$1" = compose ]; then
 ' "${FAKE_RABBIT_ALARMS-$sin_alarmas}"
         exit "${FAKE_RABBIT_EXIT:-0}"
       fi
+      if [ "$3" = nginx ]; then
+        case " $* " in
+          *" nginx -t "*)
+            count=$(cat "$FAKE_DIR/nginx_test_calls" 2>/dev/null || echo 0)
+            count=$((count + 1))
+            printf '%s\n' "$count" >"$FAKE_DIR/nginx_test_calls"
+            [ "${FAKE_NGINX_FAIL_ON_TEST:-}" != "$count" ] || exit 1 ;;
+        esac
+      fi
       exit "${FAKE_NGINX_EXIT:-0}" ;;
     logs) cat "$FAKE_DIR/nginx.log" 2>/dev/null; exit 0 ;;
     *) exit 0 ;;
@@ -183,17 +212,110 @@ case "$1" in
       echo "Error: No such image: $imagen" >&2
       exit 1
     fi
-    case "$*" in *.Id*) echo "${FAKE_IMAGE_ID:-sha256:igual}" ;; esac ;;
+    if [ -z "${FAKE_IMAGE_ID-sha256:igual}" ]; then
+      echo "Error: No such image: $imagen" >&2
+      exit 1
+    fi
+    case "$*" in
+      *.Id*)
+        image_id="${FAKE_IMAGE_ID:-sha256:igual}"
+        if [ -n "${FAKE_ASSET_FIXTURES:-}" ] && [ "${imagen##*:}" != "1.30.7-alpine" ]; then
+          hash=$(printf '%s' "${imagen##*:}" | sha256sum | cut -d' ' -f1)
+          image_id="sha256:$hash"
+        fi
+        echo "$image_id" ;;
+    esac ;;
+  run)
+    [ "${FAKE_ASSET_SIZE_EXIT:-0}" = 0 ] || exit "$FAKE_ASSET_SIZE_EXIT"
+    printf '%s\t/usr/share/nginx/html/assets\n' "${FAKE_ASSET_SIZE_KB:-1}"
+    exit 0 ;;
+  create)
+    name=""
+    image=""
+    next_name=0
+    for arg in "$@"; do
+      if [ "$next_name" = 1 ]; then
+        name="$arg"
+        next_name=0
+      elif [ "$arg" = --name ]; then
+        next_name=1
+      else
+        image="$arg"
+      fi
+    done
+    release=$(printf '%s\n' "$name" | sed 's/^shifty-assets-//; s/-[0-9][0-9]*-[0-9][0-9]*$//')
+    container="asset-container-${release}-$$"
+    printf '%s\t%s\t%s\n' "$container" "$image" "$release" >> "$FAKE_DIR/asset_containers"
+    echo "$container"
+    exit "${FAKE_ASSET_CREATE_EXIT:-0}" ;;
+  cp)
+    [ "${FAKE_ASSET_COPY_EXIT:-0}" = 0 ] || exit "$FAKE_ASSET_COPY_EXIT"
+    source="$2"
+    container="${source%%:*}"
+    release=$(awk -F '\t' -v id="$container" '$1 == id { print $3; exit }' "$FAKE_DIR/asset_containers")
+    fixture="$FAKE_ASSET_FIXTURES/$release"
+    [ -d "$fixture" ] || fixture="$FAKE_ASSET_FIXTURES/default"
+    [ -d "$fixture" ] || exit 1
+    cp -R "$fixture/." "$3"
+    exit 0 ;;
   inspect)
     formato="$3"; shift 3
     for id in "$@"; do
+      asset_row=$(awk -F '\t' -v id="$id" '$1 == id { print; exit }' "$FAKE_DIR/asset_containers" 2>/dev/null || true)
+      if [ -n "$asset_row" ]; then
+        asset_image=$(printf '%s\n' "$asset_row" | cut -f2)
+        asset_release=$(printf '%s\n' "$asset_row" | cut -f3)
+        case "$formato" in
+          *.Image*) echo "$asset_image" ;;
+          *Config.Image*) echo "ghcr.io/x/shifty-frontend:$asset_release" ;;
+          *) echo "/$id" ;;
+        esac
+        continue
+      fi
       # Servicio por convencion de nombre: shifty-<servicio>-<n>.
       svc="${id%-[0-9]*}"; svc="${svc#shifty-}"
       case "$formato" in
-        *Config.Image*) echo "ghcr.io/x/shifty-backend:${FAKE_RUNNING_VERSION:-}" ;;
+        *State.Status*)
+          if [ "$id" = nginxid ]; then
+            echo "${FAKE_NGINX_STATE:-running}"
+          else
+            echo "running"
+          fi ;;
+        *State.Restarting*)
+          if [ "$id" = nginxid ]; then
+            echo "${FAKE_NGINX_RESTARTING:-false}"
+          else
+            echo "false"
+          fi ;;
+        *Mounts*)
+          if [ "$id" = nginxid ] && [ -z "${FAKE_NGINX_MOUNT_MISSING:-}" ]; then
+            src="${FAKE_NGINX_MOUNT_SOURCE:-${DEPLOY_ASSET_STORE}/assets}"
+            rw="${FAKE_NGINX_MOUNT_RW:-false}"
+            printf '%s|%s\n' "$src" "$rw"
+          fi ;;
+        *Config.Image*)
+          case "$id" in
+            front-new*) echo "ghcr.io/x/shifty-frontend:${id##*-}" ;;
+            front-*) echo "ghcr.io/x/shifty-frontend:${FAKE_RUNNING_VERSION:-v1}" ;;
+            *) echo "ghcr.io/x/shifty-backend:${FAKE_RUNNING_VERSION:-}" ;;
+          esac ;;
         *compose.service*) echo "/$id $svc" ;;
         *Health*) echo "/$id ${FAKE_HEALTH:-healthy}" ;;
-        *.Image*) echo "${FAKE_RUNNING_IMAGE_ID:-sha256:igual}" ;;
+        *.Image*)
+          case "$id" in
+            nginxid)
+              echo "${FAKE_NGINX_RUNNING_IMAGE_ID:-${FAKE_RUNNING_IMAGE_ID:-sha256:igual}}" ;;
+            front-*)
+              running_version="${FAKE_RUNNING_VERSION:-v1}"
+              case "$id" in front-new*) running_version="${id##*-}" ;; esac
+              if [ -n "${FAKE_ASSET_FIXTURES:-}" ]; then
+                hash=$(printf '%s' "$running_version" | sha256sum | cut -d' ' -f1)
+                echo "sha256:$hash"
+              else
+                echo "${FAKE_RUNNING_IMAGE_ID:-sha256:igual}"
+              fi ;;
+            *) echo "${FAKE_RUNNING_IMAGE_ID:-sha256:igual}" ;;
+          esac ;;
         *) echo "/$id" ;;
       esac
     done
@@ -240,6 +362,50 @@ case "$*" in
     sha="$(printf '%s\n' "$*" | sed -n 's/.*head_sha=\([A-Za-z0-9_.-]*\).*/\1/p')"
     [ -f "$FAKE_DIR/gh_runs" ] && sed "s/__SHA__/$sha/g" "$FAKE_DIR/gh_runs"
     exit "${FAKE_GH_EXIT:-0}" ;;
+esac
+out_file=""
+w_fmt=""
+url=""
+prev=""
+for arg in "$@"; do
+  case "$prev" in
+    -o|--output) out_file="$arg"; prev=""; continue ;;
+    -w|--write-out) w_fmt="$arg"; prev=""; continue ;;
+    -m|--max-time|--connect-timeout|--cacert|-H|--header|-K|--config|--data|-d) prev=""; continue ;;
+  esac
+  case "$arg" in
+    -o|--output|-w|--write-out|-m|--max-time|--connect-timeout|--cacert|-H|--header|-K|--config|--data|-d)
+      prev="$arg" ;;
+    http://*|https://*)
+      url="$arg" ;;
+  esac
+done
+case "$url" in
+  */assets/*)
+    if [ -n "${FAKE_ASSET_HTTP_EXIT:-}" ] && [ "$FAKE_ASSET_HTTP_EXIT" != 0 ]; then
+      exit "$FAKE_ASSET_HTTP_EXIT"
+    fi
+    rel="${url#*/assets/}"
+    rel="${rel%%\?*}"
+    if [ "${FAKE_ASSET_HTTP_BODY+set}" = set ]; then
+      [ -n "$out_file" ] && printf '%s' "$FAKE_ASSET_HTTP_BODY" > "$out_file"
+      http_code="${FAKE_ASSET_HTTP_CODE:-200}"
+      mime="${FAKE_ASSET_HTTP_MIME:-application/javascript}"
+    elif [ -f "$DEPLOY_ASSET_STORE/assets/$rel" ]; then
+      [ -n "$out_file" ] && cp -- "$DEPLOY_ASSET_STORE/assets/$rel" "$out_file"
+      http_code="${FAKE_ASSET_HTTP_CODE:-200}"
+      mime="${FAKE_ASSET_HTTP_MIME:-application/javascript}"
+    else
+      [ -n "$out_file" ] && : > "$out_file"
+      http_code="${FAKE_ASSET_HTTP_CODE:-404}"
+      mime="${FAKE_ASSET_HTTP_MIME:-text/html}"
+    fi
+    if [ -n "$w_fmt" ]; then
+      printf '%s' "$w_fmt" | sed \
+        -e "s|%{http_code}|$http_code|g" \
+        -e "s|%{content_type}|$mime|g" | awk '{ gsub(/\\n/, "\n"); printf "%s", $0 }'
+    fi
+    exit 0 ;;
 esac
 exit "${FAKE_CURL_EXIT:-0}"
 """
@@ -456,7 +622,7 @@ def sin_espacio_para_crear(host: Host, patron: str) -> None:
 
 _DF = r"""#!/bin/sh
 echo "Filesystem 1024-blocks Used Available Capacity Mounted on"
-echo "/dev/sda1 100 50 50 ${FAKE_DISK_USE:-42}% /"
+echo "/dev/sda1 100 50 ${FAKE_ASSET_AVAILABLE_KB:-50} ${FAKE_DISK_USE:-42}% /"
 """
 
 _TIMEDATECTL = r"""#!/bin/sh
@@ -760,8 +926,13 @@ def crear_host(tmp_path: Path) -> Host:
     repo = tmp_path / "repo"
     state = tmp_path / "state"
     backups = tmp_path / "backups"
-    for d in (fake, bin_dir, repo, state, backups):
+    assets = fake / "assets"
+    assets_default = assets / "default"
+    for d in (fake, bin_dir, repo, state, backups, assets, assets_default):
         d.mkdir()
+    (assets_default / "chunk-default.js").write_text(
+        "window.releaseAssets = true;\n", encoding="utf-8", newline="\n"
+    )
     _ejecutable(bin_dir / "docker", _DOCKER)
     _ejecutable(bin_dir / "curl", _CURL)
     for nombre, variable in (
@@ -830,6 +1001,12 @@ def crear_host(tmp_path: Path) -> Host:
         **os.environ,
         "PATH": os.pathsep.join(rutas),
         "FAKE_DIR": fake.as_posix(),
+        "FAKE_ASSET_FIXTURES": assets.as_posix(),
+        "FAKE_ASSET_AVAILABLE_KB": "51200",
+        "DEPLOY_ASSET_STORE": (tmp_path / "asset-store").as_posix(),
+        "DEPLOY_ASSET_MIN_FREE_BYTES": "0",
+        "DEPLOY_ASSET_RETENTION_DAYS": "14",
+        "DEPLOY_ASSET_MIN_RELEASES": "3",
         "SHIFTY_OPS_ENV": (tmp_path / "no-existe.env").as_posix(),
         "SHIFTY_DIR": repo.as_posix(),
         "SHIFTY_STATE_DIR": state.as_posix(),
