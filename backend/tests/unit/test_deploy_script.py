@@ -757,6 +757,62 @@ def test_deploy_edge_recrea_si_cambio_la_imagen(host: Host) -> None:
     assert _hay(llamadas, r"--force-recreate .*nginx$")
 
 
+# 2026-11-25: `nginx -t` corria recien dentro del borde recreado. Una config
+# invalida dejaba un borde nuevo que no arrancaba y el sitio caido hasta el
+# rollback. Ahora se prueba antes, en un contenedor efimero con la misma imagen
+# y los mismos montajes, mientras el borde actual sigue sirviendo.
+_NGINX_T_EFIMERO = r"compose run --rm --no-deps -T nginx nginx -t$"
+
+
+def test_deploy_edge_prueba_la_config_nueva_antes_de_recrear(host: Host) -> None:
+    archivo = _preparar_borde(host)
+    host.correr("deploy.sh", "edge", **_BASE_DEPLOY)
+    archivo.write_text("server { listen 443; }\n", encoding="utf-8")
+    (host.fake / "calls").unlink()
+
+    resultado = host.correr("deploy.sh", "edge", **_BASE_DEPLOY)
+
+    assert resultado.returncode == 0, resultado.stderr
+    llamadas = host.llamadas()
+    prueba = next(i for i, c in enumerate(llamadas) if re.search(_NGINX_T_EFIMERO, c))
+    recrea = next(i for i, c in enumerate(llamadas) if "--force-recreate" in c)
+    assert prueba < recrea, llamadas
+
+
+def test_deploy_edge_no_recrea_si_la_config_nueva_no_pasa_nginx_t(host: Host) -> None:
+    archivo = _preparar_borde(host)
+    host.correr("deploy.sh", "edge", **_BASE_DEPLOY)
+    huella = (host.repo / ".deploy" / "edge-conf.sha256").read_text(encoding="utf-8")
+    archivo.write_text("server { esto_no_es_una_directiva; }\n", encoding="utf-8")
+    (host.fake / "calls").unlink()
+
+    resultado = host.correr(
+        "deploy.sh", "edge", FAKE_EDGE_NGINX_T_EXIT="1", **_BASE_DEPLOY
+    )
+
+    assert resultado.returncode != 0
+    assert "no pasa nginx -t" in resultado.stdout + resultado.stderr
+    llamadas = host.llamadas()
+    assert _hay(llamadas, _NGINX_T_EFIMERO)
+    assert not _hay(llamadas, r"--force-recreate")
+    assert not _hay(llamadas, r"nginx -s reload")
+    # Sin registrar la huella nueva: el proximo `edge` vuelve a intentarlo.
+    assert (host.repo / ".deploy" / "edge-conf.sha256").read_text(
+        encoding="utf-8"
+    ) == huella
+
+
+def test_deploy_edge_sin_cambios_no_levanta_el_contenedor_de_prueba(host: Host) -> None:
+    _preparar_borde(host)
+    host.correr("deploy.sh", "edge", **_BASE_DEPLOY)
+    (host.fake / "calls").unlink()
+
+    resultado = host.correr("deploy.sh", "edge", **_BASE_DEPLOY)
+
+    assert resultado.returncode == 0, resultado.stderr
+    assert not _hay(host.llamadas(), _NGINX_T_EFIMERO)
+
+
 # --- ronda final: BACKUP_DIR, huerfanos y alarmas de RabbitMQ -----------------
 
 

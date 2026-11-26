@@ -105,7 +105,10 @@ if [ "$1" = compose ]; then
         *) echo dbid; cat "$ids_backend" "$ids_frontend" 2>/dev/null; echo nginxid; exit 0 ;;
       esac ;;
     pull) exit "${FAKE_PULL_EXIT:-0}" ;;
-    run) exit "${FAKE_MIGRATE_EXIT:-0}" ;;
+    run)
+      # deploy.sh edge prueba la config nueva en un contenedor efimero.
+      case "$*" in *" nginx nginx -t") exit "${FAKE_EDGE_NGINX_T_EXIT:-0}" ;; esac
+      exit "${FAKE_MIGRATE_EXIT:-0}" ;;
     up)
       escala=$(printf '%s\n' "$*" | sed -n 's/.*--scale backend=\([0-9]*\).*/\1/p')
       if [ -n "$escala" ]; then
