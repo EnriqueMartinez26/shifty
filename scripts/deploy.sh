@@ -59,6 +59,8 @@
 # Edge: pull de nginx y recreacion SOLO si cambio el id de su imagen o la
 # config montada (un bind mount de un archivo sigue viendo el inodo viejo
 # cuando git lo reemplaza: hace falta recrear, no alcanza con reload).
+# Antes de recrear prueba la config con `nginx -t` en un contenedor efimero:
+# si falla, no recrea y el borde actual sigue sirviendo.
 #
 # Sin sudo ni docker.sock: el usuario que lo corre tiene que estar en el grupo
 # docker. Las variables de abajo se pueden fijar en /etc/shifty/ops.env.
@@ -682,6 +684,13 @@ cmd_edge() {
   anterior="$(cat "$estado_dir/edge-conf.sha256" 2>/dev/null || true)"
 
   if [ "$deseada" != "$corriendo" ] || [ "$huella" != "$anterior" ]; then
+    # nginx -t ANTES de recrear, en un contenedor efimero con la misma imagen
+    # y los mismos montajes (2026-11-25): una config invalida deja el borde
+    # actual sirviendo, no un borde nuevo que no arranca. `run` no publica los
+    # puertos del servicio ni usa su container_name. Sin registrar la huella,
+    # el proximo `edge` vuelve a intentarlo.
+    docker compose run --rm --no-deps -T "$servicio" nginx -t ||
+      die "edge: la config nueva no pasa nginx -t; no se recrea y el borde actual sigue sirviendo"
     log "edge: recreo $servicio (imagen ${corriendo:-ninguna} -> $deseada, config ${anterior:-sin registro} -> $huella)"
     docker compose up -d --no-deps --no-build --remove-orphans --force-recreate --wait \
       --wait-timeout "$DEPLOY_WAIT_TIMEOUT" "$servicio" ||
