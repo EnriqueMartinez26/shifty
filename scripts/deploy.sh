@@ -833,9 +833,21 @@ borde_monta_assets_ro() {
   [ "$(realpath -m -- "$src")" = "$expected_src" ]
 }
 
+borde_requiere_montaje_assets() {
+  local servicio="${1:-$DEPLOY_EDGE_SERVICE}" conf
+  if docker compose config "$servicio" 2>/dev/null | grep -F '/srv/shifty-assets/assets' >/dev/null; then
+    return 0
+  fi
+  # shellcheck disable=SC2086
+  for conf in $DEPLOY_EDGE_CONF_FILES; do
+    [ -f "$conf" ] && grep -F '/srv/shifty-assets' "$conf" >/dev/null && return 0
+  done
+  return 1
+}
+
 recrear_borde() {
-  local servicio="$1" imagen deseada corriendo id huella anterior
-  docker compose pull "$servicio" || die "edge: pull de $servicio fallo"
+  local servicio="$1" imagen deseada corriendo id huella anterior requiere_assets=0
+  docker compose pull "$servicio" || log "edge: pull de $servicio fallo; sigo solo si la imagen ya esta local"
   imagen="$(compose_service_image "$servicio")"
   [ -n "$imagen" ] || die "edge: no pude resolver la imagen de $servicio"
   deseada="$(docker image inspect -f '{{.Id}}' "$imagen")" || die "edge: falta la imagen $imagen"
@@ -846,7 +858,10 @@ recrear_borde() {
   # recrear el bind mount, aunque el archivo nginx no haya cambiado.
   huella="$(edge_fingerprint)"
   anterior="$(cat "$estado_dir/edge-conf.sha256" 2>/dev/null || true)"
-  if [ -z "$id" ] || [ "$deseada" != "$corriendo" ] || [ "$huella" != "$anterior" ] || ! borde_monta_assets_ro "$id"; then
+  borde_requiere_montaje_assets "$servicio" && requiere_assets=1
+  if [ -z "$id" ] || [ "$deseada" != "$corriendo" ] || [ "$huella" != "$anterior" ] ||
+    { [ "$requiere_assets" = 1 ] && ! borde_monta_assets_ro "$id"; } ||
+    { [ "$requiere_assets" = 0 ] && borde_monta_assets_ro "$id"; }; then
     # nginx -t ANTES de recrear, en un contenedor efimero con la misma imagen
     # y los mismos montajes (2026-11-25): una config invalida deja el borde
     # actual sirviendo, no un borde nuevo que no arranca. `run` no publica los
@@ -859,8 +874,12 @@ recrear_borde() {
       --wait-timeout "$DEPLOY_WAIT_TIMEOUT" "$servicio" ||
       die "edge: $servicio no quedo sano despues de recrearlo"
     id="$(docker compose ps -q "$servicio" | head -n 1)"
-    if [ -z "$id" ] || ! borde_monta_assets_ro "$id"; then
-      die "edge: $servicio recreado pero no monta $ASSET_STORE_PATH/assets en modo solo lectura"
+    if [ "$requiere_assets" = 1 ]; then
+      if [ -z "$id" ] || ! borde_monta_assets_ro "$id"; then
+        die "edge: $servicio recreado pero no monta $ASSET_STORE_PATH/assets en modo solo lectura"
+      fi
+    elif [ -z "$id" ] || [ "$(docker inspect -f '{{.State.Status}}' "$id" 2>/dev/null || true)" != "running" ]; then
+      die "edge: $servicio recreado pero no esta corriendo"
     fi
   else
     log "edge: sin cambios de imagen, config ni asset store; solo reload"

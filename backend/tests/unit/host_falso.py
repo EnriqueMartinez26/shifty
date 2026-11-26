@@ -101,6 +101,15 @@ if [ "$1" = compose ]; then
         printf '  backend:\n    image: ghcr.io/x/shifty-backend:%s\n' "${APP_VERSION:-}"
         printf '  frontend:\n    image: ghcr.io/x/shifty-frontend:%s\n' "${APP_VERSION:-}"
         printf '  nginx:\n    image: %s\n' "${FAKE_NGINX_IMAGE:-nginx:1.30.7-alpine}"
+        incluir_mount=1
+        if [ -n "${FAKE_EDGE_WITHOUT_ASSETS_MOUNT:-}" ]; then
+          incluir_mount=0
+        elif [ -f docker-compose.prod.yml ] && ! grep -q '/srv/shifty-assets/assets' docker-compose.prod.yml; then
+          incluir_mount=0
+        fi
+        if [ "$incluir_mount" = 1 ]; then
+          printf '    volumes:\n      - type: bind\n        source: %s/assets\n        target: /srv/shifty-assets/assets\n        read_only: true\n' "${DEPLOY_ASSET_STORE:-/srv/shifty-assets}"
+        fi
         exit "${FAKE_CONFIG_EXIT:-0}"
       fi
       exit "${FAKE_CONFIG_EXIT:-0}" ;;
@@ -200,6 +209,10 @@ case "$1" in
     # docker image inspect [-f FORMATO] IMAGEN
     for imagen in "$@"; do :; done
     if [ -n "${FAKE_MISSING_TAG:-}" ] && [ "${imagen##*:}" = "$FAKE_MISSING_TAG" ]; then
+      echo "Error: No such image: $imagen" >&2
+      exit 1
+    fi
+    if [ -z "${FAKE_IMAGE_ID-sha256:igual}" ]; then
       echo "Error: No such image: $imagen" >&2
       exit 1
     fi

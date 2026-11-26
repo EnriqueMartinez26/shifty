@@ -2523,3 +2523,129 @@ def test_leer_env_repo_valida_clave_y_normaliza_valores(tmp_path: Path) -> None:
         check=False,
     )
     assert invalida.returncode != 0
+
+
+def test_deploy_edge_rollback_pre_retencion_recrea_sin_exigir_montaje_assets(
+    host: Host,
+) -> None:
+    archivo = _preparar_borde(
+        host, conf="server { location ^~ /assets/ { root /srv/shifty-assets; } }\n"
+    )
+    inicial = host.correr("deploy.sh", "edge", **_BASE_DEPLOY)
+    assert inicial.returncode == 0, inicial.stderr
+    huella_anterior = (host.repo / ".deploy" / "edge-conf.sha256").read_text(
+        encoding="utf-8"
+    )
+
+    # Also verify that if only compose drops the mount while the live container
+    # still mounts assets (huella unchanged), edge still recreates to drop it.
+    (host.repo / "docker-compose.prod.yml").write_text(
+        "services:\n  nginx:\n    image: nginx:1.30.7-alpine\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    archivo.write_text("server { listen 443; }\n", encoding="utf-8", newline="\n")
+    (host.repo / ".deploy" / "edge-conf.sha256").write_text(
+        hashlib.sha256(
+            f"server {{ listen 443; }}\n\nasset-store={host.env['DEPLOY_ASSET_STORE']}\n".encode(
+                "utf-8"
+            )
+        ).hexdigest()
+        + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    (host.fake / "calls").unlink()
+
+    recrea_por_mount = host.correr(
+        "deploy.sh",
+        "edge",
+        FAKE_EDGE_WITHOUT_ASSETS_MOUNT="1",
+        **_BASE_DEPLOY,
+    )
+    assert recrea_por_mount.returncode == 0, recrea_por_mount.stderr
+    llamadas_mount = host.llamadas()
+    assert _hay(llamadas_mount, _NGINX_T_EFIMERO)
+    assert _hay(llamadas_mount, r"--force-recreate .*nginx$")
+
+    # Now restore the previous fingerprint and verify full rollback with mount gone.
+    (host.repo / ".deploy" / "edge-conf.sha256").write_text(
+        huella_anterior, encoding="utf-8", newline="\n"
+    )
+    (host.fake / "calls").unlink()
+
+    resultado = host.correr(
+        "deploy.sh",
+        "edge",
+        FAKE_EDGE_WITHOUT_ASSETS_MOUNT="1",
+        FAKE_NGINX_MOUNT_MISSING="1",
+        **_BASE_DEPLOY,
+    )
+
+    assert resultado.returncode == 0, resultado.stderr
+    llamadas = host.llamadas()
+    prueba = next(i for i, c in enumerate(llamadas) if re.search(_NGINX_T_EFIMERO, c))
+    recrea = next(i for i, c in enumerate(llamadas) if "--force-recreate" in c)
+    assert prueba < recrea, llamadas
+    assert _hay(llamadas, r"compose exec -T nginx nginx -s reload")
+    huella_nueva = (host.repo / ".deploy" / "edge-conf.sha256").read_text(
+        encoding="utf-8"
+    )
+    assert huella_nueva != huella_anterior
+
+
+def test_deploy_edge_falla_cerrado_si_nginx_conf_usa_assets_sin_montaje_compose(
+    host: Host,
+) -> None:
+    _preparar_borde(
+        host, conf="server { location ^~ /assets/ { root /srv/shifty-assets; } }\n"
+    )
+    (host.repo / "docker-compose.prod.yml").write_text(
+        "services:\n  nginx:\n    image: nginx:1.30.7-alpine\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    (host.repo / ".deploy" / "edge-conf.sha256").unlink()
+    (host.fake / "calls").unlink(missing_ok=True)
+
+    resultado = host.correr(
+        "deploy.sh",
+        "edge",
+        FAKE_EDGE_WITHOUT_ASSETS_MOUNT="1",
+        FAKE_NGINX_MOUNT_MISSING="1",
+        **_BASE_DEPLOY,
+    )
+
+    assert resultado.returncode != 0
+    assert "solo lectura" in resultado.stderr
+    assert not _hay(host.llamadas(), r"nginx -s reload")
+    assert not (host.repo / ".deploy" / "edge-conf.sha256").exists()
+
+
+def test_deploy_edge_recupera_con_imagen_local_si_registro_no_responde(
+    host: Host,
+) -> None:
+    _preparar_borde(host)
+    (host.fake / "calls").unlink(missing_ok=True)
+
+    con_local = host.correr(
+        "deploy.sh",
+        "edge",
+        FAKE_PULL_EXIT="1",
+        FAKE_IMAGE_ID="sha256:igual",
+        **_BASE_DEPLOY,
+    )
+    assert con_local.returncode == 0, con_local.stderr
+    assert _hay(host.llamadas(), r"compose exec -T nginx nginx -s reload")
+
+    (host.fake / "calls").unlink()
+    sin_local = host.correr(
+        "deploy.sh",
+        "edge",
+        FAKE_PULL_EXIT="1",
+        FAKE_IMAGE_ID="",
+        **_BASE_DEPLOY,
+    )
+    assert sin_local.returncode != 0
+    assert "falta la imagen" in sin_local.stderr
+    assert not _hay(host.llamadas(), r"--force-recreate")
