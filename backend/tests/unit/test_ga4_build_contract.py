@@ -1,4 +1,4 @@
-"""La imagen estatica de frontend recibe el ID de GA4 y la CSP del mismo build."""
+"""Las imagenes nuevas de frontend compilan con GA4 apagado."""
 
 from pathlib import Path
 
@@ -9,9 +9,15 @@ WORKFLOW = REPO_ROOT / ".github" / "workflows" / "build-images.yml"
 COMPOSE = REPO_ROOT / "docker-compose.yml"
 DOCKERFILE = REPO_ROOT / "frontend" / "Dockerfile"
 GA4 = "VITE_GA4_MEASUREMENT_ID"
+PRESERVED_BUILD_ARGS = (
+    "VITE_SENTRY_DSN",
+    "VITE_SUPPORT_WHATSAPP",
+    "VITE_CONTACT_EMAIL",
+    "VITE_LEGAL_RESPONSABLES",
+)
 
 
-def test_ci_y_compose_pasan_ga4_como_build_arg_del_frontend() -> None:
+def test_ci_y_compose_no_pasan_ga4_como_build_arg() -> None:
     workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
     job = workflow["jobs"]["build"]
     frontend = next(
@@ -29,20 +35,29 @@ def test_ci_y_compose_pasan_ga4_como_build_arg_del_frontend() -> None:
     )
     assert build["with"]["context"] == "${{ matrix.context }}"
     build_args = [arg.strip() for arg in build["with"]["build-args"].splitlines()]
-    assert f"{GA4}=${{{{ vars.{GA4} }}}}" in build_args
+    assert not any(arg.startswith(f"{GA4}=") for arg in build_args)
+    for name in PRESERVED_BUILD_ARGS:
+        assert any(arg.startswith(f"{name}=") for arg in build_args)
 
     compose = yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))
     frontend_build = compose["services"]["frontend"]["build"]
     assert frontend_build["context"] == "./frontend"
     assert frontend_build["dockerfile"] == "Dockerfile"
     frontend_args = frontend_build["args"]
-    assert frontend_args[GA4] == f"${{{GA4}:-}}"
+    assert GA4 not in frontend_args
+    for name in PRESERVED_BUILD_ARGS:
+        assert name in frontend_args
 
 
-def test_dockerfile_embebe_ga4_y_publica_la_csp_generada_en_la_imagen() -> None:
+def test_dockerfile_fuerza_ga4_vacio_y_publica_la_csp_generada_en_la_imagen() -> None:
     dockerfile = DOCKERFILE.read_text(encoding="utf-8")
-    argument = dockerfile.index(f"ARG {GA4}=")
-    environment = dockerfile.index(f"ENV {GA4}=${{{GA4}}}")
+    disabled_environment = f"ENV {GA4}=\n"
+    assert disabled_environment in dockerfile.splitlines(keepends=True)
+    environment = dockerfile.index(disabled_environment)
+    assert f"ARG {GA4}=" not in dockerfile
+    for name in PRESERVED_BUILD_ARGS:
+        assert f"ARG {name}=" in dockerfile
+        assert f"ENV {name}=${{{name}}}" in dockerfile
     build = dockerfile.index("RUN npm run build")
     generate_csp = dockerfile.index(
         "RUN node configure-analytics-csp.mjs security-headers.conf "
@@ -64,7 +79,7 @@ def test_dockerfile_embebe_ga4_y_publica_la_csp_generada_en_la_imagen() -> None:
         if line.startswith(("COPY ", "ADD ")) and line.split()[-1] == csp_destination
     ]
 
-    assert argument < environment < build < generate_csp < copy_csp
+    assert environment < build < generate_csp < copy_csp
     assert dockerfile.count(csp_destination) == 1
     assert writes_to_csp == [copy_line]
     assert copy_line_index > final_stage

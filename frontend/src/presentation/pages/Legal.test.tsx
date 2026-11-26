@@ -70,29 +70,48 @@ describe('LegalPage', () => {
     )
   })
 
-  // 2026-10-10: GA4 esta en produccion en el portal de reservas, con
-  // consentimiento. La politica tiene que decir que se usa, quien la provee,
-  // que sale solo tras aceptar y como se retira; nunca que no hay analitica.
-  it('the privacy policy discloses Google Analytics, its consent and how to withdraw it', () => {
+  // La política distingue la contención de GA4 de los datos anteriores y de
+  // las cookies que podrían permanecer en el navegador.
+
+  it('the privacy policy distinguishes GA4 containment from previous data and cookies', () => {
     renderAt(['/legal/privacidad'])
 
     expect(
-      screen.getByRole('heading', { level: 2, name: /Analítica opcional en el portal de reservas/ })
+      screen.getByRole('heading', {
+        level: 2,
+        name: /Google Analytics 4: contención y usos anteriores/
+      })
     ).toBeInTheDocument()
     const main = screen.getByRole('main')
-    expect(main).toHaveTextContent(/Shifty usa Google Analytics 4, un servicio de Google/)
-    expect(main).toHaveTextContent(/únicamente si la persona elige "Aceptar analítica"/)
-    expect(main).toHaveTextContent(/no se carga ningún script de Google ni se le envía ningún dato/)
-    expect(main).toHaveTextContent(/no se carga en el panel de las tiendas, en "Mis turnos"/)
+    expect(main).toHaveTextContent(
+      /Las imágenes construidas con la contención actual no cargan Google Analytics 4 ni envían nuevas mediciones/
+    )
+    expect(main).toHaveTextContent(
+      /En versiones del portal con Google Analytics 4 habilitado, la integración solo se activaba tras consentimiento previo/
+    )
+    expect(main).toHaveTextContent(/no se cargaba ningún script de Google ni se enviaban datos/)
+    expect(main).toHaveTextContent(
+      /no se cargaba en el panel, en el inicio de sesión, en "Mis turnos"/
+    )
     expect(main).toHaveTextContent(/sin el nombre de la tienda ni la página de origen/)
     expect(main).toHaveTextContent(/indicación de no personalizar anuncios/)
-    expect(main).toHaveTextContent(/Google puede tratar estos datos fuera de Argentina/)
+    expect(main).toHaveTextContent(
+      /Los datos que Google hubiera recibido en usos anteriores podrían tratarse fuera de Argentina/
+    )
     expect(main).toHaveTextContent(
       /desde el enlace "Preferencias de analítica", al pie del portal de reservas/
     )
-    expect(main).toHaveTextContent(/Retirar el consentimiento detiene las mediciones siguientes/)
-    expect(main).toHaveTextContent(/no borra los datos que Google ya recibió/)
-    expect(main).not.toHaveTextContent(/no (usa|utiliza|usamos|utilizamos)[^.]*analítica/i)
+    expect(main).toHaveTextContent(
+      /Las imágenes construidas con la contención actual no envían nuevas mediciones/
+    )
+    expect(main).toHaveTextContent(
+      /Esto no elimina los datos que Google hubiera recibido en usos anteriores/
+    )
+    expect(main).toHaveTextContent(
+      /cookies de GA4 guardadas durante usos anteriores podrían permanecer en el navegador/
+    )
+    expect(main).toHaveTextContent(/eliminarlas desde la configuración del navegador/)
+    expect(main).not.toHaveTextContent(/Shifty no usa Google Analytics 4/i)
   })
 
   it('reads the document in a centered column with 16px body text', () => {

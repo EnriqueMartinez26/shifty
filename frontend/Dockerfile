@@ -11,8 +11,9 @@ COPY . .
 
 ARG VITE_API_URL=/api
 ENV VITE_API_URL=${VITE_API_URL}
-ARG VITE_GA4_MEASUREMENT_ID=
-ENV VITE_GA4_MEASUREMENT_ID=${VITE_GA4_MEASUREMENT_ID}
+# Contencion: toda imagen Docker compila con GA4 apagado, incluso si alguien
+# intenta pasar el build-arg anterior.
+ENV VITE_GA4_MEASUREMENT_ID=
 ARG VITE_SENTRY_DSN=
 ARG VITE_SENTRY_ENVIRONMENT=production
 ARG VITE_SENTRY_TRACES_SAMPLE_RATE=0.1
