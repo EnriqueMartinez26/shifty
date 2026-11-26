@@ -18,10 +18,12 @@ consentimiento de analítica en el backend.
 
 `VITE_GA4_MEASUREMENT_ID` es una variable de build de Vite, leída en un único
 lugar (`frontend/src/shared/utils/env.ts::getGa4MeasurementId`). No es una
-credencial. Cadena: variable de repositorio de GitHub
-(`.github/workflows/build-images.yml`, build-arg) o entorno de Compose
-(`docker-compose.yml`) → `ARG`/`ENV` en `frontend/Dockerfile` → bundle.
-Cambiarlo exige construir una imagen nueva. Vacío = analítica apagada.
+credencial. Durante la contención de emergencia, el workflow de GitHub y
+Compose no pasan el valor, y `frontend/Dockerfile` fija la variable en vacío
+antes de compilar. Por eso las imágenes nuevas quedan sin GA4 aunque una
+preferencia antigua del navegador diga `accepted`. La implementación y la
+propiedad GA4 se conservan; reactivarla requiere un cambio explícito al bloqueo
+del build, no alcanza con volver a definir una variable remota.
 
 La CSP se genera en el mismo build (`frontend/configure-analytics-csp.mjs`):
 con ID agrega solo `https://www.googletagmanager.com` a `script-src` y
@@ -81,7 +83,9 @@ afirma «no personalizar anuncios», así que esa verificación respalda el text
 
 ## Cómo se apaga
 
-- **Para todos**: build sin `VITE_GA4_MEASUREMENT_ID` (nueva imagen).
+- **Builds Docker durante la contención**: todas las imágenes nuevas quedan sin
+  GA4; no se modifica el bundle de una imagen ya publicada. Para apagar una
+  versión en producción hace falta desplegar una imagen nueva.
 - **Una persona**: «Preferencias de analítica» → «Rechazar analítica». Pone
   `ga-disable-<ID>`, descarta la cola pendiente, bloquea envíos y borra las
   cookies `shifty_ga*` accesibles; no borra lo que Google ya recibió.

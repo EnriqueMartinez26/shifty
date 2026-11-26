@@ -112,6 +112,7 @@ jobs:
             org.opencontainers.image.revision=${{ env.IMAGE_SHA }}
           # VITE_SENTRY_DSN: solo lo lee el Dockerfile del frontend (el DSN
           # publico de Sentry va en el bundle); los otros dos lo ignoran.
+          # GA4 esta forzado a vacio en frontend/Dockerfile durante la contencion.
           # SECURITY_UPGRADE_STAMP: distinto en cada corrida, invalida la capa
           # de apk/apt upgrade de los tres Dockerfiles. Sin el, la cache gha
           # reusaba esa capa y la imagen no recibia parches (D-20260930-23).
@@ -121,7 +122,6 @@ jobs:
           # linea (docs/DEPLOY_RUNBOOK.md, seccion 2).
           build-args: |
             VITE_SENTRY_DSN=${{ vars.VITE_SENTRY_DSN }}
-            VITE_GA4_MEASUREMENT_ID=${{ vars.VITE_GA4_MEASUREMENT_ID }}
             VITE_SUPPORT_WHATSAPP=${{ vars.VITE_SUPPORT_WHATSAPP }}
             VITE_CONTACT_EMAIL=${{ vars.VITE_CONTACT_EMAIL }}
             VITE_LEGAL_RESPONSABLES=${{ vars.VITE_LEGAL_RESPONSABLES }}
