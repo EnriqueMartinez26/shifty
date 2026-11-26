@@ -267,6 +267,14 @@ services:
     volumes:
       - ./nginx/nginx.prod.conf:/etc/nginx/conf.d/default.conf:ro
       - ./nginx/certs:/etc/nginx/certs:ro
+      # Activos inmutables importados desde las imagenes de frontend por
+      # deploy.sh. No apuntar a un volumen dentro del checkout.
+      - type: bind
+        source: ${ASSET_STORE_PATH:?prepare asset store first}/assets
+        target: /srv/shifty-assets/assets
+        read_only: true
+        bind:
+          create_host_path: false
       # F0-12 (decision 4): certbot en el host escribe el desafio en
       # ./nginx/acme (--webroot) y el borde lo sirve en
       # /.well-known/acme-challenge/ desde /var/www/acme.
