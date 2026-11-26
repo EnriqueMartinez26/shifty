@@ -831,6 +831,52 @@ def test_toda_location_con_add_header_repite_los_del_server(ruta: Path) -> None:
                 assert del_server <= propias, (loc.args, del_server - propias)
 
 
+# --- Contencion de GA4: el edge agrega la CSP base de la SPA -------------------
+
+SPA_SECURITY_HEADERS = RAIZ / "frontend" / "security-headers.conf"
+# Los destinos que frontend/configure-analytics-csp.mjs suma a la CSP de una
+# imagen construida con VITE_GA4_MEASUREMENT_ID.
+HOSTS_DE_ANALYTICS = ("googletagmanager.com", "google-analytics.com")
+
+
+def _csp_base_de_la_spa() -> str:
+    return _cabeceras_agregadas(leer(SPA_SECURITY_HEADERS))["content-security-policy"]
+
+
+@EDGES
+def test_el_edge_agrega_la_csp_base_de_la_spa(ruta: Path) -> None:
+    # 2026-11-25: la imagen del frontend construida con GA4 amplia su propia
+    # CSP. El navegador aplica TODAS las CSP que recibe (la interseccion), asi
+    # que una segunda politica en el edge solo puede restringir: bloquea GA4
+    # con cualquier imagen del frontend, tambien la que vuelve un rollback.
+    # Igual a la base de la SPA, ni mas dura ni mas floja: un host nuevo se
+    # declara en los dos lados o el edge lo bloquea.
+    server = server_de_la_app(leer(ruta))
+    csp = [
+        d
+        for d in todas(server, "add_header")
+        if d.args[0].lower() == "content-security-policy"
+    ]
+    assert len(csp) == 1, csp
+    assert csp[0].args[1:] == (_csp_base_de_la_spa(), "always")
+    assert not any(host in csp[0].args[1] for host in HOSTS_DE_ANALYTICS)
+
+
+@EDGES
+def test_el_edge_no_reemplaza_la_csp_de_la_spa(ruta: Path) -> None:
+    # Contencion por interseccion, no por reemplazo: si el edge ocultara la CSP
+    # del upstream, un endurecimiento futuro de la SPA dejaria de aplicarse.
+    for server in servidores(leer(ruta)):
+        for directiva in _directivas_recursivas(server):
+            if directiva.nombre == "proxy_hide_header":
+                assert directiva.args[0].lower() != "content-security-policy"
+
+
+def test_la_csp_base_de_la_spa_no_habilita_analytics() -> None:
+    # La base es lo que sirve una imagen sin GA4 y lo que repite el edge.
+    assert not any(host in _csp_base_de_la_spa() for host in HOSTS_DE_ANALYTICS)
+
+
 @EDGES
 def test_los_errores_de_api_del_edge_salen_en_json_canonico(ruta: Path) -> None:
     # Regla 23: un 502/504 de nginx llegaba al front como HTML y rompia el
