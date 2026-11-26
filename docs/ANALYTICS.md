@@ -18,12 +18,14 @@ consentimiento de analítica en el backend.
 
 `VITE_GA4_MEASUREMENT_ID` es una variable de build de Vite, leída en un único
 lugar (`frontend/src/shared/utils/env.ts::getGa4MeasurementId`). No es una
-credencial. Durante la contención de emergencia, el workflow de GitHub y
-Compose no pasan el valor, y `frontend/Dockerfile` fija la variable en vacío
-antes de compilar. Por eso las imágenes nuevas quedan sin GA4 aunque una
-preferencia antigua del navegador diga `accepted`. La implementación y la
-propiedad GA4 se conservan; reactivarla requiere un cambio explícito al bloqueo
-del build, no alcanza con volver a definir una variable remota.
+credencial. Durante la contención de emergencia, el workflow de publicación y
+Compose no pasan el valor, y `frontend/Dockerfile` lo fija en vacío antes de
+compilar. Las nuevas imágenes Docker quedan sin GA4 aunque una preferencia
+antigua del navegador diga `accepted`. Las builds directas de Vite siguen
+leyendo esta variable; el flujo de publicación documentado en este repositorio
+usa las imágenes Docker. La implementación y la propiedad GA4 se conservan;
+reactivar GA4 en esas imágenes requiere cambiar el bloqueo del Dockerfile, no
+alcanza con volver a definir una variable remota.
 
 La CSP se genera en el mismo build (`frontend/configure-analytics-csp.mjs`):
 con ID agrega solo `https://www.googletagmanager.com` a `script-src` y
