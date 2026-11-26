@@ -863,6 +863,18 @@ def test_el_edge_agrega_la_csp_base_de_la_spa(ruta: Path) -> None:
 
 
 @EDGES
+def test_toda_location_con_add_header_repite_la_misma_csp(ruta: Path) -> None:
+    # Repetir el NOMBRE no alcanza (test de arriba): una CSP mas floja en una
+    # location con add_header propio volveria a dejar pasar GA4 ahi.
+    for loc in locations(server_de_la_app(leer(ruta))):
+        propias = _cabeceras_agregadas(loc.bloque)
+        if propias:
+            assert propias.get("content-security-policy") == _csp_base_de_la_spa(), (
+                loc.args
+            )
+
+
+@EDGES
 def test_el_edge_no_reemplaza_la_csp_de_la_spa(ruta: Path) -> None:
     # Contencion por interseccion, no por reemplazo: si el edge ocultara la CSP
     # del upstream, un endurecimiento futuro de la SPA dejaria de aplicarse.
